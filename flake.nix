@@ -1,5 +1,5 @@
 {
-  description = "Audio preprocessor for linuxmatters.sh";
+  description = "Audio pre-processor for linuxmatters.sh";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
