@@ -39,6 +39,22 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 	config.Measurements = measurements
 	config.NoiseFloor = measurements.NoiseFloor
 
+	// Adaptively set de-esser frequency based on spectral analysis
+	// This targets sibilance more precisely based on voice characteristics
+	if measurements.SpectralCentroid > 0 {
+		if measurements.SpectralCentroid > 7000 {
+			// Bright voice with high-frequency energy - target higher sibilance
+			config.DeessFrequency = 7500
+		} else if measurements.SpectralCentroid > 6000 {
+			// Normal voice - use default targeting
+			config.DeessFrequency = 7000
+		} else {
+			// Dark/warm voice - target lower sibilance frequencies
+			config.DeessFrequency = 6500
+		}
+	}
+	// If no spectral analysis available (SpectralCentroid == 0), keep default 7000Hz
+
 	// Pass 2: Processing
 	// (printf output suppressed for UI compatibility)
 

@@ -14,6 +14,7 @@ import (
 )
 
 // LoudnormMeasurements contains the measurements from loudnorm first-pass analysis
+// plus spectral analysis for adaptive de-esser targeting
 type LoudnormMeasurements struct {
 	InputI       float64 `json:"input_i"`       // Integrated loudness (LUFS)
 	InputTP      float64 `json:"input_tp"`      // True peak (dBTP)
@@ -21,6 +22,10 @@ type LoudnormMeasurements struct {
 	InputThresh  float64 `json:"input_thresh"`  // Threshold level
 	TargetOffset float64 `json:"target_offset"` // Offset for normalization
 	NoiseFloor   float64 `json:"noise_floor"`   // Estimated noise floor (dB)
+
+	// Spectral analysis for adaptive de-esser frequency targeting
+	SpectralCentroid float64 `json:"spectral_centroid"` // Average spectral centroid (Hz) - where energy is concentrated
+	SpectralRolloff  float64 `json:"spectral_rolloff"`  // Average spectral rolloff (Hz) - high-frequency energy dropoff point
 }
 
 // loudnormJSON is a helper struct for unmarshaling FFmpeg's JSON output
@@ -97,6 +102,11 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 	updateInterval := 100 // Send progress update every N frames
 	currentLevel := 0.0
 
+	// Accumulators for spectral statistics
+	var spectralCentroidSum float64
+	var spectralRolloffSum float64
+	var spectralFrameCount int
+
 	for {
 		frame, err := reader.ReadFrame()
 		if err != nil {
@@ -124,7 +134,7 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 			return nil, fmt.Errorf("failed to add frame to filter: %w", err)
 		}
 
-		// Pull filtered frames (we don't need them, just processing for measurements)
+		// Pull filtered frames and extract spectral metadata
 		for {
 			if _, err := ffmpeg.AVBuffersinkGetFrame(bufferSinkCtx, filteredFrame); err != nil {
 				if errors.Is(err, ffmpeg.EAgain) || errors.Is(err, ffmpeg.AVErrorEOF) {
@@ -132,6 +142,25 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 				}
 				return nil, fmt.Errorf("failed to get filtered frame: %w", err)
 			}
+
+			// Extract spectral statistics from frame metadata
+			metadata := filteredFrame.Metadata()
+			if metadata != nil {
+				// Get spectral centroid if available
+				if centroidEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.aspectralstats.centroid"), nil, 0); centroidEntry != nil {
+					if centroidValue, err := strconv.ParseFloat(centroidEntry.Value().String(), 64); err == nil {
+						spectralCentroidSum += centroidValue
+						spectralFrameCount++
+					}
+				}
+				// Get spectral rolloff if available
+				if rolloffEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.aspectralstats.rolloff"), nil, 0); rolloffEntry != nil {
+					if rolloffValue, err := strconv.ParseFloat(rolloffEntry.Value().String(), 64); err == nil {
+						spectralRolloffSum += rolloffValue
+					}
+				}
+			}
+
 			ffmpeg.AVFrameUnref(filteredFrame)
 		}
 	}
@@ -149,6 +178,23 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 			}
 			return nil, fmt.Errorf("failed to get filtered frame: %w", err)
 		}
+
+		// Extract spectral statistics from remaining frames
+		metadata := filteredFrame.Metadata()
+		if metadata != nil {
+			if centroidEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.aspectralstats.centroid"), nil, 0); centroidEntry != nil {
+				if centroidValue, err := strconv.ParseFloat(centroidEntry.Value().String(), 64); err == nil {
+					spectralCentroidSum += centroidValue
+					spectralFrameCount++
+				}
+			}
+			if rolloffEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.aspectralstats.rolloff"), nil, 0); rolloffEntry != nil {
+				if rolloffValue, err := strconv.ParseFloat(rolloffEntry.Value().String(), 64); err == nil {
+					spectralRolloffSum += rolloffValue
+				}
+			}
+		}
+
 		ffmpeg.AVFrameUnref(filteredFrame)
 	}
 
@@ -161,6 +207,12 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 	measurements, err := capture.extractMeasurements()
 	if err != nil {
 		return nil, fmt.Errorf("failed to extract measurements: %w", err)
+	}
+
+	// Calculate average spectral statistics
+	if spectralFrameCount > 0 {
+		measurements.SpectralCentroid = spectralCentroidSum / float64(spectralFrameCount)
+		measurements.SpectralRolloff = spectralRolloffSum / float64(spectralFrameCount)
 	}
 
 	// Estimate noise floor based on loudnorm input threshold
@@ -246,9 +298,10 @@ func createLoudnormFilterGraph(
 	// Build filter string
 	var filterSpec string
 	if firstPass {
-		// First pass: Analysis only - extract loudnorm measurements
+		// First pass: Analysis only - extract loudnorm measurements and spectral statistics
+		// aspectralstats measures spectral centroid and rolloff for adaptive de-esser targeting
 		// Note: Noise floor will be handled in Pass 2 by afftdn's automatic tracking (tn=1)
-		filterSpec = fmt.Sprintf("loudnorm=I=%.1f:TP=%.1f:LRA=%.1f:print_format=json",
+		filterSpec = fmt.Sprintf("aspectralstats=win_size=2048:win_func=hann:measure=centroid+rolloff,loudnorm=I=%.1f:TP=%.1f:LRA=%.1f:print_format=json",
 			targetI, targetTP, targetLRA)
 	} else {
 		// Second pass: use measurements from first pass

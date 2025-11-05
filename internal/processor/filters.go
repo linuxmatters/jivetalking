@@ -30,10 +30,13 @@ type FilterChainConfig struct {
 	CompRelease   float64 // Release time (ms)
 	CompMakeup    float64 // dB, makeup gain
 
-	// De-esser (deesser) - reduces harsh sibilance
-	DeessIntensity float64 // 0.0-1.0, de-essing strength
-	DeessMax       float64 // 0.0-1.0, max deessing amount
-	DeessFreq      float64 // 0.0-1.0, frequency target (0.5 = ~6-8kHz)
+	// Dynamic EQ De-esser (adynamicequalizer) - reduces harsh sibilance with precise frequency targeting
+	DeessThreshold float64 // 0.0-100.0, detection threshold (lower = more aggressive)
+	DeessFrequency float64 // Hz, target sibilance frequency (typical: 6000-9000)
+	DeessQFactor   float64 // 0.001-1000, bandwidth control (higher = narrower, more surgical)
+	DeessRatio     float64 // 0-30, compression ratio for sibilance reduction
+	DeessAttack    float64 // ms, attack time for sibilance detection
+	DeessRelease   float64 // ms, release time for smooth reduction
 
 	// Loudness Normalization (loudnorm two-pass)
 	TargetI   float64 // LUFS target (podcast standard: -16)
@@ -74,10 +77,13 @@ func DefaultFilterConfig() *FilterChainConfig {
 		CompRelease:   100,
 		CompMakeup:    8,
 
-		// De-esser - gentle sibilance reduction
-		DeessIntensity: 0.3, // Gentle de-essing
-		DeessMax:       0.5, // Max 50% reduction
-		DeessFreq:      0.5, // Target ~6-8kHz sibilance range
+		// Dynamic EQ De-esser - precise sibilance reduction at 7kHz
+		DeessThreshold: 0.1,  // Very gentle threshold (activates on subtle sibilance)
+		DeessFrequency: 7000, // 7kHz center frequency (typical sibilance peak)
+		DeessQFactor:   2.0,  // Moderate bandwidth (focused but not too narrow)
+		DeessRatio:     3.0,  // 3:1 compression ratio (gentle but effective)
+		DeessAttack:    5.0,  // 5ms fast attack (catches sibilance peaks)
+		DeessRelease:   50.0, // 50ms moderate release (smooth, natural decay)
 
 		// Loudness - podcast standard
 		TargetI:   -16.0,
@@ -119,10 +125,20 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 	acompressorFilter := fmt.Sprintf("acompressor=threshold=%.0fdB:ratio=%.1f:attack=%.0f:release=%.0f:makeup=%.0fdB",
 		cfg.CompThreshold, cfg.CompRatio, cfg.CompAttack, cfg.CompRelease, cfg.CompMakeup)
 
-	// Build deesser (sibilance reduction) filter
+	// Build adynamicequalizer (dynamic EQ de-esser) filter
 	// Applied after compression to correct emphasized sibilance
-	deesserFilter := fmt.Sprintf("deesser=i=%.1f:m=%.1f:f=%.1f",
-		cfg.DeessIntensity, cfg.DeessMax, cfg.DeessFreq)
+	// Uses precise Hz targeting with dynamic compression for natural sibilance control
+	// mode: 1=cutabove, dftype: 0=bandpass, tftype: 0=bell
+	deesserFilter := fmt.Sprintf(
+		"adynamicequalizer=threshold=%.1f:dfrequency=%.0f:tfrequency=%.0f:"+
+			"dqfactor=%.1f:tqfactor=%.1f:attack=%.0f:release=%.0f:ratio=%.1f:"+
+			"mode=1:dftype=0:tftype=0",
+		cfg.DeessThreshold,
+		cfg.DeessFrequency, cfg.DeessFrequency, // detection and target same frequency
+		cfg.DeessQFactor, cfg.DeessQFactor, // detection and target same bandwidth
+		cfg.DeessAttack, cfg.DeessRelease,
+		cfg.DeessRatio,
+	)
 
 	// Build loudnorm (two-pass normalization) filter
 	var loudnormFilter string

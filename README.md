@@ -20,7 +20,7 @@ Raw microphone recordings are messy: room rumble, background hiss, awkward silen
 2. **Noise reduction** – Intelligently removes background hiss while preserving voice clarity using adaptive spectral analysis
 3. **Silence gate** – Cuts dead air and room tone during pauses, keeping your podcast tight and professional
 4. **Compression** – Smooths out volume inconsistencies so whispers and emphasis have similar energy levels
-5. **De-esser** – Tames harsh 's' and 'sh' sounds that can pierce listeners' ears, especially on headphones
+5. **Dynamic EQ de-esser** – Surgically tames harsh sibilance at 7kHz using frequency-specific compression for natural-sounding results
 6. **Loudness normalisation** – Matches the -16 LUFS podcast standard used by Spotify, Apple Podcasts, and YouTube
 7. **True peak limiter** – Safety net preventing any clipping or distortion in the final output
 
