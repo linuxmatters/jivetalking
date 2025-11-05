@@ -10,21 +10,21 @@ import (
 
 // Reader wraps ffmpeg-go demuxer and decoder for audio file reading
 type Reader struct {
-	fmtCtx  *ffmpeg.AVFormatContext
-	decCtx  *ffmpeg.AVCodecContext
+	fmtCtx    *ffmpeg.AVFormatContext
+	decCtx    *ffmpeg.AVCodecContext
 	streamIdx int
-	frame   *ffmpeg.AVFrame
-	packet  *ffmpeg.AVPacket
+	frame     *ffmpeg.AVFrame
+	packet    *ffmpeg.AVPacket
 }
 
 // Metadata contains audio file metadata
 type Metadata struct {
-	Duration    float64 // seconds
-	SampleRate  int
-	Channels    int
-	SampleFmt   string
-	ChLayout    string
-	BitDepth    int
+	Duration   float64 // seconds
+	SampleRate int
+	Channels   int
+	SampleFmt  string
+	ChLayout   string
+	BitDepth   int
 }
 
 // OpenAudioFile opens an audio file for reading
@@ -95,20 +95,20 @@ func OpenAudioFile(filename string) (*Reader, *Metadata, error) {
 
 	// Extract metadata
 	duration := float64(fmtCtx.Duration()) / float64(ffmpeg.AVTimeBase)
-	
+
 	// Get channel layout description
 	layoutPtr := ffmpeg.AllocCStr(64)
 	defer layoutPtr.Free()
-	
+
 	if _, err := ffmpeg.AVChannelLayoutDescribe(decCtx.ChLayout(), layoutPtr, 64); err != nil {
 		ffmpeg.AVCodecFreeContext(&decCtx)
 		ffmpeg.AVFormatCloseInput(&fmtCtx)
 		return nil, nil, fmt.Errorf("failed to get channel layout: %w", err)
 	}
-	
+
 	sampleFmtName := ffmpeg.AVGetSampleFmtName(decCtx.SampleFmt())
 	bytesPerSample, _ := ffmpeg.AVGetBytesPerSample(decCtx.SampleFmt())
-	
+
 	metadata := &Metadata{
 		Duration:   duration,
 		SampleRate: decCtx.SampleRate(),

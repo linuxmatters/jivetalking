@@ -173,7 +173,7 @@ processAudio(inputFile, outputFile, filterChain)
 
 **FFmpeg Filter String (Pass 2):**
 ```
-afftdn=nf=-25:nr=0.02,
+afftdn=nf={noise_floor}:nr=0.02:tn=1,
 agate=threshold=0.003:ratio=4:attack=5:release=100,
 acompressor=threshold=-18dB:ratio=4:attack=20:release=100:makeup=8dB,
 loudnorm=I=-16:TP=-1.5:LRA=11:
@@ -185,6 +185,8 @@ loudnorm=I=-16:TP=-1.5:LRA=11:
          linear=true:
          print_format=summary
 ```
+
+Note: `tn=1` enables automatic noise tracking, allowing afftdn to adapt from the initial `nf` estimate to the actual noise floor during processing. Each file's noise floor is calculated as `input_thresh - 15dB` from Pass 1 analysis.
 
 ### 4. User Interface (Bubbletea + Lipgloss)
 
@@ -433,13 +435,13 @@ jivetalking/
 - [x] Integrate ffmpeg-go filter graph API
 - [x] Implement loudnorm analysis (first pass)
 - [x] Extract measurements: input_i, input_tp, input_lra, input_thresh, target_offset
-- [ ] Calculate noise floor estimate
+- [x] Calculate noise floor estimate (input_thresh - 15dB for afftdn starting point)
 - [x] Store measurements for Pass 2
 
 **Pass 2: Processing Implementation:**
 - [ ] Build filter chain with measurements
 - [ ] Implement FFmpeg filter string generation:
-  - afftdn (noise reduction)
+  - afftdn (noise reduction using automatic noise tracking via `tn=1` to adapt from initial estimate)
   - agate (silence removal)
   - acompressor (dynamics)
   - loudnorm (two-pass with measurements)

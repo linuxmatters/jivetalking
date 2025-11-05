@@ -15,11 +15,12 @@ import (
 
 // LoudnormMeasurements contains the measurements from loudnorm first-pass analysis
 type LoudnormMeasurements struct {
-	InputI       float64 `json:"input_i"`        // Integrated loudness (LUFS)
-	InputTP      float64 `json:"input_tp"`       // True peak (dBTP)
-	InputLRA     float64 `json:"input_lra"`      // Loudness range (LU)
-	InputThresh  float64 `json:"input_thresh"`   // Threshold level
-	TargetOffset float64 `json:"target_offset"`  // Offset for normalization
+	InputI       float64 `json:"input_i"`       // Integrated loudness (LUFS)
+	InputTP      float64 `json:"input_tp"`      // True peak (dBTP)
+	InputLRA     float64 `json:"input_lra"`     // Loudness range (LU)
+	InputThresh  float64 `json:"input_thresh"`  // Threshold level
+	TargetOffset float64 `json:"target_offset"` // Offset for normalization
+	NoiseFloor   float64 `json:"noise_floor"`   // Estimated noise floor (dB)
 }
 
 // loudnormJSON is a helper struct for unmarshaling FFmpeg's JSON output
@@ -41,7 +42,7 @@ type loudnormJSON struct {
 func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64) (*LoudnormMeasurements, error) {
 	// Set up log capture to extract loudnorm JSON output
 	capture := &logCapture{}
-	
+
 	// Save current log level and set to INFO to capture loudnorm output
 	oldLevel, _ := ffmpeg.AVLogGetLevel()
 	ffmpeg.AVLogSetLevel(ffmpeg.AVLogInfo)
@@ -135,6 +136,13 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64) (*Loudn
 		return nil, fmt.Errorf("failed to extract measurements: %w", err)
 	}
 
+	// Estimate noise floor based on loudnorm input threshold
+	// The input_thresh represents the threshold below which audio is considered silence
+	// For podcast audio, the noise floor is typically 10-15 dB below this threshold
+	// This provides a good starting estimate for afftdn's automatic tracking (tn=1)
+	// which will adapt to the actual noise floor during Pass 2 processing
+	measurements.NoiseFloor = measurements.InputThresh - 15.0
+
 	return measurements, nil
 }
 
@@ -162,7 +170,7 @@ func createLoudnormFilterGraph(
 	// Get channel layout description
 	layoutPtr := ffmpeg.AllocCStr(64)
 	defer layoutPtr.Free()
-	
+
 	if _, err := ffmpeg.AVChannelLayoutDescribe(decCtx.ChLayout(), layoutPtr, 64); err != nil {
 		ffmpeg.AVFilterGraphFree(&filterGraph)
 		return nil, nil, nil, fmt.Errorf("failed to get channel layout: %w", err)
@@ -208,10 +216,11 @@ func createLoudnormFilterGraph(
 		return nil, nil, nil, fmt.Errorf("failed to create abuffersink: %w", err)
 	}
 
-	// Build loudnorm filter string
+	// Build filter string
 	var filterSpec string
 	if firstPass {
-		// First pass: just analysis, output JSON
+		// First pass: Analysis only - extract loudnorm measurements
+		// Note: Noise floor will be handled in Pass 2 by afftdn's automatic tracking (tn=1)
 		filterSpec = fmt.Sprintf("loudnorm=I=%.1f:TP=%.1f:LRA=%.1f:print_format=json",
 			targetI, targetTP, targetLRA)
 	} else {
@@ -278,45 +287,45 @@ func (lc *logCapture) callback(ctx *ffmpeg.LogCtx, level int, msg string) {
 func (lc *logCapture) extractMeasurements() (*LoudnormMeasurements, error) {
 	lc.mu.Lock()
 	defer lc.mu.Unlock()
-	
+
 	// Look for JSON block in accumulated logs
 	// loudnorm outputs JSON with this pattern:
 	// [Parsed_loudnorm_0 @ 0x...] {
 	//   "input_i" : "-31.10",
 	//   ...
 	// }
-	
+
 	logs := lc.allLogs.String()
-	
+
 	// Debug: Check if we got any logs at all
 	if len(logs) == 0 {
 		return nil, fmt.Errorf("no logs captured - log callback may not be working")
 	}
-	
+
 	// Find JSON block - look for { followed by "input_i"
 	startIdx := strings.Index(logs, "{")
 	if startIdx == -1 {
 		return nil, fmt.Errorf("no JSON block found in logs (captured %d bytes)", len(logs))
 	}
-	
+
 	// Find matching closing brace
 	endIdx := strings.Index(logs[startIdx:], "}")
 	if endIdx == -1 {
 		return nil, fmt.Errorf("incomplete JSON block in logs")
 	}
-	
+
 	jsonStr := logs[startIdx : startIdx+endIdx+1]
-	
+
 	// Parse JSON (FFmpeg outputs numeric values as strings)
 	var raw loudnormJSON
 	if err := json.Unmarshal([]byte(jsonStr), &raw); err != nil {
 		return nil, fmt.Errorf("failed to parse JSON: %w (json: %s)", err, jsonStr)
 	}
-	
+
 	// Convert string values to float64
 	m := &LoudnormMeasurements{}
 	var err error
-	
+
 	if m.InputI, err = strconv.ParseFloat(raw.InputI, 64); err != nil {
 		return nil, fmt.Errorf("failed to parse input_i: %w", err)
 	}
@@ -332,8 +341,6 @@ func (lc *logCapture) extractMeasurements() (*LoudnormMeasurements, error) {
 	if m.TargetOffset, err = strconv.ParseFloat(raw.TargetOffset, 64); err != nil {
 		return nil, fmt.Errorf("failed to parse target_offset: %w", err)
 	}
-	
+
 	return m, nil
 }
-
-
