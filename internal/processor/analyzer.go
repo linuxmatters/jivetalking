@@ -39,7 +39,7 @@ type loudnormJSON struct {
 // Implementation note: The loudnorm filter outputs its measurements via av_log()
 // only when the filter is destroyed (in its uninit() function). Therefore, we must
 // explicitly free the filter graph BEFORE attempting to extract measurements.
-func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64) (*LoudnormMeasurements, error) {
+func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progressCallback func(pass int, passName string, progress float64, measurements *LoudnormMeasurements)) (*LoudnormMeasurements, error) {
 	// Set up log capture to extract loudnorm JSON output
 	capture := &logCapture{}
 
@@ -53,11 +53,20 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64) (*Loudn
 	}()
 
 	// Open audio file
-	reader, _, err := audio.OpenAudioFile(filename)
+	reader, metadata, err := audio.OpenAudioFile(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open audio file: %w", err)
 	}
 	defer reader.Close()
+
+	// Get total duration for progress calculation
+	totalDuration := metadata.Duration
+	sampleRate := float64(metadata.SampleRate)
+
+	// Calculate total frames estimate (duration * sample_rate / samples_per_frame)
+	// For FLAC, typical frame size is 4096 samples
+	samplesPerFrame := 4096.0
+	estimatedTotalFrames := (totalDuration * sampleRate) / samplesPerFrame
 
 	// Create filter graph for loudnorm analysis
 	filterGraph, bufferSrcCtx, bufferSinkCtx, err := createLoudnormFilterGraph(
@@ -83,6 +92,10 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64) (*Loudn
 	filteredFrame := ffmpeg.AVFrameAlloc()
 	defer ffmpeg.AVFrameFree(&filteredFrame)
 
+	// Track frames for periodic progress updates
+	frameCount := 0
+	updateInterval := 100 // Send progress update every N frames
+
 	for {
 		frame, err := reader.ReadFrame()
 		if err != nil {
@@ -91,6 +104,16 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64) (*Loudn
 		if frame == nil {
 			break // EOF
 		}
+
+		// Send periodic progress updates based on frame count
+		if frameCount%updateInterval == 0 && progressCallback != nil && estimatedTotalFrames > 0 {
+			progress := float64(frameCount) / estimatedTotalFrames
+			if progress > 1.0 {
+				progress = 1.0
+			}
+			progressCallback(1, "Analyzing", progress, nil)
+		}
+		frameCount++
 
 		// Push frame into filter graph
 		if _, err := ffmpeg.AVBuffersrcAddFrameFlags(bufferSrcCtx, frame, 0); err != nil {

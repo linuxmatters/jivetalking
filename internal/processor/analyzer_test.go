@@ -41,7 +41,7 @@ func TestAnalyzeAudio(t *testing.T) {
 		t.Run(filepath.Base(filename), func(t *testing.T) {
 			t.Logf("Analyzing: %s", filepath.Base(filename))
 
-			measurements, err := AnalyzeAudio(filename, targetI, targetTP, targetLRA)
+			measurements, err := AnalyzeAudio(filename, targetI, targetTP, targetLRA, nil)
 			if err != nil {
 				t.Fatalf("AnalyzeAudio failed: %v", err)
 			}

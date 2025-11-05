@@ -16,50 +16,84 @@ import (
 // - Pass 2: Process audio through complete filter chain (afftdn → agate → acompressor → loudnorm)
 //
 // The output file will be named <basename>-processed.<ext> in the same directory as the input
-func ProcessAudio(inputPath string, config *FilterChainConfig) error {
+// If progressCallback is not nil, it will be called with progress updates
+func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback func(pass int, passName string, progress float64, measurements *LoudnormMeasurements)) (*ProcessingResult, error) {
 	// Pass 1: Analysis
-	fmt.Printf("Pass 1: Analyzing %s\n", filepath.Base(inputPath))
-	measurements, err := AnalyzeAudio(inputPath, config.TargetI, config.TargetTP, config.TargetLRA)
-	if err != nil {
-		return fmt.Errorf("Pass 1 failed: %w", err)
+	// (printf output suppressed for UI compatibility)
+
+	if progressCallback != nil {
+		progressCallback(1, "Analyzing", 0.0, nil)
 	}
 
-	// Display Pass 1 results
-	fmt.Printf("  Input Loudness:    %.1f LUFS\n", measurements.InputI)
-	fmt.Printf("  True Peak:         %.1f dBTP\n", measurements.InputTP)
-	fmt.Printf("  Loudness Range:    %.1f LU\n", measurements.InputLRA)
-	fmt.Printf("  Noise Floor:       %.0f dB (estimated)\n", measurements.NoiseFloor)
-	fmt.Println()
+	measurements, err := AnalyzeAudio(inputPath, config.TargetI, config.TargetTP, config.TargetLRA, progressCallback)
+	if err != nil {
+		return nil, fmt.Errorf("Pass 1 failed: %w", err)
+	}
+
+	if progressCallback != nil {
+		progressCallback(1, "Analyzing", 1.0, measurements)
+	}
 
 	// Update config with measurements and noise floor for Pass 2
 	config.Measurements = measurements
 	config.NoiseFloor = measurements.NoiseFloor
 
 	// Pass 2: Processing
-	fmt.Printf("Pass 2: Processing %s\n", filepath.Base(inputPath))
+	// (printf output suppressed for UI compatibility)
+
+	if progressCallback != nil {
+		progressCallback(2, "Processing", 0.0, measurements)
+	}
 
 	// Generate output filename: input.flac → input-processed.flac
 	outputPath := generateOutputPath(inputPath)
 
-	if err := processWithFilters(inputPath, outputPath, config); err != nil {
-		return fmt.Errorf("Pass 2 failed: %w", err)
+	if err := processWithFilters(inputPath, outputPath, config, progressCallback, measurements); err != nil {
+		return nil, fmt.Errorf("Pass 2 failed: %w", err)
 	}
 
-	fmt.Printf("✓ Output: %s\n", filepath.Base(outputPath))
-	fmt.Printf("  Target Loudness: %.1f LUFS\n", config.TargetI)
-	fmt.Println()
+	if progressCallback != nil {
+		progressCallback(2, "Processing", 1.0, measurements)
+	}
 
-	return nil
+	// Return the processing result
+	result := &ProcessingResult{
+		OutputPath:   outputPath,
+		InputLUFS:    measurements.InputI,
+		OutputLUFS:   config.TargetI,
+		NoiseFloor:   measurements.NoiseFloor,
+		Measurements: measurements,
+	}
+
+	return result, nil
+}
+
+// ProcessingResult contains the results of audio processing
+type ProcessingResult struct {
+	OutputPath   string
+	InputLUFS    float64
+	OutputLUFS   float64
+	NoiseFloor   float64
+	Measurements *LoudnormMeasurements
 }
 
 // processWithFilters performs the actual audio processing with the complete filter chain
-func processWithFilters(inputPath, outputPath string, config *FilterChainConfig) error {
+func processWithFilters(inputPath, outputPath string, config *FilterChainConfig, progressCallback func(pass int, passName string, progress float64, measurements *LoudnormMeasurements), measurements *LoudnormMeasurements) error {
 	// Open input audio file
 	reader, metadata, err := audio.OpenAudioFile(inputPath)
 	if err != nil {
 		return fmt.Errorf("failed to open input file: %w", err)
 	}
 	defer reader.Close()
+
+	// Get total duration for progress calculation
+	totalDuration := metadata.Duration
+	sampleRate := float64(metadata.SampleRate)
+
+	// Calculate total frames estimate (duration * sample_rate / samples_per_frame)
+	// For FLAC, typical frame size is 4096 samples
+	samplesPerFrame := 4096.0
+	estimatedTotalFrames := (totalDuration * sampleRate) / samplesPerFrame
 
 	// Create filter graph with complete processing chain
 	filterGraph, bufferSrcCtx, bufferSinkCtx, err := CreateProcessingFilterGraph(
@@ -82,6 +116,10 @@ func processWithFilters(inputPath, outputPath string, config *FilterChainConfig)
 	filteredFrame := ffmpeg.AVFrameAlloc()
 	defer ffmpeg.AVFrameFree(&filteredFrame)
 
+	// Track frame count for periodic progress updates
+	frameCount := 0
+	updateInterval := 100 // Send progress update every N frames
+
 	// Process all frames through the filter chain
 	for {
 		// Read frame from input
@@ -92,6 +130,16 @@ func processWithFilters(inputPath, outputPath string, config *FilterChainConfig)
 		if frame == nil {
 			break // EOF
 		}
+
+		// Send periodic progress updates based on frame count
+		if frameCount%updateInterval == 0 && progressCallback != nil && estimatedTotalFrames > 0 {
+			progress := float64(frameCount) / estimatedTotalFrames
+			if progress > 1.0 {
+				progress = 1.0
+			}
+			progressCallback(2, "Processing", progress, measurements)
+		}
+		frameCount++
 
 		// Push frame into filter graph
 		if _, err := ffmpeg.AVBuffersrcAddFrameFlags(bufferSrcCtx, frame, 0); err != nil {

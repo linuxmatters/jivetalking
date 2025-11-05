@@ -484,30 +484,30 @@ jivetalking/
 ### Phase 3: User Interface
 
 **Bubbletea Application:**
-- [ ] Multi-file queue display
-- [ ] Per-file progress tracking
-- [ ] Live processing statistics
-- [ ] Pass 1/Pass 2 phase indicators
-- [ ] Real-time audio level visualization
+- [x] Multi-file queue display
+- [x] Per-file progress tracking
+- [x] Live processing statistics
+- [x] Pass 1/Pass 2 phase indicators
+- [ ] Real-time audio level visualization (waveform/meters)
 - [ ] Filter effect indicators (noise reduction active, etc.)
 
 **Lipgloss Styling:**
-- [ ] Professional color scheme
-- [ ] Progress bars with gradients
-- [ ] Status icons (✓, ⚙, ○)
-- [ ] Bordered sections
-- [ ] Responsive layout
+- [x] Professional color scheme
+- [x] Progress bars with gradients
+- [x] Status icons (✓, ⚙, ○)
+- [x] Bordered sections
+- [x] Responsive layout
 
 **Progress Updates:**
-- [ ] FFmpeg progress callback integration
-- [ ] Frame-by-frame progress tracking
-- [ ] Time estimates (elapsed/remaining)
-- [ ] Audio level monitoring
+- [x] FFmpeg progress callback integration
+- [x] Percentage-based progress tracking
+- [x] Time estimates (elapsed/remaining)
+- [x] Audio level monitoring (data structures ready)
 
 **Deliverables:**
-- [ ] Beautiful terminal UI
-- [ ] Real-time feedback
-- [ ] Professional appearance
+- [x] Beautiful terminal UI
+- [x] Real-time feedback
+- [x] Professional appearance
 
 ### Phase 4: Comparison Mode
 
@@ -764,5 +764,7 @@ This a Jivetalking, an in-development Go project, that is a professional podcast
 Orientate yourself with the project by reading the documentation and code. You should refer to the ffmpeg-go source code when required, it can usually be found in `/tmp/ffmpeg-go-research`, but if it is not there you can use `gh` to clone it from https://github.com/csnewman/ffmpeg-go
 
 Sample audio files are in `testdata/`. You should only build and test Jivetalking via `just` commands. We are using NixOS as the host operating system and `flake.nix` provides tooling for the development shell. I use the `fish` shell. If you need to create "throw-away" test code, the put it in `testdata/`.
+
+Never claim your work is "Perfect", "Excellent" or "Production ready". I will judge the quality of the work we do. Never claim something is fixed, working or implemented until we have both confirmed so.
 
 Let me know when you are ready to start collaborating.
