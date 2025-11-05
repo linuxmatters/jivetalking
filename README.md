@@ -8,3 +8,10 @@ Jivetalking processes spoken word audio through a scientifically-tuned filter ch
 
 ```bash
 jivetalking presenter1.flac presenter2.flac presenter3.flac
+```
+
+## Specification
+
+Here is the detailed project specification and implementation plan:
+
+- [SPECIFICATION.md](docs/SPECIFICATION.md)
