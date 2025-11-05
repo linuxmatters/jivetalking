@@ -7,6 +7,7 @@ import (
 	"math"
 	"path/filepath"
 	"strings"
+	"unsafe"
 
 	"github.com/csnewman/ffmpeg-go"
 	"github.com/linuxmatters/jivetalking/internal/audio"
@@ -428,31 +429,85 @@ func (e *Encoder) receivePackets() error {
 	return nil
 }
 
-// calculateFrameLevel calculates an estimated RMS level of an audio frame in dBFS
-// Returns the level in decibels (negative values, where 0 is maximum)
-// This is a simplified implementation that provides visual feedback without deep FFmpeg buffer access
+// calculateFrameLevel calculates the RMS (Root Mean Square) level of an audio frame in dB
+// This provides accurate audio level measurement for VU meter display
 func calculateFrameLevel(frame *ffmpeg.AVFrame) float64 {
 	if frame == nil || frame.NbSamples() == 0 {
 		return -60.0 // Silence threshold
 	}
 
-	// Since we don't have easy access to the actual sample data through the FFmpeg bindings,
-	// we'll use a heuristic approach based on the frame's best_effort_timestamp and sample count
-	// This provides visual feedback even if not perfectly accurate
+	// Get sample format to know how to interpret the data
+	sampleFmt := frame.Format()
+	nbSamples := frame.NbSamples()
+	nbChannels := frame.ChLayout().NbChannels()
+	
+	// Get pointer to audio data (first plane for packed formats, or first channel for planar)
+	dataPtr := frame.Data().Get(0)
+	if dataPtr == nil {
+		return -60.0
+	}
 
-	// For now, return a simulated level that varies to show the meter is working
-	// In a production system, you'd want to properly decode the sample buffer
-	// The actual audio level would require accessing frame.Data() buffer correctly
+	// Calculate RMS based on sample format
+	// Most common formats: S16 (signed 16-bit) and FLT (32-bit float)
+	var sumSquares float64
+	var sampleCount int64
 
-	// Generate a pseudo-random level between -40dB and -12dB to demonstrate the meter
-	// In practice, you should extract and calculate RMS from the actual audio samples
-	pts := frame.BestEffortTimestamp()
+	switch ffmpeg.AVSampleFormat(sampleFmt) {
+	case ffmpeg.AVSampleFmtS16, ffmpeg.AVSampleFmtS16P:
+		// 16-bit signed integer samples
+		samples := unsafe.Slice((*int16)(dataPtr), int(nbSamples)*int(nbChannels))
+		for _, sample := range samples {
+			normalized := float64(sample) / 32768.0 // Normalize to -1.0 to 1.0
+			sumSquares += normalized * normalized
+			sampleCount++
+		}
 
-	// Use a simple sine wave pattern for demo (varies between -40 and -12 dB)
-	sineInput := float64(pts%1000) / 1000.0 * 2.0 * math.Pi
-	level := -26.0 + 14.0*math.Sin(sineInput) // Oscillates between -40dB and -12dB
+	case ffmpeg.AVSampleFmtFlt, ffmpeg.AVSampleFmtFltp:
+		// 32-bit float samples (already normalized to -1.0 to 1.0)
+		samples := unsafe.Slice((*float32)(dataPtr), int(nbSamples)*int(nbChannels))
+		for _, sample := range samples {
+			normalized := float64(sample)
+			sumSquares += normalized * normalized
+			sampleCount++
+		}
 
-	return level
+	case ffmpeg.AVSampleFmtS32, ffmpeg.AVSampleFmtS32P:
+		// 32-bit signed integer samples
+		samples := unsafe.Slice((*int32)(dataPtr), int(nbSamples)*int(nbChannels))
+		for _, sample := range samples {
+			normalized := float64(sample) / 2147483648.0 // Normalize to -1.0 to 1.0
+			sumSquares += normalized * normalized
+			sampleCount++
+		}
+
+	default:
+		// Unsupported format, return neutral value
+		return -30.0
+	}
+
+	if sampleCount == 0 {
+		return -60.0
+	}
+
+	// Calculate RMS (Root Mean Square)
+	rms := math.Sqrt(sumSquares / float64(sampleCount))
+
+	// Convert to dB: 20 * log10(rms)
+	// Add small epsilon to avoid log(0)
+	if rms < 0.00001 { // Equivalent to -100 dB
+		return -60.0 // Floor at -60 dB for silence
+	}
+
+	levelDB := 20.0 * math.Log10(rms)
+
+	// Clamp to reasonable range for display (-60 dB to 0 dB)
+	if levelDB < -60.0 {
+		levelDB = -60.0
+	} else if levelDB > 0.0 {
+		levelDB = 0.0
+	}
+
+	return levelDB
 }
 
 // Close closes the encoder and output file
