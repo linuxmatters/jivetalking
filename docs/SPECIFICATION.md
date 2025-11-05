@@ -368,7 +368,7 @@ Real-time Factor:    116x (2m 34s processing time for 5h 0m audio)
 **Project Setup:**
 - [x] Create repository: `linuxmatters/jivetalking`
 - [x] Copy Jivefire project structure template
-- [ ] Set up Go modules (ffmpeg-go, bubbletea, lipgloss, kong)
+- [x] Set up Go modules (ffmpeg-go, bubbletea, lipgloss, kong)
 - [x] Configure Nix flake for development environment
 - [x] Set up GitHub Actions CI/CD
 
@@ -410,9 +410,8 @@ jivetalking/
 ```
 
 **Deliverables:**
-- ✓ Compiling binary with basic CLI
-- ✓ File input validation
-- ✓ Audio format detection (reuse Jivefire code)
+- [x] Compiling binary with basic CLI
+- [x] File input validation
 
 ### Phase 2: Audio Processing Core (Week 2)
 
@@ -441,9 +440,10 @@ jivetalking/
 - [ ] Preserve sample rate and bit depth where possible
 
 **Deliverables:**
-- ✓ Working two-pass processing
-- ✓ Accurate -16 LUFS normalization
-- ✓ Output files with `-processed` suffix
+- [ ] Audio format detection
+- [ ] Working two-pass processing
+- [ ] Accurate -16 LUFS normalization
+- [ ] Output files with `-processed` suffix
 
 ### Phase 3: Configuration System (Week 3)
 
@@ -462,9 +462,9 @@ jivetalking/
 - [ ] Validate against professional podcast standards
 
 **Deliverables:**
-- ✓ Working TOML config system
-- ✓ Scientifically-tuned defaults
-- ✓ Config validation with helpful error messages
+- [ ] Working TOML config system
+- [ ] Scientifically-tuned defaults
+- [ ] Config validation with helpful error messages
 
 ### Phase 4: User Interface (Week 4)
 

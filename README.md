@@ -1,4 +1,4 @@
-# Jivetalking
+# Jivetalking 🕺
 
 **Professional podcast audio preprocessor that transforms raw voice recordings into broadcast-ready audio.**
 
