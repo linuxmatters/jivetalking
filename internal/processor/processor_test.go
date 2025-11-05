@@ -19,9 +19,17 @@ func TestProcessAudio(t *testing.T) {
 	// Create default config
 	config := DefaultFilterConfig()
 
-	// Process the audio
-	if err := ProcessAudio(testFile, config); err != nil {
+	// Process the audio with a no-op progress callback
+	result, err := ProcessAudio(testFile, config, func(pass int, passName string, progress float64, level float64, measurements *LoudnormMeasurements) {
+		// No-op for tests
+	})
+	if err != nil {
 		t.Fatalf("ProcessAudio failed: %v", err)
+	}
+
+	// Verify we got a valid result
+	if result == nil {
+		t.Fatal("ProcessAudio returned nil result")
 	}
 
 	// Verify output file was created

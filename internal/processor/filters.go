@@ -9,6 +9,9 @@ import (
 
 // FilterChainConfig holds configuration for the audio processing filter chain
 type FilterChainConfig struct {
+	// High-Pass Filter (highpass) - removes subsonic rumble
+	HighpassFreq float64 // Hz, cutoff frequency (removes frequencies below this)
+
 	// Noise Reduction (afftdn)
 	NoiseFloor     float64 // dB, estimated noise floor from Pass 1
 	NoiseReduction float64 // 0.0-1.0, reduction amount
@@ -27,10 +30,20 @@ type FilterChainConfig struct {
 	CompRelease   float64 // Release time (ms)
 	CompMakeup    float64 // dB, makeup gain
 
+	// De-esser (deesser) - reduces harsh sibilance
+	DeessIntensity float64 // 0.0-1.0, de-essing strength
+	DeessMax       float64 // 0.0-1.0, max deessing amount
+	DeessFreq      float64 // 0.0-1.0, frequency target (0.5 = ~6-8kHz)
+
 	// Loudness Normalization (loudnorm two-pass)
 	TargetI   float64 // LUFS target (podcast standard: -16)
 	TargetTP  float64 // dBTP, true peak ceiling
 	TargetLRA float64 // LU, loudness range target
+
+	// True Peak Limiter (alimiter) - brick-wall safety net
+	LimiterCeiling float64 // 0.0625-1.0, peak ceiling (0.98 = -0.17dBFS)
+	LimiterAttack  float64 // ms, attack time
+	LimiterRelease float64 // ms, release time
 
 	// Pass 1 measurements (nil for first pass)
 	Measurements *LoudnormMeasurements
@@ -40,6 +53,9 @@ type FilterChainConfig struct {
 // for podcast spoken word audio processing
 func DefaultFilterConfig() *FilterChainConfig {
 	return &FilterChainConfig{
+		// High-pass - remove subsonic rumble
+		HighpassFreq: 80.0, // 80Hz cutoff
+
 		// Noise Reduction - will use Pass 1 noise floor estimate
 		NoiseFloor:     -25.0, // Placeholder, will be updated from measurements
 		NoiseReduction: 0.02,
@@ -58,18 +74,33 @@ func DefaultFilterConfig() *FilterChainConfig {
 		CompRelease:   100,
 		CompMakeup:    8,
 
+		// De-esser - gentle sibilance reduction
+		DeessIntensity: 0.3, // Gentle de-essing
+		DeessMax:       0.5, // Max 50% reduction
+		DeessFreq:      0.5, // Target ~6-8kHz sibilance range
+
 		// Loudness - podcast standard
 		TargetI:   -16.0,
 		TargetTP:  -1.5,
 		TargetLRA: 11.0,
+
+		// Limiter - brick-wall safety net
+		LimiterCeiling: 0.98, // -0.17dBFS ceiling
+		LimiterAttack:  5.0,  // 5ms attack
+		LimiterRelease: 50.0, // 50ms release
 
 		Measurements: nil, // Will be set after Pass 1
 	}
 }
 
 // BuildFilterSpec builds the FFmpeg filter specification string for Pass 2 processing
-// This creates the complete filter chain: afftdn → agate → acompressor → loudnorm
+// This creates the complete filter chain: highpass → afftdn → agate → acompressor → deesser → loudnorm → alimiter
 func (cfg *FilterChainConfig) BuildFilterSpec() string {
+	// Build highpass (rumble removal) filter
+	// Remove subsonic frequencies below 80Hz (HVAC, handling noise, etc.)
+	highpassFilter := fmt.Sprintf("highpass=f=%.0f:t=q",
+		cfg.HighpassFreq)
+
 	// Build afftdn (noise reduction) filter
 	// Use automatic noise tracking (tn=1) to adapt from initial estimate to actual noise floor
 	noiseTrackFlag := 0
@@ -87,6 +118,11 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 	// Build acompressor (dynamics) filter
 	acompressorFilter := fmt.Sprintf("acompressor=threshold=%.0fdB:ratio=%.1f:attack=%.0f:release=%.0f:makeup=%.0fdB",
 		cfg.CompThreshold, cfg.CompRatio, cfg.CompAttack, cfg.CompRelease, cfg.CompMakeup)
+
+	// Build deesser (sibilance reduction) filter
+	// Applied after compression to correct emphasized sibilance
+	deesserFilter := fmt.Sprintf("deesser=i=%.1f:m=%.1f:f=%.1f",
+		cfg.DeessIntensity, cfg.DeessMax, cfg.DeessFreq)
 
 	// Build loudnorm (two-pass normalization) filter
 	var loudnormFilter string
@@ -107,11 +143,17 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 		)
 	}
 
+	// Build alimiter (true peak limiter) filter
+	// Brick-wall safety net to catch any true peak violations after loudnorm
+	alimiterFilter := fmt.Sprintf("alimiter=level_in=1:level_out=1:limit=%.2f:attack=%.0f:release=%.0f",
+		cfg.LimiterCeiling, cfg.LimiterAttack, cfg.LimiterRelease)
+
 	// Chain all filters together with commas
+	// Order: highpass → denoise → gate → compress → deess → normalize → limit → format → frame
 	// Add aformat for podcast-standard output: 44.1kHz, mono, s16
 	// Add asetnsamples to ensure fixed frame size for FLAC encoder (which doesn't support variable frame size)
-	return fmt.Sprintf("%s,%s,%s,%s,aformat=sample_rates=44100:channel_layouts=mono:sample_fmts=s16,asetnsamples=n=4096",
-		afftdnFilter, agateFilter, acompressorFilter, loudnormFilter)
+	return fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s,aformat=sample_rates=44100:channel_layouts=mono:sample_fmts=s16,asetnsamples=n=4096",
+		highpassFilter, afftdnFilter, agateFilter, acompressorFilter, deesserFilter, loudnormFilter, alimiterFilter)
 }
 
 // CreateProcessingFilterGraph creates an AVFilterGraph for complete audio processing

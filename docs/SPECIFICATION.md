@@ -103,10 +103,13 @@ Input Audio
     └─ Calculate dynamic range
     ↓
 [Pass 2: Processing]
-    ├─ FFT Noise Reduction (afftdn)
-    ├─ Audio Gate (agate)
-    ├─ Dynamic Range Compression (acompressor)
-    └─ Loudness Normalization (loudnorm, two-pass)
+    ├─ High-Pass Filter (highpass) - Remove subsonic rumble
+    ├─ FFT Noise Reduction (afftdn) - Remove background noise
+    ├─ Audio Gate (agate) - Remove silence
+    ├─ Dynamic Range Compression (acompressor) - Even out levels
+    ├─ De-esser (deesser) - Reduce harsh sibilance
+    ├─ Loudness Normalization (loudnorm, two-pass) - Target -16 LUFS
+    └─ True Peak Limiter (alimiter) - Brick-wall safety net
     ↓
 Output: -16 LUFS, broadcast-ready audio
     ↓
@@ -119,6 +122,10 @@ Output: -16 LUFS, broadcast-ready audio
 ```toml
 # Scientifically-tuned for spoken word podcast audio
 # Users should not need to change these unless they have specific needs
+
+[highpass]
+# Remove subsonic rumble and low-frequency noise
+frequency = 80          # Hz, cutoff frequency (removes below this)
 
 [noise-reduction]
 # FFT-based noise reduction (afftdn)
@@ -140,11 +147,23 @@ attack = 20             # Attack time (ms)
 release = 100           # Release time (ms)
 makeup_gain = 8         # dB, post-compression gain
 
+[deesser]
+# Reduce harsh sibilance (S, T, SH sounds)
+intensity = 0.3         # De-essing strength (0.0-1.0)
+max = 0.5              # Max deessing amount (0.0-1.0)
+frequency = 0.5         # Frequency target (0.5 = ~6-8kHz)
+
 [loudness]
 # EBU R128 loudness normalization (loudnorm)
 integrated = -16        # LUFS target (podcast standard)
 true_peak = -1.5        # dBTP, peak ceiling
 lra = 11                # LU, loudness range target
+
+[limiter]
+# True peak limiter - brick-wall safety net (alimiter)
+ceiling = 0.98          # Peak ceiling (0.98 = -0.17dBFS)
+attack = 5              # Attack time (ms)
+release = 50            # Release time (ms)
 ```
 
 ### 3. Two-Pass Loudnorm Implementation
@@ -173,9 +192,11 @@ processAudio(inputFile, outputFile, filterChain)
 
 **FFmpeg Filter String (Pass 2):**
 ```
+highpass=f=80:t=q,
 afftdn=nf={noise_floor}:nr=0.02:tn=1,
 agate=threshold=0.003:ratio=4:attack=5:release=100,
 acompressor=threshold=-18dB:ratio=4:attack=20:release=100:makeup=8dB,
+deesser=i=0.3:m=0.5:f=0.5,
 loudnorm=I=-16:TP=-1.5:LRA=11:
          measured_I={input_i}:
          measured_TP={input_tp}:
@@ -183,8 +204,18 @@ loudnorm=I=-16:TP=-1.5:LRA=11:
          measured_thresh={input_thresh}:
          offset={target_offset}:
          linear=true:
-         print_format=summary
+         print_format=summary,
+alimiter=level_in=1:level_out=1:limit=0.98:attack=5:release=50
 ```
+
+**Filter Order Justification:**
+1. **highpass** - Remove subsonic rumble BEFORE spectral analysis (prevents low-frequency artifacts)
+2. **afftdn** - Noise reduction on clean frequency spectrum
+3. **agate** - Remove silence after noise reduction for cleaner cuts
+4. **acompressor** - Even out dynamics on clean signal
+5. **deesser** - Correct sibilance emphasis caused by compression
+6. **loudnorm** - Final loudness targeting on fully processed signal
+7. **alimiter** - Safety net for true peak violations (loudnorm can occasionally overshoot)
 
 Note: `tn=1` enables automatic noise tracking, allowing afftdn to adapt from the initial `nf` estimate to the actual noise floor during processing. Each file's noise floor is calculated as `input_thresh - 15dB` from Pass 1 analysis.
 
@@ -441,10 +472,13 @@ jivetalking/
 **Pass 2: Processing Implementation:**
 - [x] Build filter chain with measurements
 - [x] Implement FFmpeg filter string generation:
+  - [x] highpass (rumble removal at 80Hz)
   - [x] afftdn (noise reduction using automatic noise tracking via `tn=1` to adapt from initial estimate)
   - [x] agate (silence removal)
   - [x] acompressor (dynamics)
+  - [x] deesser (sibilance control)
   - [x] loudnorm (two-pass with measurements)
+  - [x] alimiter (true peak safety limiter)
   - [x] aformat (S16 sample format for FLAC compatibility)
   - [x] asetnsamples (fixed 4096 frame size for FLAC encoder requirement)
 - [x] Create AVFilterGraph from string
@@ -454,8 +488,8 @@ jivetalking/
 **Audio I/O:**
 - [x] Implement ffmpeg-go demuxer for FLAC/WAV input reading
 - [x] Decode audio frames via ffmpeg-go codec API
-- [x] Implement ffmpeg-go FLAC encoder output (preferred)
-- [ ] Implement ffmpeg-go WAV encoder fallback
+- [x] Implement ffmpeg-go FLAC encoder output
+- [ ] ~~Implement ffmpeg-go WAV encoder fallback~~
 - [x] Preserve sample rate and bit depth where possible
 - [x] Keep audio in AVFrame format throughout pipeline (no format conversion overhead)
 - [x] Handle channel layout configuration for encoder
