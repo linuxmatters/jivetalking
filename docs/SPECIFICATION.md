@@ -489,7 +489,6 @@ jivetalking/
 - [x] Live processing statistics
 - [x] Pass 1/Pass 2 phase indicators
 - [x] Real-time audio level visualization (waveform/meters)
-- [ ] Analysis measurements (LUFS, peak, LRA, noise floor)
 - [ ] Filter effect indicators (noise reduction active, etc.)
 
 **Lipgloss Styling:**
@@ -538,11 +537,12 @@ jivetalking/
 - [ ] Loudness: normalization adjustment
 
 **Log Files (--logs):**
-- [ ] Generate detailed analysis reports
-- [ ] Save alongside output files
-- [ ] Include all measurements and effects
-- [ ] Format for readability
-- [ ] Timestamp and metadata
+- [x] Generate detailed analysis reports
+- [x] Save alongside output files (filename-processed.log)
+- [x] Include all measurements and effects
+- [x] Format for readability
+- [x] Timestamp and metadata
+- [x] Per-file timing (Pass 1, Pass 2, total, real-time factor)
 
 **Quality Scoring:**
 - [ ] Analyze output quality metrics
@@ -551,7 +551,7 @@ jivetalking/
 
 **Deliverables:**
 - [ ] Comprehensive measurement display
-- [ ] Detailed log file generation
+- [x] Detailed log file generation
 - [ ] Quality assessment system
 
 ### Phase 7: Configuration System

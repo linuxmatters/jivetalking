@@ -174,7 +174,7 @@ func renderAudioLevelMeter(currentLevel, peakLevel float64) string {
 
 	// Build meter character by character with appropriate colors
 	// Using ANSI color codes directly to avoid lipgloss width calculation issues
-	greenColor := "\033[38;2;0;170;0m"   // #00AA00
+	greenColor := "\033[38;2;0;170;0m"    // #00AA00
 	orangeColor := "\033[38;2;255;165;0m" // #FFA500
 	redColor := "\033[38;2;164;0;0m"      // #A40000
 	resetColor := "\033[0m"
