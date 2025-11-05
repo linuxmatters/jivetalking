@@ -72,6 +72,7 @@ jivetalking [flags] <input-files...>
 Flags:
   --config, -c <path>    Path to TOML config (optional)
   --logs                 Save detailed analysis logs
+  --compare              Create before/after comparison files
   --version, -v          Show version
   --help, -h             Show help
 ```
@@ -85,6 +86,10 @@ Flags:
 - Format: FLAC (preferred) or WAV (fallback if FLAC encoding unavailable)
 - Naming: `<basename>-processed.<ext>` (e.g., `presenter1-processed.flac`)
 - Location: Same directory as source file
+- Comparison mode (`--compare`):
+  - `unprocessed.flac`: Mixed raw input audio (no processing)
+  - `processed.flac`: Mixed processed audio after all files complete
+  - Enables A/B comparison to demonstrate Jivetalking's value
 
 ### 2. Audio Processing Pipeline
 
@@ -104,6 +109,10 @@ Input Audio
     └─ Loudness Normalization (loudnorm, two-pass)
     ↓
 Output: -16 LUFS, broadcast-ready audio
+    ↓
+[Optional: Comparison Mode (--compare)]
+    ├─ Mix all raw input files → unprocessed.flac
+    └─ Mix all processed files → processed.flac
 ```
 
 **Default Filter Parameters:**
@@ -259,6 +268,11 @@ All files normalized to -16 LUFS and level-matched ✓
 Ready for import into Audacity - no additional processing needed!
 
 📁 Output: 3 files | 💾 Total: 142.7 MB | ⏱ Total Time: 2m 34s
+
+🔊 Comparison Files (--compare):
+  unprocessed.flac - Mixed raw input (no processing)
+  processed.flac - Mixed processed output
+  → Listen to both files to hear the difference!
 ```
 
 ### 5. Configuration File (Optional)
@@ -441,11 +455,19 @@ jivetalking/
 - [ ] Preserve sample rate and bit depth where possible
 - [ ] Keep audio in AVFrame format throughout pipeline (no format conversion overhead)
 
+**Comparison Mode (--compare flag):**
+- [ ] Implement audio mixing function using ffmpeg-go amerge filter
+- [ ] Create unprocessed.flac from raw input files (no processing)
+- [ ] Create processed.flac from processed output files
+- [ ] Ensure mixed files maintain -16 LUFS target for accurate comparison
+- [ ] Add comparison file generation to UI completion summary
+
 **Deliverables:**
 - [ ] Audio format detection
 - [ ] Working two-pass processing
 - [ ] Accurate -16 LUFS normalization
 - [ ] Output files with `-processed` suffix
+- [ ] Comparison files (when --compare flag used)
 
 ### Phase 3: Configuration System (Week 3)
 
@@ -492,9 +514,9 @@ jivetalking/
 - [ ] Audio level monitoring
 
 **Deliverables:**
-- ✓ Beautiful terminal UI
-- ✓ Real-time feedback
-- ✓ Professional appearance
+- [ ] Beautiful terminal UI
+- [ ] Real-time feedback
+- [ ] Professional appearance
 
 ### Phase 5: Analysis & Reporting (Week 5)
 
@@ -524,9 +546,9 @@ jivetalking/
 - [ ] Detect potential issues (clipping, etc.)
 
 **Deliverables:**
-- ✓ Comprehensive measurement display
-- ✓ Detailed log file generation
-- ✓ Quality assessment system
+- [ ] Comprehensive measurement display
+- [ ] Detailed log file generation
+- [ ] Quality assessment system
 
 ### Phase 6: Testing & Polish (Week 6)
 
