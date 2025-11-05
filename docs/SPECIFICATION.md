@@ -379,7 +379,7 @@ Real-time Factor:    116x (2m 34s processing time for 5h 0m audio)
 
 ## Implementation Plan
 
-### Phase 1: Foundation (Week 1)
+### Phase 1: Foundation
 
 **Project Setup:**
 - [x] Create repository: `linuxmatters/jivetalking`
@@ -429,7 +429,7 @@ jivetalking/
 - [x] Compiling binary with basic CLI
 - [x] File input validation
 
-### Phase 2: Audio Processing Core (Week 2)
+### Phase 2: Audio Processing Core
 
 **Pass 1: Analysis Implementation:**
 - [x] Integrate ffmpeg-go filter graph API
@@ -461,13 +461,6 @@ jivetalking/
 - [x] Handle channel layout configuration for encoder
 - [x] Fixed frame size handling for FLAC encoder (4096 samples)
 
-**Comparison Mode (--compare flag):**
-- [ ] Implement audio mixing function using ffmpeg-go amerge filter
-- [ ] Create unprocessed.flac from raw input files (no processing)
-- [ ] Create processed.flac from processed output files
-- [ ] Ensure mixed files maintain -16 LUFS target for accurate comparison
-- [ ] Add comparison file generation to UI completion summary
-
 **Deliverables:**
 - [x] Audio format detection
 - [x] Working two-pass processing
@@ -488,28 +481,7 @@ jivetalking/
 - Two-pass loudnorm requires Pass 1 measurements (input_i, input_tp, input_lra, input_thresh, target_offset)
 - Filter chain order critical: denoise → gate → compress → normalize → format → frame
 
-### Phase 3: Configuration System (Week 3)
-
-**TOML Parser:**
-- [ ] Load config from `jivetalking.toml` or `--config` path
-- [ ] Parse all filter parameters
-- [ ] Validate parameter ranges
-- [ ] Merge with defaults
-- [ ] Document parameter meanings in comments
-
-**Default Tuning:**
-- [ ] Research optimal parameters for podcast audio
-- [ ] Test with various voice types (male, female, different mics)
-- [ ] Calibrate noise reduction aggressiveness
-- [ ] Fine-tune compression for natural sound
-- [ ] Validate against professional podcast standards
-
-**Deliverables:**
-- [ ] Working TOML config system
-- [ ] Scientifically-tuned defaults
-- [ ] Config validation with helpful error messages
-
-### Phase 4: User Interface (Week 4)
+### Phase 3: User Interface
 
 **Bubbletea Application:**
 - [ ] Multi-file queue display
@@ -537,7 +509,19 @@ jivetalking/
 - [ ] Real-time feedback
 - [ ] Professional appearance
 
-### Phase 5: Analysis & Reporting (Week 5)
+### Phase 4: Comparison Mode
+
+**Comparison Mode (--compare flag):**
+- [ ] Implement audio mixing function using ffmpeg-go amerge filter
+- [ ] Create unprocessed.flac from raw input files (no processing)
+- [ ] Create processed.flac from processed output files
+- [ ] Ensure mixed files maintain -16 LUFS target for accurate comparison
+- [ ] Add comparison file generation to UI completion summary
+
+**Deliverables:**
+- [ ] Comparison files (when --compare flag used)
+
+### Phase 5: Analysis & Reporting
 
 **Measurements Display:**
 - [ ] Show input LUFS before processing
@@ -569,7 +553,28 @@ jivetalking/
 - [ ] Detailed log file generation
 - [ ] Quality assessment system
 
-### Phase 6: Testing & Polish (Week 6)
+### Phase 7: Configuration System
+
+**TOML Parser:**
+- [ ] Load config from `jivetalking.toml` or `--config` path
+- [ ] Parse all filter parameters
+- [ ] Validate parameter ranges
+- [ ] Merge with defaults
+- [ ] Document parameter meanings in comments
+
+**Default Tuning:**
+- [ ] Research optimal parameters for podcast audio
+- [ ] Test with various voice types (male, female, different mics)
+- [ ] Calibrate noise reduction aggressiveness
+- [ ] Fine-tune compression for natural sound
+- [ ] Validate against professional podcast standards
+
+**Deliverables:**
+- [ ] Working TOML config system
+- [ ] Scientifically-tuned defaults
+- [ ] Config validation with helpful error messages
+
+### Phase 7: Testing & Polish
 
 **Test Coverage:**
 - [ ] Unit tests for filter chain builder
@@ -758,6 +763,6 @@ This a Jivetalking, an in-development Go project, that is a professional podcast
 
 Orientate yourself with the project by reading the documentation and code. You should refer to the ffmpeg-go source code when required, it can usually be found in `/tmp/ffmpeg-go-research`, but if it is not there you can use `gh` to clone it from https://github.com/csnewman/ffmpeg-go
 
-Sample audio files are in `testdata/`. You should only build and test Jivetalking via `just` commands. We are using NixOS as the host operating system and `flake.nix` provides tooling for the development shell. I use the `fish` shell.
+Sample audio files are in `testdata/`. You should only build and test Jivetalking via `just` commands. We are using NixOS as the host operating system and `flake.nix` provides tooling for the development shell. I use the `fish` shell. If you need to create "throw-away" test code, the put it in `testdata/`.
 
 Let me know when you are ready to start collaborating.
