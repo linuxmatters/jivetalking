@@ -78,7 +78,7 @@ Flags:
 
 **Input:**
 - Accepts 1 or more audio files
-- Supported formats: FLAC, WAV, MP3 (via existing Jivefire decoders)
+- Supported formats: FLAC, WAV (via ffmpeg-go demuxer API)
 - Files processed **sequentially** (one at a time)
 
 **Output:**
@@ -385,8 +385,8 @@ jivetalking/
 │   │   ├── filters.go           # Filter chain builder
 │   │   └── encoder.go           # Output FLAC/WAV encoder
 │   ├── audio/
-│   │   ├── reader.go            # Reuse from Jivefire
-│   │   ├── decoder.go           # Multi-format decoder
+│   │   ├── reader.go            # ffmpeg-go demuxer wrapper
+│   │   ├── decoder.go           # ffmpeg-go decoder wrapper
 │   │   └── metadata.go          # Audio file metadata
 │   ├── config/
 │   │   ├── config.go            # TOML config parser
@@ -434,10 +434,12 @@ jivetalking/
 - [ ] Monitor processing progress
 
 **Audio I/O:**
-- [ ] Reuse Jivefire decoders (FLAC, WAV, MP3)
-- [ ] Implement FLAC encoder output (preferred)
-- [ ] Implement WAV encoder fallback
+- [ ] Implement ffmpeg-go demuxer for FLAC/WAV input reading
+- [ ] Decode audio frames via ffmpeg-go codec API
+- [ ] Implement ffmpeg-go FLAC encoder output (preferred)
+- [ ] Implement ffmpeg-go WAV encoder fallback
 - [ ] Preserve sample rate and bit depth where possible
+- [ ] Keep audio in AVFrame format throughout pipeline (no format conversion overhead)
 
 **Deliverables:**
 - [ ] Audio format detection
@@ -531,9 +533,9 @@ jivetalking/
 **Test Coverage:**
 - [ ] Unit tests for filter chain builder
 - [ ] Integration tests for full pipeline
-- [ ] Test with various input formats (FLAC, WAV, MP3)
+- [ ] Test with various input formats (FLAC, WAV)
 - [ ] Test with mono and stereo inputs
-- [ ] Test with different sample rates
+- [ ] Test with different sample rates (44.1kHz, 48kHz, 96kHz)
 - [ ] Edge cases (very quiet audio, very loud audio)
 
 **Performance Testing:**
@@ -564,19 +566,24 @@ jivetalking/
 
 ## Technical Dependencies
 
-### Go Modules (same as Jivefire)
+### Go Modules
 
 ```go
 require (
-    github.com/csnewman/ffmpeg-go v0.6.0      // FFmpeg bindings
+    github.com/csnewman/ffmpeg-go v0.6.0      // FFmpeg bindings (audio I/O + filter graph)
     github.com/charmbracelet/bubbletea v0.x    // TUI framework
     github.com/charmbracelet/lipgloss v0.x     // Terminal styling
     github.com/alecthomas/kong v0.x            // CLI parser
-    github.com/go-audio/wav v1.x               // WAV decoder
-    github.com/sukus21/go-mp3 v0.x             // MP3 decoder
-    github.com/mewkiz/flac v1.x                // FLAC decoder/encoder
+    // Note: No pure Go audio decoders needed - ffmpeg-go handles all I/O
 )
 ```
+
+**Architecture Decision:**
+- Uses ffmpeg-go for all audio I/O (reading, decoding, encoding, writing)
+- Audio stays in FFmpeg's native `AVFrame` format throughout pipeline
+- No format conversion overhead between decoder → filter graph → encoder
+- Simpler architecture with single dependency for all audio operations
+- MP3 not needed for podcast workflow (FLAC/WAV only)
 
 ### External Requirements
 
