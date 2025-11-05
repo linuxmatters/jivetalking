@@ -366,11 +366,11 @@ Real-time Factor:    116x (2m 34s processing time for 5h 0m audio)
 ### Phase 1: Foundation (Week 1)
 
 **Project Setup:**
-- [ ] Create repository: `linuxmatters/jivetalking`
-- [ ] Copy Jivefire project structure template
+- [x] Create repository: `linuxmatters/jivetalking`
+- [x] Copy Jivefire project structure template
 - [ ] Set up Go modules (ffmpeg-go, bubbletea, lipgloss, kong)
-- [ ] Configure Nix flake for development environment
-- [ ] Set up GitHub Actions CI/CD
+- [x] Configure Nix flake for development environment
+- [x] Set up GitHub Actions CI/CD
 
 **Directory Structure:**
 ```
