@@ -90,8 +90,7 @@ func renderFileDetails(file FileProgress) string {
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#A40000")).
-		Padding(0, 1).
-		Width(60)
+		Padding(0, 1)
 
 	var content strings.Builder
 
@@ -114,10 +113,10 @@ func renderFileDetails(file FileProgress) string {
 	}
 	content.WriteString(fmt.Sprintf("⏱  Elapsed: %.1fs | Remaining: ~%.1fs\n", elapsed, remaining))
 
-	// Current level if available
+	// Audio level visualization
 	if file.CurrentLevel != 0 {
-		content.WriteString(fmt.Sprintf("📊 Current Level: %.1f dB | Peak: %.1f dB",
-			file.CurrentLevel, file.PeakLevel))
+		content.WriteString("\n")
+		content.WriteString(renderAudioLevelMeter(file.CurrentLevel, file.PeakLevel))
 	}
 
 	return box.Render(content.String())
@@ -134,13 +133,91 @@ func renderProgressBar(progress float64, width int) string {
 	return fmt.Sprintf("%s %d%%", bar, percentage)
 }
 
+// renderAudioLevelMeter renders a live audio level meter with dB visualization
+func renderAudioLevelMeter(currentLevel, peakLevel float64) string {
+	var b strings.Builder
+
+	// Display current and peak levels
+	b.WriteString(fmt.Sprintf("🎙 Audio Level: %.1f dB | Peak: %.1f dB\n", currentLevel, peakLevel))
+
+	// Create visual meter
+	// dB range: -60 dB (silence) to 0 dB (maximum)
+	// Map to 40-character width meter
+	width := 40
+	minDB := -60.0
+	maxDB := 0.0
+
+	// Calculate fill position for current level
+	currentPos := int(((currentLevel - minDB) / (maxDB - minDB)) * float64(width))
+	if currentPos < 0 {
+		currentPos = 0
+	}
+	if currentPos > width {
+		currentPos = width
+	}
+
+	// Calculate position for peak marker
+	peakPos := int(((peakLevel - minDB) / (maxDB - minDB)) * float64(width))
+	if peakPos < 0 {
+		peakPos = 0
+	}
+	if peakPos > width {
+		peakPos = width
+	}
+
+	// Build the meter bar with color zones
+	// Green: -60 to -18 dB (safe)
+	// Orange: -18 to -6 dB (approaching loud)
+	// Red: -6 to 0 dB (loud/clipping risk)
+	greenZone := int((((-18.0) - minDB) / (maxDB - minDB)) * float64(width))
+	orangeZone := int((((-6.0) - minDB) / (maxDB - minDB)) * float64(width))
+
+	// Build meter character by character with appropriate colors
+	// Using ANSI color codes directly to avoid lipgloss width calculation issues
+	greenColor := "\033[38;2;0;170;0m"   // #00AA00
+	orangeColor := "\033[38;2;255;165;0m" // #FFA500
+	redColor := "\033[38;2;164;0;0m"      // #A40000
+	resetColor := "\033[0m"
+
+	for i := 0; i < width; i++ {
+		// Determine color zone
+		var color string
+		if i < greenZone {
+			color = greenColor
+		} else if i < orangeZone {
+			color = orangeColor
+		} else {
+			color = redColor
+		}
+
+		// Determine character
+		var char rune
+		if i == peakPos && i > currentPos {
+			// Show peak marker only if it's ahead of current position
+			char = '|'
+		} else if i < currentPos {
+			char = '▓' // Filled
+		} else if i == currentPos && currentPos == peakPos {
+			// When current level is at peak, show filled bar
+			char = '▓'
+		} else {
+			char = '░' // Empty
+		}
+
+		b.WriteString(color)
+		b.WriteRune(char)
+	}
+	b.WriteString(resetColor)
+
+	return b.String()
+}
+
 // renderOverallProgress renders the overall progress footer
 func renderOverallProgress(m Model) string {
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#888888")).
-		Padding(0, 1).
-		Width(60)
+		Padding(0, 1)
 
 	// Show current file being processed
 	var content string

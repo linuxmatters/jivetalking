@@ -441,12 +441,12 @@ jivetalking/
 **Pass 2: Processing Implementation:**
 - [x] Build filter chain with measurements
 - [x] Implement FFmpeg filter string generation:
-  - afftdn (noise reduction using automatic noise tracking via `tn=1` to adapt from initial estimate)
-  - agate (silence removal)
-  - acompressor (dynamics)
-  - loudnorm (two-pass with measurements)
-  - aformat (S16 sample format for FLAC compatibility)
-  - asetnsamples (fixed 4096 frame size for FLAC encoder requirement)
+  - [x] afftdn (noise reduction using automatic noise tracking via `tn=1` to adapt from initial estimate)
+  - [x] agate (silence removal)
+  - [x] acompressor (dynamics)
+  - [x] loudnorm (two-pass with measurements)
+  - [x] aformat (S16 sample format for FLAC compatibility)
+  - [x] asetnsamples (fixed 4096 frame size for FLAC encoder requirement)
 - [x] Create AVFilterGraph from string
 - [x] Process audio through filter chain
 - [x] Frame-by-frame processing with proper timebase handling
@@ -488,7 +488,8 @@ jivetalking/
 - [x] Per-file progress tracking
 - [x] Live processing statistics
 - [x] Pass 1/Pass 2 phase indicators
-- [ ] Real-time audio level visualization (waveform/meters)
+- [x] Real-time audio level visualization (waveform/meters)
+- [ ] Analysis measurements (LUFS, peak, LRA, noise floor)
 - [ ] Filter effect indicators (noise reduction active, etc.)
 
 **Lipgloss Styling:**

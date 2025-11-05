@@ -92,6 +92,7 @@ func NewModel(inputFiles []string) Model {
 		files[i] = FileProgress{
 			InputPath: path,
 			Status:    StatusQueued,
+			PeakLevel: -60.0, // Initialize to silence threshold
 		}
 	}
 
@@ -190,6 +191,7 @@ func updateFileProgress(fp FileProgress, msg ProgressMsg) FileProgress {
 	// Reset the start time when transitioning to a new pass
 	if msg.Pass != fp.CurrentPass {
 		fp.StartTime = time.Now()
+		log("[UI] Pass transition: %d -> %d, PeakLevel before: %.1f dB", fp.CurrentPass, msg.Pass, fp.PeakLevel)
 	}
 
 	fp.Progress = msg.Progress
@@ -204,7 +206,9 @@ func updateFileProgress(fp FileProgress, msg ProgressMsg) FileProgress {
 	if msg.Level != 0 {
 		fp.CurrentLevel = msg.Level
 		if msg.Level > fp.PeakLevel {
+			oldPeak := fp.PeakLevel
 			fp.PeakLevel = msg.Level
+			log("[UI] Peak updated: %.1f -> %.1f dB (current: %.1f dB)", oldPeak, fp.PeakLevel, msg.Level)
 		}
 	}
 

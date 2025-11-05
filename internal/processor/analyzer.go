@@ -39,7 +39,7 @@ type loudnormJSON struct {
 // Implementation note: The loudnorm filter outputs its measurements via av_log()
 // only when the filter is destroyed (in its uninit() function). Therefore, we must
 // explicitly free the filter graph BEFORE attempting to extract measurements.
-func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progressCallback func(pass int, passName string, progress float64, measurements *LoudnormMeasurements)) (*LoudnormMeasurements, error) {
+func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progressCallback func(pass int, passName string, progress float64, level float64, measurements *LoudnormMeasurements)) (*LoudnormMeasurements, error) {
 	// Set up log capture to extract loudnorm JSON output
 	capture := &logCapture{}
 
@@ -95,6 +95,7 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 	// Track frames for periodic progress updates
 	frameCount := 0
 	updateInterval := 100 // Send progress update every N frames
+	currentLevel := 0.0
 
 	for {
 		frame, err := reader.ReadFrame()
@@ -105,13 +106,16 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 			break // EOF
 		}
 
+		// Calculate audio level from frame
+		currentLevel = calculateFrameLevel(frame)
+
 		// Send periodic progress updates based on frame count
 		if frameCount%updateInterval == 0 && progressCallback != nil && estimatedTotalFrames > 0 {
 			progress := float64(frameCount) / estimatedTotalFrames
 			if progress > 1.0 {
 				progress = 1.0
 			}
-			progressCallback(1, "Analyzing", progress, nil)
+			progressCallback(1, "Analyzing", progress, currentLevel, nil)
 		}
 		frameCount++
 
