@@ -108,9 +108,9 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 	}
 
 	// Chain all filters together with commas
-	// Add aformat at the end to ensure output format is compatible with FLAC encoder (s16)
+	// Add aformat for podcast-standard output: 44.1kHz, mono, s16
 	// Add asetnsamples to ensure fixed frame size for FLAC encoder (which doesn't support variable frame size)
-	return fmt.Sprintf("%s,%s,%s,%s,aformat=sample_fmts=s16,asetnsamples=n=4096",
+	return fmt.Sprintf("%s,%s,%s,%s,aformat=sample_rates=44100:channel_layouts=mono:sample_fmts=s16,asetnsamples=n=4096",
 		afftdnFilter, agateFilter, acompressorFilter, loudnormFilter)
 }
 
