@@ -439,23 +439,27 @@ jivetalking/
 - [x] Store measurements for Pass 2
 
 **Pass 2: Processing Implementation:**
-- [ ] Build filter chain with measurements
-- [ ] Implement FFmpeg filter string generation:
+- [x] Build filter chain with measurements
+- [x] Implement FFmpeg filter string generation:
   - afftdn (noise reduction using automatic noise tracking via `tn=1` to adapt from initial estimate)
   - agate (silence removal)
   - acompressor (dynamics)
   - loudnorm (two-pass with measurements)
-- [ ] Create AVFilterGraph from string
-- [ ] Process audio through filter chain
-- [ ] Monitor processing progress
+  - aformat (S16 sample format for FLAC compatibility)
+  - asetnsamples (fixed 4096 frame size for FLAC encoder requirement)
+- [x] Create AVFilterGraph from string
+- [x] Process audio through filter chain
+- [x] Frame-by-frame processing with proper timebase handling
 
 **Audio I/O:**
 - [x] Implement ffmpeg-go demuxer for FLAC/WAV input reading
 - [x] Decode audio frames via ffmpeg-go codec API
-- [ ] Implement ffmpeg-go FLAC encoder output (preferred)
+- [x] Implement ffmpeg-go FLAC encoder output (preferred)
 - [ ] Implement ffmpeg-go WAV encoder fallback
 - [x] Preserve sample rate and bit depth where possible
 - [x] Keep audio in AVFrame format throughout pipeline (no format conversion overhead)
+- [x] Handle channel layout configuration for encoder
+- [x] Fixed frame size handling for FLAC encoder (4096 samples)
 
 **Comparison Mode (--compare flag):**
 - [ ] Implement audio mixing function using ffmpeg-go amerge filter
@@ -465,11 +469,24 @@ jivetalking/
 - [ ] Add comparison file generation to UI completion summary
 
 **Deliverables:**
-- [ ] Audio format detection
-- [ ] Working two-pass processing
-- [ ] Accurate -16 LUFS normalization
-- [ ] Output files with `-processed` suffix
+- [x] Audio format detection
+- [x] Working two-pass processing
+- [x] Accurate -16 LUFS normalization
+- [x] Output files with `-processed` suffix
+- [x] Complete filter chain implementation (filters.go)
+- [x] Processing orchestration (processor.go)
+- [x] FLAC encoder with proper frame handling
+- [x] Comprehensive test coverage (processor_test.go)
 - [ ] Comparison files (when --compare flag used)
+
+**Technical Notes (Implementation Discoveries):**
+- FLAC encoder does NOT support variable frame sizes - requires fixed frames via `asetnsamples` filter
+- Channel layout must be set using `AVChannelLayoutDefault()` with channel count from buffersink
+- FLAC encoder supports S16 and S32 sample formats - we use S16 via `aformat` filter
+- Encoder frame_size must exactly match filter output frame size (4096 samples)
+- All audio stays in AVFrame format throughout pipeline for zero-copy processing
+- Two-pass loudnorm requires Pass 1 measurements (input_i, input_tp, input_lra, input_thresh, target_offset)
+- Filter chain order critical: denoise → gate → compress → normalize → format → frame
 
 ### Phase 3: Configuration System (Week 3)
 
