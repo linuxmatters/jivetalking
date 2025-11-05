@@ -430,11 +430,11 @@ jivetalking/
 ### Phase 2: Audio Processing Core (Week 2)
 
 **Pass 1: Analysis Implementation:**
-- [ ] Integrate ffmpeg-go filter graph API
-- [ ] Implement loudnorm analysis (first pass)
-- [ ] Extract measurements: input_i, input_tp, input_lra, input_thresh, target_offset
+- [x] Integrate ffmpeg-go filter graph API
+- [x] Implement loudnorm analysis (first pass)
+- [x] Extract measurements: input_i, input_tp, input_lra, input_thresh, target_offset
 - [ ] Calculate noise floor estimate
-- [ ] Store measurements for Pass 2
+- [x] Store measurements for Pass 2
 
 **Pass 2: Processing Implementation:**
 - [ ] Build filter chain with measurements
@@ -448,12 +448,12 @@ jivetalking/
 - [ ] Monitor processing progress
 
 **Audio I/O:**
-- [ ] Implement ffmpeg-go demuxer for FLAC/WAV input reading
-- [ ] Decode audio frames via ffmpeg-go codec API
+- [x] Implement ffmpeg-go demuxer for FLAC/WAV input reading
+- [x] Decode audio frames via ffmpeg-go codec API
 - [ ] Implement ffmpeg-go FLAC encoder output (preferred)
 - [ ] Implement ffmpeg-go WAV encoder fallback
-- [ ] Preserve sample rate and bit depth where possible
-- [ ] Keep audio in AVFrame format throughout pipeline (no format conversion overhead)
+- [x] Preserve sample rate and bit depth where possible
+- [x] Keep audio in AVFrame format throughout pipeline (no format conversion overhead)
 
 **Comparison Mode (--compare flag):**
 - [ ] Implement audio mixing function using ffmpeg-go amerge filter
