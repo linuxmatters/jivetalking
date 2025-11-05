@@ -732,3 +732,13 @@ The two-pass loudnorm approach ensures perfect level-matching across multiple pr
 **Goal:** Transform raw voice recordings into broadcast-ready audio with a single command.
 
 **Success:** When users say "I can't believe it's this easy to get professional sound."
+
+## Prompt
+
+This a Jivetalking, an in-development Go project, that is a professional podcast audio preprocessor that transforms raw voice recordings into broadcast-ready audio files optimized for editing in Audacity. It processes spoken word audio through a scientifically-tuned filter chain to achieve -16 LUFS podcast standard with zero audio processing knowledge required from the user.
+
+Orientate yourself with the project by reading the documentation and code. You should refer to the ffmpeg-go source code when required, it can usually be found in `/tmp/ffmpeg-go-research`, but if it is not there you can use `gh` to clone it from https://github.com/csnewman/ffmpeg-go
+
+Sample audio files are in `testdata/`. You should only build and test Jivetalking via `just` commands. We are using NixOS as the host operating system and `flake.nix` provides tooling for the development shell. I use the `fish` shell.
+
+Let me know when you are ready to start collaborating.
