@@ -4,6 +4,7 @@ package logging
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,35 +56,76 @@ func GenerateReport(data ReportData) error {
 		fmt.Fprintf(f, "Integrated Loudness: %.1f LUFS\n", m.InputI)
 		fmt.Fprintf(f, "True Peak:           %.1f dBTP\n", m.InputTP)
 		fmt.Fprintf(f, "Loudness Range:      %.1f LU\n", m.InputLRA)
-		fmt.Fprintf(f, "Noise Floor:         %.0f dB\n", m.NoiseFloor)
+		fmt.Fprintf(f, "Noise Floor:         %.1f dB (measured)\n", m.NoiseFloor)
+		fmt.Fprintf(f, "Dynamic Range:       %.1f dB\n", m.DynamicRange)
+		fmt.Fprintf(f, "RMS Level:           %.1f dBFS\n", m.RMSLevel)
+		fmt.Fprintf(f, "Peak Level:          %.1f dBFS\n", m.PeakLevel)
+		fmt.Fprintf(f, "Spectral Centroid:   %.0f Hz\n", m.SpectralCentroid)
+		fmt.Fprintf(f, "Spectral Rolloff:    %.0f Hz\n", m.SpectralRolloff)
 	}
 	fmt.Fprintf(f, "Sample Rate:         %d Hz\n", data.SampleRate)
 	fmt.Fprintf(f, "Channels:            %d (%s)\n", data.Channels, channelName(data.Channels))
 	fmt.Fprintln(f, "")
 
-	// Pass 2: Processing Applied
+	// Adaptive Processing Decisions
+	fmt.Fprintln(f, "Adaptive Processing Decisions")
+	fmt.Fprintln(f, "-----------------------------")
+	if data.Result != nil && data.Result.Config != nil {
+		cfg := data.Result.Config
+		m := data.Result.Measurements
+		
+		fmt.Fprintf(f, "Highpass Frequency:  %.0f Hz (adaptive, based on centroid)\n", cfg.HighpassFreq)
+		
+		// Show deesser decision with both factors
+		if cfg.DeessIntensity > 0 {
+			fmt.Fprintf(f, "De-esser Intensity:  %.2f (adaptive, centroid: %.0f Hz, rolloff: %.0f Hz)\n", 
+				cfg.DeessIntensity, m.SpectralCentroid, m.SpectralRolloff)
+		} else {
+			fmt.Fprintf(f, "De-esser Intensity:  %.2f (disabled, insufficient HF content)\n", cfg.DeessIntensity)
+		}
+		
+		// Calculate gate threshold in dB for display
+		gateThresholdDB := 20.0 * math.Log10(cfg.GateThreshold)
+		fmt.Fprintf(f, "Gate Threshold:      %.1f dB (adaptive, based on noise floor)\n", gateThresholdDB)
+		
+		// Show adaptive compression settings
+		if m.DynamicRange > 0 {
+			fmt.Fprintf(f, "Compression Ratio:   %.1f:1 (adaptive, DR: %.1f dB)\n", cfg.CompRatio, m.DynamicRange)
+			fmt.Fprintf(f, "Compression Thresh:  %.0f dB (adaptive, DR: %.1f dB)\n", cfg.CompThreshold, m.DynamicRange)
+		} else {
+			fmt.Fprintf(f, "Compression Ratio:   %.1f:1 (default)\n", cfg.CompRatio)
+			fmt.Fprintf(f, "Compression Thresh:  %.0f dB (default)\n", cfg.CompThreshold)
+		}
+	}
+	fmt.Fprintln(f, "")	// Pass 2: Processing Applied
 	fmt.Fprintln(f, "Pass 2: Processing Applied")
 	fmt.Fprintln(f, "---------------------------")
 	if data.Result != nil && data.Result.Measurements != nil {
 		m := data.Result.Measurements
 
 		fmt.Fprintln(f, "Noise Reduction:")
-		fmt.Fprintf(f, "  - Noise floor: %.0f dB\n", m.NoiseFloor)
+		fmt.Fprintf(f, "  - Noise floor: %.1f dB (measured)\n", m.NoiseFloor)
 		fmt.Fprintln(f, "  - Method: FFT spectral subtraction with adaptive tracking")
 		fmt.Fprintln(f, "")
 
-		fmt.Fprintln(f, "Gate:")
-		fmt.Fprintln(f, "  - Threshold: 0.003")
-		fmt.Fprintln(f, "  - Ratio: 4:1")
-		fmt.Fprintln(f, "  - Attack/Release: 5ms/100ms")
-		fmt.Fprintln(f, "")
+		if data.Result.Config != nil {
+			cfg := data.Result.Config
+			gateThresholdDB := 20.0 * math.Log10(cfg.GateThreshold)
 
-		fmt.Fprintln(f, "Compression:")
-		fmt.Fprintln(f, "  - Threshold: -18 dB")
-		fmt.Fprintln(f, "  - Ratio: 4:1")
-		fmt.Fprintln(f, "  - Attack/Release: 20ms/100ms")
-		fmt.Fprintln(f, "  - Makeup gain: +8 dB")
-		fmt.Fprintln(f, "")
+			fmt.Fprintln(f, "Gate:")
+			fmt.Fprintf(f, "  - Threshold: %.1f dB (adaptive, based on noise floor)\n", gateThresholdDB)
+			fmt.Fprintf(f, "  - Ratio: %.1f:1\n", cfg.GateRatio)
+			fmt.Fprintf(f, "  - Attack/Release: %.0fms/%.0fms\n", cfg.GateAttack, cfg.GateRelease)
+			fmt.Fprintln(f, "")
+
+			compThresholdDB := cfg.CompThreshold
+			fmt.Fprintln(f, "Compression:")
+			fmt.Fprintf(f, "  - Threshold: %.0f dB\n", compThresholdDB)
+			fmt.Fprintf(f, "  - Ratio: %.1f:1\n", cfg.CompRatio)
+			fmt.Fprintf(f, "  - Attack/Release: %.0fms/%.0fms\n", cfg.CompAttack, cfg.CompRelease)
+			fmt.Fprintf(f, "  - Makeup gain: %+.0f dB\n", cfg.CompMakeup)
+			fmt.Fprintln(f, "")
+		}
 
 		fmt.Fprintln(f, "Loudness Normalization:")
 		fmt.Fprintf(f, "  - Input: %.1f LUFS\n", m.InputI)
