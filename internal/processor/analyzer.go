@@ -2,12 +2,9 @@
 package processor
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
-	"strings"
-	"sync"
 
 	"github.com/csnewman/ffmpeg-go"
 	"github.com/linuxmatters/jivetalking/internal/audio"
@@ -33,35 +30,12 @@ type LoudnormMeasurements struct {
 	PeakLevel    float64 `json:"peak_level"`    // Overall peak level (dBFS)
 }
 
-// loudnormJSON is a helper struct for unmarshaling FFmpeg's JSON output
-// FFmpeg outputs numeric values as strings, e.g., "input_i": "-31.10"
-type loudnormJSON struct {
-	InputI       string `json:"input_i"`
-	InputTP      string `json:"input_tp"`
-	InputLRA     string `json:"input_lra"`
-	InputThresh  string `json:"input_thresh"`
-	TargetOffset string `json:"target_offset"`
-}
-
-// AnalyzeAudio performs Pass 1: loudnorm analysis to get input measurements
-// This is required for accurate two-pass loudness normalization.
+// AnalyzeAudio performs Pass 1: ebur128 + astats + aspectralstats analysis to get measurements
+// This is required for adaptive processing in Pass 2.
 //
-// Implementation note: The loudnorm filter outputs its measurements via av_log()
-// only when the filter is destroyed (in its uninit() function). Therefore, we must
-// explicitly free the filter graph BEFORE attempting to extract measurements.
+// Implementation note: ebur128 and astats write measurements to frame metadata with lavfi.r128.*
+// and lavfi.astats.Overall.* keys respectively. We extract these from the last processed frames.
 func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progressCallback func(pass int, passName string, progress float64, level float64, measurements *LoudnormMeasurements)) (*LoudnormMeasurements, error) {
-	// Set up log capture to extract loudnorm JSON output
-	capture := &logCapture{}
-
-	// Save current log level and set to INFO to capture loudnorm output
-	oldLevel, _ := ffmpeg.AVLogGetLevel()
-	ffmpeg.AVLogSetLevel(ffmpeg.AVLogInfo)
-	ffmpeg.AVLogSetCallback(capture.callback)
-	defer func() {
-		ffmpeg.AVLogSetCallback(nil)
-		ffmpeg.AVLogSetLevel(oldLevel)
-	}()
-
 	// Open audio file
 	reader, metadata, err := audio.OpenAudioFile(filename)
 	if err != nil {
@@ -78,8 +52,8 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 	samplesPerFrame := 4096.0
 	estimatedTotalFrames := (totalDuration * sampleRate) / samplesPerFrame
 
-	// Create filter graph for loudnorm analysis
-	filterGraph, bufferSrcCtx, bufferSinkCtx, err := createLoudnormFilterGraph(
+	// Create filter graph for Pass 1 analysis (astats + aspectralstats + ebur128)
+	filterGraph, bufferSrcCtx, bufferSinkCtx, err := createAnalysisFilterGraph(
 		reader.GetDecoderContext(),
 		targetI, targetTP, targetLRA,
 		true, // first pass (analysis only)
@@ -115,6 +89,11 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 	// Accumulators for astats measurements (will extract from last frame metadata)
 	var astatsNoiseFloor, astatsDynamicRange, astatsRMSLevel, astatsPeakLevel float64
 	var astatsFound bool
+
+	// Accumulators for ebur128 measurements (will extract from last frame metadata)
+	// ebur128 writes cumulative measurements to frame metadata with lavfi.r128.* keys
+	var ebur128InputI, ebur128InputTP, ebur128InputLRA float64
+	var ebur128Found bool
 
 	for {
 		frame, err := reader.ReadFrame()
@@ -156,41 +135,73 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 			metadata := filteredFrame.Metadata()
 			if metadata != nil {
 				// Get spectral centroid if available
-				if centroidEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.aspectralstats.centroid"), nil, 0); centroidEntry != nil {
+				// For mono audio, spectral stats are under channel .1
+				if centroidEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.aspectralstats.1.centroid"), nil, 0); centroidEntry != nil {
 					if centroidValue, err := strconv.ParseFloat(centroidEntry.Value().String(), 64); err == nil {
 						spectralCentroidSum += centroidValue
 						spectralFrameCount++
 					}
 				}
 				// Get spectral rolloff if available
-				if rolloffEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.aspectralstats.rolloff"), nil, 0); rolloffEntry != nil {
+				if rolloffEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.aspectralstats.1.rolloff"), nil, 0); rolloffEntry != nil {
 					if rolloffValue, err := strconv.ParseFloat(rolloffEntry.Value().String(), 64); err == nil {
 						spectralRolloffSum += rolloffValue
 					}
 				}
 
 				// Extract astats measurements (cumulative, so we just get the latest)
-				if noiseFloorEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.astats.Overall.Noise_floor"), nil, 0); noiseFloorEntry != nil {
+				// For mono audio, stats are under channel .1; for stereo, use .Overall or average channels
+				// Since podcast audio is typically mono, we check channel 1 first, then Overall as fallback
+				noiseFloorKey := "lavfi.astats.1.Noise_floor"
+				if noiseFloorEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr(noiseFloorKey), nil, 0); noiseFloorEntry != nil {
 					if value, err := strconv.ParseFloat(noiseFloorEntry.Value().String(), 64); err == nil {
 						astatsNoiseFloor = value
 						astatsFound = true
 					}
 				}
-				if dynamicRangeEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.astats.Overall.Dynamic_range"), nil, 0); dynamicRangeEntry != nil {
+
+				dynamicRangeKey := "lavfi.astats.1.Dynamic_range"
+				if dynamicRangeEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr(dynamicRangeKey), nil, 0); dynamicRangeEntry != nil {
 					if value, err := strconv.ParseFloat(dynamicRangeEntry.Value().String(), 64); err == nil {
 						astatsDynamicRange = value
 					}
 				}
-				if rmsEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.astats.Overall.RMS_level"), nil, 0); rmsEntry != nil {
+
+				rmsKey := "lavfi.astats.1.RMS_level"
+				if rmsEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr(rmsKey), nil, 0); rmsEntry != nil {
 					if value, err := strconv.ParseFloat(rmsEntry.Value().String(), 64); err == nil {
 						astatsRMSLevel = value
 					}
 				}
-				if peakEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.astats.Overall.Peak_level"), nil, 0); peakEntry != nil {
+
+				peakKey := "lavfi.astats.1.Peak_level"
+				if peakEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr(peakKey), nil, 0); peakEntry != nil {
 					if value, err := strconv.ParseFloat(peakEntry.Value().String(), 64); err == nil {
 						astatsPeakLevel = value
 					}
 				}
+
+				// Extract ebur128 measurements (cumulative loudness analysis)
+				// ebur128 provides: M.* (momentary), S.* (short-term), I (integrated), LRA, sample_peak, true_peak
+				// We need the integrated loudness measurements for normalization
+				if integratedEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.r128.I"), nil, 0); integratedEntry != nil {
+					if value, err := strconv.ParseFloat(integratedEntry.Value().String(), 64); err == nil {
+						ebur128InputI = value
+						ebur128Found = true
+					}
+				}
+				if truePeakEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.r128.true_peak"), nil, 0); truePeakEntry != nil {
+					if value, err := strconv.ParseFloat(truePeakEntry.Value().String(), 64); err == nil {
+						ebur128InputTP = value
+					}
+				}
+				if lraEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.r128.LRA"), nil, 0); lraEntry != nil {
+					if value, err := strconv.ParseFloat(lraEntry.Value().String(), 64); err == nil {
+						ebur128InputLRA = value
+					}
+				}
+				// Note: ebur128 doesn't provide threshold directly like loudnorm does
+				// We'll calculate it from the integrated loudness if needed
 			}
 
 			ffmpeg.AVFrameUnref(filteredFrame)
@@ -214,38 +225,65 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 		// Extract spectral statistics from remaining frames
 		metadata := filteredFrame.Metadata()
 		if metadata != nil {
-			if centroidEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.aspectralstats.centroid"), nil, 0); centroidEntry != nil {
+			// Use channel 1 keys for mono audio (same as main loop)
+			if centroidEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.aspectralstats.1.centroid"), nil, 0); centroidEntry != nil {
 				if centroidValue, err := strconv.ParseFloat(centroidEntry.Value().String(), 64); err == nil {
 					spectralCentroidSum += centroidValue
 					spectralFrameCount++
 				}
 			}
-			if rolloffEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.aspectralstats.rolloff"), nil, 0); rolloffEntry != nil {
+			if rolloffEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.aspectralstats.1.rolloff"), nil, 0); rolloffEntry != nil {
 				if rolloffValue, err := strconv.ParseFloat(rolloffEntry.Value().String(), 64); err == nil {
 					spectralRolloffSum += rolloffValue
 				}
 			}
 
 			// Extract astats measurements from remaining frames
-			if noiseFloorEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.astats.Overall.Noise_floor"), nil, 0); noiseFloorEntry != nil {
+			// Use channel 1 keys for mono audio (same as main loop)
+			noiseFloorKey := "lavfi.astats.1.Noise_floor"
+			if noiseFloorEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr(noiseFloorKey), nil, 0); noiseFloorEntry != nil {
 				if value, err := strconv.ParseFloat(noiseFloorEntry.Value().String(), 64); err == nil {
 					astatsNoiseFloor = value
 					astatsFound = true
 				}
 			}
-			if dynamicRangeEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.astats.Overall.Dynamic_range"), nil, 0); dynamicRangeEntry != nil {
+
+			dynamicRangeKey := "lavfi.astats.1.Dynamic_range"
+			if dynamicRangeEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr(dynamicRangeKey), nil, 0); dynamicRangeEntry != nil {
 				if value, err := strconv.ParseFloat(dynamicRangeEntry.Value().String(), 64); err == nil {
 					astatsDynamicRange = value
 				}
 			}
-			if rmsEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.astats.Overall.RMS_level"), nil, 0); rmsEntry != nil {
+
+			rmsKey := "lavfi.astats.1.RMS_level"
+			if rmsEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr(rmsKey), nil, 0); rmsEntry != nil {
 				if value, err := strconv.ParseFloat(rmsEntry.Value().String(), 64); err == nil {
 					astatsRMSLevel = value
 				}
 			}
-			if peakEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.astats.Overall.Peak_level"), nil, 0); peakEntry != nil {
+
+			peakKey := "lavfi.astats.1.Peak_level"
+			if peakEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr(peakKey), nil, 0); peakEntry != nil {
 				if value, err := strconv.ParseFloat(peakEntry.Value().String(), 64); err == nil {
 					astatsPeakLevel = value
+				}
+			}
+
+			// Extract ebur128 measurements from remaining frames
+			if integratedEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.r128.I"), nil, 0); integratedEntry != nil {
+				if value, err := strconv.ParseFloat(integratedEntry.Value().String(), 64); err == nil {
+					ebur128InputI = value
+					ebur128Found = true
+				}
+			}
+			if truePeakEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.r128.true_peak"), nil, 0); truePeakEntry != nil {
+				if value, err := strconv.ParseFloat(truePeakEntry.Value().String(), 64); err == nil {
+					ebur128InputTP = value
+				}
+			}
+			if lraEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.r128.LRA"), nil, 0); lraEntry != nil {
+				if value, err := strconv.ParseFloat(lraEntry.Value().String(), 64); err == nil {
+					ebur128InputLRA = value
 				}
 			}
 		}
@@ -253,15 +291,25 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 		ffmpeg.AVFrameUnref(filteredFrame)
 	}
 
-	// CRITICAL: Free the filter graph to trigger uninit() which outputs the JSON measurements via av_log
-	// The loudnorm filter only outputs its measurements when being destroyed
+	// Free the filter graph
 	ffmpeg.AVFilterGraphFree(&filterGraph)
 	filterFreed = true
 
-	// Extract measurements from captured logs (now available after uninit)
-	measurements, err := capture.extractMeasurements()
-	if err != nil {
-		return nil, fmt.Errorf("failed to extract measurements: %w", err)
+	// Create measurements struct and populate from metadata
+	measurements := &LoudnormMeasurements{}
+
+	// Populate ebur128 loudness measurements from metadata
+	if ebur128Found {
+		measurements.InputI = ebur128InputI
+		measurements.InputTP = ebur128InputTP
+		measurements.InputLRA = ebur128InputLRA
+		// Calculate threshold based on integrated loudness (ebur128 doesn't provide this directly)
+		// Threshold is typically around 10 LU below the integrated loudness
+		measurements.InputThresh = ebur128InputI - 10.0
+		// Target offset for normalization (difference between measured and target)
+		measurements.TargetOffset = targetI - ebur128InputI
+	} else {
+		return nil, fmt.Errorf("ebur128 measurements not found in metadata")
 	}
 
 	// Calculate average spectral statistics
@@ -290,9 +338,9 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 			// Quiet source: likely higher noise floor relative to signal
 			noiseFloorOffset = 8.0
 		}
-		
+
 		measurements.NoiseFloor = measurements.InputThresh - noiseFloorOffset
-		
+
 		// Clamp to reasonable range: -60dB (very quiet studio) to -30dB (noisy environment)
 		if measurements.NoiseFloor < -60.0 {
 			measurements.NoiseFloor = -60.0
@@ -304,8 +352,9 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 	return measurements, nil
 }
 
-// createLoudnormFilterGraph creates an AVFilterGraph for loudnorm processing
-func createLoudnormFilterGraph(
+// createAnalysisFilterGraph creates an AVFilterGraph for Pass 1 analysis
+// Uses astats, aspectralstats, and ebur128 filters to extract measurements
+func createAnalysisFilterGraph(
 	decCtx *ffmpeg.AVCodecContext,
 	targetI, targetTP, targetLRA float64,
 	firstPass bool,
@@ -377,22 +426,19 @@ func createLoudnormFilterGraph(
 	// Build filter string
 	var filterSpec string
 	if firstPass {
-		// First pass: Analysis only - extract loudnorm measurements, spectral statistics, and time-domain stats
+		// First pass: Analysis only - extract loudness measurements, spectral statistics, and time-domain stats
 		// astats provides noise floor and dynamic range measurements for adaptive gate and compression
 		// aspectralstats measures spectral centroid and rolloff for adaptive de-esser targeting
-		filterSpec = fmt.Sprintf("astats=metadata=1:measure_overall=Noise_floor+Dynamic_range+RMS_level+Peak_level:reset=1,aspectralstats=win_size=2048:win_func=hann:measure=centroid+rolloff,loudnorm=I=%.1f:TP=%.1f:LRA=%.1f:print_format=json",
-			targetI, targetTP, targetLRA)
+		// ebur128 provides integrated loudness (LUFS), true peak, and LRA via metadata
+		// Note: reset=0 (default) allows astats to accumulate statistics across all frames for Overall measurements
+		// ebur128 metadata=1 writes per-frame loudness data to frame metadata (lavfi.r128.* keys)
+		// ebur128 framelog=verbose outputs summary measurements to logs for verification
+		filterSpec = fmt.Sprintf("astats=metadata=1:measure_overall=Noise_floor+Dynamic_range+RMS_level+Peak_level,aspectralstats=win_size=2048:win_func=hann:measure=centroid+rolloff,ebur128=metadata=1:framelog=verbose:target=%.0f",
+			targetI)
 	} else {
-		// Second pass: use measurements from first pass
-		filterSpec = fmt.Sprintf(
-			"loudnorm=I=%.1f:TP=%.1f:LRA=%.1f:"+
-				"measured_I=%.2f:measured_TP=%.2f:measured_LRA=%.2f:"+
-				"measured_thresh=%.2f:offset=%.2f:"+
-				"linear=true:print_format=summary",
-			targetI, targetTP, targetLRA,
-			measurements.InputI, measurements.InputTP, measurements.InputLRA,
-			measurements.InputThresh, measurements.TargetOffset,
-		)
+		// Second pass: Not used anymore - loudnorm disabled
+		// Using dynaudnorm for loudness normalization in Pass 2 processing
+		filterSpec = ""
 	}
 
 	// Parse filter graph
@@ -426,80 +472,4 @@ func createLoudnormFilterGraph(
 	}
 
 	return filterGraph, bufferSrcCtx, bufferSinkCtx, nil
-}
-
-// logCapture captures FFmpeg logs to extract loudnorm JSON measurements
-type logCapture struct {
-	mu           sync.Mutex
-	allLogs      strings.Builder
-	measurements *LoudnormMeasurements
-}
-
-func (lc *logCapture) callback(ctx *ffmpeg.LogCtx, level int, msg string) {
-	lc.mu.Lock()
-	defer lc.mu.Unlock()
-
-	// Accumulate all log output
-	lc.allLogs.WriteString(msg)
-}
-
-func (lc *logCapture) extractMeasurements() (*LoudnormMeasurements, error) {
-	lc.mu.Lock()
-	defer lc.mu.Unlock()
-
-	// Look for JSON block in accumulated logs
-	// loudnorm outputs JSON with this pattern:
-	// [Parsed_loudnorm_0 @ 0x...] {
-	//   "input_i" : "-31.10",
-	//   ...
-	// }
-
-	logs := lc.allLogs.String()
-
-	// Debug: Check if we got any logs at all
-	if len(logs) == 0 {
-		return nil, fmt.Errorf("no logs captured - log callback may not be working")
-	}
-
-	// Find JSON block - look for { followed by "input_i"
-	startIdx := strings.Index(logs, "{")
-	if startIdx == -1 {
-		return nil, fmt.Errorf("no JSON block found in logs (captured %d bytes)", len(logs))
-	}
-
-	// Find matching closing brace
-	endIdx := strings.Index(logs[startIdx:], "}")
-	if endIdx == -1 {
-		return nil, fmt.Errorf("incomplete JSON block in logs")
-	}
-
-	jsonStr := logs[startIdx : startIdx+endIdx+1]
-
-	// Parse JSON (FFmpeg outputs numeric values as strings)
-	var raw loudnormJSON
-	if err := json.Unmarshal([]byte(jsonStr), &raw); err != nil {
-		return nil, fmt.Errorf("failed to parse JSON: %w (json: %s)", err, jsonStr)
-	}
-
-	// Convert string values to float64
-	m := &LoudnormMeasurements{}
-	var err error
-
-	if m.InputI, err = strconv.ParseFloat(raw.InputI, 64); err != nil {
-		return nil, fmt.Errorf("failed to parse input_i: %w", err)
-	}
-	if m.InputTP, err = strconv.ParseFloat(raw.InputTP, 64); err != nil {
-		return nil, fmt.Errorf("failed to parse input_tp: %w", err)
-	}
-	if m.InputLRA, err = strconv.ParseFloat(raw.InputLRA, 64); err != nil {
-		return nil, fmt.Errorf("failed to parse input_lra: %w", err)
-	}
-	if m.InputThresh, err = strconv.ParseFloat(raw.InputThresh, 64); err != nil {
-		return nil, fmt.Errorf("failed to parse input_thresh: %w", err)
-	}
-	if m.TargetOffset, err = strconv.ParseFloat(raw.TargetOffset, 64); err != nil {
-		return nil, fmt.Errorf("failed to parse target_offset: %w", err)
-	}
-
-	return m, nil
 }

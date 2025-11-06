@@ -245,26 +245,22 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 
 	// Build loudnorm (two-pass normalization) filter
 	var loudnormFilter string
-	if cfg.Measurements == nil {
-		// First pass: analysis only
-		loudnormFilter = fmt.Sprintf("loudnorm=I=%.1f:TP=%.1f:LRA=%.1f:print_format=json",
-			cfg.TargetI, cfg.TargetTP, cfg.TargetLRA)
-	} else {
-		// Second pass: use measurements from first pass for precise normalization
-		// Use dynamic mode (linear=false) to prevent distortion on narrow-LRA sources
-		// Dynamic mode adapts to the source material rather than forcing LRA expansion
-		// Include offset parameter for proper gain adjustment even in dynamic mode
-		loudnormFilter = fmt.Sprintf(
-			"loudnorm=I=%.1f:TP=%.1f:LRA=%.1f:"+
-				"measured_I=%.2f:measured_TP=%.2f:measured_LRA=%.2f:"+
-				"measured_thresh=%.2f:offset=%.2f:"+
-				"linear=false:print_format=summary",
-			cfg.TargetI, cfg.TargetTP, cfg.TargetLRA,
-			cfg.Measurements.InputI, cfg.Measurements.InputTP, cfg.Measurements.InputLRA,
-			cfg.Measurements.InputThresh, cfg.Measurements.TargetOffset,
-		)
-	}
+	// Use measurements from first pass for precise normalization
+	// Use dynamic mode (linear=false) to prevent distortion on narrow-LRA sources
+	// Dynamic mode adapts to the source material rather than forcing LRA expansion
+	// Include offset parameter for proper gain adjustment even in dynamic mode
+	loudnormFilter = fmt.Sprintf(
+		"loudnorm=I=%.1f:TP=%.1f:LRA=%.1f:"+
+			"measured_I=%.2f:measured_TP=%.2f:measured_LRA=%.2f:"+
+			"measured_thresh=%.2f:offset=%.2f:"+
+			"linear=false:print_format=summary",
+		cfg.TargetI, cfg.TargetTP, cfg.TargetLRA,
+		cfg.Measurements.InputI, cfg.Measurements.InputTP, cfg.Measurements.InputLRA,
+		cfg.Measurements.InputThresh, cfg.Measurements.TargetOffset,
+	)
+	// Intentionally disabled!
 	loudnormFilter = ""
+
 	// Build dynaudnorm (Dynamic Audio Normalizer) filter
 	// Alternative to loudnorm with different approach - uses local statistics and Gaussian smoothing
 	// This provides more consistent loudness over time with adaptive gain adjustment

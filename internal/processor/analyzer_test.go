@@ -57,8 +57,9 @@ func TestAnalyzeAudio(t *testing.T) {
 			t.Logf("Input Threshold: %.2f dB", measurements.InputThresh)
 			t.Logf("Target Offset: %.2f dB", measurements.TargetOffset)
 			t.Logf("Noise Floor: %.2f dB", measurements.NoiseFloor)
-
-			// Sanity checks
+			t.Logf("Dynamic Range: %.2f dB", measurements.DynamicRange)
+			t.Logf("RMS Level: %.2f dB", measurements.RMSLevel)
+			t.Logf("Peak Level: %.2f dB", measurements.PeakLevel) // Sanity checks
 			if measurements.InputI > 0 || measurements.InputI < -100 {
 				t.Errorf("InputI out of reasonable range: %.2f", measurements.InputI)
 			}
