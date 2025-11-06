@@ -14,17 +14,29 @@ jivetalking presenter1.flac presenter2.flac presenter3.flac
 
 Raw microphone recordings are messy: room rumble, background hiss, awkward silences, inconsistent volume, and harsh sibilance. Jivetalking fixes all of this automatically.
 
-**The Processing Pipeline:**
+### The Processing Pipeline
 
-1. **High-pass filter** (80Hz) – Removes low-frequency rumble from HVAC, traffic, and handling noise that muddies your audio
-2. **Noise reduction** – Intelligently removes background hiss while preserving voice clarity using adaptive spectral analysis
-3. **Silence gate** – Cuts dead air and room tone during pauses, keeping your podcast tight and professional
-4. **Compression** – Smooths out volume inconsistencies so whispers and emphasis have similar energy levels
-5. **Dynamic EQ de-esser** – Surgically tames harsh sibilance at 7kHz using frequency-specific compression for natural-sounding results
-6. **Loudness normalisation** – Matches the -16 LUFS podcast standard used by Spotify, Apple Podcasts, and YouTube
-7. **True peak limiter** – Safety net preventing any clipping or distortion in the final output
+Jivetalking uses a **two-pass architecture**. Pass 1 analyzes your audio (loudness, noise floor, dynamic range, spectral characteristics), then Pass 2 applies adaptive processing tuned to your specific recording.
 
-**Why this order matters:** Each filter prepares the audio for the next. Rumble removal happens before spectral analysis to prevent artefacts. Compression happens before de-essing because it emphasises sibilance. Loudness normalisation happens last so it sees the fully processed signal, with the limiter catching any rare peaks.
+#### Pass 1: Analysis
+- Measures integrated loudness, true peak, and loudness range
+- Analyzes noise floor and dynamic range for adaptive gating and compression
+- Examines spectral content (centroid and rolloff) for intelligent high-pass and de-essing
+
+#### Pass 2: Adaptive Processing
+
+1. **High-pass filter** (60-100Hz, adaptive) – Removes low-frequency rumble. Cutoff adapts to voice characteristics: lower for warm voices, higher for bright voices
+2. **Click/pop removal** – Eliminates mouth clicks and plosive artifacts using autoregressive modeling
+3. **Noise reduction** – Intelligently removes background hiss while preserving voice clarity using adaptive FFT spectral subtraction
+4. **Noise gate** (adaptive threshold) – Cuts dead air and room tone. Threshold adapts to measured noise floor (typically 6-10dB above)
+5. **Compression** (adaptive ratio/threshold) – Smooths volume inconsistencies. Settings adapt to dynamic range: gentle for expressive content, aggressive for already-compressed audio
+6. **De-esser** (adaptive intensity) – Tames harsh sibilance. Intensity adapts to spectral characteristics: disabled for voices lacking high-frequency content, increased for bright sibilant voices
+7. **Loudness normalisation** – Two-pass EBU R128 normalization to -16 LUFS podcast standard (Spotify, Apple Podcasts, YouTube)
+8. **True peak limiter** – Safety net preventing clipping or distortion
+
+**Why this order matters:** Each filter prepares the audio for the next. Rumble removal happens before spectral analysis to prevent artifacts. Compression happens before de-essing because it emphasizes sibilance. Loudness normalization happens last so it sees the fully processed signal, with the limiter catching any rare peaks.
+
+**Why adaptive matters:** A dark-voiced narrator doesn't need aggressive de-essing. Pre-compressed audio doesn't need heavy compression. Clean studio recordings need different gating than noisy home offices. Jivetalking measures your specific audio and adapts every filter automatically.
 
 **The result:** Broadcast-quality audio that sounds professional on any platform, from laptop speakers to studio monitors. Your voice, just cleaner and more consistent.
 
