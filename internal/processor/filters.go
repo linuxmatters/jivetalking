@@ -55,6 +55,17 @@ type FilterChainConfig struct {
 	TargetTP  float64 // dBTP, true peak ceiling
 	TargetLRA float64 // LU, loudness range target
 
+	// Dynamic Audio Normalizer (dynaudnorm) - alternative to loudnorm
+	DynaudnormFrameLen    int     // Frame length in milliseconds (10-8000, default 500)
+	DynaudnormFilterSize  int     // Filter size for Gaussian filter (3-301, default 31)
+	DynaudnormPeakValue   float64 // Target peak value 0.0-1.0 (default 0.95)
+	DynaudnormMaxGain     float64 // Maximum gain factor (1.0-100.0, default 10.0)
+	DynaudnormTargetRMS   float64 // Target RMS 0.0-1.0 (default 0.0 = disabled)
+	DynaudnormCompress    float64 // Compression factor 0.0-30.0 (default 0.0 = disabled)
+	DynaudnormChannels    bool    // Process channels independently (default false = coupled)
+	DynaudnormDCCorrect   bool    // Enable DC bias correction (default false)
+	DynaudnormAltBoundary bool    // Enable alternative boundary mode (default false)
+
 	// True Peak Limiter (alimiter) - brick-wall safety net
 	LimiterCeiling float64 // 0.0625-1.0, peak ceiling (0.98 = -0.17dBFS)
 	LimiterAttack  float64 // ms, attack time
@@ -109,6 +120,17 @@ func DefaultFilterConfig() *FilterChainConfig {
 		TargetTP:  -0.3, // Very permissive TP for loudnorm (only catches extreme peaks), alimiter does real limiting at -1.5
 		TargetLRA: 7.0,  // EBU R128 default, appropriate for speech
 
+		// Dynamic Audio Normalizer - adaptive loudness normalization
+		DynaudnormFrameLen:    500,   // 500ms frames (default, good for speech)
+		DynaudnormFilterSize:  31,    // Gaussian filter size (default, smooth transitions)
+		DynaudnormPeakValue:   0.95,  // Target peak 0.95 (default, leaves headroom)
+		DynaudnormMaxGain:     10.0,  // Maximum 10x gain (default, prevents over-amplification)
+		DynaudnormTargetRMS:   0.0,   // Disabled (default, use peak normalization only)
+		DynaudnormCompress:    0.0,   // No compression (default, preserve dynamics)
+		DynaudnormChannels:    false, // Coupled channels (default, mono so no effect)
+		DynaudnormDCCorrect:   false, // No DC correction (default)
+		DynaudnormAltBoundary: false, // Standard boundary mode (default)
+
 		// Limiter - brick-wall safety net with soft knee (via ASC)
 		// This does the real true-peak limiting with better sound quality than loudnorm's hard limiter
 		LimiterCeiling: 0.84, // -1.5dBTP (actual target, tighter than loudnorm's -1.0)
@@ -126,7 +148,8 @@ func dbToLinear(db float64) float64 {
 }
 
 // BuildFilterSpec builds the FFmpeg filter specification string for Pass 2 processing
-// This creates the complete filter chain: highpass → adeclick → afftdn → agate → acompressor → deesser → loudnorm → alimiter
+// This creates the complete filter chain: highpass → adeclick → afftdn → agate → acompressor → deesser → loudnorm → dynaudnorm → alimiter
+// Note: loudnorm is kept for Pass 1 analysis measurements, but dynaudnorm is the active normalizer in Pass 2
 func (cfg *FilterChainConfig) BuildFilterSpec() string {
 	// Build highpass (rumble removal) filter
 	// Remove subsonic frequencies below 80Hz (HVAC, handling noise, etc.)
@@ -241,6 +264,45 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 			cfg.Measurements.InputThresh, cfg.Measurements.TargetOffset,
 		)
 	}
+	loudnormFilter = ""
+	// Build dynaudnorm (Dynamic Audio Normalizer) filter
+	// Alternative to loudnorm with different approach - uses local statistics and Gaussian smoothing
+	// This provides more consistent loudness over time with adaptive gain adjustment
+	// Parameters:
+	// f: frame length in ms (10-8000) - analysis window size
+	// g: filter size for Gaussian smoothing (3-301, must be odd) - temporal smoothing
+	// p: target peak value 0.0-1.0 - maximum output level
+	// m: maximum gain factor (1.0-100.0) - limits amplification
+	// r: target RMS 0.0-1.0 - if >0, uses RMS normalization instead of peak
+	// n: enable channel coupling (0=independent, 1=coupled)
+	// c: enable DC bias correction (0=off, 1=on)
+	// b: enable alternative boundary mode (0=off, 1=on)
+	// s: compression factor 0.0-30.0 - dynamic range compression (0=disabled)
+	channelFlag := 0
+	if cfg.DynaudnormChannels {
+		channelFlag = 1
+	}
+	dcCorrectFlag := 0
+	if cfg.DynaudnormDCCorrect {
+		dcCorrectFlag = 1
+	}
+	altBoundaryFlag := 0
+	if cfg.DynaudnormAltBoundary {
+		altBoundaryFlag = 1
+	}
+
+	dynaudnormFilter := fmt.Sprintf(
+		"dynaudnorm=f=%d:g=%d:p=%.2f:m=%.1f:r=%.2f:n=%d:c=%d:b=%d:s=%.1f",
+		cfg.DynaudnormFrameLen,
+		cfg.DynaudnormFilterSize,
+		cfg.DynaudnormPeakValue,
+		cfg.DynaudnormMaxGain,
+		cfg.DynaudnormTargetRMS,
+		channelFlag,
+		dcCorrectFlag,
+		altBoundaryFlag,
+		cfg.DynaudnormCompress,
+	)
 
 	// Build alimiter (true peak limiter) filter
 	// Uses lookahead technology and ASC for smooth, musical limiting
@@ -261,13 +323,13 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 	)
 
 	// Chain all filters together with commas
-	// Order: highpass → adeclick → denoise → gate → compress → deess → normalize → limit → format → frame
+	// Order: highpass → adeclick → denoise → gate → compress → deess → loudnorm → dynaudnorm → limit → format → frame
 	// Add aformat for podcast-standard output: 44.1kHz, mono, s16
 	// Add asetnsamples to ensure fixed frame size for FLAC encoder (which doesn't support variable frame size)
 
 	// Build filter list, skipping empty filters
 	var filters []string
-	for _, f := range []string{highpassFilter, adeclickFilter, afftdnFilter, agateFilter, acompressorFilter, deesserFilter, loudnormFilter, alimiterFilter} {
+	for _, f := range []string{highpassFilter, adeclickFilter, afftdnFilter, agateFilter, acompressorFilter, deesserFilter, loudnormFilter, dynaudnormFilter, alimiterFilter} {
 		if f != "" {
 			filters = append(filters, f)
 		}
