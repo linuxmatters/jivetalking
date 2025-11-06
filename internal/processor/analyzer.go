@@ -4,6 +4,7 @@ package processor
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 
 	"github.com/csnewman/ffmpeg-go"
@@ -28,6 +29,7 @@ type LoudnormMeasurements struct {
 	DynamicRange float64 `json:"dynamic_range"` // Measured dynamic range (dB)
 	RMSLevel     float64 `json:"rms_level"`     // Overall RMS level (dBFS)
 	PeakLevel    float64 `json:"peak_level"`    // Overall peak level (dBFS)
+	RMSTrough    float64 `json:"rms_trough"`    // RMS level of quietest segments - best noise floor indicator (dBFS)
 }
 
 // AnalyzeAudio performs Pass 1: ebur128 + astats + aspectralstats analysis to get measurements
@@ -87,7 +89,7 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 	var spectralFrameCount int
 
 	// Accumulators for astats measurements (will extract from last frame metadata)
-	var astatsNoiseFloor, astatsDynamicRange, astatsRMSLevel, astatsPeakLevel float64
+	var astatsDynamicRange, astatsRMSLevel, astatsPeakLevel, astatsRMSTrough float64
 	var astatsFound bool
 
 	// Accumulators for ebur128 measurements (will extract from last frame metadata)
@@ -152,15 +154,14 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 				// Extract astats measurements (cumulative, so we just get the latest)
 				// For mono audio, stats are under channel .1; for stereo, use .Overall or average channels
 				// Since podcast audio is typically mono, we check channel 1 first, then Overall as fallback
-				noiseFloorKey := "lavfi.astats.1.Noise_floor"
-				if noiseFloorEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr(noiseFloorKey), nil, 0); noiseFloorEntry != nil {
-					if value, err := strconv.ParseFloat(noiseFloorEntry.Value().String(), 64); err == nil {
-						astatsNoiseFloor = value
+
+				dynamicRangeKey := "lavfi.astats.1.Dynamic_range"
+				if dynamicRangeEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr(dynamicRangeKey), nil, 0); dynamicRangeEntry != nil {
+					if value, err := strconv.ParseFloat(dynamicRangeEntry.Value().String(), 64); err == nil {
+						astatsDynamicRange = value
 						astatsFound = true
 					}
 				}
-
-				dynamicRangeKey := "lavfi.astats.1.Dynamic_range"
 				if dynamicRangeEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr(dynamicRangeKey), nil, 0); dynamicRangeEntry != nil {
 					if value, err := strconv.ParseFloat(dynamicRangeEntry.Value().String(), 64); err == nil {
 						astatsDynamicRange = value
@@ -178,6 +179,15 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 				if peakEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr(peakKey), nil, 0); peakEntry != nil {
 					if value, err := strconv.ParseFloat(peakEntry.Value().String(), 64); err == nil {
 						astatsPeakLevel = value
+					}
+				}
+
+				// Extract RMS_trough - RMS level of quietest segments (best noise floor indicator for speech)
+				// In speech audio, quiet inter-word periods contain primarily ambient/electronic noise
+				rmsTroughKey := "lavfi.astats.1.RMS_trough"
+				if rmsTroughEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr(rmsTroughKey), nil, 0); rmsTroughEntry != nil {
+					if value, err := strconv.ParseFloat(rmsTroughEntry.Value().String(), 64); err == nil {
+						astatsRMSTrough = value
 					}
 				}
 
@@ -240,15 +250,14 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 
 			// Extract astats measurements from remaining frames
 			// Use channel 1 keys for mono audio (same as main loop)
-			noiseFloorKey := "lavfi.astats.1.Noise_floor"
-			if noiseFloorEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr(noiseFloorKey), nil, 0); noiseFloorEntry != nil {
-				if value, err := strconv.ParseFloat(noiseFloorEntry.Value().String(), 64); err == nil {
-					astatsNoiseFloor = value
+
+			dynamicRangeKey := "lavfi.astats.1.Dynamic_range"
+			if dynamicRangeEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr(dynamicRangeKey), nil, 0); dynamicRangeEntry != nil {
+				if value, err := strconv.ParseFloat(dynamicRangeEntry.Value().String(), 64); err == nil {
+					astatsDynamicRange = value
 					astatsFound = true
 				}
 			}
-
-			dynamicRangeKey := "lavfi.astats.1.Dynamic_range"
 			if dynamicRangeEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr(dynamicRangeKey), nil, 0); dynamicRangeEntry != nil {
 				if value, err := strconv.ParseFloat(dynamicRangeEntry.Value().String(), 64); err == nil {
 					astatsDynamicRange = value
@@ -266,6 +275,13 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 			if peakEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr(peakKey), nil, 0); peakEntry != nil {
 				if value, err := strconv.ParseFloat(peakEntry.Value().String(), 64); err == nil {
 					astatsPeakLevel = value
+				}
+			}
+
+			rmsTroughKey := "lavfi.astats.1.RMS_trough"
+			if rmsTroughEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr(rmsTroughKey), nil, 0); rmsTroughEntry != nil {
+				if value, err := strconv.ParseFloat(rmsTroughEntry.Value().String(), 64); err == nil {
+					astatsRMSTrough = value
 				}
 			}
 
@@ -320,33 +336,51 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 
 	// Store astats measurements (if captured)
 	if astatsFound {
-		measurements.NoiseFloor = astatsNoiseFloor
 		measurements.DynamicRange = astatsDynamicRange
 		measurements.RMSLevel = astatsRMSLevel
 		measurements.PeakLevel = astatsPeakLevel
+		measurements.RMSTrough = astatsRMSTrough
+	}
+
+	// Derive noise floor using three-tier approach based on audio engineering best practices:
+	// Tier 1 (Primary): RMS_trough from astats - most accurate
+	//   - Measures RMS level during quietest segments (inter-word silence in speech)
+	//   - These quiet periods contain primarily room noise, HVAC, electronics noise
+	//   - Directly represents the actual noise floor of the recording environment
+	// Tier 2 (Secondary): Estimate from RMS_level - 15dB
+	//   - Based on typical speech crest factor where quiet segments are 12-18dB below average RMS
+	//   - Reasonable approximation when RMS_trough unavailable
+	// Tier 3 (Tertiary): Estimate from ebur128 InputThresh with loudness-based offset
+	//   - Fallback for when astats data is completely unavailable
+	//   - Uses integrated loudness to infer likely noise floor characteristics
+
+	if astatsRMSTrough != 0 && !math.IsInf(astatsRMSTrough, -1) {
+		// Tier 1: Use RMS_trough (best - actual measurement of quiet segments)
+		measurements.NoiseFloor = astatsRMSTrough
+	} else if astatsRMSLevel != 0 && !math.IsInf(astatsRMSLevel, -1) {
+		// Tier 2: Estimate from overall RMS level
+		// Typical speech has quiet segments 12-18dB below average RMS; use 15dB as balanced estimate
+		measurements.NoiseFloor = astatsRMSLevel - 15.0
 	} else {
-		// Fallback: estimate noise floor if astats didn't provide it
-		// Calculate offset based on input loudness (louder recordings typically have lower noise floors)
+		// Tier 3: Estimate from ebur128 integrated loudness threshold
+		// Louder recordings typically have better SNR (lower relative noise floor)
 		var noiseFloorOffset float64
 		if measurements.InputI > -20 {
-			// Very loud source: likely professional, low noise floor
-			noiseFloorOffset = 18.0
+			noiseFloorOffset = 18.0 // Professional: very low noise floor
 		} else if measurements.InputI > -30 {
-			// Moderate loudness: typical podcast, moderate noise floor
-			noiseFloorOffset = 12.0
+			noiseFloorOffset = 12.0 // Typical podcast: moderate noise floor
 		} else {
-			// Quiet source: likely higher noise floor relative to signal
-			noiseFloorOffset = 8.0
+			noiseFloorOffset = 8.0 // Quiet source: higher relative noise
 		}
-
 		measurements.NoiseFloor = measurements.InputThresh - noiseFloorOffset
+	}
 
-		// Clamp to reasonable range: -60dB (very quiet studio) to -30dB (noisy environment)
-		if measurements.NoiseFloor < -60.0 {
-			measurements.NoiseFloor = -60.0
-		} else if measurements.NoiseFloor > -30.0 {
-			measurements.NoiseFloor = -30.0
-		}
+	// Safety clamp: -90dB (digital silence) to -30dB (very noisy environment)
+	// Prevents extreme values while allowing wide range of recording quality
+	if measurements.NoiseFloor < -90.0 {
+		measurements.NoiseFloor = -90.0
+	} else if measurements.NoiseFloor > -30.0 {
+		measurements.NoiseFloor = -30.0
 	}
 
 	return measurements, nil

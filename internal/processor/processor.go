@@ -110,12 +110,15 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 	}
 	// If no spectral analysis available, keep default 0.0 (disabled)
 
-	// Adaptively set gate threshold based on measured noise floor from astats
-	// The gate threshold should be set above the noise floor to remove noise while preserving speech
-	// Offset strategy:
-	// - Clean recordings (low noise floor < -60dB): Use larger offset (10dB) for safety margin
-	// - Moderate recordings (-60 to -50dB): Use standard offset (8dB) for good balance
-	// - Noisy recordings (> -50dB): Use smaller offset (6dB) to preserve more speech
+	// Adaptively set gate threshold based on measured noise floor from astats RMS_trough
+	// RMS_trough measures the RMS level during quietest segments (inter-word silence)
+	// providing accurate noise floor for the recording environment
+	//
+	// Gate threshold = noise floor + offset (dB above noise to avoid cutting into speech)
+	// Offset strategy based on recording quality:
+	// - Clean recordings (< -60dB): 10dB offset for safety margin
+	// - Moderate recordings (-60 to -50dB): 8dB offset for balance
+	// - Noisy recordings (> -50dB): 6dB offset to preserve more speech
 	var gateOffsetDB float64
 	if measurements.NoiseFloor < -60.0 {
 		// Very clean recording - use larger margin to avoid false triggers
@@ -132,15 +135,16 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 	gateThresholdDB := measurements.NoiseFloor + gateOffsetDB
 	config.GateThreshold = math.Pow(10, gateThresholdDB/20.0)
 
-	// Safety limits: clamp between -55dB (0.0018) and -25dB (0.056)
-	// This prevents extremes while allowing adaptation to various recording conditions
-	const minThresholdDB = -55.0
+	// Safety limits: prevent extremes while allowing wide range of recording quality
+	// Min -70dB: handles very clean studio recordings (RMS_trough can be -80 to -90dB)
+	// Max -25dB: prevents over-aggressive gating in noisy environments
+	const minThresholdDB = -70.0
 	const maxThresholdDB = -25.0
 	minThresholdLinear := math.Pow(10, minThresholdDB/20.0)
 	maxThresholdLinear := math.Pow(10, maxThresholdDB/20.0)
 
 	if config.GateThreshold < minThresholdLinear {
-		config.GateThreshold = minThresholdLinear // -55dBFS minimum (very quiet studio)
+		config.GateThreshold = minThresholdLinear // -70dBFS minimum (professional studio)
 	} else if config.GateThreshold > maxThresholdLinear {
 		config.GateThreshold = maxThresholdLinear // -25dBFS maximum (noisy environment)
 	}
