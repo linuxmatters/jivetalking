@@ -14,12 +14,12 @@ import (
 )
 
 // ProcessAudio performs complete two-pass audio processing:
-// - Pass 1: Analyze audio to get loudnorm measurements and noise floor estimate
-// - Pass 2: Process audio through complete filter chain (afftdn → agate → acompressor → loudnorm)
+// - Pass 1: Analyze audio to get measurements and noise floor estimate
+// - Pass 2: Process audio through complete filter chain (afftdn → agate → acompressor → dynaudnorm → alimiter)
 //
 // The output file will be named <basename>-processed.<ext> in the same directory as the input
 // If progressCallback is not nil, it will be called with progress updates
-func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback func(pass int, passName string, progress float64, level float64, measurements *LoudnormMeasurements)) (*ProcessingResult, error) {
+func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements)) (*ProcessingResult, error) {
 	// Pass 1: Analysis
 	// (printf output suppressed for UI compatibility)
 
@@ -153,124 +153,79 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 	// Dynamic range indicates how much variation exists between loud and quiet parts
 	// This informs how aggressively we should compress to even out the levels
 	if measurements.DynamicRange > 0 {
-		if measurements.DynamicRange > 20.0 {
-			// High dynamic range (>20dB) - expressive content with intentional level variations
-			// Examples: Storytelling, dramatic reading, varied speaking styles
-			// Strategy: Use gentle compression to preserve expression while providing some consistency
-			config.CompRatio = 2.0       // Gentle 2:1 ratio
-			config.CompThreshold = -18.0 // Higher threshold (only compress peaks)
-			config.CompMakeup = 2.0      // Less makeup gain needed
-		} else if measurements.DynamicRange > 12.0 {
-			// Moderate dynamic range (12-20dB) - typical conversational podcast
-			// Examples: Interview, discussion, normal speech patterns
-			// Strategy: Standard compression for broadcast-quality consistency
-			config.CompRatio = 2.5       // Moderate 2.5:1 ratio (default)
-			config.CompThreshold = -20.0 // Standard threshold
-			config.CompMakeup = 3.0      // Standard makeup gain (default)
-		} else if measurements.DynamicRange > 8.0 {
-			// Low-moderate dynamic range (8-12dB) - already fairly consistent
-			// Examples: Experienced podcaster, good mic technique, some processing
-			// Strategy: Light compression to avoid over-processing
+		if measurements.DynamicRange > 30.0 {
+			// Very dynamic content (expressive delivery)
 			config.CompRatio = 2.0       // Gentle ratio
-			config.CompThreshold = -22.0 // Lower threshold to catch more
-			config.CompMakeup = 2.0      // Less makeup needed
+			config.CompThreshold = -16.0 // Higher threshold
+			config.CompMakeup = 1.0      // Minimal makeup
+		} else if measurements.DynamicRange > 20.0 {
+			// Moderately dynamic (typical podcast)
+			config.CompRatio = 3.0
+			config.CompThreshold = -18.0
+			config.CompMakeup = 2.0
 		} else {
-			// Very low dynamic range (<8dB) - already heavily compressed/limited
-			// Examples: Pre-processed audio, aggressive recording chain, broadcast feeds
-			// Strategy: Minimal or no compression to avoid artifacts
-			config.CompRatio = 1.5       // Very gentle
-			config.CompThreshold = -16.0 // High threshold (barely compress)
-			config.CompMakeup = 1.0      // Minimal makeup gain
-			// Note: Could skip compression entirely, but gentle settings provide safety net
+			// Already compressed/consistent
+			config.CompRatio = 4.0       // Stronger ratio for peaks
+			config.CompThreshold = -20.0 // Lower threshold
+			config.CompMakeup = 3.0      // More makeup
 		}
+	}
+
+	// Adaptive attack/release based on loudness range
+	if measurements.InputLRA > 15.0 {
+		// Wide loudness range = preserve transients
+		config.CompAttack = 25   // Slower attack
+		config.CompRelease = 150 // Slower release
+	} else if measurements.InputLRA > 10.0 {
+		// Moderate range
+		config.CompAttack = 20
+		config.CompRelease = 100
+	} else {
+		// Narrow range = tighter control
+		config.CompAttack = 15
+		config.CompRelease = 80
+	}
+
+	// Adaptive parallel compression mix based on recording quality AND dynamic range
+	var mixFactor float64
+
+	// Noise floor indicates recording quality (affects artifact audibility)
+	if measurements.NoiseFloor < -50 {
+		mixFactor = 0.95 // Clean recording baseline - can use more compression
+	} else if measurements.NoiseFloor < -40 {
+		mixFactor = 0.85 // Moderate quality
+	} else {
+		mixFactor = 0.75 // Noisy - gentler processing to mask pumping artifacts
+	}
+
+	// Dynamic range indicates content characteristics (affects how much compression needed)
+	if measurements.DynamicRange > 30 {
+		// Very dynamic - preserve more dry signal
+		config.CompMix = mixFactor - 0.10
+	} else if measurements.DynamicRange > 20 {
+		// Moderate dynamics
+		config.CompMix = mixFactor
+	} else {
+		// Already compressed - can use more
+		config.CompMix = math.Min(1.0, mixFactor+0.10)
 	}
 	// If no dynamic range measurement available, keep defaults (ratio: 2.5, threshold: -20dB)
 
-	// Adaptively configure dynaudnorm for consistent perceived loudness across varied inputs
-	// dynaudnorm applies dynamic normalization to match RMS (perceived loudness) while preserving
-	// dynamic range within local neighborhoods, making it ideal for matching presenter levels
+	// Phase 1: Conservative dynaudnorm configuration
+	// Remove aggressive adaptive tuning that caused distortion/clipping
+	// Use fixed conservative values with gain staging safety check
 
-	// 1. Target RMS: Convert target LUFS to linear RMS value for perceived loudness matching
-	//    LUFS measures integrated loudness over time (ITU-R BS.1770-4 standard)
-	//    RMS represents signal energy and correlates with perceived loudness
-	//    Conversion: LUFS → dBFS (add ~23dB offset) → linear (10^(dB/20))
-	//    Target -16 LUFS is podcast industry standard (Spotify, Apple Podcasts)
-	targetLUFS := config.TargetI                               // -16.0 LUFS (set in config)
-	targetDBFS := targetLUFS + 23.0                            // Approximate LUFS to dBFS conversion
-	config.DynaudnormTargetRMS = math.Pow(10, targetDBFS/20.0) // Convert dB to linear (0.0-1.0)
-
-	// Clamp to dynaudnorm's valid range
-	if config.DynaudnormTargetRMS < 0.0 {
-		config.DynaudnormTargetRMS = 0.0
-	} else if config.DynaudnormTargetRMS > 1.0 {
-		config.DynaudnormTargetRMS = 1.0
-	}
-
-	// 2. Frame Length: Temporal resolution based on loudness range (dynamic variation)
-	//    High LR (>12 LU): Expressive delivery with intentional level changes
-	//      → Longer frames preserve natural dynamics and prevent pumping
-	//    Low LR (<8 LU): Consistent delivery, already controlled
-	//      → Shorter frames for tighter, faster adaptation
-	if measurements.InputLRA > 12.0 {
-		config.DynaudnormFrameLen = 500 // Preserve natural expression
-	} else if measurements.InputLRA > 8.0 {
-		config.DynaudnormFrameLen = 300 // Balanced approach
-	} else {
-		config.DynaudnormFrameLen = 200 // Faster adaptation for consistent sources
-	}
-
-	// 3. Gaussian Filter Size: Controls gain smoothing across time
-	//    Larger window = slower gain changes (more like traditional normalization)
-	//    Smaller window = faster gain changes (more like dynamic compression)
-	//    High LR needs larger window to avoid artifacts from rapid gain changes
-	if measurements.InputLRA > 15.0 {
-		config.DynaudnormFilterSize = 41 // Slow, smooth for highly dynamic content
-	} else if measurements.InputLRA > 10.0 {
-		config.DynaudnormFilterSize = 31 // Default, balanced
-	} else {
-		config.DynaudnormFilterSize = 21 // Faster response for consistent content
-	}
-
-	// 4. Maximum Gain: Based on how quiet the input is (integrated loudness)
-	//    Very quiet inputs (e.g., -45 LUFS) need substantial gain to reach target
-	//    Conversion: dB difference = linear gain factor (10^(dB/20))
-	//    Example: -45 to -16 LUFS = 29 dB = 28.2x gain factor
-	if measurements.InputI < -40.0 {
-		config.DynaudnormMaxGain = 25.0 // Allow high gain for very quiet sources
-	} else if measurements.InputI < -30.0 {
-		config.DynaudnormMaxGain = 15.0 // Moderate gain for typical quiet sources
-	} else {
-		config.DynaudnormMaxGain = 10.0 // Default for normal-level sources
-	}
-
-	// 5. Compress: Soft-knee compression applied BEFORE normalization
-	//    Helps tame extreme peaks in high dynamic range content
-	//    Prevents pumping artifacts from large gain swings
-	//    Lower values = stronger compression (counter-intuitive but per FFmpeg docs)
-	if measurements.InputLRA > 15.0 {
-		config.DynaudnormCompress = 7.0 // Mild compression for very dynamic content
-	} else if measurements.InputLRA > 10.0 {
-		config.DynaudnormCompress = 3.0 // Very light compression
-	} else {
-		config.DynaudnormCompress = 0.0 // No compression for already-consistent content
-	}
-
-	// 6. Threshold: Minimum magnitude to normalize (prevents amplifying noise)
-	//    Based on measured noise floor (RMS_trough from astats)
-	//    Frames below this level won't be normalized, avoiding noise amplification
-	//    Convert noise floor from dBFS to linear magnitude (0.0-1.0 range)
-	if measurements.NoiseFloor < 0 {
-		config.DynaudnormThreshold = math.Pow(10, measurements.NoiseFloor/20.0)
-
-		// Clamp to reasonable range
-		if config.DynaudnormThreshold < 0.0001 { // -80 dBFS
-			config.DynaudnormThreshold = 0.0001
-		} else if config.DynaudnormThreshold > 0.01 { // -40 dBFS
-			config.DynaudnormThreshold = 0.01
-		}
-	} else {
-		config.DynaudnormThreshold = 0.0 // Normalize everything if no noise floor measurement
-	}
+	// Fixed conservative dynaudnorm parameters
+	config.DynaudnormFrameLen = 500      // 500ms frames (default, balanced)
+	config.DynaudnormFilterSize = 31     // Gaussian filter size 31 (default, smooth)
+	config.DynaudnormPeakValue = 0.95    // Peak target 0.95 (default, 5% headroom)
+	config.DynaudnormMaxGain = 5.0       // Max gain 5x (conservative, prevents over-amplification)
+	config.DynaudnormTargetRMS = 0.0     // No RMS targeting (peak-based normalization only)
+	config.DynaudnormCompress = 0.0      // No compression (acompressor handles this)
+	config.DynaudnormThreshold = 0.0     // Normalize all frames
+	config.DynaudnormChannels = false    // Coupled channels
+	config.DynaudnormDCCorrect = false   // No DC correction
+	config.DynaudnormAltBoundary = false // Standard boundary mode
 
 	// Safety checks: ensure no NaN or Inf values
 	if math.IsNaN(config.HighpassFreq) || math.IsInf(config.HighpassFreq, 0) {
@@ -311,10 +266,12 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 	}
 
 	// Return the processing result
+	// Note: OutputLUFS is no longer guaranteed to match TargetI
+	// Dynaudnorm provides adaptive normalization but doesn't target specific LUFS values
 	result := &ProcessingResult{
 		OutputPath:   outputPath,
 		InputLUFS:    measurements.InputI,
-		OutputLUFS:   config.TargetI,
+		OutputLUFS:   0.0, // Not measured - would require third pass analysis
 		NoiseFloor:   measurements.NoiseFloor,
 		Measurements: measurements,
 		Config:       config, // Include config for logging adaptive parameters
@@ -329,12 +286,12 @@ type ProcessingResult struct {
 	InputLUFS    float64
 	OutputLUFS   float64
 	NoiseFloor   float64
-	Measurements *LoudnormMeasurements
+	Measurements *AudioMeasurements
 	Config       *FilterChainConfig // Contains adaptive parameters used
 }
 
 // processWithFilters performs the actual audio processing with the complete filter chain
-func processWithFilters(inputPath, outputPath string, config *FilterChainConfig, progressCallback func(pass int, passName string, progress float64, level float64, measurements *LoudnormMeasurements), measurements *LoudnormMeasurements) error {
+func processWithFilters(inputPath, outputPath string, config *FilterChainConfig, progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements), measurements *AudioMeasurements) error {
 	// Open input audio file
 	reader, metadata, err := audio.OpenAudioFile(inputPath)
 	if err != nil {

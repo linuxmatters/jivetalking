@@ -11,9 +11,9 @@ import (
 	"github.com/linuxmatters/jivetalking/internal/audio"
 )
 
-// LoudnormMeasurements contains the measurements from loudnorm first-pass analysis
-// plus spectral analysis for adaptive de-esser targeting
-type LoudnormMeasurements struct {
+// AudioMeasurements contains the measurements from Pass 1 analysis
+// Uses ebur128 (LUFS/LRA), astats (dynamic range/noise floor), and aspectralstats (spectral analysis)
+type AudioMeasurements struct {
 	InputI       float64 `json:"input_i"`       // Integrated loudness (LUFS)
 	InputTP      float64 `json:"input_tp"`      // True peak (dBTP)
 	InputLRA     float64 `json:"input_lra"`     // Loudness range (LU)
@@ -37,7 +37,7 @@ type LoudnormMeasurements struct {
 //
 // Implementation note: ebur128 and astats write measurements to frame metadata with lavfi.r128.*
 // and lavfi.astats.Overall.* keys respectively. We extract these from the last processed frames.
-func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progressCallback func(pass int, passName string, progress float64, level float64, measurements *LoudnormMeasurements)) (*LoudnormMeasurements, error) {
+func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements)) (*AudioMeasurements, error) {
 	// Open audio file
 	reader, metadata, err := audio.OpenAudioFile(filename)
 	if err != nil {
@@ -210,7 +210,7 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 						ebur128InputLRA = value
 					}
 				}
-				// Note: ebur128 doesn't provide threshold directly like loudnorm does
+				// Note: ebur128 doesn't provide threshold directly
 				// We'll calculate it from the integrated loudness if needed
 			}
 
@@ -312,7 +312,7 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 	filterFreed = true
 
 	// Create measurements struct and populate from metadata
-	measurements := &LoudnormMeasurements{}
+	measurements := &AudioMeasurements{}
 
 	// Populate ebur128 loudness measurements from metadata
 	if ebur128Found {
@@ -392,7 +392,7 @@ func createAnalysisFilterGraph(
 	decCtx *ffmpeg.AVCodecContext,
 	targetI, targetTP, targetLRA float64,
 	firstPass bool,
-	measurements *LoudnormMeasurements,
+	measurements *AudioMeasurements,
 ) (*ffmpeg.AVFilterGraph, *ffmpeg.AVFilterContext, *ffmpeg.AVFilterContext, error) {
 
 	filterGraph := ffmpeg.AVFilterGraphAlloc()
@@ -469,8 +469,8 @@ func createAnalysisFilterGraph(
 		filterSpec = fmt.Sprintf("astats=metadata=1:measure_overall=Noise_floor+Dynamic_range+RMS_level+Peak_level,aspectralstats=win_size=2048:win_func=hann:measure=centroid+rolloff,ebur128=metadata=1:target=%.0f",
 			targetI)
 	} else {
-		// Second pass: Not used anymore - loudnorm disabled
-		// Using dynaudnorm for loudness normalization in Pass 2 processing
+		// Second pass: Not used anymore
+		// Using dynaudnorm for normalization in Pass 2 processing (not analysis)
 		filterSpec = ""
 	}
 

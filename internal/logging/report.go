@@ -73,21 +73,21 @@ func GenerateReport(data ReportData) error {
 	if data.Result != nil && data.Result.Config != nil {
 		cfg := data.Result.Config
 		m := data.Result.Measurements
-		
+
 		fmt.Fprintf(f, "Highpass Frequency:  %.0f Hz (adaptive, based on centroid)\n", cfg.HighpassFreq)
-		
+
 		// Show deesser decision with both factors
 		if cfg.DeessIntensity > 0 {
-			fmt.Fprintf(f, "De-esser Intensity:  %.2f (adaptive, centroid: %.0f Hz, rolloff: %.0f Hz)\n", 
+			fmt.Fprintf(f, "De-esser Intensity:  %.2f (adaptive, centroid: %.0f Hz, rolloff: %.0f Hz)\n",
 				cfg.DeessIntensity, m.SpectralCentroid, m.SpectralRolloff)
 		} else {
 			fmt.Fprintf(f, "De-esser Intensity:  %.2f (disabled, insufficient HF content)\n", cfg.DeessIntensity)
 		}
-		
+
 		// Calculate gate threshold in dB for display
 		gateThresholdDB := 20.0 * math.Log10(cfg.GateThreshold)
 		fmt.Fprintf(f, "Gate Threshold:      %.1f dB (adaptive, based on noise floor)\n", gateThresholdDB)
-		
+
 		// Show adaptive compression settings
 		if m.DynamicRange > 0 {
 			fmt.Fprintf(f, "Compression Ratio:   %.1f:1 (adaptive, DR: %.1f dB)\n", cfg.CompRatio, m.DynamicRange)
@@ -97,7 +97,7 @@ func GenerateReport(data ReportData) error {
 			fmt.Fprintf(f, "Compression Thresh:  %.0f dB (default)\n", cfg.CompThreshold)
 		}
 	}
-	fmt.Fprintln(f, "")	// Pass 2: Processing Applied
+	fmt.Fprintln(f, "") // Pass 2: Processing Applied
 	fmt.Fprintln(f, "Pass 2: Processing Applied")
 	fmt.Fprintln(f, "---------------------------")
 	if data.Result != nil && data.Result.Measurements != nil {
@@ -127,12 +127,11 @@ func GenerateReport(data ReportData) error {
 			fmt.Fprintln(f, "")
 		}
 
-		fmt.Fprintln(f, "Loudness Normalization:")
+		fmt.Fprintln(f, "Adaptive Normalization:")
 		fmt.Fprintf(f, "  - Input: %.1f LUFS\n", m.InputI)
-		fmt.Fprintf(f, "  - Target: %.1f LUFS\n", data.Result.OutputLUFS)
-		fmt.Fprintf(f, "  - Adjustment: %+.1f dB\n", data.Result.OutputLUFS-m.InputI)
-		fmt.Fprintf(f, "  - True peak: %.1f dBTP (compliant)\n", m.InputTP)
-		fmt.Fprintf(f, "  - Loudness range: %.1f LU\n", m.InputLRA)
+		fmt.Fprintf(f, "  - Method: dynaudnorm (adaptive peak-based)\n")
+		fmt.Fprintf(f, "  - True peak: %.1f dBTP (input)\n", m.InputTP)
+		fmt.Fprintf(f, "  - Loudness range: %.1f LU (input)\n", m.InputLRA)
 		fmt.Fprintln(f, "")
 	}
 
@@ -140,12 +139,8 @@ func GenerateReport(data ReportData) error {
 	fmt.Fprintln(f, "Output Analysis")
 	fmt.Fprintln(f, "---------------")
 	if data.Result != nil {
-		fmt.Fprintf(f, "Integrated Loudness: %.1f LUFS", data.Result.OutputLUFS)
-		if abs(data.Result.OutputLUFS-(-16.0)) <= 0.1 {
-			fmt.Fprint(f, " (✓ target achieved)")
-		}
-		fmt.Fprintln(f, "")
 		fmt.Fprintf(f, "Output File:         %s\n", filepath.Base(data.OutputPath))
+		fmt.Fprintln(f, "Note: Output LUFS not measured (would require third-pass analysis)")
 	}
 	fmt.Fprintln(f, "")
 

@@ -36,7 +36,7 @@ type FileProgress struct {
 	ElapsedTime time.Duration
 
 	// Analysis results (from Pass 1)
-	Measurements *processor.LoudnormMeasurements
+	Measurements *processor.AudioMeasurements
 
 	// Processing statistics
 	CurrentLevel float64 // Current audio level in dB

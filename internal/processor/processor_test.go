@@ -52,7 +52,7 @@ func TestFilterChainBuilder(t *testing.T) {
 	filterSpec := config.BuildFilterSpec()
 	t.Logf("Pass 1 filter spec: %s", filterSpec)
 
-	// Should end with loudnorm in JSON mode
+	// Should contain filter chain
 	if filterSpec == "" {
 		t.Error("Filter spec is empty")
 	}
@@ -71,7 +71,7 @@ func TestFilterChainBuilder(t *testing.T) {
 	filterSpec = config.BuildFilterSpec()
 	t.Logf("Pass 2 filter spec: %s", filterSpec)
 
-	// Should contain all filters: afftdn, agate, acompressor, loudnorm
+	// Should contain all filters: afftdn, agate, acompressor, dynaudnorm
 	if filterSpec == "" {
 		t.Error("Filter spec is empty")
 	}

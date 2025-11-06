@@ -50,12 +50,12 @@ type FilterChainConfig struct {
 	DeessAmount    float64 // 0.0-1.0, amount of ducking on treble (how much to reduce)
 	DeessFreq      float64 // 0.0-1.0, how much original frequency content to keep
 
-	// Loudness Normalization (loudnorm two-pass)
-	TargetI   float64 // LUFS target (podcast standard: -16)
-	TargetTP  float64 // dBTP, true peak ceiling
-	TargetLRA float64 // LU, loudness range target
+	// Target values (for reference only)
+	TargetI   float64 // LUFS target reference (podcast standard: -16)
+	TargetTP  float64 // dBTP, true peak ceiling reference
+	TargetLRA float64 // LU, loudness range reference
 
-	// Dynamic Audio Normalizer (dynaudnorm) - alternative to loudnorm
+	// Dynamic Audio Normalizer (dynaudnorm) - primary normalization method
 	DynaudnormFrameLen    int     // Frame length in milliseconds (10-8000, default 500)
 	DynaudnormFilterSize  int     // Filter size for Gaussian filter (3-301, default 31)
 	DynaudnormPeakValue   float64 // Target peak value 0.0-1.0 (default 0.95)
@@ -73,7 +73,7 @@ type FilterChainConfig struct {
 	LimiterRelease float64 // ms, release time
 
 	// Pass 1 measurements (nil for first pass)
-	Measurements *LoudnormMeasurements
+	Measurements *AudioMeasurements
 }
 
 // DefaultFilterConfig returns the scientifically-tuned default filter configuration
@@ -99,7 +99,7 @@ func DefaultFilterConfig() *FilterChainConfig {
 		GateRelease:   250,    // 250ms release (smooth, natural decay)
 		GateRange:     0.0625, // -24dB reduction (moderate, avoids voice ducking)
 		GateKnee:      2.828,  // Soft knee (2.828 = default, smooth engagement)
-		GateMakeup:    1.0,    // No makeup gain (handled by loudnorm)
+		GateMakeup:    1.0,    // No makeup gain (normalization handled by dynaudnorm)
 
 		// Compression - even out dynamics naturally
 		// LA-2A-style gentle compression for podcast speech
@@ -116,10 +116,10 @@ func DefaultFilterConfig() *FilterChainConfig {
 		DeessAmount:    0.5, // 50% ducking on treble (moderate reduction)
 		DeessFreq:      0.5, // Keep 50% of original frequency content (balanced)
 
-		// Loudness - podcast standard
-		TargetI:   -16.0,
-		TargetTP:  -0.3, // Very permissive TP for loudnorm (only catches extreme peaks), alimiter does real limiting at -1.5
-		TargetLRA: 7.0,  // EBU R128 default, appropriate for speech
+		// Target values (for reference only)
+		TargetI:   -16.0, // Reference LUFS target (not enforced)
+		TargetTP:  -0.3,  // Reference true peak (not enforced, alimiter does real limiting at -1.5)
+		TargetLRA: 7.0,   // Reference loudness range (EBU R128 default)
 
 		// Dynamic Audio Normalizer - adaptive loudness normalization
 		DynaudnormFrameLen:    500,   // 500ms frames (default, good for speech)
@@ -134,8 +134,7 @@ func DefaultFilterConfig() *FilterChainConfig {
 		DynaudnormAltBoundary: false, // Standard boundary mode (default)
 
 		// Limiter - brick-wall safety net with soft knee (via ASC)
-		// This does the real true-peak limiting with better sound quality than loudnorm's hard limiter
-		LimiterCeiling: 0.84, // -1.5dBTP (actual target, tighter than loudnorm's -1.0)
+		LimiterCeiling: 0.84, // -1.5dBTP (actual limiting target)
 		LimiterAttack:  5.0,  // 5ms lookahead for smooth limiting
 		LimiterRelease: 50.0, // 50ms release for natural sound
 
@@ -150,8 +149,7 @@ func dbToLinear(db float64) float64 {
 }
 
 // BuildFilterSpec builds the FFmpeg filter specification string for Pass 2 processing
-// This creates the complete filter chain: highpass → adeclick → afftdn → agate → acompressor → deesser → loudnorm → dynaudnorm → alimiter
-// Note: loudnorm is kept for Pass 1 analysis measurements, but dynaudnorm is the active normalizer in Pass 2
+// Filter Chain: highpass → adeclick → afftdn → agate → acompressor → deesser → dynaudnorm → alimiter
 func (cfg *FilterChainConfig) BuildFilterSpec() string {
 	// Build highpass (rumble removal) filter
 	// Remove subsonic frequencies below 80Hz (HVAC, handling noise, etc.)
@@ -245,37 +243,11 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 	}
 	// If DeessIntensity is 0, deesserFilter stays empty and will be skipped in filter chain
 
-	// Build loudnorm (two-pass normalization) filter
-	var loudnormFilter string
-	// Use measurements from first pass for precise normalization
-	// Use dynamic mode (linear=false) to prevent distortion on narrow-LRA sources
-	// Dynamic mode adapts to the source material rather than forcing LRA expansion
-	// Include offset parameter for proper gain adjustment even in dynamic mode
-	loudnormFilter = fmt.Sprintf(
-		"loudnorm=I=%.1f:TP=%.1f:LRA=%.1f:"+
-			"measured_I=%.2f:measured_TP=%.2f:measured_LRA=%.2f:"+
-			"measured_thresh=%.2f:offset=%.2f:"+
-			"linear=false:print_format=summary",
-		cfg.TargetI, cfg.TargetTP, cfg.TargetLRA,
-		cfg.Measurements.InputI, cfg.Measurements.InputTP, cfg.Measurements.InputLRA,
-		cfg.Measurements.InputThresh, cfg.Measurements.TargetOffset,
-	)
-	// Intentionally disabled!
-	loudnormFilter = ""
-
 	// Build dynaudnorm (Dynamic Audio Normalizer) filter
-	// Alternative to loudnorm with different approach - uses local statistics and Gaussian smoothing
-	// This provides more consistent loudness over time with adaptive gain adjustment
-	// Parameters:
-	// f: frame length in ms (10-8000) - analysis window size
-	// g: filter size for Gaussian smoothing (3-301, must be odd) - temporal smoothing
-	// p: target peak value 0.0-1.0 - maximum output level
-	// m: maximum gain factor (1.0-100.0) - limits amplification
-	// r: target RMS 0.0-1.0 - if >0, uses RMS normalization instead of peak
-	// n: enable channel coupling (0=independent, 1=coupled)
-	// c: enable DC bias correction (0=off, 1=on)
-	// b: enable alternative boundary mode (0=off, 1=on)
-	// s: compression factor 0.0-30.0 - dynamic range compression (0=disabled)
+	// Conservative fixed settings for adaptive local normalization
+	// No RMS targeting (r=0.0) - relies on peak-based normalization
+	// No compression (s=0.0) - acompressor handles dynamic range reduction
+	// Reduced max gain (m=5.0, with safety check) - prevents over-amplification
 	channelFlag := 0
 	if cfg.DynaudnormChannels {
 		channelFlag = 1
@@ -291,44 +263,43 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 
 	dynaudnormFilter := fmt.Sprintf(
 		"dynaudnorm=f=%d:g=%d:p=%.2f:m=%.1f:r=%.3f:t=%.6f:n=%d:c=%d:b=%d:s=%.1f",
-		cfg.DynaudnormFrameLen,
-		cfg.DynaudnormFilterSize,
-		cfg.DynaudnormPeakValue,
-		cfg.DynaudnormMaxGain,
-		cfg.DynaudnormTargetRMS,
-		cfg.DynaudnormThreshold, // Minimum magnitude to normalize (prevents noise amplification)
-		channelFlag,
-		dcCorrectFlag,
-		altBoundaryFlag,
-		cfg.DynaudnormCompress,
+		cfg.DynaudnormFrameLen,   // 500ms frames (fixed)
+		cfg.DynaudnormFilterSize, // 31 Gaussian filter size (fixed)
+		cfg.DynaudnormPeakValue,  // 0.95 peak target (fixed)
+		cfg.DynaudnormMaxGain,    // 5.0 max gain (with safety check reducing if needed)
+		cfg.DynaudnormTargetRMS,  // 0.0 - no RMS targeting
+		cfg.DynaudnormThreshold,  // 0.0 - normalize all frames
+		channelFlag,              // false = coupled channels
+		dcCorrectFlag,            // false = no DC correction
+		altBoundaryFlag,          // false = standard boundary mode
+		cfg.DynaudnormCompress,   // 0.0 - no compression
 	)
 
 	// Build alimiter (true peak limiter) filter
 	// Uses lookahead technology and ASC for smooth, musical limiting
-	// This provides better sound quality than loudnorm's hard brick-wall limiter
-	// Used in both Pass 1 and Pass 2 for consistent, high-quality peak control
+	// Brick-wall safety net for peak control
 	alimiterFilter := fmt.Sprintf(
 		"alimiter=level_in=%.2f:level_out=%.2f:limit=%.2f:"+
 			"attack=%.0f:release=%.0f:asc=%d:asc_level=%.1f:level=%d:latency=%d",
 		1.0,                // No input gain adjustment
 		1.0,                // No output gain adjustment
-		cfg.LimiterCeiling, // Peak ceiling (0.84 = -1.5dBTP, actual target)
+		cfg.LimiterCeiling, // Peak ceiling (0.84 = -1.5dBTP)
 		cfg.LimiterAttack,  // Lookahead time (5ms for smooth limiting)
 		cfg.LimiterRelease, // Release time (50ms for natural sound)
 		1,                  // Enable ASC for smoother, more musical limiting
 		0.5,                // Moderate ASC influence (soft knee behavior)
-		0,                  // Disable auto-level normalization (loudnorm handles LUFS)
+		0,                  // Disable auto-level normalization (dynaudnorm handles normalization)
 		1,                  // Enable latency compensation
 	)
 
 	// Chain all filters together with commas
-	// Order: highpass → adeclick → denoise → gate → compress → deess → loudnorm → dynaudnorm → limit → format → frame
+	// Order: highpass → adeclick → denoise → gate → compress → deess → dynaudnorm → limit → format → frame
 	// Add aformat for podcast-standard output: 44.1kHz, mono, s16
 	// Add asetnsamples to ensure fixed frame size for FLAC encoder (which doesn't support variable frame size)
 
 	// Build filter list, skipping empty filters
 	var filters []string
-	for _, f := range []string{highpassFilter, adeclickFilter, afftdnFilter, agateFilter, acompressorFilter, deesserFilter, loudnormFilter, dynaudnormFilter, alimiterFilter} {
+	for _, f := range []string{highpassFilter, adeclickFilter, afftdnFilter, agateFilter, acompressorFilter, deesserFilter, dynaudnormFilter, alimiterFilter} {
 		if f != "" {
 			filters = append(filters, f)
 		}
@@ -349,7 +320,7 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 }
 
 // CreateProcessingFilterGraph creates an AVFilterGraph for complete audio processing
-// This is used in Pass 2 to apply the full filter chain: noise reduction → gate → compression → loudnorm
+// This is used in Pass 2 to apply the full filter chain
 func CreateProcessingFilterGraph(
 	decCtx *ffmpeg.AVCodecContext,
 	config *FilterChainConfig,

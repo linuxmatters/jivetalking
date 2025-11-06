@@ -6,11 +6,11 @@ import (
 
 // ProgressMsg represents a progress update from the processor
 type ProgressMsg struct {
-	Pass         int     // 1 or 2
-	PassName     string  // "Analyzing" or "Processing"
-	Progress     float64 // 0.0 to 1.0
-	Level        float64 // Current audio level in dB
-	Measurements *processor.LoudnormMeasurements
+	Pass         int
+	PassName     string
+	Progress     float64
+	Level        float64
+	Measurements *processor.AudioMeasurements
 }
 
 // FileStartMsg indicates a new file has started processing
