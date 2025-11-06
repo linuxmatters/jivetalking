@@ -81,13 +81,13 @@ func DefaultFilterConfig() *FilterChainConfig {
 
 		// Gate - remove silence and low-level noise between speech
 		// Threshold will be set adaptively based on noise floor in Pass 2
-		GateThreshold: 0.01, // -40dBFS default (will be adaptive)
-		GateRatio:     3.0,  // 3:1 expansion ratio
-		GateAttack:    10,   // 10ms attack (protects consonants)
-		GateRelease:   200,  // 200ms release (smooth, natural decay)
-		GateRange:     0.01, // -40dB reduction (aggressive noise removal)
-		GateKnee:      2.0,  // Soft knee for natural speech
-		GateMakeup:    1.0,  // No makeup gain (handled by loudnorm)
+		GateThreshold: 0.01,   // -40dBFS default (will be adaptive)
+		GateRatio:     2.0,    // 2:1 expansion ratio (gentle, preserves natural pauses)
+		GateAttack:    20,     // 20ms attack (protects speech onset, prevents clipping)
+		GateRelease:   250,    // 250ms release (smooth, natural decay)
+		GateRange:     0.0625, // -24dB reduction (moderate, avoids voice ducking)
+		GateKnee:      2.828,  // Soft knee (2.828 = default, smooth engagement)
+		GateMakeup:    1.0,    // No makeup gain (handled by loudnorm)
 
 		// Compression - even out dynamics naturally
 		// LA-2A-style gentle compression for podcast speech
