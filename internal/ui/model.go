@@ -3,24 +3,11 @@ package ui
 
 import (
 	"fmt"
-	"os"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/linuxmatters/jivetalking/internal/processor"
 )
-
-var debugLog *os.File
-
-func init() {
-	debugLog, _ = os.OpenFile("jivetalking-ui-debug.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-}
-
-func log(format string, args ...interface{}) {
-	if debugLog != nil {
-		fmt.Fprintf(debugLog, format+"\n", args...)
-	}
-}
 
 // FileStatus represents the processing state of a single file
 type FileStatus int
@@ -77,9 +64,6 @@ type Model struct {
 	StartTime time.Time
 	Done      bool
 
-	// Channel for receiving progress updates from processor
-	ProgressChan chan tea.Msg
-
 	// Terminal dimensions
 	Width  int
 	Height int
@@ -101,13 +85,12 @@ func NewModel(inputFiles []string) Model {
 		CurrentIndex: -1, // No file processing yet
 		TotalFiles:   len(inputFiles),
 		StartTime:    time.Now(),
-		ProgressChan: make(chan tea.Msg, 100), // Buffered channel
 	}
 }
 
 // Init initializes the model
 func (m Model) Init() tea.Cmd {
-	return waitForProgress(m.ProgressChan)
+	return nil
 }
 
 // Update handles messages and updates the model
@@ -122,28 +105,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.Width = msg.Width
 		m.Height = msg.Height
-		log("[DEBUG] Window size: %dx%d", m.Width, m.Height)
 
 	case ProgressMsg:
-		log("[DEBUG] ProgressMsg received: Pass %d, %.1f%%", msg.Pass, msg.Progress*100)
 		// Update the current file's progress
 		if m.CurrentIndex >= 0 && m.CurrentIndex < len(m.Files) {
 			m.Files[m.CurrentIndex] = updateFileProgress(m.Files[m.CurrentIndex], msg)
 		}
-
-		// Listen for the next progress message
-		return m, waitForProgress(m.ProgressChan)
+		return m, nil
 
 	case FileStartMsg:
-		log("[DEBUG] FileStartMsg received: index=%d, file=%s", msg.FileIndex, msg.FileName)
 		// Start processing next file
 		m.CurrentIndex = msg.FileIndex
 		m.Files[m.CurrentIndex].Status = StatusAnalyzing
 		m.Files[m.CurrentIndex].StartTime = time.Now()
-		return m, waitForProgress(m.ProgressChan)
+		return m, nil
 
 	case FileCompleteMsg:
-		log("[DEBUG] FileCompleteMsg received: index=%d", msg.FileIndex)
 		// Mark file as complete
 		if m.CurrentIndex >= 0 && m.CurrentIndex < len(m.Files) {
 			m.Files[m.CurrentIndex].Status = StatusComplete
@@ -159,10 +136,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.CompletedFiles++
 			}
 		}
-		return m, waitForProgress(m.ProgressChan)
+		return m, nil
 
 	case AllCompleteMsg:
-		log("[DEBUG] AllCompleteMsg received")
 		// All files processed
 		m.Done = true
 		return m, tea.Quit
@@ -191,7 +167,6 @@ func updateFileProgress(fp FileProgress, msg ProgressMsg) FileProgress {
 	// Reset the start time when transitioning to a new pass
 	if msg.Pass != fp.CurrentPass {
 		fp.StartTime = time.Now()
-		log("[UI] Pass transition: %d -> %d, PeakLevel before: %.1f dB", fp.CurrentPass, msg.Pass, fp.PeakLevel)
 	}
 
 	fp.Progress = msg.Progress
@@ -206,9 +181,7 @@ func updateFileProgress(fp FileProgress, msg ProgressMsg) FileProgress {
 	if msg.Level != 0 {
 		fp.CurrentLevel = msg.Level
 		if msg.Level > fp.PeakLevel {
-			oldPeak := fp.PeakLevel
 			fp.PeakLevel = msg.Level
-			log("[UI] Peak updated: %.1f -> %.1f dB (current: %.1f dB)", oldPeak, fp.PeakLevel, msg.Level)
 		}
 	}
 
@@ -220,11 +193,4 @@ func updateFileProgress(fp FileProgress, msg ProgressMsg) FileProgress {
 	}
 
 	return fp
-}
-
-// waitForProgress creates a command that waits for progress messages
-func waitForProgress(progressChan chan tea.Msg) tea.Cmd {
-	return func() tea.Msg {
-		return <-progressChan
-	}
 }

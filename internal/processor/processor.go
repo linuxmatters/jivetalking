@@ -374,6 +374,7 @@ func processWithFilters(inputPath, outputPath string, config *FilterChainConfig,
 
 	// Track frame count for periodic progress updates
 	frameCount := 0
+	currentLevel := 0.0
 
 	// Process all frames through the filter chain
 	for {
@@ -403,17 +404,7 @@ func processWithFilters(inputPath, outputPath string, config *FilterChainConfig,
 			}
 
 			// Calculate audio level from FILTERED frame (shows processed audio in VU meter)
-			currentLevel := calculateFrameLevel(filteredFrame)
-
-			// Send periodic progress updates based on frame count
-			updateInterval := 100 // Send progress update every N frames
-			if frameCount%updateInterval == 0 && progressCallback != nil && estimatedTotalFrames > 0 {
-				progress := float64(frameCount) / estimatedTotalFrames
-				if progress > 1.0 {
-					progress = 1.0
-				}
-				progressCallback(2, "Processing", progress, currentLevel, measurements)
-			}
+			currentLevel = calculateFrameLevel(filteredFrame)
 
 			// Set timebase for the filtered frame
 			filteredFrame.SetTimeBase(ffmpeg.AVBuffersinkGetTimeBase(bufferSinkCtx))
@@ -424,6 +415,17 @@ func processWithFilters(inputPath, outputPath string, config *FilterChainConfig,
 			}
 
 			ffmpeg.AVFrameUnref(filteredFrame)
+		}
+
+		// Send periodic progress updates based on INPUT frame count (moved outside inner loop)
+		// This ensures consistent update frequency between Pass 1 and Pass 2
+		updateInterval := 100 // Send progress update every N frames
+		if frameCount%updateInterval == 0 && progressCallback != nil && estimatedTotalFrames > 0 {
+			progress := float64(frameCount) / estimatedTotalFrames
+			if progress > 1.0 {
+				progress = 1.0
+			}
+			progressCallback(2, "Processing", progress, currentLevel, measurements)
 		}
 	}
 
