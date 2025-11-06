@@ -21,11 +21,16 @@ type LoudnormMeasurements struct {
 	InputLRA     float64 `json:"input_lra"`     // Loudness range (LU)
 	InputThresh  float64 `json:"input_thresh"`  // Threshold level
 	TargetOffset float64 `json:"target_offset"` // Offset for normalization
-	NoiseFloor   float64 `json:"noise_floor"`   // Estimated noise floor (dB)
+	NoiseFloor   float64 `json:"noise_floor"`   // Measured noise floor from astats (dBFS)
 
 	// Spectral analysis for adaptive de-esser frequency targeting
 	SpectralCentroid float64 `json:"spectral_centroid"` // Average spectral centroid (Hz) - where energy is concentrated
 	SpectralRolloff  float64 `json:"spectral_rolloff"`  // Average spectral rolloff (Hz) - high-frequency energy dropoff point
+
+	// Time-domain statistics from astats for adaptive processing
+	DynamicRange float64 `json:"dynamic_range"` // Measured dynamic range (dB)
+	RMSLevel     float64 `json:"rms_level"`     // Overall RMS level (dBFS)
+	PeakLevel    float64 `json:"peak_level"`    // Overall peak level (dBFS)
 }
 
 // loudnormJSON is a helper struct for unmarshaling FFmpeg's JSON output
@@ -107,6 +112,10 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 	var spectralRolloffSum float64
 	var spectralFrameCount int
 
+	// Accumulators for astats measurements (will extract from last frame metadata)
+	var astatsNoiseFloor, astatsDynamicRange, astatsRMSLevel, astatsPeakLevel float64
+	var astatsFound bool
+
 	for {
 		frame, err := reader.ReadFrame()
 		if err != nil {
@@ -159,6 +168,29 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 						spectralRolloffSum += rolloffValue
 					}
 				}
+
+				// Extract astats measurements (cumulative, so we just get the latest)
+				if noiseFloorEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.astats.Overall.Noise_floor"), nil, 0); noiseFloorEntry != nil {
+					if value, err := strconv.ParseFloat(noiseFloorEntry.Value().String(), 64); err == nil {
+						astatsNoiseFloor = value
+						astatsFound = true
+					}
+				}
+				if dynamicRangeEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.astats.Overall.Dynamic_range"), nil, 0); dynamicRangeEntry != nil {
+					if value, err := strconv.ParseFloat(dynamicRangeEntry.Value().String(), 64); err == nil {
+						astatsDynamicRange = value
+					}
+				}
+				if rmsEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.astats.Overall.RMS_level"), nil, 0); rmsEntry != nil {
+					if value, err := strconv.ParseFloat(rmsEntry.Value().String(), 64); err == nil {
+						astatsRMSLevel = value
+					}
+				}
+				if peakEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.astats.Overall.Peak_level"), nil, 0); peakEntry != nil {
+					if value, err := strconv.ParseFloat(peakEntry.Value().String(), 64); err == nil {
+						astatsPeakLevel = value
+					}
+				}
 			}
 
 			ffmpeg.AVFrameUnref(filteredFrame)
@@ -193,6 +225,29 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 					spectralRolloffSum += rolloffValue
 				}
 			}
+
+			// Extract astats measurements from remaining frames
+			if noiseFloorEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.astats.Overall.Noise_floor"), nil, 0); noiseFloorEntry != nil {
+				if value, err := strconv.ParseFloat(noiseFloorEntry.Value().String(), 64); err == nil {
+					astatsNoiseFloor = value
+					astatsFound = true
+				}
+			}
+			if dynamicRangeEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.astats.Overall.Dynamic_range"), nil, 0); dynamicRangeEntry != nil {
+				if value, err := strconv.ParseFloat(dynamicRangeEntry.Value().String(), 64); err == nil {
+					astatsDynamicRange = value
+				}
+			}
+			if rmsEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.astats.Overall.RMS_level"), nil, 0); rmsEntry != nil {
+				if value, err := strconv.ParseFloat(rmsEntry.Value().String(), 64); err == nil {
+					astatsRMSLevel = value
+				}
+			}
+			if peakEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.astats.Overall.Peak_level"), nil, 0); peakEntry != nil {
+				if value, err := strconv.ParseFloat(peakEntry.Value().String(), 64); err == nil {
+					astatsPeakLevel = value
+				}
+			}
 		}
 
 		ffmpeg.AVFrameUnref(filteredFrame)
@@ -215,12 +270,36 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 		measurements.SpectralRolloff = spectralRolloffSum / float64(spectralFrameCount)
 	}
 
-	// Estimate noise floor based on loudnorm input threshold
-	// The input_thresh represents the threshold below which audio is considered silence
-	// For podcast audio, the noise floor is typically 10-15 dB below this threshold
-	// This provides a good starting estimate for afftdn's automatic tracking (tn=1)
-	// which will adapt to the actual noise floor during Pass 2 processing
-	measurements.NoiseFloor = measurements.InputThresh - 15.0
+	// Store astats measurements (if captured)
+	if astatsFound {
+		measurements.NoiseFloor = astatsNoiseFloor
+		measurements.DynamicRange = astatsDynamicRange
+		measurements.RMSLevel = astatsRMSLevel
+		measurements.PeakLevel = astatsPeakLevel
+	} else {
+		// Fallback: estimate noise floor if astats didn't provide it
+		// Calculate offset based on input loudness (louder recordings typically have lower noise floors)
+		var noiseFloorOffset float64
+		if measurements.InputI > -20 {
+			// Very loud source: likely professional, low noise floor
+			noiseFloorOffset = 18.0
+		} else if measurements.InputI > -30 {
+			// Moderate loudness: typical podcast, moderate noise floor
+			noiseFloorOffset = 12.0
+		} else {
+			// Quiet source: likely higher noise floor relative to signal
+			noiseFloorOffset = 8.0
+		}
+		
+		measurements.NoiseFloor = measurements.InputThresh - noiseFloorOffset
+		
+		// Clamp to reasonable range: -60dB (very quiet studio) to -30dB (noisy environment)
+		if measurements.NoiseFloor < -60.0 {
+			measurements.NoiseFloor = -60.0
+		} else if measurements.NoiseFloor > -30.0 {
+			measurements.NoiseFloor = -30.0
+		}
+	}
 
 	return measurements, nil
 }
@@ -298,10 +377,10 @@ func createLoudnormFilterGraph(
 	// Build filter string
 	var filterSpec string
 	if firstPass {
-		// First pass: Analysis only - extract loudnorm measurements and spectral statistics
+		// First pass: Analysis only - extract loudnorm measurements, spectral statistics, and time-domain stats
+		// astats provides noise floor and dynamic range measurements for adaptive gate and compression
 		// aspectralstats measures spectral centroid and rolloff for adaptive de-esser targeting
-		// Note: Noise floor will be handled in Pass 2 by afftdn's automatic tracking (tn=1)
-		filterSpec = fmt.Sprintf("aspectralstats=win_size=2048:win_func=hann:measure=centroid+rolloff,loudnorm=I=%.1f:TP=%.1f:LRA=%.1f:print_format=json",
+		filterSpec = fmt.Sprintf("astats=metadata=1:measure_overall=Noise_floor+Dynamic_range+RMS_level+Peak_level:reset=1,aspectralstats=win_size=2048:win_func=hann:measure=centroid+rolloff,loudnorm=I=%.1f:TP=%.1f:LRA=%.1f:print_format=json",
 			targetI, targetTP, targetLRA)
 	} else {
 		// Second pass: use measurements from first pass

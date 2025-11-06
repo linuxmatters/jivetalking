@@ -40,21 +40,167 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 	config.Measurements = measurements
 	config.NoiseFloor = measurements.NoiseFloor
 
-	// Adaptively set de-esser frequency based on spectral analysis
-	// This targets sibilance more precisely based on voice characteristics
+	// Adaptively set highpass frequency based on spectral centroid
+	// Lower spectral centroid (darker/warmer voice) = use lower cutoff to preserve warmth
+	// Higher spectral centroid (brighter voice) = use higher cutoff to remove more rumble
 	if measurements.SpectralCentroid > 0 {
-		if measurements.SpectralCentroid > 7000 {
-			// Bright voice with high-frequency energy - target higher sibilance
-			config.DeessFrequency = 7500
-		} else if measurements.SpectralCentroid > 6000 {
-			// Normal voice - use default targeting
-			config.DeessFrequency = 7000
+		if measurements.SpectralCentroid > 6000 {
+			// Bright voice with high-frequency energy concentration
+			// Safe to use higher cutoff - voice energy is well above 100Hz
+			config.HighpassFreq = 100.0
+		} else if measurements.SpectralCentroid > 4000 {
+			// Normal voice with balanced frequency distribution
+			// Use standard cutoff for podcast speech
+			config.HighpassFreq = 80.0
 		} else {
-			// Dark/warm voice - target lower sibilance frequencies
-			config.DeessFrequency = 6500
+			// Dark/warm voice with low-frequency energy concentration
+			// Use lower cutoff to preserve voice warmth and body
+			config.HighpassFreq = 60.0
 		}
 	}
-	// If no spectral analysis available (SpectralCentroid == 0), keep default 7000Hz
+	// If no spectral analysis available (SpectralCentroid == 0), keep default 80Hz
+
+	// Adaptively set de-esser intensity based on spectral analysis
+	// Uses both spectral centroid (energy concentration) and rolloff (high-frequency extension)
+	// to intelligently detect likelihood of harsh sibilance
+	if measurements.SpectralCentroid > 0 && measurements.SpectralRolloff > 0 {
+		// Start with centroid-based baseline
+		var baseIntensity float64
+		if measurements.SpectralCentroid > 7000 {
+			baseIntensity = 0.6 // Bright voice baseline
+		} else if measurements.SpectralCentroid > 6000 {
+			baseIntensity = 0.5 // Normal voice baseline
+		} else {
+			baseIntensity = 0.4 // Dark voice baseline
+		}
+
+		// Refine based on spectral rolloff (high-frequency extension)
+		// Rolloff indicates where HF content actually extends to
+		if measurements.SpectralRolloff < 6000 {
+			// Very limited high-frequency content - unlikely to have sibilance
+			// Skip deesser entirely for dark/warm voices with no HF extension
+			config.DeessIntensity = 0.0
+		} else if measurements.SpectralRolloff < 8000 {
+			// Limited HF extension - reduce intensity
+			// Even bright voices may not need much deessing if HF content drops off early
+			config.DeessIntensity = baseIntensity * 0.7 // Reduce by 30%
+			if config.DeessIntensity < 0.3 {
+				config.DeessIntensity = 0.0 // Skip if too low
+			}
+		} else if measurements.SpectralRolloff > 12000 {
+			// Extensive high-frequency content - likely to have sibilance
+			// Increase intensity even for moderate centroid values
+			config.DeessIntensity = baseIntensity * 1.2 // Increase by 20%
+			if config.DeessIntensity > 0.8 {
+				config.DeessIntensity = 0.8 // Cap at 0.8 for safety
+			}
+		} else {
+			// Normal HF extension (8-12 kHz) - use baseline
+			config.DeessIntensity = baseIntensity
+		}
+	} else if measurements.SpectralCentroid > 0 {
+		// Fallback: only centroid available (no rolloff measurement)
+		if measurements.SpectralCentroid > 7000 {
+			config.DeessIntensity = 0.6
+		} else if measurements.SpectralCentroid > 6000 {
+			config.DeessIntensity = 0.5
+		} else {
+			config.DeessIntensity = 0.4
+		}
+	}
+	// If no spectral analysis available, keep default 0.0 (disabled)
+
+	// Adaptively set gate threshold based on measured noise floor from astats
+	// The gate threshold should be set above the noise floor to remove noise while preserving speech
+	// Offset strategy:
+	// - Clean recordings (low noise floor < -60dB): Use larger offset (10dB) for safety margin
+	// - Moderate recordings (-60 to -50dB): Use standard offset (8dB) for good balance
+	// - Noisy recordings (> -50dB): Use smaller offset (6dB) to preserve more speech
+	var gateOffsetDB float64
+	if measurements.NoiseFloor < -60.0 {
+		// Very clean recording - use larger margin to avoid false triggers
+		gateOffsetDB = 10.0
+	} else if measurements.NoiseFloor < -50.0 {
+		// Typical podcast recording - standard margin
+		gateOffsetDB = 8.0
+	} else {
+		// Noisy recording - use smaller margin to preserve more speech
+		gateOffsetDB = 6.0
+	}
+
+	// Calculate gate threshold: noise floor + offset (in dB), then convert to linear
+	gateThresholdDB := measurements.NoiseFloor + gateOffsetDB
+	config.GateThreshold = math.Pow(10, gateThresholdDB/20.0)
+
+	// Safety limits: clamp between -55dB (0.0018) and -25dB (0.056)
+	// This prevents extremes while allowing adaptation to various recording conditions
+	const minThresholdDB = -55.0
+	const maxThresholdDB = -25.0
+	minThresholdLinear := math.Pow(10, minThresholdDB/20.0)
+	maxThresholdLinear := math.Pow(10, maxThresholdDB/20.0)
+
+	if config.GateThreshold < minThresholdLinear {
+		config.GateThreshold = minThresholdLinear // -55dBFS minimum (very quiet studio)
+	} else if config.GateThreshold > maxThresholdLinear {
+		config.GateThreshold = maxThresholdLinear // -25dBFS maximum (noisy environment)
+	}
+
+	// Adaptively set compression based on measured dynamic range from astats
+	// Dynamic range indicates how much variation exists between loud and quiet parts
+	// This informs how aggressively we should compress to even out the levels
+	if measurements.DynamicRange > 0 {
+		if measurements.DynamicRange > 20.0 {
+			// High dynamic range (>20dB) - expressive content with intentional level variations
+			// Examples: Storytelling, dramatic reading, varied speaking styles
+			// Strategy: Use gentle compression to preserve expression while providing some consistency
+			config.CompRatio = 2.0       // Gentle 2:1 ratio
+			config.CompThreshold = -18.0 // Higher threshold (only compress peaks)
+			config.CompMakeup = 2.0      // Less makeup gain needed
+		} else if measurements.DynamicRange > 12.0 {
+			// Moderate dynamic range (12-20dB) - typical conversational podcast
+			// Examples: Interview, discussion, normal speech patterns
+			// Strategy: Standard compression for broadcast-quality consistency
+			config.CompRatio = 2.5       // Moderate 2.5:1 ratio (default)
+			config.CompThreshold = -20.0 // Standard threshold
+			config.CompMakeup = 3.0      // Standard makeup gain (default)
+		} else if measurements.DynamicRange > 8.0 {
+			// Low-moderate dynamic range (8-12dB) - already fairly consistent
+			// Examples: Experienced podcaster, good mic technique, some processing
+			// Strategy: Light compression to avoid over-processing
+			config.CompRatio = 2.0       // Gentle ratio
+			config.CompThreshold = -22.0 // Lower threshold to catch more
+			config.CompMakeup = 2.0      // Less makeup needed
+		} else {
+			// Very low dynamic range (<8dB) - already heavily compressed/limited
+			// Examples: Pre-processed audio, aggressive recording chain, broadcast feeds
+			// Strategy: Minimal or no compression to avoid artifacts
+			config.CompRatio = 1.5       // Very gentle
+			config.CompThreshold = -16.0 // High threshold (barely compress)
+			config.CompMakeup = 1.0      // Minimal makeup gain
+			// Note: Could skip compression entirely, but gentle settings provide safety net
+		}
+	}
+	// If no dynamic range measurement available, keep defaults (ratio: 2.5, threshold: -20dB)
+
+	// Safety checks: ensure no NaN or Inf values
+	if math.IsNaN(config.HighpassFreq) || math.IsInf(config.HighpassFreq, 0) {
+		config.HighpassFreq = 80.0
+	}
+	if math.IsNaN(config.DeessIntensity) || math.IsInf(config.DeessIntensity, 0) {
+		config.DeessIntensity = 0.0
+	}
+	if math.IsNaN(config.GateThreshold) || math.IsInf(config.GateThreshold, 0) || config.GateThreshold <= 0 {
+		config.GateThreshold = 0.01 // -40dBFS default
+	}
+	if math.IsNaN(config.CompRatio) || math.IsInf(config.CompRatio, 0) {
+		config.CompRatio = 2.5
+	}
+	if math.IsNaN(config.CompThreshold) || math.IsInf(config.CompThreshold, 0) {
+		config.CompThreshold = -20.0
+	}
+	if math.IsNaN(config.CompMakeup) || math.IsInf(config.CompMakeup, 0) {
+		config.CompMakeup = 3.0
+	}
 
 	// Pass 2: Processing
 	// (printf output suppressed for UI compatibility)
@@ -81,6 +227,7 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 		OutputLUFS:   config.TargetI,
 		NoiseFloor:   measurements.NoiseFloor,
 		Measurements: measurements,
+		Config:       config, // Include config for logging adaptive parameters
 	}
 
 	return result, nil
@@ -93,6 +240,7 @@ type ProcessingResult struct {
 	OutputLUFS   float64
 	NoiseFloor   float64
 	Measurements *LoudnormMeasurements
+	Config       *FilterChainConfig // Contains adaptive parameters used
 }
 
 // processWithFilters performs the actual audio processing with the complete filter chain
@@ -440,7 +588,7 @@ func calculateFrameLevel(frame *ffmpeg.AVFrame) float64 {
 	sampleFmt := frame.Format()
 	nbSamples := frame.NbSamples()
 	nbChannels := frame.ChLayout().NbChannels()
-	
+
 	// Get pointer to audio data (first plane for packed formats, or first channel for planar)
 	dataPtr := frame.Data().Get(0)
 	if dataPtr == nil {
