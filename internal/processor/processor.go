@@ -284,8 +284,6 @@ func processWithFilters(inputPath, outputPath string, config *FilterChainConfig,
 
 	// Track frame count for periodic progress updates
 	frameCount := 0
-	updateInterval := 100 // Send progress update every N frames
-	currentLevel := 0.0
 
 	// Process all frames through the filter chain
 	for {
@@ -298,17 +296,6 @@ func processWithFilters(inputPath, outputPath string, config *FilterChainConfig,
 			break // EOF
 		}
 
-		// Calculate audio level from frame (RMS in dB)
-		currentLevel = calculateFrameLevel(frame)
-
-		// Send periodic progress updates based on frame count
-		if frameCount%updateInterval == 0 && progressCallback != nil && estimatedTotalFrames > 0 {
-			progress := float64(frameCount) / estimatedTotalFrames
-			if progress > 1.0 {
-				progress = 1.0
-			}
-			progressCallback(2, "Processing", progress, currentLevel, measurements)
-		}
 		frameCount++
 
 		// Push frame into filter graph
@@ -323,6 +310,19 @@ func processWithFilters(inputPath, outputPath string, config *FilterChainConfig,
 					break
 				}
 				return fmt.Errorf("failed to get filtered frame: %w", err)
+			}
+
+			// Calculate audio level from FILTERED frame (shows processed audio in VU meter)
+			currentLevel := calculateFrameLevel(filteredFrame)
+
+			// Send periodic progress updates based on frame count
+			updateInterval := 100 // Send progress update every N frames
+			if frameCount%updateInterval == 0 && progressCallback != nil && estimatedTotalFrames > 0 {
+				progress := float64(frameCount) / estimatedTotalFrames
+				if progress > 1.0 {
+					progress = 1.0
+				}
+				progressCallback(2, "Processing", progress, currentLevel, measurements)
 			}
 
 			// Set timebase for the filtered frame
