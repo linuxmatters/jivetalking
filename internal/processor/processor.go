@@ -186,6 +186,92 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 	}
 	// If no dynamic range measurement available, keep defaults (ratio: 2.5, threshold: -20dB)
 
+	// Adaptively configure dynaudnorm for consistent perceived loudness across varied inputs
+	// dynaudnorm applies dynamic normalization to match RMS (perceived loudness) while preserving
+	// dynamic range within local neighborhoods, making it ideal for matching presenter levels
+
+	// 1. Target RMS: Convert target LUFS to linear RMS value for perceived loudness matching
+	//    LUFS measures integrated loudness over time (ITU-R BS.1770-4 standard)
+	//    RMS represents signal energy and correlates with perceived loudness
+	//    Conversion: LUFS → dBFS (add ~23dB offset) → linear (10^(dB/20))
+	//    Target -16 LUFS is podcast industry standard (Spotify, Apple Podcasts)
+	targetLUFS := config.TargetI                               // -16.0 LUFS (set in config)
+	targetDBFS := targetLUFS + 23.0                            // Approximate LUFS to dBFS conversion
+	config.DynaudnormTargetRMS = math.Pow(10, targetDBFS/20.0) // Convert dB to linear (0.0-1.0)
+
+	// Clamp to dynaudnorm's valid range
+	if config.DynaudnormTargetRMS < 0.0 {
+		config.DynaudnormTargetRMS = 0.0
+	} else if config.DynaudnormTargetRMS > 1.0 {
+		config.DynaudnormTargetRMS = 1.0
+	}
+
+	// 2. Frame Length: Temporal resolution based on loudness range (dynamic variation)
+	//    High LR (>12 LU): Expressive delivery with intentional level changes
+	//      → Longer frames preserve natural dynamics and prevent pumping
+	//    Low LR (<8 LU): Consistent delivery, already controlled
+	//      → Shorter frames for tighter, faster adaptation
+	if measurements.InputLRA > 12.0 {
+		config.DynaudnormFrameLen = 500 // Preserve natural expression
+	} else if measurements.InputLRA > 8.0 {
+		config.DynaudnormFrameLen = 300 // Balanced approach
+	} else {
+		config.DynaudnormFrameLen = 200 // Faster adaptation for consistent sources
+	}
+
+	// 3. Gaussian Filter Size: Controls gain smoothing across time
+	//    Larger window = slower gain changes (more like traditional normalization)
+	//    Smaller window = faster gain changes (more like dynamic compression)
+	//    High LR needs larger window to avoid artifacts from rapid gain changes
+	if measurements.InputLRA > 15.0 {
+		config.DynaudnormFilterSize = 41 // Slow, smooth for highly dynamic content
+	} else if measurements.InputLRA > 10.0 {
+		config.DynaudnormFilterSize = 31 // Default, balanced
+	} else {
+		config.DynaudnormFilterSize = 21 // Faster response for consistent content
+	}
+
+	// 4. Maximum Gain: Based on how quiet the input is (integrated loudness)
+	//    Very quiet inputs (e.g., -45 LUFS) need substantial gain to reach target
+	//    Conversion: dB difference = linear gain factor (10^(dB/20))
+	//    Example: -45 to -16 LUFS = 29 dB = 28.2x gain factor
+	if measurements.InputI < -40.0 {
+		config.DynaudnormMaxGain = 25.0 // Allow high gain for very quiet sources
+	} else if measurements.InputI < -30.0 {
+		config.DynaudnormMaxGain = 15.0 // Moderate gain for typical quiet sources
+	} else {
+		config.DynaudnormMaxGain = 10.0 // Default for normal-level sources
+	}
+
+	// 5. Compress: Soft-knee compression applied BEFORE normalization
+	//    Helps tame extreme peaks in high dynamic range content
+	//    Prevents pumping artifacts from large gain swings
+	//    Lower values = stronger compression (counter-intuitive but per FFmpeg docs)
+	if measurements.InputLRA > 15.0 {
+		config.DynaudnormCompress = 7.0 // Mild compression for very dynamic content
+	} else if measurements.InputLRA > 10.0 {
+		config.DynaudnormCompress = 3.0 // Very light compression
+	} else {
+		config.DynaudnormCompress = 0.0 // No compression for already-consistent content
+	}
+
+	// 6. Threshold: Minimum magnitude to normalize (prevents amplifying noise)
+	//    Based on measured noise floor (RMS_trough from astats)
+	//    Frames below this level won't be normalized, avoiding noise amplification
+	//    Convert noise floor from dBFS to linear magnitude (0.0-1.0 range)
+	if measurements.NoiseFloor < 0 {
+		config.DynaudnormThreshold = math.Pow(10, measurements.NoiseFloor/20.0)
+
+		// Clamp to reasonable range
+		if config.DynaudnormThreshold < 0.0001 { // -80 dBFS
+			config.DynaudnormThreshold = 0.0001
+		} else if config.DynaudnormThreshold > 0.01 { // -40 dBFS
+			config.DynaudnormThreshold = 0.01
+		}
+	} else {
+		config.DynaudnormThreshold = 0.0 // Normalize everything if no noise floor measurement
+	}
+
 	// Safety checks: ensure no NaN or Inf values
 	if math.IsNaN(config.HighpassFreq) || math.IsInf(config.HighpassFreq, 0) {
 		config.HighpassFreq = 80.0

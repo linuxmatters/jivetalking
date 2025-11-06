@@ -62,6 +62,7 @@ type FilterChainConfig struct {
 	DynaudnormMaxGain     float64 // Maximum gain factor (1.0-100.0, default 10.0)
 	DynaudnormTargetRMS   float64 // Target RMS 0.0-1.0 (default 0.0 = disabled)
 	DynaudnormCompress    float64 // Compression factor 0.0-30.0 (default 0.0 = disabled)
+	DynaudnormThreshold   float64 // Minimum magnitude to normalize 0.0-1.0 (default 0.0 = all frames)
 	DynaudnormChannels    bool    // Process channels independently (default false = coupled)
 	DynaudnormDCCorrect   bool    // Enable DC bias correction (default false)
 	DynaudnormAltBoundary bool    // Enable alternative boundary mode (default false)
@@ -127,6 +128,7 @@ func DefaultFilterConfig() *FilterChainConfig {
 		DynaudnormMaxGain:     10.0,  // Maximum 10x gain (default, prevents over-amplification)
 		DynaudnormTargetRMS:   0.0,   // Disabled (default, use peak normalization only)
 		DynaudnormCompress:    0.0,   // No compression (default, preserve dynamics)
+		DynaudnormThreshold:   0.0,   // Normalize all frames (default)
 		DynaudnormChannels:    false, // Coupled channels (default, mono so no effect)
 		DynaudnormDCCorrect:   false, // No DC correction (default)
 		DynaudnormAltBoundary: false, // Standard boundary mode (default)
@@ -288,12 +290,13 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 	}
 
 	dynaudnormFilter := fmt.Sprintf(
-		"dynaudnorm=f=%d:g=%d:p=%.2f:m=%.1f:r=%.2f:n=%d:c=%d:b=%d:s=%.1f",
+		"dynaudnorm=f=%d:g=%d:p=%.2f:m=%.1f:r=%.3f:t=%.6f:n=%d:c=%d:b=%d:s=%.1f",
 		cfg.DynaudnormFrameLen,
 		cfg.DynaudnormFilterSize,
 		cfg.DynaudnormPeakValue,
 		cfg.DynaudnormMaxGain,
 		cfg.DynaudnormTargetRMS,
+		cfg.DynaudnormThreshold, // Minimum magnitude to normalize (prevents noise amplification)
 		channelFlag,
 		dcCorrectFlag,
 		altBoundaryFlag,
