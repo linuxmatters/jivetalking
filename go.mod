@@ -3,7 +3,7 @@ module github.com/linuxmatters/jivetalking
 go 1.25.2
 
 require (
-	github.com/alecthomas/kong v1.12.1
+	github.com/alecthomas/kong v1.13.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/csnewman/ffmpeg-go v0.6.0
