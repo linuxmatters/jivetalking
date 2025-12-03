@@ -11,6 +11,20 @@ import (
 	"github.com/linuxmatters/jivetalking/internal/audio"
 )
 
+// Cached metadata keys for frame extraction - avoids per-frame C string allocations
+// These use GlobalCStr which maintains an internal cache, so identical strings share the same CStr
+var (
+	metaKeySpectralCentroid = ffmpeg.GlobalCStr("lavfi.aspectralstats.1.centroid")
+	metaKeySpectralRolloff  = ffmpeg.GlobalCStr("lavfi.aspectralstats.1.rolloff")
+	metaKeyDynamicRange     = ffmpeg.GlobalCStr("lavfi.astats.1.Dynamic_range")
+	metaKeyRMSLevel         = ffmpeg.GlobalCStr("lavfi.astats.1.RMS_level")
+	metaKeyPeakLevel        = ffmpeg.GlobalCStr("lavfi.astats.1.Peak_level")
+	metaKeyRMSTrough        = ffmpeg.GlobalCStr("lavfi.astats.1.RMS_trough")
+	metaKeyEbur128I         = ffmpeg.GlobalCStr("lavfi.r128.I")
+	metaKeyEbur128TruePeak  = ffmpeg.GlobalCStr("lavfi.r128.true_peak")
+	metaKeyEbur128LRA       = ffmpeg.GlobalCStr("lavfi.r128.LRA")
+)
+
 // AudioMeasurements contains the measurements from Pass 1 analysis
 // Uses ebur128 (LUFS/LRA), astats (dynamic range/noise floor), and aspectralstats (spectral analysis)
 type AudioMeasurements struct {
@@ -138,14 +152,14 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 			if metadata != nil {
 				// Get spectral centroid if available
 				// For mono audio, spectral stats are under channel .1
-				if centroidEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.aspectralstats.1.centroid"), nil, 0); centroidEntry != nil {
+				if centroidEntry := ffmpeg.AVDictGet(metadata, metaKeySpectralCentroid, nil, 0); centroidEntry != nil {
 					if centroidValue, err := strconv.ParseFloat(centroidEntry.Value().String(), 64); err == nil {
 						spectralCentroidSum += centroidValue
 						spectralFrameCount++
 					}
 				}
 				// Get spectral rolloff if available
-				if rolloffEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.aspectralstats.1.rolloff"), nil, 0); rolloffEntry != nil {
+				if rolloffEntry := ffmpeg.AVDictGet(metadata, metaKeySpectralRolloff, nil, 0); rolloffEntry != nil {
 					if rolloffValue, err := strconv.ParseFloat(rolloffEntry.Value().String(), 64); err == nil {
 						spectralRolloffSum += rolloffValue
 					}
@@ -154,29 +168,20 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 				// Extract astats measurements (cumulative, so we just get the latest)
 				// For mono audio, stats are under channel .1; for stereo, use .Overall or average channels
 				// Since podcast audio is typically mono, we check channel 1 first, then Overall as fallback
-
-				dynamicRangeKey := "lavfi.astats.1.Dynamic_range"
-				if dynamicRangeEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr(dynamicRangeKey), nil, 0); dynamicRangeEntry != nil {
+				if dynamicRangeEntry := ffmpeg.AVDictGet(metadata, metaKeyDynamicRange, nil, 0); dynamicRangeEntry != nil {
 					if value, err := strconv.ParseFloat(dynamicRangeEntry.Value().String(), 64); err == nil {
 						astatsDynamicRange = value
 						astatsFound = true
 					}
 				}
-				if dynamicRangeEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr(dynamicRangeKey), nil, 0); dynamicRangeEntry != nil {
-					if value, err := strconv.ParseFloat(dynamicRangeEntry.Value().String(), 64); err == nil {
-						astatsDynamicRange = value
-					}
-				}
 
-				rmsKey := "lavfi.astats.1.RMS_level"
-				if rmsEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr(rmsKey), nil, 0); rmsEntry != nil {
+				if rmsEntry := ffmpeg.AVDictGet(metadata, metaKeyRMSLevel, nil, 0); rmsEntry != nil {
 					if value, err := strconv.ParseFloat(rmsEntry.Value().String(), 64); err == nil {
 						astatsRMSLevel = value
 					}
 				}
 
-				peakKey := "lavfi.astats.1.Peak_level"
-				if peakEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr(peakKey), nil, 0); peakEntry != nil {
+				if peakEntry := ffmpeg.AVDictGet(metadata, metaKeyPeakLevel, nil, 0); peakEntry != nil {
 					if value, err := strconv.ParseFloat(peakEntry.Value().String(), 64); err == nil {
 						astatsPeakLevel = value
 					}
@@ -184,8 +189,7 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 
 				// Extract RMS_trough - RMS level of quietest segments (best noise floor indicator for speech)
 				// In speech audio, quiet inter-word periods contain primarily ambient/electronic noise
-				rmsTroughKey := "lavfi.astats.1.RMS_trough"
-				if rmsTroughEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr(rmsTroughKey), nil, 0); rmsTroughEntry != nil {
+				if rmsTroughEntry := ffmpeg.AVDictGet(metadata, metaKeyRMSTrough, nil, 0); rmsTroughEntry != nil {
 					if value, err := strconv.ParseFloat(rmsTroughEntry.Value().String(), 64); err == nil {
 						astatsRMSTrough = value
 					}
@@ -194,18 +198,18 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 				// Extract ebur128 measurements (cumulative loudness analysis)
 				// ebur128 provides: M.* (momentary), S.* (short-term), I (integrated), LRA, sample_peak, true_peak
 				// We need the integrated loudness measurements for normalization
-				if integratedEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.r128.I"), nil, 0); integratedEntry != nil {
+				if integratedEntry := ffmpeg.AVDictGet(metadata, metaKeyEbur128I, nil, 0); integratedEntry != nil {
 					if value, err := strconv.ParseFloat(integratedEntry.Value().String(), 64); err == nil {
 						ebur128InputI = value
 						ebur128Found = true
 					}
 				}
-				if truePeakEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.r128.true_peak"), nil, 0); truePeakEntry != nil {
+				if truePeakEntry := ffmpeg.AVDictGet(metadata, metaKeyEbur128TruePeak, nil, 0); truePeakEntry != nil {
 					if value, err := strconv.ParseFloat(truePeakEntry.Value().String(), 64); err == nil {
 						ebur128InputTP = value
 					}
 				}
-				if lraEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.r128.LRA"), nil, 0); lraEntry != nil {
+				if lraEntry := ffmpeg.AVDictGet(metadata, metaKeyEbur128LRA, nil, 0); lraEntry != nil {
 					if value, err := strconv.ParseFloat(lraEntry.Value().String(), 64); err == nil {
 						ebur128InputLRA = value
 					}
@@ -236,13 +240,13 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 		metadata := filteredFrame.Metadata()
 		if metadata != nil {
 			// Use channel 1 keys for mono audio (same as main loop)
-			if centroidEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.aspectralstats.1.centroid"), nil, 0); centroidEntry != nil {
+			if centroidEntry := ffmpeg.AVDictGet(metadata, metaKeySpectralCentroid, nil, 0); centroidEntry != nil {
 				if centroidValue, err := strconv.ParseFloat(centroidEntry.Value().String(), 64); err == nil {
 					spectralCentroidSum += centroidValue
 					spectralFrameCount++
 				}
 			}
-			if rolloffEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.aspectralstats.1.rolloff"), nil, 0); rolloffEntry != nil {
+			if rolloffEntry := ffmpeg.AVDictGet(metadata, metaKeySpectralRolloff, nil, 0); rolloffEntry != nil {
 				if rolloffValue, err := strconv.ParseFloat(rolloffEntry.Value().String(), 64); err == nil {
 					spectralRolloffSum += rolloffValue
 				}
@@ -250,54 +254,44 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 
 			// Extract astats measurements from remaining frames
 			// Use channel 1 keys for mono audio (same as main loop)
-
-			dynamicRangeKey := "lavfi.astats.1.Dynamic_range"
-			if dynamicRangeEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr(dynamicRangeKey), nil, 0); dynamicRangeEntry != nil {
+			if dynamicRangeEntry := ffmpeg.AVDictGet(metadata, metaKeyDynamicRange, nil, 0); dynamicRangeEntry != nil {
 				if value, err := strconv.ParseFloat(dynamicRangeEntry.Value().String(), 64); err == nil {
 					astatsDynamicRange = value
 					astatsFound = true
 				}
 			}
-			if dynamicRangeEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr(dynamicRangeKey), nil, 0); dynamicRangeEntry != nil {
-				if value, err := strconv.ParseFloat(dynamicRangeEntry.Value().String(), 64); err == nil {
-					astatsDynamicRange = value
-				}
-			}
 
-			rmsKey := "lavfi.astats.1.RMS_level"
-			if rmsEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr(rmsKey), nil, 0); rmsEntry != nil {
+			if rmsEntry := ffmpeg.AVDictGet(metadata, metaKeyRMSLevel, nil, 0); rmsEntry != nil {
 				if value, err := strconv.ParseFloat(rmsEntry.Value().String(), 64); err == nil {
 					astatsRMSLevel = value
 				}
 			}
 
-			peakKey := "lavfi.astats.1.Peak_level"
-			if peakEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr(peakKey), nil, 0); peakEntry != nil {
+			if peakEntry := ffmpeg.AVDictGet(metadata, metaKeyPeakLevel, nil, 0); peakEntry != nil {
 				if value, err := strconv.ParseFloat(peakEntry.Value().String(), 64); err == nil {
 					astatsPeakLevel = value
 				}
 			}
 
-			rmsTroughKey := "lavfi.astats.1.RMS_trough"
-			if rmsTroughEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr(rmsTroughKey), nil, 0); rmsTroughEntry != nil {
+			if rmsTroughEntry := ffmpeg.AVDictGet(metadata, metaKeyRMSTrough, nil, 0); rmsTroughEntry != nil {
 				if value, err := strconv.ParseFloat(rmsTroughEntry.Value().String(), 64); err == nil {
 					astatsRMSTrough = value
 				}
 			}
 
 			// Extract ebur128 measurements from remaining frames
-			if integratedEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.r128.I"), nil, 0); integratedEntry != nil {
+			if integratedEntry := ffmpeg.AVDictGet(metadata, metaKeyEbur128I, nil, 0); integratedEntry != nil {
 				if value, err := strconv.ParseFloat(integratedEntry.Value().String(), 64); err == nil {
 					ebur128InputI = value
 					ebur128Found = true
 				}
 			}
-			if truePeakEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.r128.true_peak"), nil, 0); truePeakEntry != nil {
+			if truePeakEntry := ffmpeg.AVDictGet(metadata, metaKeyEbur128TruePeak, nil, 0); truePeakEntry != nil {
 				if value, err := strconv.ParseFloat(truePeakEntry.Value().String(), 64); err == nil {
 					ebur128InputTP = value
 				}
 			}
-			if lraEntry := ffmpeg.AVDictGet(metadata, ffmpeg.ToCStr("lavfi.r128.LRA"), nil, 0); lraEntry != nil {
+			if lraEntry := ffmpeg.AVDictGet(metadata, metaKeyEbur128LRA, nil, 0); lraEntry != nil {
 				if value, err := strconv.ParseFloat(lraEntry.Value().String(), 64); err == nil {
 					ebur128InputLRA = value
 				}
