@@ -1,5 +1,5 @@
 .direnv
-jivetalking
+/jivetalking
 jivetalking-debug.log
 testdata/
 
