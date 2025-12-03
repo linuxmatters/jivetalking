@@ -12,7 +12,7 @@ func TestAnalyzeAudio(t *testing.T) {
 	testdataDir := "../../testdata"
 	entries, err := os.ReadDir(testdataDir)
 	if err != nil {
-		t.Fatalf("Failed to read testdata directory: %v", err)
+		t.Skipf("Skipping: testdata directory not available: %v", err)
 	}
 
 	// Filter for audio files (.flac, .wav, .mp3)
