@@ -15,6 +15,50 @@ import (
 //go:embed models/cb.rnnn
 var rnnModelData []byte
 
+// FilterID identifies a filter in the processing chain
+type FilterID string
+
+// Filter identifiers for the audio processing chain
+const (
+	FilterHighpass    FilterID = "highpass"
+	FilterAdeclick    FilterID = "adeclick"
+	FilterAfftdn      FilterID = "afftdn"
+	FilterAgate       FilterID = "agate"
+	FilterAcompressor FilterID = "acompressor"
+	FilterDeesser     FilterID = "deesser"
+	FilterSpeechnorm  FilterID = "speechnorm"
+	FilterArnndn      FilterID = "arnndn"
+	FilterAnlmdn      FilterID = "anlmdn"
+	FilterDynaudnorm  FilterID = "dynaudnorm"
+	FilterAlimiter    FilterID = "alimiter"
+)
+
+// DefaultFilterOrder defines the standard filter chain order for podcast audio processing.
+// Order rationale:
+// - Highpass first: removes rumble before it affects other filters
+// - Adeclick early: removes impulse noise before spectral processing
+// - Afftdn: spectral noise reduction on clean signal
+// - Agate: removes low-level noise between speech
+// - Acompressor: evens dynamics before normalisation
+// - Deesser: after compression (which emphasises sibilance)
+// - Speechnorm: cycle-level normalisation for speech
+// - Arnndn/Anlmdn: mop up amplified noise after expansion
+// - Dynaudnorm: frame-level normalisation for final consistency
+// - Alimiter: brick-wall safety net at the end
+var DefaultFilterOrder = []FilterID{
+	FilterHighpass,
+	FilterAdeclick,
+	FilterAfftdn,
+	FilterAgate,
+	FilterAcompressor,
+	FilterDeesser,
+	FilterSpeechnorm,
+	FilterArnndn,
+	FilterAnlmdn,
+	FilterDynaudnorm,
+	FilterAlimiter,
+}
+
 var (
 	cachedModelPath string
 	modelCacheMutex sync.Mutex
@@ -66,23 +110,21 @@ func getRNNModelPath() (string, error) {
 // FilterChainConfig holds configuration for the audio processing filter chain
 type FilterChainConfig struct {
 	// High-Pass Filter (highpass) - removes subsonic rumble
-	HighpassFreq float64 // Hz, cutoff frequency (removes frequencies below this)
+	HighpassEnabled bool    // Enable highpass filter
+	HighpassFreq    float64 // Hz, cutoff frequency (removes frequencies below this)
 
 	// Click/Pop Removal (adeclick) - removes clicks and pops
-	AdeclickMethod string // 'a' = overlap-add, 's' = overlap-save (default: 's')
+	AdeclickEnabled bool   // Enable adeclick filter
+	AdeclickMethod  string // 'a' = overlap-add, 's' = overlap-save (default: 's')
 
 	// Noise Reduction (afftdn)
+	AfftdnEnabled  bool    // Enable afftdn filter
 	NoiseFloor     float64 // dB, estimated noise floor from Pass 1
-	NoiseReduction float64 // 0.0-1.0, reduction amount
+	NoiseReduction float64 // dB, reduction amount
 	NoiseTrack     bool    // Enable automatic noise tracking (tn=1)
 
-	NoiseStrength     float64 // Set denoising strength. Allowed range is from 0.00001 to 10000. Default value is 0.00001.
-	NoisePatchSize    float64 // Set patch radius duration. Allowed range is from 1 to 100 milliseconds. Default value is 2 milliseconds.
-	NoiseResearchSize float64 // Set research radius duration. Allowed range is from 2 to 300 milliseconds. Default value is 6 milliseconds.
-	NoiseSmoothFactor float64 // Set smooth factor. Default value is 11. Allowed range is from 1 to 1000.
-	NoiseOutputMode   string  // 'i' = input (bypass), 'n' = noise only, 'o' = output (processed)
-
 	// Gate (agate) - removes silence and low-level noise
+	GateEnabled   bool    // Enable agate filter
 	GateThreshold float64 // Activation threshold (0.0-1.0, linear)
 	GateRatio     float64 // Reduction ratio (1.0-9000.0)
 	GateAttack    float64 // Attack time (ms)
@@ -92,6 +134,7 @@ type FilterChainConfig struct {
 	GateMakeup    float64 // Makeup gain after gating (1.0-64.0)
 
 	// Compression (acompressor) - evens out dynamic range
+	CompEnabled   bool    // Enable acompressor filter
 	CompThreshold float64 // dB, compression threshold (stored in dB, converted to linear)
 	CompRatio     float64 // Compression ratio (1.0-20.0)
 	CompAttack    float64 // Attack time (ms)
@@ -101,6 +144,7 @@ type FilterChainConfig struct {
 	CompMix       float64 // Wet/dry mix (0.0-1.0, 1.0 = 100% compressed)
 
 	// De-esser (deesser) - removes harsh sibilance automatically
+	DeessEnabled   bool    // Enable deesser filter
 	DeessIntensity float64 // 0.0-1.0, intensity for triggering de-essing (0=off, 1=max)
 	DeessAmount    float64 // 0.0-1.0, amount of ducking on treble (how much to reduce)
 	DeessFreq      float64 // 0.0-1.0, how much original frequency content to keep
@@ -111,6 +155,7 @@ type FilterChainConfig struct {
 	TargetLRA float64 // LU, loudness range reference
 
 	// Dynamic Audio Normalizer (dynaudnorm) - primary normalization method
+	DynaudnormEnabled     bool    // Enable dynaudnorm filter
 	DynaudnormFrameLen    int     // Frame length in milliseconds (10-8000, default 500)
 	DynaudnormFilterSize  int     // Filter size for Gaussian filter (3-301, default 31)
 	DynaudnormPeakValue   float64 // Target peak value 0.0-1.0 (default 0.95)
@@ -123,6 +168,7 @@ type FilterChainConfig struct {
 	DynaudnormAltBoundary bool    // Enable alternative boundary mode (default false)
 
 	// Speech Normalizer (speechnorm) - alternative normalization method
+	SpeechnormEnabled     bool    // Enable speechnorm filter
 	SpeechnormPeak        float64 // Target peak value 0.0-1.0 (default 0.95)
 	SpeechnormExpansion   float64 // Max expansion factor 1.0-50.0 (default 2.0)
 	SpeechnormCompression float64 // Max compression factor 1.0-50.0 (default 2.0)
@@ -143,9 +189,14 @@ type FilterChainConfig struct {
 	AnlmDnResearch float64 // Research radius in milliseconds 2-300ms (default 6ms)
 
 	// True Peak Limiter (alimiter) - brick-wall safety net
+	LimiterEnabled bool    // Enable alimiter filter
 	LimiterCeiling float64 // 0.0625-1.0, peak ceiling (0.98 = -0.17dBFS)
 	LimiterAttack  float64 // ms, attack time
 	LimiterRelease float64 // ms, release time
+
+	// Filter chain order - controls the sequence of filters in the processing chain
+	// Use DefaultFilterOrder or customise for experimentation
+	FilterOrder []FilterID
 
 	// Pass 1 measurements (nil for first pass)
 	Measurements *AudioMeasurements
@@ -156,18 +207,22 @@ type FilterChainConfig struct {
 func DefaultFilterConfig() *FilterChainConfig {
 	return &FilterChainConfig{
 		// High-pass - remove subsonic rumble
-		HighpassFreq: 80.0, // 80Hz cutoff
+		HighpassEnabled: true,
+		HighpassFreq:    80.0, // 80Hz cutoff
 
 		// Click/Pop Removal - use overlap-save method with defaults
-		AdeclickMethod: "s", // overlap-save (default for better quality)
+		AdeclickEnabled: false, // Disabled: causes artifacts on some recordings
+		AdeclickMethod:  "s",   // overlap-save (default for better quality)
 
 		// Noise Reduction - will use Pass 1 noise floor estimate
+		AfftdnEnabled:  true,
 		NoiseFloor:     -25.0, // Placeholder, will be updated from measurements
 		NoiseReduction: 12.0,  // 12 dB reduction (FFT denoise default, good for speech)
 		NoiseTrack:     true,  // Enable adaptive tracking
 
 		// Gate - remove silence and low-level noise between speech
 		// Threshold will be set adaptively based on noise floor in Pass 2
+		GateEnabled:   true,
 		GateThreshold: 0.01,   // -40dBFS default (will be adaptive)
 		GateRatio:     2.0,    // 2:1 expansion ratio (gentle, preserves natural pauses)
 		GateAttack:    20,     // 20ms attack (protects speech onset, prevents clipping)
@@ -178,6 +233,7 @@ func DefaultFilterConfig() *FilterChainConfig {
 
 		// Compression - even out dynamics naturally
 		// LA-2A-style gentle compression for podcast speech
+		CompEnabled:   true,
 		CompThreshold: -20, // -20dB threshold (gentle, preserves dynamics)
 		CompRatio:     2.5, // 2.5:1 ratio (gentle compression)
 		CompAttack:    15,  // 15ms attack (preserves transients)
@@ -187,9 +243,10 @@ func DefaultFilterConfig() *FilterChainConfig {
 		CompMix:       1.0, // 100% compressed signal (no parallel compression)
 
 		// De-esser - automatic sibilance reduction
-		DeessIntensity: 0.0, // 0.0 = disabled by default, will be set adaptively if enabled
-		DeessAmount:    0.5, // 50% ducking on treble (moderate reduction)
-		DeessFreq:      0.5, // Keep 50% of original frequency content (balanced)
+		DeessEnabled:   true, // Enabled, but intensity set adaptively (0.0 = effectively off)
+		DeessIntensity: 0.0,  // 0.0 = disabled by default, will be set adaptively if enabled
+		DeessAmount:    0.5,  // 50% ducking on treble (moderate reduction)
+		DeessFreq:      0.5,  // Keep 50% of original frequency content (balanced)
 
 		// Target values (for reference only)
 		TargetI:   -16.0, // Reference LUFS target (not enforced)
@@ -197,6 +254,7 @@ func DefaultFilterConfig() *FilterChainConfig {
 		TargetLRA: 7.0,   // Reference loudness range (EBU R128 default)
 
 		// Dynamic Audio Normalizer - adaptive loudness normalization
+		DynaudnormEnabled:     true,
 		DynaudnormFrameLen:    500,   // 500ms frames (default, good for speech)
 		DynaudnormFilterSize:  31,    // Gaussian filter size (default, smooth transitions)
 		DynaudnormPeakValue:   0.95,  // Target peak 0.95 (default, leaves headroom)
@@ -209,6 +267,7 @@ func DefaultFilterConfig() *FilterChainConfig {
 		DynaudnormAltBoundary: false, // Standard boundary mode (default)
 
 		// Speech Normalizer - alternative cycle-level normalization
+		SpeechnormEnabled:     true,
 		SpeechnormPeak:        0.95,  // Target peak 0.95 (matches dynaudnorm)
 		SpeechnormExpansion:   3.0,   // Max 3x expansion (moderate, tames loud peaks)
 		SpeechnormCompression: 2.0,   // Max 2x compression (gentle, lifts quiet sections)
@@ -229,9 +288,13 @@ func DefaultFilterConfig() *FilterChainConfig {
 		AnlmDnResearch: 6.0,     // 6ms research radius (default from docs)
 
 		// Limiter - brick-wall safety net with soft knee (via ASC)
+		LimiterEnabled: true,
 		LimiterCeiling: 0.84, // -1.5dBTP (actual limiting target)
 		LimiterAttack:  5.0,  // 5ms lookahead for smooth limiting
 		LimiterRelease: 50.0, // 50ms release for natural sound
+
+		// Filter chain order - use default order
+		FilterOrder: DefaultFilterOrder,
 
 		Measurements: nil, // Will be set after Pass 1
 	}
@@ -243,31 +306,42 @@ func dbToLinear(db float64) float64 {
 	return math.Pow(10, db/20.0)
 }
 
-// BuildFilterSpec builds the FFmpeg filter specification string for Pass 2 processing
-// Filter Chain: highpass → adeclick → afftdn → agate → acompressor → deesser → [dynaudnorm | speechnorm] → alimiter
-// Note: dynaudnorm and speechnorm are mutually exclusive - use one or the other, not both
-func (cfg *FilterChainConfig) BuildFilterSpec() string {
-	// Build highpass (rumble removal) filter
-	// Remove subsonic frequencies below 80Hz (HVAC, handling noise, etc.)
-	// Use Butterworth response (Q=0.707) for maximally flat passband
-	// poles=2 gives 12dB/octave rolloff, normalize=1 prevents level shift
-	highpassFilter := fmt.Sprintf("highpass=f=%.0f:poles=2:width_type=q:width=0.707:normalize=1",
+// boolToInt converts a bool to 0 or 1 for FFmpeg filter parameters
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// buildHighpassFilter builds the highpass (rumble removal) filter specification.
+// Removes subsonic frequencies below cutoff (HVAC, handling noise, etc.)
+// Uses Butterworth response (Q=0.707) for maximally flat passband.
+// poles=2 gives 12dB/octave rolloff, normalize=1 prevents level shift.
+func (cfg *FilterChainConfig) buildHighpassFilter() string {
+	if !cfg.HighpassEnabled {
+		return ""
+	}
+	return fmt.Sprintf("highpass=f=%.0f:poles=2:width_type=q:width=0.707:normalize=1",
 		cfg.HighpassFreq)
+}
 
-	// Build adeclick (click/pop removal) filter
-	// Removes clicks, pops, and impulse noise using AR model
-	// m: method ('a' = overlap-add, 's' = overlap-save for better quality)
-	// Uses default values for arorder, threshold, and burst (suitable for most cases)
-	adeclickFilter := fmt.Sprintf("adeclick=m=%s", cfg.AdeclickMethod)
+// buildAdeclickFilter builds the adeclick (click/pop removal) filter specification.
+// Removes clicks, pops, and impulse noise using AR model.
+// m: method ('a' = overlap-add, 's' = overlap-save for better quality)
+func (cfg *FilterChainConfig) buildAdeclickFilter() string {
+	if !cfg.AdeclickEnabled {
+		return ""
+	}
+	return fmt.Sprintf("adeclick=m=%s", cfg.AdeclickMethod)
+}
 
-	// Build afftdn (FFT denoise) filter
-	// Removes noise using FFT analysis with adaptive tracking
-	// nf: noise floor estimate from Pass 1, nr: noise reduction in dB
-	// tn: enable adaptive tracking, rf: residual floor, ad: adaptivity speed
-	// gs: gain smoothing to reduce musical noise artifacts
-	noiseTrackFlag := 0
-	if cfg.NoiseTrack {
-		noiseTrackFlag = 1
+// buildAfftdnFilter builds the afftdn (FFT denoise) filter specification.
+// Removes noise using FFT analysis with adaptive tracking.
+// Parameters adapt based on noise reduction amount for optimal quality.
+func (cfg *FilterChainConfig) buildAfftdnFilter() string {
+	if !cfg.AfftdnEnabled {
+		return ""
 	}
 
 	// Clamp noise floor to afftdn's valid range: -80 to -20 dB
@@ -278,17 +352,15 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 		noiseFloorClamped = -20.0
 	}
 
-	// Adaptive afftdn parameters based on noise reduction amount
-	// For aggressive noise reduction (>30dB), use more aggressive parameters
-	var residualFloor float64
-	var adaptivity float64
+	// Adaptive parameters based on noise reduction amount
+	var residualFloor, adaptivity float64
 	var gainSmooth int
 
 	if cfg.NoiseReduction >= 30.0 {
 		// Aggressive noise reduction for very quiet sources
-		residualFloor = -70.0 // Much lower residual floor (near minimum -80dB)
-		adaptivity = 0.2      // Faster adaptation (more responsive to noise variations)
-		gainSmooth = 12       // Higher smoothing to reduce musical noise artifacts
+		residualFloor = -70.0
+		adaptivity = 0.2
+		gainSmooth = 12
 	} else if cfg.NoiseReduction >= 20.0 {
 		// Moderate noise reduction
 		residualFloor = -50.0
@@ -296,29 +368,33 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 		gainSmooth = 8
 	} else {
 		// Light noise reduction
-		residualFloor = -38.0 // Default
-		adaptivity = 0.5      // Default
-		gainSmooth = 5        // Default
+		residualFloor = -38.0
+		adaptivity = 0.5
+		gainSmooth = 5
 	}
 
-	afftdnFilter := fmt.Sprintf(
+	return fmt.Sprintf(
 		"afftdn=nf=%.1f:nr=%.1f:tn=%d:rf=%.1f:ad=%.2f:fo=%.1f:gs=%d:om=%s:nt=%s",
-		noiseFloorClamped,  // Noise floor from Pass 1 measurements (clamped to -80 to -20 dB)
-		cfg.NoiseReduction, // Noise reduction amount (dB)
-		noiseTrackFlag,     // Enable adaptive noise floor tracking
-		residualFloor,      // Residual floor (adaptive, more aggressive for high reduction)
-		adaptivity,         // Adaptivity factor (adaptive, faster for high reduction)
-		1.0,                // Floor offset factor (adjustment to tracked floor)
-		gainSmooth,         // Gain smooth radius (adaptive, higher for aggressive reduction)
-		"o",                // Output mode: filtered audio
-		"w",                // Noise type: white noise (typical for room/HVAC)
+		noiseFloorClamped,
+		cfg.NoiseReduction,
+		boolToInt(cfg.NoiseTrack),
+		residualFloor,
+		adaptivity,
+		1.0, // Floor offset factor
+		gainSmooth,
+		"o", // Output mode: filtered audio
+		"w", // Noise type: white noise
 	)
+}
 
-	// Build agate (noise gate) filter
-	// Gate removes low-level noise between speech while preserving natural pauses
-	// range: amount of reduction below threshold, knee: soft engagement curve
-	// detection=rms: smooth RMS detection for natural speech gating
-	agateFilter := fmt.Sprintf(
+// buildAgateFilter builds the agate (noise gate) filter specification.
+// Removes low-level noise between speech while preserving natural pauses.
+// Uses RMS detection for smooth, natural speech gating.
+func (cfg *FilterChainConfig) buildAgateFilter() string {
+	if !cfg.GateEnabled {
+		return ""
+	}
+	return fmt.Sprintf(
 		"agate=threshold=%.3f:ratio=%.1f:attack=%.0f:release=%.0f:"+
 			"range=%.3f:knee=%.1f:detection=rms:makeup=%.1f",
 		cfg.GateThreshold,
@@ -329,172 +405,169 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 		cfg.GateKnee,
 		cfg.GateMakeup,
 	)
+}
 
-	// Build acompressor (dynamics) filter
-	// Convert dB values to linear: threshold (0.0-1.0), makeup (1.0-64.0 gain multiplier)
-	// knee: soft compression curve, detection=rms: smooth RMS detection for speech
-	acompressorFilter := fmt.Sprintf(
+// buildAcompressorFilter builds the acompressor (dynamics) filter specification.
+// Evens out dynamic range with soft knee compression.
+// Converts dB values to linear for FFmpeg's format.
+func (cfg *FilterChainConfig) buildAcompressorFilter() string {
+	if !cfg.CompEnabled {
+		return ""
+	}
+	return fmt.Sprintf(
 		"acompressor=threshold=%.6f:ratio=%.1f:attack=%.0f:release=%.0f:"+
 			"makeup=%.2f:knee=%.1f:detection=rms:mix=%.2f",
-		dbToLinear(cfg.CompThreshold), // Convert dB to linear (0.0-1.0)
+		dbToLinear(cfg.CompThreshold),
 		cfg.CompRatio,
 		cfg.CompAttack,
 		cfg.CompRelease,
-		dbToLinear(cfg.CompMakeup), // Convert dB to linear gain multiplier
+		dbToLinear(cfg.CompMakeup),
 		cfg.CompKnee,
 		cfg.CompMix,
 	)
+}
 
-	// Build deesser filter
-	// Purpose-built for sibilance removal - automatically detects and reduces harsh "s" sounds
-	// i: intensity for triggering (0=off, higher=more aggressive detection)
-	// m: amount of ducking on treble frequencies (how much to reduce sibilance)
-	// f: how much of original frequency content to preserve (balance vs naturalness)
-	// Skip deesser entirely if intensity is 0 or negative (adaptive logic disabled it)
-	var deesserFilter string
-	if cfg.DeessIntensity > 0 {
-		deesserFilter = fmt.Sprintf(
-			"deesser=i=%.2f:m=%.2f:f=%.2f",
-			cfg.DeessIntensity, // Triggering sensitivity
-			cfg.DeessAmount,    // Reduction amount
-			cfg.DeessFreq,      // Frequency preservation
-		)
+// buildDeesserFilter builds the deesser filter specification.
+// Automatically detects and reduces harsh sibilance ("s" sounds).
+// Returns empty string if disabled or intensity is 0.
+func (cfg *FilterChainConfig) buildDeesserFilter() string {
+	if !cfg.DeessEnabled || cfg.DeessIntensity <= 0 {
+		return ""
 	}
-	// If DeessIntensity is 0, deesserFilter stays empty and will be skipped in filter chain
+	return fmt.Sprintf(
+		"deesser=i=%.2f:m=%.2f:f=%.2f",
+		cfg.DeessIntensity,
+		cfg.DeessAmount,
+		cfg.DeessFreq,
+	)
+}
 
-	// Build dynaudnorm (Dynamic Audio Normalizer) filter
-	// Conservative fixed settings for adaptive local normalization
-	// No RMS targeting (r=0.0) - relies on peak-based normalization
-	// No compression (s=0.0) - acompressor handles dynamic range reduction
-	// Reduced max gain (m=5.0, with safety check) - prevents over-amplification
-	channelFlag := 0
-	if cfg.DynaudnormChannels {
-		channelFlag = 1
+// buildDynaudnormFilter builds the dynaudnorm (Dynamic Audio Normalizer) filter specification.
+// Provides adaptive local normalization with Gaussian smoothing.
+// Conservative settings prevent over-amplification while normalizing levels.
+func (cfg *FilterChainConfig) buildDynaudnormFilter() string {
+	if !cfg.DynaudnormEnabled {
+		return ""
 	}
-	dcCorrectFlag := 0
-	if cfg.DynaudnormDCCorrect {
-		dcCorrectFlag = 1
-	}
-	altBoundaryFlag := 0
-	if cfg.DynaudnormAltBoundary {
-		altBoundaryFlag = 1
-	}
-
-	dynaudnormFilter := fmt.Sprintf(
+	return fmt.Sprintf(
 		"dynaudnorm=f=%d:g=%d:p=%.2f:m=%.1f:r=%.3f:t=%.6f:n=%d:c=%d:b=%d:s=%.1f",
-		cfg.DynaudnormFrameLen,   // 500ms frames (fixed)
-		cfg.DynaudnormFilterSize, // 31 Gaussian filter size (fixed)
-		cfg.DynaudnormPeakValue,  // 0.95 peak target (fixed)
-		cfg.DynaudnormMaxGain,    // 5.0 max gain (with safety check reducing if needed)
-		cfg.DynaudnormTargetRMS,  // 0.0 - no RMS targeting
-		cfg.DynaudnormThreshold,  // 0.0 - normalize all frames
-		channelFlag,              // false = coupled channels
-		dcCorrectFlag,            // false = no DC correction
-		altBoundaryFlag,          // false = standard boundary mode
-		cfg.DynaudnormCompress,   // 0.0 - no compression
+		cfg.DynaudnormFrameLen,
+		cfg.DynaudnormFilterSize,
+		cfg.DynaudnormPeakValue,
+		cfg.DynaudnormMaxGain,
+		cfg.DynaudnormTargetRMS,
+		cfg.DynaudnormThreshold,
+		boolToInt(cfg.DynaudnormChannels),
+		boolToInt(cfg.DynaudnormDCCorrect),
+		boolToInt(cfg.DynaudnormAltBoundary),
+		cfg.DynaudnormCompress,
 	)
+}
 
-	// Build speechnorm (Speech Normalizer) filter
-	// Cycle-level normalization using zero-crossing half-cycles
-	// Fast, speech-optimized alternative to dynaudnorm's frame-based approach
-	// p: target peak, e: max expansion, c: max compression
-	// t: threshold below which to stop normalizing
-	// r: raise smoothing (peak rise), f: fall smoothing (peak fall)
-	// l: link channels (0=independent, 1=coupled)
-	speechnormChannelFlag := 0
-	if cfg.SpeechnormChannels {
-		speechnormChannelFlag = 1
+// buildSpeechnormFilter builds the speechnorm (Speech Normalizer) filter specification.
+// Cycle-level normalization using zero-crossing half-cycles.
+// Fast, speech-optimized alternative to dynaudnorm's frame-based approach.
+func (cfg *FilterChainConfig) buildSpeechnormFilter() string {
+	if !cfg.SpeechnormEnabled {
+		return ""
 	}
-
-	speechnormFilter := fmt.Sprintf(
+	return fmt.Sprintf(
 		"speechnorm=p=%.2f:e=%.1f:c=%.1f:t=%.2f:r=%.3f:f=%.3f:m=%.3f:l=%d",
-		cfg.SpeechnormPeak,        // 0.95 target peak
-		cfg.SpeechnormExpansion,   // Adaptive expansion (capped at 10x)
-		cfg.SpeechnormCompression, // 2.0 max compression
-		cfg.SpeechnormThreshold,   // 0.10 threshold
-		cfg.SpeechnormRaise,       // 0.001 rise smoothing
-		cfg.SpeechnormFall,        // 0.001 fall smoothing
-		cfg.SpeechnormRMS,         // RMS targeting (set adaptively)
-		speechnormChannelFlag,     // 0 = coupled channels
+		cfg.SpeechnormPeak,
+		cfg.SpeechnormExpansion,
+		cfg.SpeechnormCompression,
+		cfg.SpeechnormThreshold,
+		cfg.SpeechnormRaise,
+		cfg.SpeechnormFall,
+		cfg.SpeechnormRMS,
+		boolToInt(cfg.SpeechnormChannels),
 	)
+}
 
-	// Build arnndn (RNN denoise) filter - neural network noise reduction
-	// Only enabled for heavily uplifted audio (expansion >= 8x)
-	// Provides "mop up" of amplified noise AFTER speechnorm expansion
-	// Uses embedded conjoined-burgers model trained for recorded speech
-	var arnnDnFilter string
-	if cfg.ArnnDnEnabled {
-		// Get cached model path (extracts embedded model on first use)
-		modelPath, err := getRNNModelPath()
-		if err != nil {
-			// If we can't get the model, disable arnndn
-			// This shouldn't happen, but gracefully degrade rather than fail
-			arnnDnFilter = ""
-		} else {
-			arnnDnFilter = fmt.Sprintf("arnndn=m=%s:mix=%.2f", modelPath, cfg.ArnnDnMix)
-		}
+// buildArnnDnFilter builds the arnndn (RNN denoise) filter specification.
+// Neural network noise reduction for heavily uplifted audio.
+// Uses embedded conjoined-burgers model trained for recorded speech.
+func (cfg *FilterChainConfig) buildArnnDnFilter() string {
+	if !cfg.ArnnDnEnabled {
+		return ""
 	}
-	// If ArnnDnEnabled is false, arnnDnFilter stays empty and will be skipped
-
-	// Build anlmdn (Non-Local Means denoise) filter - patch-based noise reduction
-	// Only enabled for heavily uplifted audio (expansion >= 8x)
-	// Provides alternative/additional "mop up" of amplified noise AFTER speechnorm expansion
-	// Uses patch-based matching algorithm (better for preserving texture/detail)
-	var anlmDnFilter string
-	if cfg.AnlmDnEnabled {
-		// Use only strength parameter, let patch/research/output use defaults
-		// Default: p=2ms, r=6ms, o=o (filtered output)
-		anlmDnFilter = fmt.Sprintf("anlmdn=s=%f",
-			cfg.AnlmDnStrength, // Denoising strength (adaptive)
-		)
+	modelPath, err := getRNNModelPath()
+	if err != nil {
+		// Gracefully degrade if model unavailable
+		return ""
 	}
-	// If AnlmDnEnabled is false, anlmDnFilter stays empty and will be skipped
+	return fmt.Sprintf("arnndn=m=%s:mix=%.2f", modelPath, cfg.ArnnDnMix)
+}
 
-	// Build alimiter (true peak limiter) filter
-	// Uses lookahead technology and ASC for smooth, musical limiting
-	// Brick-wall safety net for peak control
-	alimiterFilter := fmt.Sprintf(
+// buildAnlmDnFilter builds the anlmdn (Non-Local Means denoise) filter specification.
+// Patch-based noise reduction for heavily uplifted audio.
+// Better at preserving texture/detail than RNN approach.
+func (cfg *FilterChainConfig) buildAnlmDnFilter() string {
+	if !cfg.AnlmDnEnabled {
+		return ""
+	}
+	return fmt.Sprintf("anlmdn=s=%f", cfg.AnlmDnStrength)
+}
+
+// buildAlimiterFilter builds the alimiter (true peak limiter) filter specification.
+// Brick-wall safety net using lookahead and ASC for smooth, musical limiting.
+func (cfg *FilterChainConfig) buildAlimiterFilter() string {
+	if !cfg.LimiterEnabled {
+		return ""
+	}
+	return fmt.Sprintf(
 		"alimiter=level_in=%.2f:level_out=%.2f:limit=%.2f:"+
 			"attack=%.0f:release=%.0f:asc=%d:asc_level=%.1f:level=%d:latency=%d",
-		1.0,                // No input gain adjustment
-		1.0,                // No output gain adjustment
-		cfg.LimiterCeiling, // Peak ceiling (0.84 = -1.5dBTP)
-		cfg.LimiterAttack,  // Lookahead time (5ms for smooth limiting)
-		cfg.LimiterRelease, // Release time (50ms for natural sound)
-		1,                  // Enable ASC for smoother, more musical limiting
-		0.5,                // Moderate ASC influence (soft knee behavior)
-		0,                  // Disable auto-level normalization (dynaudnorm handles normalization)
-		1,                  // Enable latency compensation
+		1.0, // No input gain adjustment
+		1.0, // No output gain adjustment
+		cfg.LimiterCeiling,
+		cfg.LimiterAttack,
+		cfg.LimiterRelease,
+		1,   // Enable ASC
+		0.5, // Moderate ASC influence
+		0,   // Disable auto-level normalization
+		1,   // Enable latency compensation
 	)
+}
 
-	// Chain all filters together with commas
-	// Order: highpass → adeclick → denoise → gate → compress → deess → dynaudnorm → limit → format → frame
-	// Add aformat for podcast-standard output: 44.1kHz, mono, s16
-	// Add asetnsamples to ensure fixed frame size for FLAC encoder (which doesn't support variable frame size)
+// BuildFilterSpec builds the FFmpeg filter specification string for Pass 2 processing.
+// Filter order is determined by cfg.FilterOrder (or DefaultFilterOrder if empty).
+// Each filter checks its Enabled flag and returns empty string if disabled.
+func (cfg *FilterChainConfig) BuildFilterSpec() string {
+	// Map FilterID to builder method
+	builders := map[FilterID]func() string{
+		FilterHighpass:    cfg.buildHighpassFilter,
+		FilterAdeclick:    cfg.buildAdeclickFilter,
+		FilterAfftdn:      cfg.buildAfftdnFilter,
+		FilterAgate:       cfg.buildAgateFilter,
+		FilterAcompressor: cfg.buildAcompressorFilter,
+		FilterDeesser:     cfg.buildDeesserFilter,
+		FilterSpeechnorm:  cfg.buildSpeechnormFilter,
+		FilterArnndn:      cfg.buildArnnDnFilter,
+		FilterAnlmdn:      cfg.buildAnlmDnFilter,
+		FilterDynaudnorm:  cfg.buildDynaudnormFilter,
+		FilterAlimiter:    cfg.buildAlimiterFilter,
+	}
 
-	// Build filter list, skipping empty filters
-	// Filter order: highpass → adeclick → afftdn → agate → acompressor → deesser → speechnorm → arnndn → anlmdn → dynaudnorm → alimiter
-	// arnndn positioned after speechnorm to "mop up" amplified noise from expansion (neural network approach)
-	// anlmdn positioned after arnndn to provide alternative/additional cleanup (patch-based approach)
+	// Use configured order or default
+	order := cfg.FilterOrder
+	if len(order) == 0 {
+		order = DefaultFilterOrder
+	}
 
-	// Forcibly disable filters for dev/tresting purposes
-	//highpassFilter = ""
-	adeclickFilter = ""
-	//agateFilter = ""
-	//acompressorFilter = ""
-	//deesserFilter = ""
-	//dynaudnormFilter = ""
-	//speechnormFilter = ""
-	arnnDnFilter = ""
-	anlmDnFilter = ""
-	//alimiterFilter = ""
-
+	// Build filters in specified order, skipping disabled/empty
 	var filters []string
-	for _, f := range []string{highpassFilter, adeclickFilter, afftdnFilter, agateFilter, acompressorFilter, deesserFilter, speechnormFilter, arnnDnFilter, anlmDnFilter, dynaudnormFilter, alimiterFilter} {
-		if f != "" {
-			filters = append(filters, f)
+	for _, id := range order {
+		if builder, ok := builders[id]; ok {
+			if spec := builder(); spec != "" {
+				filters = append(filters, spec)
+			}
 		}
 	}
+
+	// Add output format filters (always enabled)
+	// aformat: podcast-standard output (44.1kHz, mono, s16)
+	// asetnsamples: fixed frame size for FLAC encoder
 	filters = append(filters, "aformat=sample_rates=44100:channel_layouts=mono:sample_fmts=s16")
 	filters = append(filters, "asetnsamples=n=4096")
 
