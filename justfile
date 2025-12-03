@@ -92,6 +92,10 @@ clean:
 test: _check-submodule
     go test ./...
 
+# Run tests with all audio files
+test-all: _check-submodule
+    TEST_ALL_AUDIO=1 go test ./...
+
 # Install jivetalking to ~/.local/bin
 install: build
     @mkdir -p ~/.local/bin 2>/dev/null || true

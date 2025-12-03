@@ -15,20 +15,33 @@ func TestAnalyzeAudio(t *testing.T) {
 		t.Skipf("Skipping: testdata directory not available: %v", err)
 	}
 
-	// Filter for audio files (.flac, .wav, .mp3)
+	// Filter for unprocessed audio files (.flac, .wav, .mp3)
+	// Skip *-processed.* files as they're output files, not test inputs
 	var audioFiles []string
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
-		ext := strings.ToLower(filepath.Ext(entry.Name()))
+		name := entry.Name()
+		// Skip processed output files
+		if strings.Contains(name, "-processed") {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(name))
 		if ext == ".flac" || ext == ".wav" || ext == ".mp3" {
-			audioFiles = append(audioFiles, filepath.Join(testdataDir, entry.Name()))
+			audioFiles = append(audioFiles, filepath.Join(testdataDir, name))
 		}
 	}
 
 	if len(audioFiles) == 0 {
 		t.Skip("No audio files found in testdata directory")
+	}
+
+	// By default, only test the first file (faster CI/local iteration)
+	// Set TEST_ALL_AUDIO=1 to test all files
+	if os.Getenv("TEST_ALL_AUDIO") == "" && len(audioFiles) > 1 {
+		t.Logf("Testing 1 of %d files (set TEST_ALL_AUDIO=1 to test all)", len(audioFiles))
+		audioFiles = audioFiles[:1]
 	}
 
 	// Use podcast standard targets
@@ -37,11 +50,22 @@ func TestAnalyzeAudio(t *testing.T) {
 	targetLRA := 11.0
 
 	// Analyze each audio file
-	for _, filename := range audioFiles {
+	for i, filename := range audioFiles {
 		t.Run(filepath.Base(filename), func(t *testing.T) {
-			t.Logf("Analyzing: %s", filepath.Base(filename))
+			t.Logf("[%d/%d] Analyzing: %s", i+1, len(audioFiles), filepath.Base(filename))
 
-			measurements, err := AnalyzeAudio(filename, targetI, targetTP, targetLRA, nil)
+			// Progress callback to show analysis progress
+			lastPercent := -1
+			progressCallback := func(pass int, passName string, progress float64, level float64, m *AudioMeasurements) {
+				percent := int(progress * 100)
+				// Only log at 25% intervals to avoid spam
+				if percent >= lastPercent+25 {
+					t.Logf("  %s: %d%%", passName, percent)
+					lastPercent = percent
+				}
+			}
+
+			measurements, err := AnalyzeAudio(filename, targetI, targetTP, targetLRA, progressCallback)
 			if err != nil {
 				t.Fatalf("AnalyzeAudio failed: %v", err)
 			}
