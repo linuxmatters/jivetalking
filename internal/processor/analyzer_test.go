@@ -72,7 +72,10 @@ func TestAnalyzeAudio(t *testing.T) {
 				t.Errorf("InputLRA out of reasonable range: %.2f", measurements.InputLRA)
 			}
 
-			if measurements.NoiseFloor > -20 || measurements.NoiseFloor < -80 {
+			// NoiseFloor is derived from RMS_trough - can be very low for clean audio
+			// -20dB would indicate extremely noisy recording
+			// -120dB is silence floor (below audible range)
+			if measurements.NoiseFloor > -20 || measurements.NoiseFloor < -120 {
 				t.Errorf("NoiseFloor out of reasonable range: %.2f", measurements.NoiseFloor)
 			}
 

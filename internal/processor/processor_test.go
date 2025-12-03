@@ -20,7 +20,7 @@ func TestProcessAudio(t *testing.T) {
 	config := DefaultFilterConfig()
 
 	// Process the audio with a no-op progress callback
-	result, err := ProcessAudio(testFile, config, func(pass int, passName string, progress float64, level float64, measurements *LoudnormMeasurements) {
+	result, err := ProcessAudio(testFile, config, func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements) {
 		// No-op for tests
 	})
 	if err != nil {
@@ -58,7 +58,7 @@ func TestFilterChainBuilder(t *testing.T) {
 	}
 
 	// Test Pass 2 (processing) filter spec with measurements
-	config.Measurements = &LoudnormMeasurements{
+	config.Measurements = &AudioMeasurements{
 		InputI:       -23.4,
 		InputTP:      -3.2,
 		InputLRA:     8.7,
