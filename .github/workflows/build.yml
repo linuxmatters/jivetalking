@@ -18,72 +18,53 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-linux:
-    name: Build for Linux ${{ matrix.goarch }}
-    runs-on: ubuntu-latest
+  build:
+    name: Build ${{ matrix.os }} ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
-        goarch: [amd64, arm64]
+        include:
+          - os: linux
+            arch: amd64
+            runner: ubuntu-24.04
+          - os: linux
+            arch: arm64
+            runner: ubuntu-24.04-arm
+          - os: darwin
+            arch: amd64
+            runner: macos-15-intel
+          - os: darwin
+            arch: arm64
+            runner: macos-15
       fail-fast: false
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
           go-version: '1.24'
 
-      - name: Install dependencies
+      - name: Download ffmpeg-statigo libraries
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+          cd third_party/ffmpeg-statigo
+          go run ./cmd/download-lib
 
-      - name: Build Linux ${{ matrix.goarch }}
-        env:
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 1
-          CC: ${{ matrix.goarch == 'arm64' && 'aarch64-linux-gnu-gcc' || 'gcc' }}
+      - name: Run tests
+        run: go test -v ./...
+
+      - name: Build ${{ matrix.os }} ${{ matrix.arch }}
         run: |
-          echo "Building for linux/${{ matrix.goarch }} with CGO..."
-          go build -v -o jivetalking-linux-${{ matrix.goarch }} ./cmd/jivetalking
-          ls -lh jivetalking-linux-${{ matrix.goarch }}
+          echo "Building for ${{ matrix.os }}/${{ matrix.arch }}..."
+          go build -v -o jivetalking-${{ matrix.os }}-${{ matrix.arch }} ./cmd/jivetalking
+          ls -lh jivetalking-${{ matrix.os }}-${{ matrix.arch }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v5
         with:
-          name: jivetalking-linux-${{ matrix.goarch }}
-          path: jivetalking-linux-${{ matrix.goarch }}
-
-  build-darwin:
-    name: Build for macOS ${{ matrix.goarch }}
-    runs-on: macos-latest
-    strategy:
-      matrix:
-        goarch: [amd64, arm64]
-      fail-fast: false
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: '1.24'
-
-      - name: Build macOS ${{ matrix.goarch }}
-        env:
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 1
-        run: |
-          echo "Building for darwin/${{ matrix.goarch }} with CGO..."
-          go build -v -o jivetalking-darwin-${{ matrix.goarch }} ./cmd/jivetalking
-          ls -lh jivetalking-darwin-${{ matrix.goarch }}
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v5
-        with:
-          name: jivetalking-darwin-${{ matrix.goarch }}
-          path: jivetalking-darwin-${{ matrix.goarch }}
+          name: jivetalking-${{ matrix.os }}-${{ matrix.arch }}
+          path: jivetalking-${{ matrix.os }}-${{ matrix.arch }}

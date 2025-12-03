@@ -79,7 +79,7 @@ Flags:
 
 **Input:**
 - Accepts 1 or more audio files
-- Supported formats: FLAC, WAV (via ffmpeg-go demuxer API)
+- Supported formats: FLAC, WAV (via ffmpeg-statigo demuxer API)
 - Files processed **sequentially** (one at a time)
 
 **Output:**
@@ -415,7 +415,7 @@ Real-time Factor:    116x (2m 34s processing time for 5h 0m audio)
 **Project Setup:**
 - [x] Create repository: `linuxmatters/jivetalking`
 - [x] Copy Jivefire project structure template
-- [x] Set up Go modules (ffmpeg-go, bubbletea, lipgloss, kong)
+- [x] Set up Go modules (ffmpeg-statigo, bubbletea, lipgloss, kong)
 - [x] Configure Nix flake for development environment
 - [x] Set up GitHub Actions CI/CD
 
@@ -432,8 +432,8 @@ jivetalking/
 │   │   ├── filters.go           # Filter chain builder
 │   │   └── encoder.go           # Output FLAC/WAV encoder
 │   ├── audio/
-│   │   ├── reader.go            # ffmpeg-go demuxer wrapper
-│   │   ├── decoder.go           # ffmpeg-go decoder wrapper
+│   │   ├── reader.go            # ffmpeg-statigo demuxer wrapper
+│   │   ├── decoder.go           # ffmpeg-statigo decoder wrapper
 │   │   └── metadata.go          # Audio file metadata
 │   ├── config/
 │   │   ├── config.go            # TOML config parser
@@ -463,7 +463,7 @@ jivetalking/
 ### Phase 2: Audio Processing Core
 
 **Pass 1: Analysis Implementation:**
-- [x] Integrate ffmpeg-go filter graph API
+- [x] Integrate ffmpeg-statigo filter graph API
 - [x] Implement loudnorm analysis (first pass)
 - [x] Extract measurements: input_i, input_tp, input_lra, input_thresh, target_offset
 - [x] Calculate noise floor estimate (input_thresh - 15dB for afftdn starting point)
@@ -486,10 +486,10 @@ jivetalking/
 - [x] Frame-by-frame processing with proper timebase handling
 
 **Audio I/O:**
-- [x] Implement ffmpeg-go demuxer for FLAC/WAV input reading
-- [x] Decode audio frames via ffmpeg-go codec API
-- [x] Implement ffmpeg-go FLAC encoder output
-- [ ] ~~Implement ffmpeg-go WAV encoder fallback~~
+- [x] Implement ffmpeg-statigo demuxer for FLAC/WAV input reading
+- [x] Decode audio frames via ffmpeg-statigo codec API
+- [x] Implement ffmpeg-statigo FLAC encoder output
+- [ ] ~~Implement ffmpeg-statigo WAV encoder fallback~~
 - [x] Preserve sample rate and bit depth where possible
 - [x] Keep audio in AVFrame format throughout pipeline (no format conversion overhead)
 - [x] Handle channel layout configuration for encoder
@@ -543,11 +543,7 @@ jivetalking/
 - [x] Real-time feedback
 - [x] Professional appearance
 
-### Phase 4: Comparison Mode
-
-**Comparison Mode (--compare flag):**
-- [ ] Implement audio mixing function using ffmpeg-go amerge filter
-- [ ] Create unprocessed.flac from raw input files (no processing)
+### Phase 4: Comparison Mode\n\n**Comparison Mode (--compare flag):**\n- [ ] Implement audio mixing function using ffmpeg-statigo amerge filter\n- [ ] Create unprocessed.flac from raw input files (no processing)
 - [ ] Create processed.flac from processed output files
 - [ ] Ensure mixed files maintain -16 LUFS target for accurate comparison
 - [ ] Add comparison file generation to UI completion summary
@@ -651,16 +647,16 @@ jivetalking/
 
 ```go
 require (
-    github.com/csnewman/ffmpeg-go v0.6.0      // FFmpeg bindings (audio I/O + filter graph)
+    github.com/linuxmatters/ffmpeg-statigo     // FFmpeg bindings (audio I/O + filter graph)
     github.com/charmbracelet/bubbletea v0.x    // TUI framework
     github.com/charmbracelet/lipgloss v0.x     // Terminal styling
     github.com/alecthomas/kong v0.x            // CLI parser
-    // Note: No pure Go audio decoders needed - ffmpeg-go handles all I/O
+    // Note: No pure Go audio decoders needed - ffmpeg-statigo handles all I/O
 )
 ```
 
 **Architecture Decision:**
-- Uses ffmpeg-go for all audio I/O (reading, decoding, encoding, writing)
+- Uses ffmpeg-statigo for all audio I/O (reading, decoding, encoding, writing)
 - Audio stays in FFmpeg's native `AVFrame` format throughout pipeline
 - No format conversion overhead between decoder → filter graph → encoder
 - Simpler architecture with single dependency for all audio operations
@@ -668,7 +664,7 @@ require (
 
 ### External Requirements
 
-- **None!** Embedded FFmpeg via ffmpeg-go static libraries
+- **None!** Embedded FFmpeg via ffmpeg-statigo static libraries
 - Works offline, no network dependencies
 - Single binary distribution
 
@@ -796,7 +792,7 @@ The two-pass loudnorm approach ensures perfect level-matching across multiple pr
 
 This a Jivetalking, an in-development Go project, that is a professional podcast audio preprocessor that transforms raw voice recordings into broadcast-ready audio files optimized for editing in Audacity. It processes spoken word audio through a scientifically-tuned filter chain to achieve -16 LUFS podcast standard with zero audio processing knowledge required from the user.
 
-Orientate yourself with the project by reading the documentation and code. You should refer to the ffmpeg-go source code when required, it can usually be found in `/tmp/ffmpeg-go-research`, but if it is not there you can use `gh` to clone it from https://github.com/csnewman/ffmpeg-go
+Orientate yourself with the project by reading the documentation and code. You should refer to the ffmpeg-statigo source code when required, it can be found in `third_party/ffmpeg-statigo` or at https://github.com/linuxmatters/ffmpeg-statigo
 
 Sample audio files are in `testdata/`. You should only build and test Jivetalking via `just` commands. We are using NixOS as the host operating system and `flake.nix` provides tooling for the development shell. I use the `fish` shell. If you need to create "throw-away" test code, the put it in `testdata/`.
 

@@ -1,5 +1,5 @@
 {
-  description = "Audio pre-processor for linuxmatters.sh";
+  description = "Professional podcast audio pre-processor";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
@@ -23,6 +23,7 @@
           packages = with pkgs; [
             curl
             ffmpeg
+            gnugrep
             gcc
             go
             just

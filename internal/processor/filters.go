@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/csnewman/ffmpeg-go"
+	ffmpeg "github.com/linuxmatters/ffmpeg-statigo"
 )
 
 //go:embed models/cb.rnnn

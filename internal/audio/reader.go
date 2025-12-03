@@ -1,11 +1,11 @@
-// Package audio provides audio file I/O using ffmpeg-go
+// Package audio provides audio file I/O using ffmpeg-statigo
 package audio
 
 import (
 	"errors"
 	"fmt"
 
-	"github.com/csnewman/ffmpeg-go"
+	ffmpeg "github.com/linuxmatters/ffmpeg-statigo"
 )
 
 // Reader wraps ffmpeg-go demuxer and decoder for audio file reading

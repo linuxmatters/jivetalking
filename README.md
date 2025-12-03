@@ -40,6 +40,16 @@ Jivetalking uses a **two-pass architecture**. Pass 1 analyzes your audio (loudne
 
 **The result:** Broadcast-quality audio that sounds professional on any platform, from laptop speakers to studio monitors. Your voice, just cleaner and more consistent.
 
+## Development Setup
+
+```bash
+# Clone with submodules
+git clone --recursive https://github.com/linuxmatters/jivetalking
+
+# Or if already cloned
+just setup
+```
+
 ## Specification
 
 Here is the detailed project specification and implementation plan:

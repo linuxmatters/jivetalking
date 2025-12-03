@@ -1,3 +1,7 @@
 .direnv
 jivetalking
+jivetalking-debug.log
 testdata/
+
+# ffmpeg-statigo libraries (downloaded, not committed)
+third_party/ffmpeg-statigo/lib/*/libffmpeg.a
