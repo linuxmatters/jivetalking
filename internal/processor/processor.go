@@ -40,25 +40,88 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 	config.Measurements = measurements
 	config.NoiseFloor = measurements.NoiseFloor
 
-	// Adaptively set highpass frequency based on spectral centroid
+	// Adaptively set highpass frequency based on spectral centroid AND noise reduction needs
 	// Lower spectral centroid (darker/warmer voice) = use lower cutoff to preserve warmth
 	// Higher spectral centroid (brighter voice) = use higher cutoff to remove more rumble
+	// Heavy noise reduction needed = use higher cutoff to remove low-frequency room noise
+
+	// First, calculate LUFS gap to determine noise reduction needs
+	var lufsGap float64
+	if measurements.InputI != 0.0 {
+		lufsGap = config.TargetI - measurements.InputI
+	}
+
 	if measurements.SpectralCentroid > 0 {
+		var baseFreq float64
 		if measurements.SpectralCentroid > 6000 {
 			// Bright voice with high-frequency energy concentration
 			// Safe to use higher cutoff - voice energy is well above 100Hz
-			config.HighpassFreq = 100.0
+			baseFreq = 100.0
 		} else if measurements.SpectralCentroid > 4000 {
 			// Normal voice with balanced frequency distribution
 			// Use standard cutoff for podcast speech
-			config.HighpassFreq = 80.0
+			baseFreq = 80.0
 		} else {
 			// Dark/warm voice with low-frequency energy concentration
 			// Use lower cutoff to preserve voice warmth and body
-			config.HighpassFreq = 60.0
+			baseFreq = 60.0
+		}
+
+		// If heavy noise reduction is needed (>25dB gain), increase highpass frequency
+		// to aggressively remove low-frequency room noise (HVAC, rumble)
+		if lufsGap > 25.0 {
+			// Very quiet source needing aggressive processing
+			// Boost highpass by 40Hz to remove more room noise
+			config.HighpassFreq = baseFreq + 40.0
+		} else if lufsGap > 15.0 {
+			// Moderately quiet source
+			// Boost highpass by 20Hz
+			config.HighpassFreq = baseFreq + 20.0
+		} else {
+			// Normal source
+			config.HighpassFreq = baseFreq
+		}
+
+		// Cap at 120Hz maximum to avoid affecting voice fundamentals
+		if config.HighpassFreq > 120.0 {
+			config.HighpassFreq = 120.0
 		}
 	}
 	// If no spectral analysis available (SpectralCentroid == 0), keep default 80Hz
+
+	// Adaptively set noise reduction based on upcoming gain/expansion
+	// Key insight: If we're going to apply 30dB of gain later (via speechnorm/dynaudnorm),
+	// we need to remove 30dB of noise NOW, or it will be amplified along with the speech.
+	//
+	// Strategy:
+	// 1. Calculate LUFS gap (how much gain will be needed)
+	// 2. Set noise reduction to: base_reduction + LUFS_gap
+	// 3. This keeps final noise floor below -60dB after expansion
+	if measurements.InputI != 0.0 {
+		// Calculate how much gain will be applied in normalization
+		lufsGap := config.TargetI - measurements.InputI
+
+		// Base noise reduction (for recordings already near target)
+		baseReduction := 12.0 // dB - standard for clean recordings
+
+		// Add the LUFS gap to noise reduction
+		// If we need 30dB of gain, remove an extra 30dB of noise
+		adaptiveReduction := baseReduction + lufsGap
+
+		// Clamp to reasonable limits:
+		// - Min 6dB: always do some noise reduction
+		// - Max 40dB: afftdn becomes unstable beyond this
+		if adaptiveReduction < 6.0 {
+			adaptiveReduction = 6.0
+		} else if adaptiveReduction > 40.0 {
+			adaptiveReduction = 40.0
+		}
+
+		config.NoiseReduction = adaptiveReduction
+	} else {
+		// Fallback if no LUFS measurement
+		config.NoiseReduction = 12.0
+	}
 
 	// Adaptively set de-esser intensity based on spectral analysis
 	// Uses both spectral centroid (energy concentration) and rolloff (high-frequency extension)
@@ -226,6 +289,88 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 	config.DynaudnormChannels = false    // Coupled channels
 	config.DynaudnormDCCorrect = false   // No DC correction
 	config.DynaudnormAltBoundary = false // Standard boundary mode
+
+	// Adaptive speechnorm configuration based on input LUFS
+	// speechnorm uses RMS targeting for more consistent LUFS-based normalization
+	// Calculate expansion needed to reach target LUFS, disable compression (acompressor already handled it)
+	if measurements.InputI != 0.0 {
+		// Calculate LUFS gap from input to target (-16 LUFS)
+		lufsGap := config.TargetI - measurements.InputI
+
+		// Convert dB gap to linear expansion factor: expansion = 10^(gap/20)
+		// This gives us the multiplicative factor needed to close the gap
+		expansion := math.Pow(10, lufsGap/20.0)
+
+		// CAP EXPANSION at 10x (20dB) to preserve audio quality
+		// For very quiet sources (>20dB gap), accept higher output LUFS rather than
+		// applying extreme expansion that degrades audio quality
+		// Example: -46 LUFS input would need 31.9x expansion to reach -16 LUFS,
+		// but we cap at 10x, resulting in ~-26 LUFS output with better quality
+		const maxExpansion = 10.0 // 20dB maximum gain
+
+		// Clamp to reasonable range (1.0-10.0)
+		if expansion < 1.0 {
+			expansion = 1.0
+		} else if expansion > maxExpansion {
+			expansion = maxExpansion
+		}
+		config.SpeechnormExpansion = expansion
+
+		// Enable arnndn (RNN denoise) for heavily uplifted audio
+		// When speechnorm applies significant gain (≥8x / 18dB), it amplifies any noise
+		// that afftdn didn't catch. arnndn provides neural network-based "mop up" of
+		// this amplified noise AFTER expansion but BEFORE final normalization.
+		// Threshold: 8.0x expansion (18dB gain) - targets truly problematic cases
+		if expansion >= 8.0 {
+			config.ArnnDnEnabled = true
+			config.ArnnDnMix = 0.8 // Full noise removal
+		} else {
+			config.ArnnDnEnabled = false
+		}
+
+		// Enable anlmdn (Non-Local Means denoise) for heavily uplifted audio
+		// Patch-based denoising as alternative to RNN approach - better at preserving
+		// texture and detail while removing noise. Positioned after arnndn for
+		// additional cleanup if needed.
+		// Strength scales with expansion: more gain = more aggressive denoising
+		if expansion >= 8.0 {
+			config.AnlmDnEnabled = true
+			// Adaptive strength based on expansion level
+			// 8x expansion → 0.0001, 10x expansion → 0.001
+			// Formula: strength = 0.00001 * expansion^2
+			config.AnlmDnStrength = 0.00001 * expansion * expansion
+			// Clamp to reasonable range
+			if config.AnlmDnStrength > 0.01 {
+				config.AnlmDnStrength = 0.01 // Max strength for quality preservation
+			}
+		} else {
+			config.AnlmDnEnabled = false
+		}
+
+		// RMS targeting for LUFS consistency
+		// Target RMS calculated from desired output LUFS
+		// Rough conversion: LUFS ≈ -23 + 20*log10(RMS) for speech
+		// -16 LUFS ≈ RMS of 0.14
+		targetRMS := math.Pow(10, (config.TargetI+23)/20.0)
+		if targetRMS < 0.0 {
+			targetRMS = 0.0
+		} else if targetRMS > 1.0 {
+			targetRMS = 1.0
+		}
+		config.SpeechnormRMS = targetRMS
+
+		// Disable compression - set threshold to 0.0 so all audio gets expanded, never compressed
+		// After acompressor, we only want expansion toward target, not compression
+		config.SpeechnormThreshold = 0.0
+		config.SpeechnormCompression = 1.0 // 1.0 = no compression effect
+
+		// Peak value should leave headroom for limiter
+		config.SpeechnormPeak = 0.95
+
+		// Fast response for speech (default values work well)
+		config.SpeechnormRaise = 0.001
+		config.SpeechnormFall = 0.001
+	}
 
 	// Safety checks: ensure no NaN or Inf values
 	if math.IsNaN(config.HighpassFreq) || math.IsInf(config.HighpassFreq, 0) {

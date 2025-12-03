@@ -76,6 +76,14 @@ func GenerateReport(data ReportData) error {
 
 		fmt.Fprintf(f, "Highpass Frequency:  %.0f Hz (adaptive, based on centroid)\n", cfg.HighpassFreq)
 
+		// Show adaptive noise reduction
+		if m.InputI != 0.0 {
+			lufsGap := cfg.TargetI - m.InputI
+			fmt.Fprintf(f, "Noise Reduction:     %.1f dB (adaptive, LUFS gap: %.1f dB)\n", cfg.NoiseReduction, lufsGap)
+		} else {
+			fmt.Fprintf(f, "Noise Reduction:     %.1f dB (default)\n", cfg.NoiseReduction)
+		}
+
 		// Show deesser decision with both factors
 		if cfg.DeessIntensity > 0 {
 			fmt.Fprintf(f, "De-esser Intensity:  %.2f (adaptive, centroid: %.0f Hz, rolloff: %.0f Hz)\n",
@@ -106,6 +114,10 @@ func GenerateReport(data ReportData) error {
 		fmt.Fprintln(f, "Noise Reduction:")
 		fmt.Fprintf(f, "  - Noise floor: %.1f dB (measured)\n", m.NoiseFloor)
 		fmt.Fprintln(f, "  - Method: FFT spectral subtraction with adaptive tracking")
+
+		if data.Result.Config != nil {
+			fmt.Fprintf(f, "  - Reduction: %.1f dB (adaptive, based on input LUFS)\n", data.Result.Config.NoiseReduction)
+		}
 		fmt.Fprintln(f, "")
 
 		if data.Result.Config != nil {
@@ -129,7 +141,43 @@ func GenerateReport(data ReportData) error {
 
 		fmt.Fprintln(f, "Adaptive Normalization:")
 		fmt.Fprintf(f, "  - Input: %.1f LUFS\n", m.InputI)
-		fmt.Fprintf(f, "  - Method: dynaudnorm (adaptive peak-based)\n")
+
+		// Show speechnorm configuration with expansion cap info
+		if data.Result.Config != nil && data.Result.Config.SpeechnormExpansion > 1.0 {
+			cfg := data.Result.Config
+			lufsGap := cfg.TargetI - m.InputI
+			expansionDB := 20.0 * math.Log10(cfg.SpeechnormExpansion)
+
+			fmt.Fprintf(f, "  - Method: speechnorm (cycle-level normalization)\n")
+			fmt.Fprintf(f, "  - Expansion: %.1fx (%.1f dB)\n", cfg.SpeechnormExpansion, expansionDB)
+
+			// Show if expansion was capped
+			if lufsGap > 20.0 {
+				expectedLUFS := m.InputI + expansionDB
+				fmt.Fprintf(f, "  - Note: Expansion capped at 10x (20 dB) for audio quality\n")
+				fmt.Fprintf(f, "  - Expected output: ~%.1f LUFS (gap was %.1f dB, capped from %.1f LUFS target)\n",
+					expectedLUFS, lufsGap, cfg.TargetI)
+			}
+
+			if cfg.SpeechnormRMS > 0.0 {
+				fmt.Fprintf(f, "  - RMS target: %.3f\n", cfg.SpeechnormRMS)
+			}
+
+			// Show arnndn status (RNN denoise)
+			if cfg.ArnnDnEnabled {
+				fmt.Fprintf(f, "  - RNN denoise: ENABLED (expansion %.1fx >= 8.0x threshold)\n", cfg.SpeechnormExpansion)
+				fmt.Fprintf(f, "    Neural network mop-up of amplified noise after expansion\n")
+			}
+
+			// Show anlmdn status (Non-Local Means denoise)
+			if cfg.AnlmDnEnabled {
+				fmt.Fprintf(f, "  - NLM denoise: ENABLED (expansion %.1fx >= 8.0x threshold)\n", cfg.SpeechnormExpansion)
+				fmt.Fprintf(f, "    Patch-based cleanup, strength: %.5f\n", cfg.AnlmDnStrength)
+			}
+		} else {
+			fmt.Fprintf(f, "  - Method: dynaudnorm (adaptive peak-based)\n")
+		}
+
 		fmt.Fprintf(f, "  - True peak: %.1f dBTP (input)\n", m.InputTP)
 		fmt.Fprintf(f, "  - Loudness range: %.1f LU (input)\n", m.InputLRA)
 		fmt.Fprintln(f, "")
