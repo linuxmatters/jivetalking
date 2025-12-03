@@ -507,9 +507,6 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 		filterChain += f
 	}
 
-	// DEBUG: Print filter chain to stderr
-	fmt.Fprintf(os.Stderr, "\n=== FILTER CHAIN DEBUG ===\n%s\n=========================\n\n", filterChain)
-
 	return filterChain
 }
 
