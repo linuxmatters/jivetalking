@@ -171,8 +171,6 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 	filterGraph, bufferSrcCtx, bufferSinkCtx, err := createAnalysisFilterGraph(
 		reader.GetDecoderContext(),
 		targetI, targetTP, targetLRA,
-		true, // first pass (analysis only)
-		nil,  // no measurements yet
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create filter graph: %w", err)
@@ -346,8 +344,6 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 func createAnalysisFilterGraph(
 	decCtx *ffmpeg.AVCodecContext,
 	targetI, targetTP, targetLRA float64,
-	firstPass bool,
-	measurements *AudioMeasurements,
 ) (*ffmpeg.AVFilterGraph, *ffmpeg.AVFilterContext, *ffmpeg.AVFilterContext, error) {
 
 	filterGraph := ffmpeg.AVFilterGraphAlloc()
@@ -412,22 +408,14 @@ func createAnalysisFilterGraph(
 		return nil, nil, nil, fmt.Errorf("failed to create abuffersink: %w", err)
 	}
 
-	// Build filter string
-	var filterSpec string
-	if firstPass {
-		// First pass: Analysis only - extract loudness measurements, spectral statistics, and time-domain stats
-		// astats provides noise floor and dynamic range measurements for adaptive gate and compression
-		// aspectralstats measures spectral centroid and rolloff for adaptive de-esser targeting
-		// ebur128 provides integrated loudness (LUFS), true peak, and LRA via metadata
-		// Note: reset=0 (default) allows astats to accumulate statistics across all frames for Overall measurements
-		// ebur128 metadata=1 writes per-frame loudness data to frame metadata (lavfi.r128.* keys)
-		filterSpec = fmt.Sprintf("astats=metadata=1:measure_overall=Noise_floor+Dynamic_range+RMS_level+Peak_level,aspectralstats=win_size=2048:win_func=hann:measure=centroid+rolloff,ebur128=metadata=1:target=%.0f",
-			targetI)
-	} else {
-		// Second pass: Not used anymore
-		// Using dynaudnorm for normalization in Pass 2 processing (not analysis)
-		filterSpec = ""
-	}
+	// Build filter string for analysis pass
+	// astats provides noise floor and dynamic range measurements for adaptive gate and compression
+	// aspectralstats measures spectral centroid and rolloff for adaptive de-esser targeting
+	// ebur128 provides integrated loudness (LUFS), true peak, and LRA via metadata
+	// Note: reset=0 (default) allows astats to accumulate statistics across all frames for Overall measurements
+	// ebur128 metadata=1 writes per-frame loudness data to frame metadata (lavfi.r128.* keys)
+	filterSpec := fmt.Sprintf("astats=metadata=1:measure_overall=Noise_floor+Dynamic_range+RMS_level+Peak_level,aspectralstats=win_size=2048:win_func=hann:measure=centroid+rolloff,ebur128=metadata=1:target=%.0f",
+		targetI)
 
 	// Parse filter graph
 	outputs := ffmpeg.AVFilterInoutAlloc()
