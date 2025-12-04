@@ -412,7 +412,7 @@ func TestTuneDeesser(t *testing.T) {
 			name:          "boundary: exactly at rolloffLimited",
 			centroid:      7500,
 			rolloff:       8000, // exactly at threshold
-			wantIntensity: 0.6, // not < 8000, falls to default (normal HF)
+			wantIntensity: 0.6,  // not < 8000, falls to default (normal HF)
 			tolerance:     0.01,
 		},
 		{
