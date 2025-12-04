@@ -250,3 +250,209 @@ func TestTuneHighpassFreq(t *testing.T) {
 		})
 	}
 }
+
+func TestTuneDeesser(t *testing.T) {
+	// Constants from adaptive.go for reference:
+	// centroidVeryBright = 7000 Hz
+	// centroidBright     = 6000 Hz
+	// rolloffNoSibilance = 6000 Hz
+	// rolloffLimited     = 8000 Hz
+	// rolloffExtensive   = 12000 Hz
+	// deessIntensityBright = 0.6
+	// deessIntensityNormal = 0.5
+	// deessIntensityDark   = 0.4
+	// deessIntensityMax    = 0.8
+	// deessIntensityMin    = 0.3
+
+	tests := []struct {
+		name          string
+		centroid      float64 // spectral centroid (Hz)
+		rolloff       float64 // spectral rolloff (Hz)
+		wantIntensity float64 // expected de-esser intensity
+		tolerance     float64 // acceptable tolerance for floating point
+	}{
+		// Full adaptive logic (both centroid and rolloff available)
+		// Bright voice (centroid > 7000) with extensive HF (rolloff > 12000)
+		{
+			name:          "very bright voice, extensive HF",
+			centroid:      7500,
+			rolloff:       14000,
+			wantIntensity: 0.72, // 0.6 * 1.2, capped at 0.8
+			tolerance:     0.01,
+		},
+		// Normal-bright voice (centroid 6000-7000) with extensive HF
+		{
+			name:          "normal-bright voice, extensive HF",
+			centroid:      6500,
+			rolloff:       14000,
+			wantIntensity: 0.6, // 0.5 * 1.2 = 0.6
+			tolerance:     0.01,
+		},
+		// Dark voice (centroid < 6000) with limited HF (rolloff 6000-8000)
+		// Dark voice base is 0.4, limited HF applies 0.7 factor = 0.28
+		// But 0.28 < deessIntensityMin (0.3), so it gets disabled
+		{
+			name:          "dark voice, limited HF - disabled below min",
+			centroid:      3500,
+			rolloff:       7000,
+			wantIntensity: 0.0, // 0.4 * 0.7 = 0.28 < 0.3 min, disabled
+			tolerance:     0.0,
+		},
+		// Normal-bright voice with limited HF - above min threshold
+		{
+			name:          "normal-bright voice, limited HF",
+			centroid:      6500,
+			rolloff:       7000,
+			wantIntensity: 0.35, // 0.5 * 0.7 = 0.35 > 0.3 min
+			tolerance:     0.01,
+		},
+		// No HF content (rolloff < 6000) - disabled regardless of centroid
+		{
+			name:          "bright voice, no HF content",
+			centroid:      7500,
+			rolloff:       5000,
+			wantIntensity: 0.0, // disabled due to no sibilance expected
+			tolerance:     0.0,
+		},
+		{
+			name:          "normal voice, no HF content",
+			centroid:      5000,
+			rolloff:       5500,
+			wantIntensity: 0.0,
+			tolerance:     0.0,
+		},
+		// Normal HF extension (8000-12000)
+		{
+			name:          "bright voice, normal HF",
+			centroid:      7500,
+			rolloff:       10000,
+			wantIntensity: 0.6, // base intensity, no modifier
+			tolerance:     0.01,
+		},
+		{
+			name:          "normal voice, normal HF",
+			centroid:      6500,
+			rolloff:       10000,
+			wantIntensity: 0.5,
+			tolerance:     0.01,
+		},
+		{
+			name:          "dark voice, normal HF",
+			centroid:      5000,
+			rolloff:       10000,
+			wantIntensity: 0.4,
+			tolerance:     0.01,
+		},
+
+		// Limited HF with intensity below minimum - should disable
+		{
+			name:          "dark voice, limited HF, below min threshold",
+			centroid:      5000, // dark voice, base 0.4
+			rolloff:       7500, // limited HF, * 0.7 = 0.28 < 0.3 min
+			wantIntensity: 0.0,  // disabled because 0.28 < deessIntensityMin
+			tolerance:     0.0,
+		},
+
+		// Centroid-only fallback (rolloff = 0)
+		{
+			name:          "very bright voice, no rolloff data",
+			centroid:      7500,
+			rolloff:       0,
+			wantIntensity: 0.6, // deessIntensityBright
+			tolerance:     0.01,
+		},
+		{
+			name:          "normal-bright voice, no rolloff data",
+			centroid:      6500,
+			rolloff:       0,
+			wantIntensity: 0.5, // deessIntensityNormal
+			tolerance:     0.01,
+		},
+		{
+			name:          "dark voice, no rolloff data",
+			centroid:      5000,
+			rolloff:       0,
+			wantIntensity: 0.4, // deessIntensityDark
+			tolerance:     0.01,
+		},
+
+		// No spectral data - keep default (0.0)
+		{
+			name:          "no spectral data",
+			centroid:      0,
+			rolloff:       0,
+			wantIntensity: 0.0,
+			tolerance:     0.0,
+		},
+		{
+			name:          "negative centroid",
+			centroid:      -100,
+			rolloff:       10000,
+			wantIntensity: 0.0,
+			tolerance:     0.0,
+		},
+
+		// Boundary conditions
+		{
+			name:          "boundary: exactly at centroidVeryBright",
+			centroid:      7000, // exactly at threshold
+			rolloff:       10000,
+			wantIntensity: 0.5, // not > 7000, so uses deessIntensityNormal
+			tolerance:     0.01,
+		},
+		{
+			name:          "boundary: exactly at centroidBright",
+			centroid:      6000,
+			rolloff:       10000,
+			wantIntensity: 0.4, // not > 6000, so uses deessIntensityDark
+			tolerance:     0.01,
+		},
+		{
+			name:          "boundary: exactly at rolloffLimited",
+			centroid:      7500,
+			rolloff:       8000, // exactly at threshold
+			wantIntensity: 0.6, // not < 8000, falls to default (normal HF)
+			tolerance:     0.01,
+		},
+		{
+			name:          "boundary: exactly at rolloffExtensive",
+			centroid:      7500,
+			rolloff:       12000, // exactly at threshold
+			wantIntensity: 0.6,   // not > 12000, falls to default (normal HF)
+			tolerance:     0.01,
+		},
+
+		// Max capping
+		{
+			name:          "intensity capped at max",
+			centroid:      7500,  // bright, base 0.6
+			rolloff:       15000, // extensive, * 1.2 = 0.72
+			wantIntensity: 0.72,  // below max 0.8, so not capped
+			tolerance:     0.01,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Setup
+			config := DefaultFilterConfig()
+			measurements := &AudioMeasurements{
+				SpectralCentroid: tt.centroid,
+				SpectralRolloff:  tt.rolloff,
+			}
+
+			// Execute
+			tuneDeesser(config, measurements)
+
+			// Verify
+			diff := config.DeessIntensity - tt.wantIntensity
+			if diff < 0 {
+				diff = -diff
+			}
+			if diff > tt.tolerance {
+				t.Errorf("DeessIntensity = %.3f, want %.3f (±%.3f) [centroid=%.0f, rolloff=%.0f]",
+					config.DeessIntensity, tt.wantIntensity, tt.tolerance, tt.centroid, tt.rolloff)
+			}
+		})
+	}
+}
