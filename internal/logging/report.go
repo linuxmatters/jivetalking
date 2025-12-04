@@ -182,11 +182,22 @@ func GenerateReport(data ReportData) error {
 			cfg := data.Result.Config
 			gateThresholdDB := 20.0 * math.Log10(cfg.GateThreshold)
 
-			fmt.Fprintln(f, "Gate:")
+			fmt.Fprintln(f, "Gate (pre-normalisation):")
 			fmt.Fprintf(f, "  - Threshold: %.1f dB (adaptive, based on noise floor)\n", gateThresholdDB)
 			fmt.Fprintf(f, "  - Ratio: %.1f:1\n", cfg.GateRatio)
 			fmt.Fprintf(f, "  - Attack/Release: %.0fms/%.0fms\n", cfg.GateAttack, cfg.GateRelease)
 			fmt.Fprintln(f, "")
+
+			// Bleed gate (catches amplified bleed/crosstalk after normalisation)
+			if cfg.BleedGateEnabled {
+				bleedGateThresholdDB := 20.0 * math.Log10(cfg.BleedGateThreshold)
+				fmt.Fprintln(f, "Bleed Gate (post-normalisation):")
+				fmt.Fprintf(f, "  - Threshold: %.1f dB (adaptive, based on predicted output bleed)\n", bleedGateThresholdDB)
+				fmt.Fprintf(f, "  - Ratio: %.1f:1\n", cfg.BleedGateRatio)
+				fmt.Fprintf(f, "  - Range: %.1f dB reduction\n", 20.0*math.Log10(cfg.BleedGateRange))
+				fmt.Fprintf(f, "  - Attack/Release: %.0fms/%.0fms\n", cfg.BleedGateAttack, cfg.BleedGateRelease)
+				fmt.Fprintln(f, "")
+			}
 
 			compThresholdDB := cfg.CompThreshold
 			fmt.Fprintln(f, "Compression:")
@@ -241,12 +252,61 @@ func GenerateReport(data ReportData) error {
 		fmt.Fprintln(f, "")
 	}
 
-	// Output Analysis
-	fmt.Fprintln(f, "Output Analysis")
-	fmt.Fprintln(f, "---------------")
+	// Pass 2: Output Analysis
+	fmt.Fprintln(f, "Pass 2: Output Analysis")
+	fmt.Fprintln(f, "-----------------------")
 	if data.Result != nil {
 		fmt.Fprintf(f, "Output File:         %s\n", filepath.Base(data.OutputPath))
-		fmt.Fprintln(f, "Note: Output LUFS not measured (would require third-pass analysis)")
+
+		if data.Result.OutputMeasurements != nil {
+			om := data.Result.OutputMeasurements
+			fmt.Fprintf(f, "Integrated Loudness: %.1f LUFS\n", om.OutputI)
+			fmt.Fprintf(f, "True Peak:           %.1f dBTP\n", om.OutputTP)
+			fmt.Fprintf(f, "Loudness Range:      %.1f LU\n", om.OutputLRA)
+			fmt.Fprintf(f, "Dynamic Range:       %.1f dB\n", om.DynamicRange)
+			fmt.Fprintf(f, "RMS Level:           %.1f dBFS\n", om.RMSLevel)
+			fmt.Fprintf(f, "Peak Level:          %.1f dBFS\n", om.PeakLevel)
+			fmt.Fprintf(f, "Spectral Centroid:   %.0f Hz\n", om.SpectralCentroid)
+			fmt.Fprintf(f, "Spectral Rolloff:    %.0f Hz\n", om.SpectralRolloff)
+
+			// Show deltas vs input for easy comparison
+			if data.Result.Measurements != nil {
+				m := data.Result.Measurements
+				fmt.Fprintln(f, "")
+				fmt.Fprintln(f, "Changes from Input:")
+				fmt.Fprintf(f, "  LUFS:              %+.1f dB\n", om.OutputI-m.InputI)
+				fmt.Fprintf(f, "  True Peak:         %+.1f dB\n", om.OutputTP-m.InputTP)
+				fmt.Fprintf(f, "  Loudness Range:    %+.1f LU\n", om.OutputLRA-m.InputLRA)
+				fmt.Fprintf(f, "  Dynamic Range:     %+.1f dB\n", om.DynamicRange-m.DynamicRange)
+				fmt.Fprintf(f, "  Spectral Centroid: %+.0f Hz\n", om.SpectralCentroid-m.SpectralCentroid)
+			}
+
+			// Show silence sample comparison (same region as Pass 1)
+			if om.SilenceSample != nil && data.Result.Measurements != nil && data.Result.Measurements.NoiseProfile != nil {
+				ss := om.SilenceSample
+				np := data.Result.Measurements.NoiseProfile
+				fmt.Fprintln(f, "")
+				fmt.Fprintf(f, "Silence Sample:      %.1fs at %.1fs\n", ss.Duration.Seconds(), ss.Start.Seconds())
+				fmt.Fprintf(f, "  Noise Floor:       %.1f dBFS (was %.1f dBFS, %+.1f dB)\n",
+					ss.NoiseFloor, np.MeasuredNoiseFloor, ss.NoiseFloor-np.MeasuredNoiseFloor)
+				fmt.Fprintf(f, "  Peak Level:        %.1f dBFS (was %.1f dBFS, %+.1f dB)\n",
+					ss.PeakLevel, np.PeakLevel, ss.PeakLevel-np.PeakLevel)
+				fmt.Fprintf(f, "  Crest Factor:      %.1f dB (was %.1f dB)\n",
+					ss.CrestFactor, np.CrestFactor)
+				if ss.Entropy > 0 {
+					// Classify noise type based on entropy
+					noiseType := "broadband (hiss)"
+					if ss.Entropy < 0.7 {
+						noiseType = "tonal (hum/buzz)"
+					} else if ss.Entropy < 0.9 {
+						noiseType = "mixed"
+					}
+					fmt.Fprintf(f, "  Entropy:           %.3f (%s)\n", ss.Entropy, noiseType)
+				}
+			}
+		} else {
+			fmt.Fprintln(f, "Note: Output measurements not available")
+		}
 	}
 	fmt.Fprintln(f, "")
 

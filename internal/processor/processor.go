@@ -43,7 +43,13 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 	// Generate output filename: input.flac → input-processed.flac
 	outputPath := generateOutputPath(inputPath)
 
-	if err := processWithFilters(inputPath, outputPath, config, progressCallback, measurements); err != nil {
+	// Enable output analysis to measure processed audio characteristics
+	config.OutputAnalysisEnabled = true
+
+	// Track output measurements from Pass 2
+	var outputMeasurements *OutputMeasurements
+
+	if err := processWithFilters(inputPath, outputPath, config, progressCallback, measurements, &outputMeasurements); err != nil {
 		return nil, fmt.Errorf("Pass 2 failed: %w", err)
 	}
 
@@ -51,16 +57,33 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 		progressCallback(2, "Processing", 1.0, 0.0, measurements)
 	}
 
-	// Return the processing result
-	// Note: OutputLUFS is no longer guaranteed to match TargetI
-	// Dynaudnorm provides adaptive normalization but doesn't target specific LUFS values
+	// Measure silence region in output file (same region as Pass 1) for noise comparison
+	// This is done after processing so we can analyse the actual output file
+	if outputMeasurements != nil && measurements.NoiseProfile != nil {
+		silenceRegion := SilenceRegion{
+			Start:    measurements.NoiseProfile.Start,
+			Duration: measurements.NoiseProfile.Duration,
+		}
+		if silenceAnalysis, err := MeasureOutputSilenceRegion(outputPath, silenceRegion); err == nil {
+			outputMeasurements.SilenceSample = silenceAnalysis
+		}
+		// Non-fatal if measurement fails - we still have the other output measurements
+	}
+
+	// Return the processing result with output measurements for comparison
 	result := &ProcessingResult{
-		OutputPath:   outputPath,
-		InputLUFS:    measurements.InputI,
-		OutputLUFS:   0.0, // Not measured - would require third pass analysis
-		NoiseFloor:   measurements.NoiseFloor,
-		Measurements: measurements,
-		Config:       config, // Include config for logging adaptive parameters
+		OutputPath:         outputPath,
+		InputLUFS:          measurements.InputI,
+		OutputLUFS:         0.0, // Will be populated from OutputMeasurements if available
+		NoiseFloor:         measurements.NoiseFloor,
+		Measurements:       measurements,
+		Config:             config, // Include config for logging adaptive parameters
+		OutputMeasurements: outputMeasurements,
+	}
+
+	// Populate OutputLUFS from measurements if available
+	if outputMeasurements != nil {
+		result.OutputLUFS = outputMeasurements.OutputI
 	}
 
 	return result, nil
@@ -79,23 +102,28 @@ type ProcessingResult struct {
 	NoiseProfileUsed    bool // Whether noise profile was used for afftdn
 	NoiseProfileFrames  int  // Number of frames fed for spectral learning
 	MainFramesProcessed int  // Number of main audio frames processed
+
+	// Output analysis (populated when OutputAnalysisEnabled is true)
+	OutputMeasurements *OutputMeasurements // Pass 2 output measurements for comparison with Pass 1
 }
 
 // processWithFilters performs the actual audio processing with the complete filter chain.
 // If a noise profile is available in the config, uses the dual-input noise profile filter graph
 // for precise spectral denoising based on the extracted silence sample.
-func processWithFilters(inputPath, outputPath string, config *FilterChainConfig, progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements), measurements *AudioMeasurements) error {
+// If outputMeasurements is non-nil and config.OutputAnalysisEnabled is true, populates it with Pass 2 output analysis.
+func processWithFilters(inputPath, outputPath string, config *FilterChainConfig, progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements), measurements *AudioMeasurements, outputMeasurements **OutputMeasurements) error {
 	// Check if we should use noise profile processing
 	if config.NoiseProfilePath != "" && config.NoiseProfileDuration > 0 {
-		return processWithNoiseProfile(inputPath, outputPath, config, progressCallback, measurements)
+		return processWithNoiseProfile(inputPath, outputPath, config, progressCallback, measurements, outputMeasurements)
 	}
 
 	// Standard processing without noise profile
-	return processWithStandardFilters(inputPath, outputPath, config, progressCallback, measurements)
+	return processWithStandardFilters(inputPath, outputPath, config, progressCallback, measurements, outputMeasurements)
 }
 
-// processWithStandardFilters performs audio processing using the standard single-input filter graph
-func processWithStandardFilters(inputPath, outputPath string, config *FilterChainConfig, progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements), measurements *AudioMeasurements) error {
+// processWithStandardFilters performs audio processing using the standard single-input filter graph.
+// If outputMeasurements is non-nil and config.OutputAnalysisEnabled is true, populates it with Pass 2 output analysis.
+func processWithStandardFilters(inputPath, outputPath string, config *FilterChainConfig, progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements), measurements *AudioMeasurements, outputMeasurements **OutputMeasurements) error {
 	// Open input audio file
 	reader, metadata, err := audio.OpenAudioFile(inputPath)
 	if err != nil {
@@ -133,6 +161,12 @@ func processWithStandardFilters(inputPath, outputPath string, config *FilterChai
 	filteredFrame := ffmpeg.AVFrameAlloc()
 	defer ffmpeg.AVFrameFree(&filteredFrame)
 
+	// Initialize output measurement accumulators if output analysis is enabled
+	var outputAcc *outputMetadataAccumulators
+	if config.OutputAnalysisEnabled && outputMeasurements != nil {
+		outputAcc = &outputMetadataAccumulators{}
+	}
+
 	// Track frame count for periodic progress updates
 	frameCount := 0
 	currentLevel := 0.0
@@ -166,6 +200,11 @@ func processWithStandardFilters(inputPath, outputPath string, config *FilterChai
 
 			// Calculate audio level from FILTERED frame (shows processed audio in VU meter)
 			currentLevel = calculateFrameLevel(filteredFrame)
+
+			// Extract output measurements from filtered frame metadata (if enabled)
+			if outputAcc != nil {
+				extractOutputFrameMetadata(filteredFrame.Metadata(), outputAcc)
+			}
 
 			// Set timebase for the filtered frame
 			filteredFrame.SetTimeBase(ffmpeg.AVBuffersinkGetTimeBase(bufferSinkCtx))
@@ -204,6 +243,11 @@ func processWithStandardFilters(inputPath, outputPath string, config *FilterChai
 			return fmt.Errorf("failed to get filtered frame: %w", err)
 		}
 
+		// Extract output measurements from remaining frames
+		if outputAcc != nil {
+			extractOutputFrameMetadata(filteredFrame.Metadata(), outputAcc)
+		}
+
 		filteredFrame.SetTimeBase(ffmpeg.AVBuffersinkGetTimeBase(bufferSinkCtx))
 
 		if err := encoder.WriteFrame(filteredFrame); err != nil {
@@ -211,6 +255,11 @@ func processWithStandardFilters(inputPath, outputPath string, config *FilterChai
 		}
 
 		ffmpeg.AVFrameUnref(filteredFrame)
+	}
+
+	// Finalize output measurements if enabled
+	if outputAcc != nil && outputMeasurements != nil {
+		*outputMeasurements = finalizeOutputMeasurements(outputAcc)
 	}
 
 	// Flush the encoder
@@ -226,14 +275,15 @@ func processWithStandardFilters(inputPath, outputPath string, config *FilterChai
 //
 // The filter graph uses concat to join noise profile + main audio, asendcmd to trigger
 // afftdn's sample_noise learning phase, and atrim to remove the noise prefix from output.
-func processWithNoiseProfile(inputPath, outputPath string, config *FilterChainConfig, progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements), measurements *AudioMeasurements) error {
+// If outputMeasurements is non-nil and config.OutputAnalysisEnabled is true, populates it with Pass 2 output analysis.
+func processWithNoiseProfile(inputPath, outputPath string, config *FilterChainConfig, progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements), measurements *AudioMeasurements, outputMeasurements **OutputMeasurements) error {
 
 	// Open noise profile WAV file
 	noiseReader, _, err := audio.OpenAudioFile(config.NoiseProfilePath)
 	if err != nil {
 		// Fall back to standard processing (warning will appear in report via NoiseProfileUsed=false)
 		config.NoiseProfilePath = ""
-		return processWithStandardFilters(inputPath, outputPath, config, progressCallback, measurements)
+		return processWithStandardFilters(inputPath, outputPath, config, progressCallback, measurements, outputMeasurements)
 	}
 	defer noiseReader.Close()
 
@@ -260,7 +310,7 @@ func processWithNoiseProfile(inputPath, outputPath string, config *FilterChainCo
 	if err != nil {
 		// Fall back to standard processing (will be noted in report via NoiseProfileUsed=false)
 		config.NoiseProfilePath = ""
-		return processWithStandardFilters(inputPath, outputPath, config, progressCallback, measurements)
+		return processWithStandardFilters(inputPath, outputPath, config, progressCallback, measurements, outputMeasurements)
 	}
 	defer ffmpeg.AVFilterGraphFree(&npGraph.Graph)
 
@@ -274,6 +324,12 @@ func processWithNoiseProfile(inputPath, outputPath string, config *FilterChainCo
 	// Allocate frames for processing
 	filteredFrame := ffmpeg.AVFrameAlloc()
 	defer ffmpeg.AVFrameFree(&filteredFrame)
+
+	// Initialize output measurement accumulators if output analysis is enabled
+	var outputAcc *outputMetadataAccumulators
+	if config.OutputAnalysisEnabled && outputMeasurements != nil {
+		outputAcc = &outputMetadataAccumulators{}
+	}
 
 	// Phase 1: Feed noise profile frames to train afftdn
 	noiseFrameCount := 0
@@ -337,6 +393,11 @@ func processWithNoiseProfile(inputPath, outputPath string, config *FilterChainCo
 			// Calculate audio level from FILTERED frame
 			currentLevel = calculateFrameLevel(filteredFrame)
 
+			// Extract output measurements from filtered frame metadata (if enabled)
+			if outputAcc != nil {
+				extractOutputFrameMetadata(filteredFrame.Metadata(), outputAcc)
+			}
+
 			// Set timebase for the filtered frame
 			filteredFrame.SetTimeBase(ffmpeg.AVBuffersinkGetTimeBase(npGraph.BufferSink))
 
@@ -373,6 +434,11 @@ func processWithNoiseProfile(inputPath, outputPath string, config *FilterChainCo
 			return fmt.Errorf("failed to get filtered frame: %w", err)
 		}
 
+		// Extract output measurements from remaining frames
+		if outputAcc != nil {
+			extractOutputFrameMetadata(filteredFrame.Metadata(), outputAcc)
+		}
+
 		filteredFrame.SetTimeBase(ffmpeg.AVBuffersinkGetTimeBase(npGraph.BufferSink))
 
 		if err := encoder.WriteFrame(filteredFrame); err != nil {
@@ -380,6 +446,11 @@ func processWithNoiseProfile(inputPath, outputPath string, config *FilterChainCo
 		}
 
 		ffmpeg.AVFrameUnref(filteredFrame)
+	}
+
+	// Finalize output measurements if enabled
+	if outputAcc != nil && outputMeasurements != nil {
+		*outputMeasurements = finalizeOutputMeasurements(outputAcc)
 	}
 
 	// Flush the encoder

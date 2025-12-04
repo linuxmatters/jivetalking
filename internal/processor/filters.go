@@ -32,6 +32,7 @@ const (
 	FilterSpeechnorm  FilterID = "speechnorm"
 	FilterAnlmdn      FilterID = "anlmdn" // Deprecated: use arnndn instead
 	FilterDynaudnorm  FilterID = "dynaudnorm"
+	FilterBleedGate   FilterID = "bleedgate" // Catches amplified bleed/crosstalk after normalisation
 	FilterAlimiter    FilterID = "alimiter"
 )
 
@@ -59,6 +60,7 @@ var DefaultFilterOrder = []FilterID{
 	FilterDeesser,
 	FilterSpeechnorm,
 	FilterDynaudnorm,
+	FilterBleedGate, // Catches amplified bleed/crosstalk after normalisation
 	FilterAlimiter,
 }
 
@@ -213,12 +215,28 @@ type FilterChainConfig struct {
 	LimiterAttack  float64 // ms, attack time
 	LimiterRelease float64 // ms, release time
 
+	// Bleed Gate (bleedgate) - catches amplified bleed/crosstalk after normalisation
+	// Positioned AFTER speechnorm/dynaudnorm to gate content that denoisers missed
+	// (denoisers preserve speech-like content, but headphone bleed IS speech-like)
+	// Uses gentler ratio than pre-gate to suppress rather than hard-cut
+	BleedGateEnabled   bool    // Enable bleed gate
+	BleedGateThreshold float64 // Activation threshold (0.0-1.0, linear) - calculated from predicted output bleed level
+	BleedGateRatio     float64 // Reduction ratio (gentler than pre-gate, e.g., 4:1)
+	BleedGateAttack    float64 // Attack time (ms)
+	BleedGateRelease   float64 // Release time (ms)
+	BleedGateRange     float64 // Level of gain reduction below threshold (0.0-1.0)
+	BleedGateKnee      float64 // Knee curve softness (1.0-8.0)
+
 	// Filter chain order - controls the sequence of filters in the processing chain
 	// Use DefaultFilterOrder or customise for experimentation
 	FilterOrder []FilterID
 
 	// Pass 1 measurements (nil for first pass)
 	Measurements *AudioMeasurements
+
+	// Output Analysis - enables astats/ebur128/aspectralstats at end of Pass 2 filter chain
+	// When enabled, measurements are extracted from processed audio for comparison with Pass 1
+	OutputAnalysisEnabled bool
 }
 
 // DefaultFilterConfig returns the scientifically-tuned default filter configuration
@@ -315,6 +333,16 @@ func DefaultFilterConfig() *FilterChainConfig {
 		AnlmDnStrength: 0.00001, // Very conservative default (will be set adaptively)
 		AnlmDnPatch:    2.0,     // 2ms patch radius (default from docs)
 		AnlmDnResearch: 6.0,     // 6ms research radius (default from docs)
+
+		// Bleed Gate - catches amplified bleed/crosstalk after normalisation
+		// Disabled by default - enabled adaptively when predicted output bleed would be audible
+		BleedGateEnabled:   false, // Enabled adaptively when normalisation amplifies bleed above threshold
+		BleedGateThreshold: 0.01,  // -40dBFS default (will be calculated from predicted output bleed level)
+		BleedGateRatio:     4.0,   // 4:1 ratio (gentler than pre-gate, suppresses rather than cuts)
+		BleedGateAttack:    15,    // 15ms attack (faster than pre-gate to catch transient bleed)
+		BleedGateRelease:   200,   // 200ms release (smooth, natural decay)
+		BleedGateRange:     0.125, // -18dB reduction (less aggressive than pre-gate's -24dB)
+		BleedGateKnee:      3.0,   // Soft knee for smooth engagement
 
 		// Limiter - brick-wall safety net with soft knee (via ASC)
 		LimiterEnabled: true,
@@ -609,6 +637,29 @@ func (cfg *FilterChainConfig) buildAnlmDnFilter() string {
 	return fmt.Sprintf("anlmdn=s=%f", cfg.AnlmDnStrength)
 }
 
+// buildBleedGateFilter builds the bleed gate filter specification.
+// Positioned AFTER speechnorm/dynaudnorm to catch bleed/crosstalk that was amplified
+// during normalisation. Uses gentler ratio (4:1) compared to pre-gate (2:1) because
+// it's suppressing rather than cleaning inter-speech gaps.
+//
+// This filter addresses the "headphone bleed" problem where normalisation amplifies
+// low-level content (like bleed from headphones) that denoisers couldn't remove because
+// it's speech-like content that they're designed to preserve.
+func (cfg *FilterChainConfig) buildBleedGateFilter() string {
+	if !cfg.BleedGateEnabled {
+		return ""
+	}
+	return fmt.Sprintf(
+		"agate=threshold=%.6f:ratio=%.1f:attack=%.0f:release=%.0f:range=%.4f:knee=%.1f",
+		cfg.BleedGateThreshold,
+		cfg.BleedGateRatio,
+		cfg.BleedGateAttack,
+		cfg.BleedGateRelease,
+		cfg.BleedGateRange,
+		cfg.BleedGateKnee,
+	)
+}
+
 // buildAlimiterFilter builds the alimiter (true peak limiter) filter specification.
 // Brick-wall safety net using lookahead and ASC for smooth, musical limiting.
 func (cfg *FilterChainConfig) buildAlimiterFilter() string {
@@ -630,6 +681,21 @@ func (cfg *FilterChainConfig) buildAlimiterFilter() string {
 	)
 }
 
+// buildOutputAnalysisFilters builds analysis filters for Pass 2 output measurement.
+// Appends astats, aspectralstats, and ebur128 to measure the processed audio,
+// enabling direct comparison with Pass 1 input measurements.
+// These filters write measurements to frame metadata that is extracted during processing.
+func (cfg *FilterChainConfig) buildOutputAnalysisFilters() string {
+	if !cfg.OutputAnalysisEnabled {
+		return ""
+	}
+	// Same filter chain as Pass 1 analysis, minus silencedetect (not needed for output)
+	// astats: provides noise floor, dynamic range, RMS, peak, DC offset, flat factor, zero crossings, max difference
+	// aspectralstats: provides spectral centroid and rolloff
+	// ebur128: provides integrated loudness (LUFS), true peak, and LRA
+	return "astats=metadata=1:measure_perchannel=Noise_floor+Dynamic_range+RMS_level+Peak_level+DC_offset+Flat_factor+Zero_crossings_rate+Max_difference,aspectralstats=win_size=2048:win_func=hann:measure=centroid+rolloff,ebur128=metadata=1:target=-16"
+}
+
 // BuildFilterSpec builds the FFmpeg filter specification string for Pass 2 processing.
 // Filter order is determined by cfg.FilterOrder (or DefaultFilterOrder if empty).
 // Each filter checks its Enabled flag and returns empty string if disabled.
@@ -646,6 +712,7 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 		FilterSpeechnorm:  cfg.buildSpeechnormFilter,
 		FilterArnndn:      cfg.buildArnnDnFilter,
 		FilterAnlmdn:      cfg.buildAnlmDnFilter,
+		FilterBleedGate:   cfg.buildBleedGateFilter,
 		FilterDynaudnorm:  cfg.buildDynaudnormFilter,
 		FilterAlimiter:    cfg.buildAlimiterFilter,
 	}
@@ -668,8 +735,16 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 
 	// Add output format filters (always enabled)
 	// aformat: podcast-standard output (44.1kHz, mono, s16)
-	// asetnsamples: fixed frame size for FLAC encoder
 	filters = append(filters, "aformat=sample_rates=44100:channel_layouts=mono:sample_fmts=s16")
+
+	// Add output analysis filters if enabled (for Pass 2 measurement comparison)
+	// These MUST come BEFORE asetnsamples because ebur128 can change frame sizes
+	// The filters write to frame metadata which is preserved through the filter chain
+	if analysisFilters := cfg.buildOutputAnalysisFilters(); analysisFilters != "" {
+		filters = append(filters, analysisFilters)
+	}
+
+	// asetnsamples: fixed frame size for FLAC encoder (must be last to ensure consistent frame sizes)
 	filters = append(filters, "asetnsamples=n=4096")
 
 	// Join with commas
@@ -917,7 +992,16 @@ func buildNoiseProfileFilterSpec(noiseDuration time.Duration, config *FilterChai
 
 	// Output format filters (always applied)
 	mainChainFilters = append(mainChainFilters, "aformat=sample_rates=44100:channel_layouts=mono:sample_fmts=s16")
+
+	// Add output analysis filters if enabled (for Pass 2 measurement comparison)
+	// These MUST come BEFORE asetnsamples because ebur128 can change frame sizes
+	if analysisFilters := config.buildOutputAnalysisFilters(); analysisFilters != "" {
+		mainChainFilters = append(mainChainFilters, analysisFilters)
+	}
+
+	// asetnsamples: fixed frame size for FLAC encoder (must be last to ensure consistent frame sizes)
 	mainChainFilters = append(mainChainFilters, "asetnsamples=n=4096")
+
 	postChain += joinFilters(mainChainFilters)
 
 	// Assemble full filter spec

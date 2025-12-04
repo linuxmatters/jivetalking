@@ -278,6 +278,164 @@ type AudioMeasurements struct {
 	MainFramesProcessed   int `json:"main_frames_processed,omitempty"`    // Number of main audio frames processed
 }
 
+// SilenceAnalysis contains measurements from a silence region.
+// Used for comparing noise characteristics between input and output.
+type SilenceAnalysis struct {
+	Start       time.Duration `json:"start"`        // Start time of silence region
+	Duration    time.Duration `json:"duration"`     // Duration of silence region
+	NoiseFloor  float64       `json:"noise_floor"`  // dBFS, RMS level of silence (average noise)
+	PeakLevel   float64       `json:"peak_level"`   // dBFS, peak level in silence
+	CrestFactor float64       `json:"crest_factor"` // Peak - RMS in dB
+	Entropy     float64       `json:"entropy"`      // Signal randomness (1.0 = white noise, lower = tonal)
+}
+
+// OutputMeasurements contains the measurements from Pass 2 output analysis.
+// Mirrors AudioMeasurements but for processed audio, enabling direct comparison.
+// Does not include silence detection or noise profile fields (those are input-only).
+type OutputMeasurements struct {
+	// Loudness measurements from ebur128
+	OutputI   float64 `json:"output_i"`   // Integrated loudness (LUFS)
+	OutputTP  float64 `json:"output_tp"`  // True peak (dBTP)
+	OutputLRA float64 `json:"output_lra"` // Loudness range (LU)
+
+	// Spectral analysis from aspectralstats
+	SpectralCentroid float64 `json:"spectral_centroid"` // Average spectral centroid (Hz)
+	SpectralRolloff  float64 `json:"spectral_rolloff"`  // Average spectral rolloff (Hz)
+
+	// Time-domain statistics from astats
+	DynamicRange float64 `json:"dynamic_range"` // Measured dynamic range (dB)
+	RMSLevel     float64 `json:"rms_level"`     // Overall RMS level (dBFS)
+	PeakLevel    float64 `json:"peak_level"`    // Overall peak level (dBFS)
+	RMSTrough    float64 `json:"rms_trough"`    // RMS level of quietest segments (dBFS)
+
+	// Additional astats measurements
+	DCOffset          float64 `json:"dc_offset"`           // Mean amplitude displacement from zero
+	FlatFactor        float64 `json:"flat_factor"`         // Consecutive samples at peak (clipping indicator)
+	ZeroCrossingsRate float64 `json:"zero_crossings_rate"` // Zero crossing rate
+	MaxDifference     float64 `json:"max_difference"`      // Largest sample-to-sample change
+
+	// Silence region analysis (same region as Pass 1, for noise reduction comparison)
+	SilenceSample *SilenceAnalysis `json:"silence_sample,omitempty"` // Measurements from same silence region
+}
+
+// outputMetadataAccumulators holds accumulator variables for Pass 2 output measurement extraction.
+// Mirrors metadataAccumulators but without silence detection fields.
+type outputMetadataAccumulators struct {
+	// Spectral statistics (averaged across frames)
+	spectralCentroidSum float64
+	spectralRolloffSum  float64
+	spectralFrameCount  int
+
+	// astats measurements (cumulative - we keep latest values)
+	astatsDynamicRange      float64
+	astatsRMSLevel          float64
+	astatsPeakLevel         float64
+	astatsRMSTrough         float64
+	astatsDCOffset          float64
+	astatsFlatFactor        float64
+	astatsZeroCrossingsRate float64
+	astatsMaxDifference     float64
+	astatsFound             bool
+
+	// ebur128 measurements (cumulative - we keep latest values)
+	ebur128OutputI   float64
+	ebur128OutputTP  float64
+	ebur128OutputLRA float64
+	ebur128Found     bool
+}
+
+// extractOutputFrameMetadata extracts audio analysis metadata from a Pass 2 filtered frame.
+// Updates accumulators with spectral, astats, and ebur128 measurements.
+// This is the output analysis counterpart to extractFrameMetadata.
+func extractOutputFrameMetadata(metadata *ffmpeg.AVDictionary, acc *outputMetadataAccumulators) {
+	if metadata == nil {
+		return
+	}
+
+	// Extract spectral centroid (Hz) - where energy is concentrated
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralCentroid); ok {
+		acc.spectralCentroidSum += value
+		acc.spectralFrameCount++
+	}
+
+	// Extract spectral rolloff (Hz) - high-frequency energy dropoff point
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralRolloff); ok {
+		acc.spectralRolloffSum += value
+	}
+
+	// Extract astats measurements (cumulative, so we keep the latest)
+	if value, ok := getFloatMetadata(metadata, metaKeyDynamicRange); ok {
+		acc.astatsDynamicRange = value
+		acc.astatsFound = true
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyRMSLevel); ok {
+		acc.astatsRMSLevel = value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyPeakLevel); ok {
+		acc.astatsPeakLevel = value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyRMSTrough); ok {
+		acc.astatsRMSTrough = value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyDCOffset); ok {
+		acc.astatsDCOffset = value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyFlatFactor); ok {
+		acc.astatsFlatFactor = value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyZeroCrossingsRate); ok {
+		acc.astatsZeroCrossingsRate = value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyMaxDifference); ok {
+		acc.astatsMaxDifference = value
+	}
+
+	// Extract ebur128 measurements
+	if value, ok := getFloatMetadata(metadata, metaKeyEbur128I); ok {
+		acc.ebur128OutputI = value
+		acc.ebur128Found = true
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyEbur128TruePeak); ok {
+		acc.ebur128OutputTP = value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyEbur128LRA); ok {
+		acc.ebur128OutputLRA = value
+	}
+}
+
+// finalizeOutputMeasurements converts accumulated values to OutputMeasurements struct.
+// Returns nil if no measurements were captured.
+func finalizeOutputMeasurements(acc *outputMetadataAccumulators) *OutputMeasurements {
+	if !acc.ebur128Found && !acc.astatsFound && acc.spectralFrameCount == 0 {
+		return nil // No measurements captured
+	}
+
+	m := &OutputMeasurements{
+		// ebur128 loudness measurements
+		OutputI:   acc.ebur128OutputI,
+		OutputTP:  acc.ebur128OutputTP,
+		OutputLRA: acc.ebur128OutputLRA,
+
+		// astats time-domain measurements
+		DynamicRange:      acc.astatsDynamicRange,
+		RMSLevel:          acc.astatsRMSLevel,
+		PeakLevel:         acc.astatsPeakLevel,
+		RMSTrough:         acc.astatsRMSTrough,
+		DCOffset:          acc.astatsDCOffset,
+		FlatFactor:        acc.astatsFlatFactor,
+		ZeroCrossingsRate: acc.astatsZeroCrossingsRate,
+		MaxDifference:     acc.astatsMaxDifference,
+	}
+
+	// Calculate average spectral statistics
+	if acc.spectralFrameCount > 0 {
+		m.SpectralCentroid = acc.spectralCentroidSum / float64(acc.spectralFrameCount)
+		m.SpectralRolloff = acc.spectralRolloffSum / float64(acc.spectralFrameCount)
+	}
+
+	return m
+}
+
 // AnalyzeAudio performs Pass 1: ebur128 + astats + aspectralstats analysis to get measurements
 // This is required for adaptive processing in Pass 2.
 //
@@ -883,4 +1041,146 @@ func extractNoiseProfile(filename string, region *SilenceRegion, tempDir string)
 	}
 
 	return profile, nil
+}
+
+// MeasureOutputSilenceRegion analyses the same silence region in the output file
+// that was measured during Pass 1, enabling direct comparison of noise characteristics.
+// Unlike extractNoiseProfile, this does NOT create a WAV file - it only measures.
+//
+// Parameters:
+//   - outputPath: path to the processed audio file
+//   - region: the silence region identified during Pass 1 (start time and duration)
+//
+// Returns SilenceAnalysis with noise floor, peak level, crest factor, and entropy.
+func MeasureOutputSilenceRegion(outputPath string, region SilenceRegion) (*SilenceAnalysis, error) {
+	if region.Duration == 0 {
+		return nil, fmt.Errorf("invalid silence region: zero duration")
+	}
+
+	// Open the processed audio file
+	reader, _, err := audio.OpenAudioFile(outputPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open output file: %w", err)
+	}
+	defer reader.Close()
+
+	// Build filter spec to extract and analyze the silence region
+	// atrim: extract the specific time region
+	// astats: measure noise floor, peak, entropy
+	filterSpec := fmt.Sprintf(
+		"atrim=start=%.3f:duration=%.3f,asetpts=PTS-STARTPTS,astats=metadata=1:measure_perchannel=RMS_level+Peak_level+Entropy",
+		region.Start.Seconds(),
+		region.Duration.Seconds(),
+	)
+
+	// Create filter graph
+	filterGraph, bufferSrcCtx, bufferSinkCtx, err := setupFilterGraph(reader.GetDecoderContext(), filterSpec)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create analysis filter graph: %w", err)
+	}
+	defer ffmpeg.AVFilterGraphFree(&filterGraph)
+
+	// Process frames through filter to measure noise characteristics
+	filteredFrame := ffmpeg.AVFrameAlloc()
+	defer ffmpeg.AVFrameFree(&filteredFrame)
+
+	// Track measurements from astats
+	var noiseFloor float64
+	var peakLevel float64
+	var entropy float64
+	var noiseFloorFound bool
+	var framesProcessed int64
+
+	for {
+		frame, err := reader.ReadFrame()
+		if err != nil {
+			break
+		}
+		if frame == nil {
+			break // EOF
+		}
+
+		// Push frame into filter graph
+		if _, err := ffmpeg.AVBuffersrcAddFrameFlags(bufferSrcCtx, frame, 0); err != nil {
+			continue // Skip problematic frames
+		}
+
+		// Pull filtered frames
+		for {
+			if _, err := ffmpeg.AVBuffersinkGetFrame(bufferSinkCtx, filteredFrame); err != nil {
+				if errors.Is(err, ffmpeg.EAgain) || errors.Is(err, ffmpeg.AVErrorEOF) {
+					break
+				}
+				continue
+			}
+
+			// Extract noise measurements from metadata
+			if metadata := filteredFrame.Metadata(); metadata != nil {
+				if value, ok := getFloatMetadata(metadata, metaKeyRMSLevel); ok {
+					noiseFloor = value
+					noiseFloorFound = true
+				}
+				if value, ok := getFloatMetadata(metadata, metaKeyPeakLevel); ok {
+					peakLevel = value
+				}
+				if value, ok := getFloatMetadata(metadata, metaKeyEntropy); ok {
+					entropy = value
+				}
+			}
+
+			framesProcessed++
+			ffmpeg.AVFrameUnref(filteredFrame)
+		}
+	}
+
+	// Flush filter graph
+	if _, err := ffmpeg.AVBuffersrcAddFrameFlags(bufferSrcCtx, nil, 0); err == nil {
+		for {
+			if _, err := ffmpeg.AVBuffersinkGetFrame(bufferSinkCtx, filteredFrame); err != nil {
+				break
+			}
+
+			if metadata := filteredFrame.Metadata(); metadata != nil {
+				if value, ok := getFloatMetadata(metadata, metaKeyRMSLevel); ok {
+					noiseFloor = value
+					noiseFloorFound = true
+				}
+				if value, ok := getFloatMetadata(metadata, metaKeyPeakLevel); ok {
+					peakLevel = value
+				}
+				if value, ok := getFloatMetadata(metadata, metaKeyEntropy); ok {
+					entropy = value
+				}
+			}
+
+			framesProcessed++
+			ffmpeg.AVFrameUnref(filteredFrame)
+		}
+	}
+
+	if framesProcessed == 0 {
+		return nil, fmt.Errorf("no frames processed in silence region")
+	}
+
+	// Calculate crest factor from peak and RMS (both in dB)
+	crestFactorDB := 0.0
+	if noiseFloorFound && peakLevel != 0 {
+		crestFactorDB = peakLevel - noiseFloor
+	}
+
+	analysis := &SilenceAnalysis{
+		Start:       region.Start,
+		Duration:    region.Duration,
+		PeakLevel:   peakLevel,
+		CrestFactor: crestFactorDB,
+		Entropy:     entropy,
+	}
+
+	if noiseFloorFound {
+		analysis.NoiseFloor = noiseFloor
+	} else {
+		analysis.NoiseFloor = -60.0 // Conservative fallback
+	}
+
+	return analysis, nil
 }

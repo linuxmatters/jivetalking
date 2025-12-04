@@ -99,6 +99,19 @@ const (
 	speechnormPeakTarget         = 0.95  // Headroom for limiter
 	speechnormSmoothingFast      = 0.001 // Fast response time
 
+	// Bleed gate parameters
+	// Catches bleed/crosstalk that was amplified by speechnorm/dynaudnorm
+	// Threshold is calculated from: predicted_output_bleed = silence_peak_level + worst_case_gain
+	bleedGateMarginDB          = 6.0   // dB above predicted bleed to set threshold (safety margin)
+	bleedGateEnableThresholdDB = -40.0 // dBFS - only enable if predicted output bleed is above this
+	bleedGateMinThresholdDB    = -50.0 // dBFS - minimum threshold (never gate below this)
+	bleedGateMaxThresholdDB    = -20.0 // dBFS - maximum threshold (never gate above this, would cut speech)
+	bleedGateDefaultRatio      = 4.0   // Gentler than pre-gate (suppress rather than cut)
+	bleedGateDefaultAttack     = 15.0  // ms - faster than pre-gate
+	bleedGateDefaultRelease    = 200.0 // ms - smooth release
+	bleedGateDefaultRange      = 0.125 // -18dB reduction (less aggressive than pre-gate)
+	bleedGateDefaultKnee       = 3.0   // Soft knee
+
 	// Mains hum filter parameters
 	humEntropyThreshold = 0.7  // Below this = tonal noise detected (hum/buzz)
 	humFreq50Hz         = 50.0 // UK/EU mains fundamental frequency
@@ -167,6 +180,7 @@ func AdaptConfig(config *FilterChainConfig, measurements *AudioMeasurements) {
 	tuneCompression(config, measurements)
 	tuneDynaudnorm(config)
 	tuneSpeechnorm(config, measurements, lufsGap)
+	tuneBleedGate(config, measurements, lufsGap) // Bleed gate for amplified bleed/crosstalk
 
 	// Final safety checks
 	sanitizeConfig(config)
@@ -608,6 +622,106 @@ func tuneSpeechnormDenoise(config *FilterChainConfig, expansion float64) {
 	}
 }
 
+// tuneBleedGate adapts the bleed gate based on predicted output bleed level.
+//
+// The bleed gate catches bleed/crosstalk that was amplified by speechnorm/dynaudnorm
+// after the denoisers have run. Denoisers preserve speech-like content (which is what
+// they're designed to do), but headphone bleed IS speech-like content from other speakers.
+//
+// Strategy:
+// - Use silence sample PEAK level (not noise floor) - captures bleed bursts, not just hiss
+// - Calculate worst-case gain: speechnorm normalises each half-cycle to peak target
+// - For silence with bleed, this can mean 40-50dB of gain applied
+// - Use crest factor to detect presence of bleed (high crest = impulsive content in silence)
+// - Adjust ratio/range based on how much bleed is detected
+//
+// Key insight: Speechnorm applies VARIABLE gain per half-cycle. For quiet sections
+// (like silence with bleed), it applies much more gain than the "expansion" factor
+// suggests. The actual gain on silence can be:
+//
+//	silence_input_peak → target_peak (0.95 = -0.45 dBFS)
+//
+// Measurements used:
+// - NoiseProfile.PeakLevel: captures the loudest bleed burst
+// - NoiseProfile.MeasuredNoiseFloor: captures the background hiss
+// - NoiseProfile.CrestFactor: high crest = impulsive content (bleed), low = steady hiss
+// - NoiseProfile.Entropy: low entropy = tonal (hum), high = broadband (hiss/bleed)
+func tuneBleedGate(config *FilterChainConfig, measurements *AudioMeasurements, lufsGap float64) {
+	// Need noise profile with measurements to calculate threshold
+	if measurements.NoiseProfile == nil {
+		config.BleedGateEnabled = false
+		return
+	}
+
+	np := measurements.NoiseProfile
+
+	// Calculate worst-case gain: speechnorm can apply gain to bring quiet content to peak
+	// The target peak is typically 0.95 (-0.45 dBFS)
+	targetPeakDB := -0.45 // 20 * log10(0.95)
+	if config.SpeechnormEnabled && config.SpeechnormPeak > 0 {
+		targetPeakDB = 20.0 * math.Log10(config.SpeechnormPeak)
+	}
+
+	// Worst-case gain = what's needed to bring silence peak to target peak
+	// This is the maximum gain speechnorm could apply to the silence content
+	worstCaseGainDB := targetPeakDB - np.PeakLevel
+
+	// Calculate predicted output level for the silence PEAK (the bleed content)
+	predictedOutputPeakDB := np.PeakLevel + worstCaseGainDB
+
+	// Calculate predicted output noise floor
+	predictedOutputNoiseDB := np.MeasuredNoiseFloor + worstCaseGainDB
+
+	// Detect bleed presence using crest factor and peak-to-floor ratio
+	// Crest factor = peak - RMS; high crest means impulsive content in silence
+	// For pure hiss, crest factor is ~10-12dB; for bleed it's typically 20-30dB
+	peakToFloorDB := np.PeakLevel - np.MeasuredNoiseFloor
+	hasSignificantBleed := np.CrestFactor > 15.0 || peakToFloorDB > 20.0
+
+	// Determine threshold strategy based on bleed detection
+	var thresholdDB float64
+	if hasSignificantBleed {
+		// Bleed detected - use peak-based threshold (more aggressive)
+		// Set threshold to catch the amplified bleed peaks
+		thresholdDB = predictedOutputPeakDB - 3.0 // 3dB below predicted peak
+	} else {
+		// No significant bleed - use noise floor based threshold (standard approach)
+		thresholdDB = predictedOutputNoiseDB + bleedGateMarginDB
+	}
+
+	// Only enable bleed gate if predicted output would be audible
+	if thresholdDB < bleedGateEnableThresholdDB {
+		config.BleedGateEnabled = false
+		return
+	}
+
+	// Enable bleed gate
+	config.BleedGateEnabled = true
+
+	// Clamp threshold to safety limits
+	thresholdDB = clamp(thresholdDB, bleedGateMinThresholdDB, bleedGateMaxThresholdDB)
+
+	// Convert to linear for agate filter
+	config.BleedGateThreshold = dbToLinear(thresholdDB)
+
+	// Adapt ratio and range based on bleed severity
+	if hasSignificantBleed {
+		// Significant bleed - use stronger settings
+		config.BleedGateRatio = 6.0   // Stronger ratio for bleed
+		config.BleedGateRange = 0.063 // -24dB reduction (more aggressive)
+		config.BleedGateAttack = 10.0 // Faster attack to catch bleed transients
+		config.BleedGateRelease = 150.0
+	} else {
+		// Mild bleed or just noise amplification - use gentler settings
+		config.BleedGateRatio = bleedGateDefaultRatio
+		config.BleedGateRange = bleedGateDefaultRange
+		config.BleedGateAttack = bleedGateDefaultAttack
+		config.BleedGateRelease = bleedGateDefaultRelease
+	}
+
+	config.BleedGateKnee = bleedGateDefaultKnee
+}
+
 // sanitizeConfig ensures no NaN or Inf values remain after adaptive tuning
 func sanitizeConfig(config *FilterChainConfig) {
 	config.HighpassFreq = sanitizeFloat(config.HighpassFreq, defaultHighpassFreq)
@@ -631,6 +745,11 @@ func sanitizeConfig(config *FilterChainConfig) {
 
 	// ArnnDn second pass mix sanitization
 	config.ArnnDnMix2 = sanitizeFloat(config.ArnnDnMix2, defaultArnnDnMix2)
+
+	// BleedGateThreshold needs additional check for zero/negative (like pre-gate)
+	if math.IsNaN(config.BleedGateThreshold) || math.IsInf(config.BleedGateThreshold, 0) || config.BleedGateThreshold <= 0 {
+		config.BleedGateThreshold = defaultGateThreshold // Use same default as pre-gate
+	}
 }
 
 // sanitizeFloat returns defaultVal if val is NaN or Inf
