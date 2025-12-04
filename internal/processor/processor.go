@@ -19,8 +19,6 @@ import (
 // If progressCallback is not nil, it will be called with progress updates
 func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements)) (*ProcessingResult, error) {
 	// Pass 1: Analysis
-	// (printf output suppressed for UI compatibility)
-
 	if progressCallback != nil {
 		progressCallback(1, "Analyzing", 0.0, 0.0, nil)
 	}
@@ -38,8 +36,6 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 	AdaptConfig(config, measurements)
 
 	// Pass 2: Processing
-	// (printf output suppressed for UI compatibility)
-
 	if progressCallback != nil {
 		progressCallback(2, "Processing", 0.0, 0.0, measurements)
 	}
