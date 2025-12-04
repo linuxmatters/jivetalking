@@ -3,6 +3,125 @@ package processor
 
 import "math"
 
+// Adaptive tuning constants for audio processing.
+// These thresholds and limits control how filters adapt to input measurements.
+const (
+	// Highpass frequency tuning
+	highpassMinFreq         = 60.0  // Hz - dark/warm voice cutoff
+	highpassDefaultFreq     = 80.0  // Hz - normal voice cutoff
+	highpassBrightFreq      = 100.0 // Hz - bright voice cutoff
+	highpassMaxFreq         = 120.0 // Hz - maximum to preserve voice fundamentals
+	highpassBoostModerate   = 20.0  // Hz - added for moderate noise reduction needs
+	highpassBoostAggressive = 40.0  // Hz - added for heavy noise reduction needs
+
+	// Spectral centroid thresholds (Hz) for voice brightness classification
+	centroidBright     = 6000.0 // Above: bright voice
+	centroidNormal     = 4000.0 // Above: normal voice, below: dark voice
+	centroidVeryBright = 7000.0 // Threshold for de-esser intensity
+
+	// Spectral rolloff thresholds (Hz) for HF content classification
+	rolloffNoSibilance = 6000.0  // Below: no sibilance expected
+	rolloffLimited     = 8000.0  // Below: limited HF extension
+	rolloffExtensive   = 12000.0 // Above: extensive HF content
+
+	// LUFS gap thresholds for adaptive processing intensity
+	lufsGapModerate   = 15.0 // dB - moderate gain required
+	lufsGapAggressive = 25.0 // dB - aggressive processing needed
+
+	// Noise reduction (afftdn) parameters
+	noiseReductionBase = 12.0 // dB - baseline for clean recordings
+	noiseReductionMin  = 6.0  // dB - minimum (always some reduction)
+	noiseReductionMax  = 40.0 // dB - maximum (afftdn stability limit)
+
+	// De-esser intensity levels
+	deessIntensityBright = 0.6 // Bright voice base intensity
+	deessIntensityNormal = 0.5 // Normal voice base intensity
+	deessIntensityDark   = 0.4 // Dark voice base intensity
+	deessIntensityMax    = 0.8 // Maximum intensity limit
+	deessIntensityMin    = 0.3 // Minimum before disabling
+
+	// Gate threshold parameters
+	gateOffsetClean    = 10.0  // dB above noise floor for clean recordings
+	gateOffsetTypical  = 8.0   // dB above noise floor for typical podcasts
+	gateOffsetNoisy    = 6.0   // dB above noise floor for noisy recordings
+	gateThresholdMinDB = -70.0 // dB - professional studio (clean)
+	gateThresholdMaxDB = -25.0 // dB - very noisy environment
+
+	// Noise floor quality thresholds
+	noiseFloorClean   = -60.0 // dBFS - very clean recording
+	noiseFloorTypical = -50.0 // dBFS - typical podcast
+	noiseFloorNoisy   = -40.0 // dBFS - noisy recording (for compression mix)
+
+	// Compression parameters
+	compDynamicRangeHigh = 30.0 // dB - very dynamic content
+	compDynamicRangeMod  = 20.0 // dB - moderately dynamic
+	compLRAWide          = 15.0 // LU - wide loudness range
+	compLRAModerate      = 10.0 // LU - moderate loudness range
+
+	// Compression ratios
+	compRatioDynamic    = 2.0 // For very dynamic content
+	compRatioModerate   = 3.0 // For typical podcasts
+	compRatioCompressed = 4.0 // For already compressed content
+
+	// Compression thresholds (dB)
+	compThresholdDynamic    = -16.0
+	compThresholdModerate   = -18.0
+	compThresholdCompressed = -20.0
+
+	// Compression makeup gain (dB)
+	compMakeupDynamic    = 1.0
+	compMakeupModerate   = 2.0
+	compMakeupCompressed = 3.0
+
+	// Compression timing (ms)
+	compAttackFast  = 15
+	compAttackMed   = 20
+	compAttackSlow  = 25
+	compReleaseFast = 80
+	compReleaseMed  = 100
+	compReleaseSlow = 150
+
+	// Compression mix factors
+	compMixClean    = 0.95 // Clean recordings - more compression OK
+	compMixModerate = 0.85 // Moderate quality
+	compMixNoisy    = 0.75 // Noisy - gentler to mask pumping
+	compMixAdjust   = 0.10 // Mix adjustment for dynamic range
+
+	// Dynaudnorm fixed parameters
+	dynaudnormFrameLen   = 500  // ms - balanced frame length
+	dynaudnormFilterSize = 31   // Gaussian filter size
+	dynaudnormPeakValue  = 0.95 // 5% headroom
+	dynaudnormMaxGain    = 5.0  // Conservative max gain
+	dynaudnormTargetRMS  = 0.0  // Peak-based only
+	dynaudnormCompress   = 0.0  // No compression
+	dynaudnormThreshold  = 0.0  // Normalize all frames
+
+	// Speechnorm parameters
+	speechnormMaxExpansion       = 10.0  // Maximum 10x (20dB) expansion
+	speechnormExpansionThreshold = 8.0   // Expansion level triggering denoise
+	speechnormPeakTarget         = 0.95  // Headroom for limiter
+	speechnormSmoothingFast      = 0.001 // Fast response time
+
+	// RNN/NLM denoise parameters
+	arnnDnMixDefault    = 0.8     // Full filtering when enabled
+	anlmDnStrengthMin   = 0.0     // Minimum strength
+	anlmDnStrengthMax   = 0.01    // Maximum strength
+	anlmDnStrengthScale = 0.00001 // Scaling factor for expansion
+
+	// LUFS to RMS conversion constant
+	// Rough conversion: LUFS ≈ -23 + 20*log10(RMS)
+	lufsRmsOffset = 23.0
+
+	// Default fallback values for sanitization
+	defaultHighpassFreq   = 80.0
+	defaultDeessIntensity = 0.0
+	defaultNoiseReduction = 12.0
+	defaultCompRatio      = 2.5
+	defaultCompThreshold  = -20.0
+	defaultCompMakeup     = 3.0
+	defaultGateThreshold  = 0.01 // -40dBFS
+)
+
 // AdaptConfig tunes all filter parameters based on Pass 1 measurements.
 // This is the main entry point for adaptive configuration.
 // It updates config in-place based on the audio characteristics measured in analysis.
@@ -46,43 +165,43 @@ func calculateLUFSGap(targetI, inputI float64) float64 {
 // - Heavy noise reduction needed → boost cutoff to remove low-frequency room noise
 func tuneHighpassFreq(config *FilterChainConfig, measurements *AudioMeasurements, lufsGap float64) {
 	if measurements.SpectralCentroid <= 0 {
-		// No spectral analysis available - keep default 80Hz
+		// No spectral analysis available - keep default
 		return
 	}
 
 	// Determine base frequency from spectral centroid
 	var baseFreq float64
 	switch {
-	case measurements.SpectralCentroid > 6000:
+	case measurements.SpectralCentroid > centroidBright:
 		// Bright voice with high-frequency energy concentration
 		// Safe to use higher cutoff - voice energy is well above 100Hz
-		baseFreq = 100.0
-	case measurements.SpectralCentroid > 4000:
+		baseFreq = highpassBrightFreq
+	case measurements.SpectralCentroid > centroidNormal:
 		// Normal voice with balanced frequency distribution
 		// Use standard cutoff for podcast speech
-		baseFreq = 80.0
+		baseFreq = highpassDefaultFreq
 	default:
 		// Dark/warm voice with low-frequency energy concentration
 		// Use lower cutoff to preserve voice warmth and body
-		baseFreq = 60.0
+		baseFreq = highpassMinFreq
 	}
 
 	// Boost cutoff for heavy noise reduction needs (removes low-frequency room noise)
 	switch {
-	case lufsGap > 25.0:
+	case lufsGap > lufsGapAggressive:
 		// Very quiet source needing aggressive processing
-		config.HighpassFreq = baseFreq + 40.0
-	case lufsGap > 15.0:
+		config.HighpassFreq = baseFreq + highpassBoostAggressive
+	case lufsGap > lufsGapModerate:
 		// Moderately quiet source
-		config.HighpassFreq = baseFreq + 20.0
+		config.HighpassFreq = baseFreq + highpassBoostModerate
 	default:
 		// Normal source
 		config.HighpassFreq = baseFreq
 	}
 
-	// Cap at 120Hz maximum to avoid affecting voice fundamentals
-	if config.HighpassFreq > 120.0 {
-		config.HighpassFreq = 120.0
+	// Cap at maximum to avoid affecting voice fundamentals
+	if config.HighpassFreq > highpassMaxFreq {
+		config.HighpassFreq = highpassMaxFreq
 	}
 }
 
@@ -98,21 +217,15 @@ func tuneHighpassFreq(config *FilterChainConfig, measurements *AudioMeasurements
 func tuneNoiseReduction(config *FilterChainConfig, measurements *AudioMeasurements, lufsGap float64) {
 	if measurements.InputI == 0.0 {
 		// Fallback if no LUFS measurement
-		config.NoiseReduction = 12.0
+		config.NoiseReduction = noiseReductionBase
 		return
 	}
 
-	const (
-		baseReduction = 12.0 // Standard for clean recordings
-		minReduction  = 6.0  // Always do some noise reduction
-		maxReduction  = 40.0 // afftdn becomes unstable beyond this
-	)
-
 	// Add the LUFS gap to noise reduction
-	adaptiveReduction := baseReduction + lufsGap
+	adaptiveReduction := noiseReductionBase + lufsGap
 
-	// Clamp to reasonable limits
-	config.NoiseReduction = clamp(adaptiveReduction, minReduction, maxReduction)
+	// Clamp to reasonable limits (afftdn stability)
+	config.NoiseReduction = clamp(adaptiveReduction, noiseReductionMin, noiseReductionMax)
 }
 
 // tuneDeesser adapts de-esser intensity based on spectral analysis.
@@ -144,30 +257,30 @@ func tuneDeesserFull(config *FilterChainConfig, measurements *AudioMeasurements)
 	// Determine baseline intensity from centroid
 	var baseIntensity float64
 	switch {
-	case measurements.SpectralCentroid > 7000:
-		baseIntensity = 0.6 // Bright voice
-	case measurements.SpectralCentroid > 6000:
-		baseIntensity = 0.5 // Normal voice
+	case measurements.SpectralCentroid > centroidVeryBright:
+		baseIntensity = deessIntensityBright // Bright voice
+	case measurements.SpectralCentroid > centroidBright:
+		baseIntensity = deessIntensityNormal // Normal voice
 	default:
-		baseIntensity = 0.4 // Dark voice
+		baseIntensity = deessIntensityDark // Dark voice
 	}
 
 	// Refine based on spectral rolloff (HF extension)
 	switch {
-	case measurements.SpectralRolloff < 6000:
+	case measurements.SpectralRolloff < rolloffNoSibilance:
 		// Very limited HF content - no sibilance expected
 		config.DeessIntensity = 0.0
 
-	case measurements.SpectralRolloff < 8000:
+	case measurements.SpectralRolloff < rolloffLimited:
 		// Limited HF extension - reduce intensity
 		config.DeessIntensity = baseIntensity * 0.7
-		if config.DeessIntensity < 0.3 {
+		if config.DeessIntensity < deessIntensityMin {
 			config.DeessIntensity = 0.0 // Skip if too low
 		}
 
-	case measurements.SpectralRolloff > 12000:
+	case measurements.SpectralRolloff > rolloffExtensive:
 		// Extensive HF content - likely sibilance
-		config.DeessIntensity = math.Min(baseIntensity*1.2, 0.8)
+		config.DeessIntensity = math.Min(baseIntensity*1.2, deessIntensityMax)
 
 	default:
 		// Normal HF extension (8-12 kHz)
@@ -178,12 +291,12 @@ func tuneDeesserFull(config *FilterChainConfig, measurements *AudioMeasurements)
 // tuneDeesserCentroidOnly provides fallback when rolloff is unavailable
 func tuneDeesserCentroidOnly(config *FilterChainConfig, measurements *AudioMeasurements) {
 	switch {
-	case measurements.SpectralCentroid > 7000:
-		config.DeessIntensity = 0.6
-	case measurements.SpectralCentroid > 6000:
-		config.DeessIntensity = 0.5
+	case measurements.SpectralCentroid > centroidVeryBright:
+		config.DeessIntensity = deessIntensityBright
+	case measurements.SpectralCentroid > centroidBright:
+		config.DeessIntensity = deessIntensityNormal
 	default:
-		config.DeessIntensity = 0.4
+		config.DeessIntensity = deessIntensityDark
 	}
 }
 
@@ -198,15 +311,15 @@ func tuneGateThreshold(config *FilterChainConfig, measurements *AudioMeasurement
 	// Determine offset based on noise floor quality
 	var gateOffsetDB float64
 	switch {
-	case measurements.NoiseFloor < -60.0:
+	case measurements.NoiseFloor < noiseFloorClean:
 		// Very clean recording - larger margin avoids false triggers
-		gateOffsetDB = 10.0
-	case measurements.NoiseFloor < -50.0:
+		gateOffsetDB = gateOffsetClean
+	case measurements.NoiseFloor < noiseFloorTypical:
 		// Typical podcast recording
-		gateOffsetDB = 8.0
+		gateOffsetDB = gateOffsetTypical
 	default:
 		// Noisy recording - smaller margin preserves more speech
-		gateOffsetDB = 6.0
+		gateOffsetDB = gateOffsetNoisy
 	}
 
 	// Calculate threshold: noise floor + offset, convert to linear
@@ -214,13 +327,8 @@ func tuneGateThreshold(config *FilterChainConfig, measurements *AudioMeasurement
 	config.GateThreshold = dbToLinear(gateThresholdDB)
 
 	// Safety limits for extreme cases
-	const (
-		minThresholdDB = -70.0 // Professional studio (clean)
-		maxThresholdDB = -25.0 // Very noisy environment
-	)
-
-	minThresholdLinear := dbToLinear(minThresholdDB)
-	maxThresholdLinear := dbToLinear(maxThresholdDB)
+	minThresholdLinear := dbToLinear(gateThresholdMinDB)
+	maxThresholdLinear := dbToLinear(gateThresholdMaxDB)
 
 	config.GateThreshold = clamp(config.GateThreshold, minThresholdLinear, maxThresholdLinear)
 }
@@ -243,43 +351,43 @@ func tuneCompressionRatioAndThreshold(config *FilterChainConfig, measurements *A
 	}
 
 	switch {
-	case measurements.DynamicRange > 30.0:
+	case measurements.DynamicRange > compDynamicRangeHigh:
 		// Very dynamic content (expressive delivery)
-		config.CompRatio = 2.0
-		config.CompThreshold = -16.0
-		config.CompMakeup = 1.0
+		config.CompRatio = compRatioDynamic
+		config.CompThreshold = compThresholdDynamic
+		config.CompMakeup = compMakeupDynamic
 
-	case measurements.DynamicRange > 20.0:
+	case measurements.DynamicRange > compDynamicRangeMod:
 		// Moderately dynamic (typical podcast)
-		config.CompRatio = 3.0
-		config.CompThreshold = -18.0
-		config.CompMakeup = 2.0
+		config.CompRatio = compRatioModerate
+		config.CompThreshold = compThresholdModerate
+		config.CompMakeup = compMakeupModerate
 
 	default:
 		// Already compressed/consistent
-		config.CompRatio = 4.0
-		config.CompThreshold = -20.0
-		config.CompMakeup = 3.0
+		config.CompRatio = compRatioCompressed
+		config.CompThreshold = compThresholdCompressed
+		config.CompMakeup = compMakeupCompressed
 	}
 }
 
 // tuneCompressionTiming sets attack and release based on loudness range
 func tuneCompressionTiming(config *FilterChainConfig, measurements *AudioMeasurements) {
 	switch {
-	case measurements.InputLRA > 15.0:
+	case measurements.InputLRA > compLRAWide:
 		// Wide loudness range - preserve transients
-		config.CompAttack = 25
-		config.CompRelease = 150
+		config.CompAttack = compAttackSlow
+		config.CompRelease = compReleaseSlow
 
-	case measurements.InputLRA > 10.0:
+	case measurements.InputLRA > compLRAModerate:
 		// Moderate range
-		config.CompAttack = 20
-		config.CompRelease = 100
+		config.CompAttack = compAttackMed
+		config.CompRelease = compReleaseMed
 
 	default:
 		// Narrow range - tighter control
-		config.CompAttack = 15
-		config.CompRelease = 80
+		config.CompAttack = compAttackFast
+		config.CompRelease = compReleaseFast
 	}
 }
 
@@ -288,25 +396,25 @@ func tuneCompressionMix(config *FilterChainConfig, measurements *AudioMeasuremen
 	// Noise floor indicates recording quality (artifact audibility)
 	var mixFactor float64
 	switch {
-	case measurements.NoiseFloor < -50:
-		mixFactor = 0.95 // Clean - can use more compression
-	case measurements.NoiseFloor < -40:
-		mixFactor = 0.85 // Moderate quality
+	case measurements.NoiseFloor < noiseFloorTypical:
+		mixFactor = compMixClean // Clean - can use more compression
+	case measurements.NoiseFloor < noiseFloorNoisy:
+		mixFactor = compMixModerate // Moderate quality
 	default:
-		mixFactor = 0.75 // Noisy - gentler to mask pumping
+		mixFactor = compMixNoisy // Noisy - gentler to mask pumping
 	}
 
 	// Adjust based on dynamic range (content characteristics)
 	switch {
-	case measurements.DynamicRange > 30:
+	case measurements.DynamicRange > compDynamicRangeHigh:
 		// Very dynamic - preserve more dry signal
-		config.CompMix = mixFactor - 0.10
-	case measurements.DynamicRange > 20:
+		config.CompMix = mixFactor - compMixAdjust
+	case measurements.DynamicRange > compDynamicRangeMod:
 		// Moderate dynamics
 		config.CompMix = mixFactor
 	default:
 		// Already compressed - can use more wet
-		config.CompMix = math.Min(1.0, mixFactor+0.10)
+		config.CompMix = math.Min(1.0, mixFactor+compMixAdjust)
 	}
 }
 
@@ -314,13 +422,13 @@ func tuneCompressionMix(config *FilterChainConfig, measurements *AudioMeasuremen
 // Unlike other filters, dynaudnorm uses fixed values to prevent
 // distortion/clipping from overly aggressive adaptive tuning.
 func tuneDynaudnorm(config *FilterChainConfig) {
-	config.DynaudnormFrameLen = 500      // 500ms frames (balanced)
-	config.DynaudnormFilterSize = 31     // Gaussian filter (smooth)
-	config.DynaudnormPeakValue = 0.95    // 5% headroom
-	config.DynaudnormMaxGain = 5.0       // Conservative max gain
-	config.DynaudnormTargetRMS = 0.0     // Peak-based only
-	config.DynaudnormCompress = 0.0      // No compression (acompressor handles it)
-	config.DynaudnormThreshold = 0.0     // Normalize all frames
+	config.DynaudnormFrameLen = dynaudnormFrameLen
+	config.DynaudnormFilterSize = dynaudnormFilterSize
+	config.DynaudnormPeakValue = dynaudnormPeakValue
+	config.DynaudnormMaxGain = dynaudnormMaxGain
+	config.DynaudnormTargetRMS = dynaudnormTargetRMS
+	config.DynaudnormCompress = dynaudnormCompress
+	config.DynaudnormThreshold = dynaudnormThreshold
 	config.DynaudnormChannels = false    // Coupled channels
 	config.DynaudnormDCCorrect = false   // No DC correction
 	config.DynaudnormAltBoundary = false // Standard boundary mode
@@ -341,41 +449,38 @@ func tuneSpeechnorm(config *FilterChainConfig, measurements *AudioMeasurements, 
 	// Calculate expansion factor from LUFS gap
 	expansion := math.Pow(10, lufsGap/20.0)
 
-	// Cap expansion at 10x (20dB) for audio quality
+	// Cap expansion for audio quality
 	// Very quiet sources accept higher output LUFS rather than degraded quality
-	const maxExpansion = 10.0
-	expansion = clamp(expansion, 1.0, maxExpansion)
+	expansion = clamp(expansion, 1.0, speechnormMaxExpansion)
 	config.SpeechnormExpansion = expansion
 
-	// Enable denoise for heavily uplifted audio (≥8x / 18dB)
+	// Enable denoise for heavily uplifted audio
 	tuneSpeechnormDenoise(config, expansion)
 
 	// RMS targeting for LUFS consistency
 	// Rough conversion: LUFS ≈ -23 + 20*log10(RMS)
-	targetRMS := math.Pow(10, (config.TargetI+23)/20.0)
+	targetRMS := math.Pow(10, (config.TargetI+lufsRmsOffset)/20.0)
 	config.SpeechnormRMS = clamp(targetRMS, 0.0, 1.0)
 
 	// Fixed parameters for speech
-	config.SpeechnormThreshold = 0.0   // Expand all audio
-	config.SpeechnormCompression = 1.0 // No compression (acompressor handled it)
-	config.SpeechnormPeak = 0.95       // Headroom for limiter
-	config.SpeechnormRaise = 0.001     // Fast response
-	config.SpeechnormFall = 0.001      // Fast response
+	config.SpeechnormThreshold = 0.0                 // Expand all audio
+	config.SpeechnormCompression = 1.0               // No compression (acompressor handled it)
+	config.SpeechnormPeak = speechnormPeakTarget     // Headroom for limiter
+	config.SpeechnormRaise = speechnormSmoothingFast // Fast response
+	config.SpeechnormFall = speechnormSmoothingFast  // Fast response
 }
 
 // tuneSpeechnormDenoise enables RNN/NLM denoise for heavily expanded audio
 func tuneSpeechnormDenoise(config *FilterChainConfig, expansion float64) {
-	const expansionThreshold = 8.0 // 18dB gain
-
-	if expansion >= expansionThreshold {
+	if expansion >= speechnormExpansionThreshold {
 		// Enable RNN denoise (neural network mop-up)
 		config.ArnnDnEnabled = true
-		config.ArnnDnMix = 0.8
+		config.ArnnDnMix = arnnDnMixDefault
 
 		// Enable NLM denoise (patch-based cleanup)
 		config.AnlmDnEnabled = true
-		// Adaptive strength: 8x → 0.00064, 10x → 0.001
-		config.AnlmDnStrength = clamp(0.00001*expansion*expansion, 0.0, 0.01)
+		// Adaptive strength scales with expansion squared
+		config.AnlmDnStrength = clamp(anlmDnStrengthScale*expansion*expansion, anlmDnStrengthMin, anlmDnStrengthMax)
 	} else {
 		config.ArnnDnEnabled = false
 		config.AnlmDnEnabled = false
@@ -384,16 +489,16 @@ func tuneSpeechnormDenoise(config *FilterChainConfig, expansion float64) {
 
 // sanitizeConfig ensures no NaN or Inf values remain after adaptive tuning
 func sanitizeConfig(config *FilterChainConfig) {
-	config.HighpassFreq = sanitizeFloat(config.HighpassFreq, 80.0)
-	config.DeessIntensity = sanitizeFloat(config.DeessIntensity, 0.0)
-	config.NoiseReduction = sanitizeFloat(config.NoiseReduction, 12.0)
-	config.CompRatio = sanitizeFloat(config.CompRatio, 2.5)
-	config.CompThreshold = sanitizeFloat(config.CompThreshold, -20.0)
-	config.CompMakeup = sanitizeFloat(config.CompMakeup, 3.0)
+	config.HighpassFreq = sanitizeFloat(config.HighpassFreq, defaultHighpassFreq)
+	config.DeessIntensity = sanitizeFloat(config.DeessIntensity, defaultDeessIntensity)
+	config.NoiseReduction = sanitizeFloat(config.NoiseReduction, defaultNoiseReduction)
+	config.CompRatio = sanitizeFloat(config.CompRatio, defaultCompRatio)
+	config.CompThreshold = sanitizeFloat(config.CompThreshold, defaultCompThreshold)
+	config.CompMakeup = sanitizeFloat(config.CompMakeup, defaultCompMakeup)
 
 	// GateThreshold needs additional check for zero/negative
 	if math.IsNaN(config.GateThreshold) || math.IsInf(config.GateThreshold, 0) || config.GateThreshold <= 0 {
-		config.GateThreshold = 0.01 // -40dBFS default
+		config.GateThreshold = defaultGateThreshold
 	}
 }
 
