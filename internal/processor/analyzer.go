@@ -345,69 +345,6 @@ func createAnalysisFilterGraph(
 	decCtx *ffmpeg.AVCodecContext,
 	targetI, targetTP, targetLRA float64,
 ) (*ffmpeg.AVFilterGraph, *ffmpeg.AVFilterContext, *ffmpeg.AVFilterContext, error) {
-
-	filterGraph := ffmpeg.AVFilterGraphAlloc()
-	if filterGraph == nil {
-		return nil, nil, nil, fmt.Errorf("failed to allocate filter graph")
-	}
-
-	// Get abuffer and abuffersink filters
-	bufferSrc := ffmpeg.AVFilterGetByName(ffmpeg.GlobalCStr("abuffer"))
-	bufferSink := ffmpeg.AVFilterGetByName(ffmpeg.GlobalCStr("abuffersink"))
-	if bufferSrc == nil || bufferSink == nil {
-		ffmpeg.AVFilterGraphFree(&filterGraph)
-		return nil, nil, nil, fmt.Errorf("abuffer or abuffersink filter not found")
-	}
-
-	// Get channel layout description
-	layoutPtr := ffmpeg.AllocCStr(64)
-	defer layoutPtr.Free()
-
-	if _, err := ffmpeg.AVChannelLayoutDescribe(decCtx.ChLayout(), layoutPtr, 64); err != nil {
-		ffmpeg.AVFilterGraphFree(&filterGraph)
-		return nil, nil, nil, fmt.Errorf("failed to get channel layout: %w", err)
-	}
-
-	// Create abuffer source
-	pktTimebase := decCtx.PktTimebase()
-	args := fmt.Sprintf(
-		"time_base=%d/%d:sample_rate=%d:sample_fmt=%s:channel_layout=%s",
-		pktTimebase.Num(), pktTimebase.Den(),
-		decCtx.SampleRate(),
-		ffmpeg.AVGetSampleFmtName(decCtx.SampleFmt()).String(),
-		layoutPtr.String(),
-	)
-
-	argsC := ffmpeg.ToCStr(args)
-	defer argsC.Free()
-
-	var bufferSrcCtx *ffmpeg.AVFilterContext
-	if _, err := ffmpeg.AVFilterGraphCreateFilter(
-		&bufferSrcCtx,
-		bufferSrc,
-		ffmpeg.GlobalCStr("in"),
-		argsC,
-		nil,
-		filterGraph,
-	); err != nil {
-		ffmpeg.AVFilterGraphFree(&filterGraph)
-		return nil, nil, nil, fmt.Errorf("failed to create abuffer: %w", err)
-	}
-
-	// Create abuffersink
-	var bufferSinkCtx *ffmpeg.AVFilterContext
-	if _, err := ffmpeg.AVFilterGraphCreateFilter(
-		&bufferSinkCtx,
-		bufferSink,
-		ffmpeg.GlobalCStr("out"),
-		nil,
-		nil,
-		filterGraph,
-	); err != nil {
-		ffmpeg.AVFilterGraphFree(&filterGraph)
-		return nil, nil, nil, fmt.Errorf("failed to create abuffersink: %w", err)
-	}
-
 	// Build filter string for analysis pass
 	// astats provides noise floor and dynamic range measurements for adaptive gate and compression
 	// aspectralstats measures spectral centroid and rolloff for adaptive de-esser targeting
@@ -417,35 +354,5 @@ func createAnalysisFilterGraph(
 	filterSpec := fmt.Sprintf("astats=metadata=1:measure_overall=Noise_floor+Dynamic_range+RMS_level+Peak_level,aspectralstats=win_size=2048:win_func=hann:measure=centroid+rolloff,ebur128=metadata=1:target=%.0f",
 		targetI)
 
-	// Parse filter graph
-	outputs := ffmpeg.AVFilterInoutAlloc()
-	inputs := ffmpeg.AVFilterInoutAlloc()
-	defer ffmpeg.AVFilterInoutFree(&outputs)
-	defer ffmpeg.AVFilterInoutFree(&inputs)
-
-	outputs.SetName(ffmpeg.ToCStr("in"))
-	outputs.SetFilterCtx(bufferSrcCtx)
-	outputs.SetPadIdx(0)
-	outputs.SetNext(nil)
-
-	inputs.SetName(ffmpeg.ToCStr("out"))
-	inputs.SetFilterCtx(bufferSinkCtx)
-	inputs.SetPadIdx(0)
-	inputs.SetNext(nil)
-
-	filterSpecC := ffmpeg.ToCStr(filterSpec)
-	defer filterSpecC.Free()
-
-	if _, err := ffmpeg.AVFilterGraphParsePtr(filterGraph, filterSpecC, &inputs, &outputs, nil); err != nil {
-		ffmpeg.AVFilterGraphFree(&filterGraph)
-		return nil, nil, nil, fmt.Errorf("failed to parse filter graph: %w", err)
-	}
-
-	// Configure filter graph
-	if _, err := ffmpeg.AVFilterGraphConfig(filterGraph, nil); err != nil {
-		ffmpeg.AVFilterGraphFree(&filterGraph)
-		return nil, nil, nil, fmt.Errorf("failed to configure filter graph: %w", err)
-	}
-
-	return filterGraph, bufferSrcCtx, bufferSinkCtx, nil
+	return setupFilterGraph(decCtx, filterSpec)
 }

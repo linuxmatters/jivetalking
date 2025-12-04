@@ -589,7 +589,21 @@ func CreateProcessingFilterGraph(
 	decCtx *ffmpeg.AVCodecContext,
 	config *FilterChainConfig,
 ) (*ffmpeg.AVFilterGraph, *ffmpeg.AVFilterContext, *ffmpeg.AVFilterContext, error) {
+	return setupFilterGraph(decCtx, config.BuildFilterSpec())
+}
 
+// setupFilterGraph creates and configures an FFmpeg filter graph with the given
+// filter specification. It handles all common boilerplate: graph allocation,
+// buffer source/sink creation, parsing, and configuration.
+//
+// Returns the configured filter graph and source/sink contexts, or an error.
+// The caller is responsible for freeing the filter graph with AVFilterGraphFree.
+func setupFilterGraph(decCtx *ffmpeg.AVCodecContext, filterSpec string) (
+	*ffmpeg.AVFilterGraph,
+	*ffmpeg.AVFilterContext,
+	*ffmpeg.AVFilterContext,
+	error,
+) {
 	filterGraph := ffmpeg.AVFilterGraphAlloc()
 	if filterGraph == nil {
 		return nil, nil, nil, fmt.Errorf("failed to allocate filter graph")
@@ -651,9 +665,6 @@ func CreateProcessingFilterGraph(
 		ffmpeg.AVFilterGraphFree(&filterGraph)
 		return nil, nil, nil, fmt.Errorf("failed to create abuffersink: %w", err)
 	}
-
-	// Build the complete filter specification
-	filterSpec := config.BuildFilterSpec()
 
 	// Parse filter graph
 	outputs := ffmpeg.AVFilterInoutAlloc()
