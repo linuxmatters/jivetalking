@@ -245,21 +245,21 @@ func createOutputEncoder(outputPath string, metadata *audio.Metadata, bufferSink
 	codec := ffmpeg.AVCodecFindEncoder(ffmpeg.AVCodecIdFlac)
 	if codec == nil {
 		ffmpeg.AVFormatFreeContext(fmtCtx)
-		return nil, fmt.Errorf("FLAC encoder not found")
+		return nil, fmt.Errorf("FLAC encoder not found for output: %s", outputPath)
 	}
 
 	// Create stream
 	stream := ffmpeg.AVFormatNewStream(fmtCtx, nil)
 	if stream == nil {
 		ffmpeg.AVFormatFreeContext(fmtCtx)
-		return nil, fmt.Errorf("failed to create stream")
+		return nil, fmt.Errorf("failed to create stream for output: %s", outputPath)
 	}
 
 	// Allocate encoder context
 	encCtx := ffmpeg.AVCodecAllocContext3(codec)
 	if encCtx == nil {
 		ffmpeg.AVFormatFreeContext(fmtCtx)
-		return nil, fmt.Errorf("failed to allocate encoder context")
+		return nil, fmt.Errorf("failed to allocate encoder context for output: %s", outputPath)
 	}
 
 	// Get audio parameters from filter output (we only need sample rate, format is set to S16 via aformat filter)
@@ -351,7 +351,7 @@ func createOutputEncoder(outputPath string, metadata *audio.Metadata, bufferSink
 		}
 		ffmpeg.AVCodecFreeContext(&encCtx)
 		ffmpeg.AVFormatFreeContext(fmtCtx)
-		return nil, fmt.Errorf("failed to allocate packet")
+		return nil, fmt.Errorf("failed to allocate packet for output: %s", outputPath)
 	}
 
 	return &Encoder{

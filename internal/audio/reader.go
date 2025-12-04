@@ -61,7 +61,7 @@ func OpenAudioFile(filename string) (*Reader, *Metadata, error) {
 
 	if streamIdx == -1 {
 		ffmpeg.AVFormatCloseInput(&fmtCtx)
-		return nil, nil, fmt.Errorf("no audio stream found")
+		return nil, nil, fmt.Errorf("no audio stream found in file: %s", filename)
 	}
 
 	// Find decoder
@@ -69,14 +69,14 @@ func OpenAudioFile(filename string) (*Reader, *Metadata, error) {
 	decoder := ffmpeg.AVCodecFindDecoder(codecPar.CodecId())
 	if decoder == nil {
 		ffmpeg.AVFormatCloseInput(&fmtCtx)
-		return nil, nil, fmt.Errorf("decoder not found for codec ID %d", codecPar.CodecId())
+		return nil, nil, fmt.Errorf("decoder not found for codec ID %d in file: %s", codecPar.CodecId(), filename)
 	}
 
 	// Allocate decoder context
 	decCtx := ffmpeg.AVCodecAllocContext3(decoder)
 	if decCtx == nil {
 		ffmpeg.AVFormatCloseInput(&fmtCtx)
-		return nil, nil, fmt.Errorf("failed to allocate decoder context")
+		return nil, nil, fmt.Errorf("failed to allocate decoder context for file: %s", filename)
 	}
 
 	// Copy codec parameters to decoder context

@@ -278,7 +278,7 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 		// Target offset for normalization (difference between measured and target)
 		measurements.TargetOffset = targetI - acc.ebur128InputI
 	} else {
-		return nil, fmt.Errorf("ebur128 measurements not found in metadata")
+		return nil, fmt.Errorf("ebur128 measurements not found in metadata for file: %s", filename)
 	}
 
 	// Calculate average spectral statistics
