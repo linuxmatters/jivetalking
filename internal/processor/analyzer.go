@@ -688,15 +688,16 @@ func findBestSilenceRegion(regions []SilenceRegion) *SilenceRegion {
 	return nil
 }
 
-// extractNoiseProfile measures the noise floor from the specified silence region.
-// Uses atrim + astats filter chain to measure RMS level of the silence segment.
+// extractNoiseProfile extracts a noise sample from the silence region and measures its characteristics.
+// The extracted sample is written as a WAV file for use with afftdn's noise profiling.
+// Uses atrim + astats filter chain to measure RMS level, peak level, and entropy.
 // Returns nil, nil if no suitable silence region exists or extraction fails non-fatally.
 func extractNoiseProfile(filename string, region *SilenceRegion, tempDir string) (*NoiseProfile, error) {
 	if region == nil {
 		return nil, nil
 	}
 
-	// Generate output filename (for future file extraction support)
+	// Generate output filename for the noise profile WAV
 	baseName := filepath.Base(filename)
 	ext := filepath.Ext(baseName)
 	nameWithoutExt := baseName[:len(baseName)-len(ext)]
@@ -712,12 +713,14 @@ func extractNoiseProfile(filename string, region *SilenceRegion, tempDir string)
 
 	decCtx := reader.GetDecoderContext()
 
-	// Create filter graph for extraction with trimming and measurement
+	// Create filter graph for extraction with trimming, format conversion, and measurement
 	// atrim: extract only the silence region
+	// aformat: convert to WAV-compatible format (44100Hz, mono, S16)
 	// astats: measure noise floor + entropy of extracted sample
 	//   - RMS_level, Peak_level: noise characteristics
 	//   - Entropy: 1.0 = white noise (broadband), lower = tonal noise (hum/buzz)
-	filterSpec := fmt.Sprintf("atrim=start=%f:end=%f,astats=metadata=1:measure_perchannel=RMS_level+Peak_level+Entropy",
+	filterSpec := fmt.Sprintf(
+		"atrim=start=%f:end=%f,aformat=sample_rates=44100:channel_layouts=mono:sample_fmts=s16,astats=metadata=1:measure_perchannel=RMS_level+Peak_level+Entropy",
 		region.Start.Seconds(), region.End.Seconds())
 
 	filterGraph, bufferSrcCtx, bufferSinkCtx, err := setupFilterGraph(decCtx, filterSpec)
@@ -727,7 +730,15 @@ func extractNoiseProfile(filename string, region *SilenceRegion, tempDir string)
 	}
 	defer ffmpeg.AVFilterGraphFree(&filterGraph)
 
-	// Process frames through filter to measure noise
+	// Create WAV encoder for writing the noise profile
+	wavEncoder, err := createWAVEncoder(outputPath, bufferSinkCtx)
+	if err != nil {
+		log.Printf("Warning: failed to create WAV encoder for noise profile: %v", err)
+		return nil, nil // Non-fatal - continue with measurement only
+	}
+	defer wavEncoder.Close()
+
+	// Process frames through filter to measure noise and write to WAV
 	filteredFrame := ffmpeg.AVFrameAlloc()
 	defer ffmpeg.AVFrameFree(&filteredFrame)
 
@@ -737,6 +748,7 @@ func extractNoiseProfile(filename string, region *SilenceRegion, tempDir string)
 	var entropy float64
 	var noiseFloorFound bool
 	var framesProcessed int64
+	var wavWriteError error
 
 	for {
 		frame, err := reader.ReadFrame()
@@ -760,6 +772,14 @@ func extractNoiseProfile(filename string, region *SilenceRegion, tempDir string)
 					break
 				}
 				continue
+			}
+
+			// Write frame to WAV file (if encoder available)
+			if wavEncoder != nil && wavWriteError == nil {
+				if err := wavEncoder.WriteFrame(filteredFrame); err != nil {
+					log.Printf("Warning: error writing frame to WAV: %v", err)
+					wavWriteError = err // Stop trying to write after first error
+				}
 			}
 
 			// Extract noise measurements from metadata
@@ -791,6 +811,14 @@ func extractNoiseProfile(filename string, region *SilenceRegion, tempDir string)
 				break
 			}
 
+			// Write remaining frames to WAV
+			if wavEncoder != nil && wavWriteError == nil {
+				if err := wavEncoder.WriteFrame(filteredFrame); err != nil {
+					log.Printf("Warning: error writing frame to WAV during flush: %v", err)
+					wavWriteError = err
+				}
+			}
+
 			if metadata := filteredFrame.Metadata(); metadata != nil {
 				if value, ok := getFloatMetadata(metadata, metaKeyRMSLevel); ok {
 					measuredNoiseFloor = value
@@ -809,6 +837,14 @@ func extractNoiseProfile(filename string, region *SilenceRegion, tempDir string)
 		}
 	}
 
+	// Flush encoder
+	if wavEncoder != nil && wavWriteError == nil {
+		if err := wavEncoder.Flush(); err != nil {
+			log.Printf("Warning: error flushing WAV encoder: %v", err)
+			wavWriteError = err
+		}
+	}
+
 	if framesProcessed == 0 {
 		log.Printf("Warning: no frames processed from silence region")
 		return nil, nil
@@ -823,15 +859,19 @@ func extractNoiseProfile(filename string, region *SilenceRegion, tempDir string)
 	}
 
 	// Build noise profile result
-	// Note: FilePath is set but file is not currently written - this can be extended
-	// in the future to actually extract the audio segment to disk for afftdn sample_noise
+	// FilePath is set only if WAV was successfully written
 	profile := &NoiseProfile{
-		FilePath:    outputPath, // Placeholder for future file extraction
 		Start:       region.Start,
 		Duration:    region.Duration,
 		PeakLevel:   peakLevel,
 		CrestFactor: crestFactorDB, // Stored in dB (peak - RMS)
 		Entropy:     entropy,       // 1.0 = broadband noise, lower = tonal noise
+	}
+
+	// Set FilePath only if WAV was successfully written
+	if wavEncoder != nil && wavWriteError == nil {
+		profile.FilePath = outputPath
+		log.Printf("Noise profile extracted to: %s (%.1fs)", outputPath, region.Duration.Seconds())
 	}
 
 	if noiseFloorFound {

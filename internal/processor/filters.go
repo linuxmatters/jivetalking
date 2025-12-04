@@ -21,14 +21,15 @@ type FilterID string
 // Filter identifiers for the audio processing chain
 const (
 	FilterHighpass    FilterID = "highpass"
+	FilterBandreject  FilterID = "bandreject" // Mains hum notch filter
 	FilterAdeclick    FilterID = "adeclick"
 	FilterAfftdn      FilterID = "afftdn"
+	FilterArnndn      FilterID = "arnndn"
 	FilterAgate       FilterID = "agate"
 	FilterAcompressor FilterID = "acompressor"
 	FilterDeesser     FilterID = "deesser"
 	FilterSpeechnorm  FilterID = "speechnorm"
-	FilterArnndn      FilterID = "arnndn"
-	FilterAnlmdn      FilterID = "anlmdn"
+	FilterAnlmdn      FilterID = "anlmdn" // Deprecated: use arnndn instead
 	FilterDynaudnorm  FilterID = "dynaudnorm"
 	FilterAlimiter    FilterID = "alimiter"
 )
@@ -36,25 +37,26 @@ const (
 // DefaultFilterOrder defines the standard filter chain order for podcast audio processing.
 // Order rationale:
 // - Highpass first: removes rumble before it affects other filters
-// - Adeclick early: removes impulse noise before spectral processing
-// - Afftdn: spectral noise reduction on clean signal
-// - Agate: removes low-level noise between speech
+// - Bandreject second: surgical notch filtering for mains hum (conditional)
+// - Adeclick early: removes impulse noise before spectral processing (currently disabled)
+// - Afftdn: profile-based spectral noise reduction using silence sample
+// - Arnndn: AI-based denoising for complex/dynamic noise patterns
+// - Agate: soft gate for inter-speech cleanup (after denoising lowers floor)
 // - Acompressor: evens dynamics before normalisation
 // - Deesser: after compression (which emphasises sibilance)
 // - Speechnorm: cycle-level normalisation for speech
-// - Arnndn/Anlmdn: mop up amplified noise after expansion
 // - Dynaudnorm: frame-level normalisation for final consistency
 // - Alimiter: brick-wall safety net at the end
 var DefaultFilterOrder = []FilterID{
 	FilterHighpass,
+	FilterBandreject,
 	FilterAdeclick,
 	FilterAfftdn,
+	FilterArnndn,
 	FilterAgate,
 	FilterAcompressor,
 	FilterDeesser,
 	FilterSpeechnorm,
-	FilterArnndn,
-	FilterAnlmdn,
 	FilterDynaudnorm,
 	FilterAlimiter,
 }
@@ -113,15 +115,25 @@ type FilterChainConfig struct {
 	HighpassEnabled bool    // Enable highpass filter
 	HighpassFreq    float64 // Hz, cutoff frequency (removes frequencies below this)
 
+	// Mains Hum Filter (bandreject) - removes 50/60Hz hum and harmonics
+	// Enabled conditionally when Pass 1 entropy indicates tonal noise
+	HumFilterEnabled bool    // Enable mains hum notch filtering
+	HumFrequency     float64 // Fundamental frequency (50Hz UK/EU, 60Hz US)
+	HumHarmonics     int     // Number of harmonics to filter (1-4, default 4)
+	HumQ             float64 // Q factor for notch filters (higher = narrower notch)
+
 	// Click/Pop Removal (adeclick) - removes clicks and pops
 	AdeclickEnabled bool   // Enable adeclick filter
 	AdeclickMethod  string // 'a' = overlap-add, 's' = overlap-save (default: 's')
 
-	// Noise Reduction (afftdn)
-	AfftdnEnabled  bool    // Enable afftdn filter
-	NoiseFloor     float64 // dB, estimated noise floor from Pass 1
-	NoiseReduction float64 // dB, reduction amount
-	NoiseTrack     bool    // Enable automatic noise tracking (tn=1)
+	// Noise Reduction (afftdn) - profile-based spectral denoising
+	// When NoiseProfilePath is set, uses extracted silence sample for precise spectral subtraction
+	// Falls back to tracking mode (tn=1) when no profile available
+	AfftdnEnabled    bool    // Enable afftdn filter
+	NoiseFloor       float64 // dB, estimated noise floor from Pass 1
+	NoiseReduction   float64 // dB, reduction amount
+	NoiseTrack       bool    // Enable automatic noise tracking (tn=1)
+	NoiseProfilePath string  // Path to extracted noise profile WAV file (empty = use tracking mode)
 
 	// Gate (agate) - removes silence and low-level noise
 	GateEnabled   bool    // Enable agate filter
@@ -178,11 +190,15 @@ type FilterChainConfig struct {
 	SpeechnormRMS         float64 // Target RMS value 0.0-1.0 (default 0.0 = disabled)
 	SpeechnormChannels    bool    // Process channels independently (default false = coupled)
 
-	// RNN Denoise (arnndn) - neural network noise reduction for heavily uplifted audio
-	ArnnDnEnabled bool    // Enable RNN denoise (adaptive, for heavily uplifted audio)
-	ArnnDnMix     float64 // Mix amount -1.0 to 1.0 (1.0 = full filtering, negative = keep noise)
+	// RNN Denoise (arnndn) - neural network noise reduction
+	// Positioned after afftdn to handle complex/dynamic noise that spectral subtraction misses
+	ArnnDnEnabled  bool    // Enable RNN denoise
+	ArnnDnMix      float64 // Mix amount -1.0 to 1.0 (1.0 = full filtering, negative = keep noise)
+	ArnnDnDualPass bool    // Enable second arnndn pass for high-noise sources
+	ArnnDnMix2     float64 // Mix amount for second pass (typically 0.7 for artifact reduction)
 
-	// Non-Local Means Denoise (anlmdn) - patch-based noise reduction for heavily uplifted audio
+	// Non-Local Means Denoise (anlmdn) - DEPRECATED: use arnndn instead
+	// Kept for backward compatibility but disabled by default
 	AnlmDnEnabled  bool    // Enable NLM denoise (adaptive, for heavily uplifted audio)
 	AnlmDnStrength float64 // Denoising strength 0.00001-10000.0 (default 0.00001)
 	AnlmDnPatch    float64 // Patch radius in milliseconds 1-100ms (default 2ms)
@@ -209,6 +225,13 @@ func DefaultFilterConfig() *FilterChainConfig {
 		// High-pass - remove subsonic rumble
 		HighpassEnabled: true,
 		HighpassFreq:    80.0, // 80Hz cutoff
+
+		// Mains Hum Notch Filter - removes 50/60Hz hum and harmonics
+		// Disabled by default - enabled adaptively when Pass 1 entropy indicates tonal noise
+		HumFilterEnabled: false, // Enabled conditionally by tuneHumFilter
+		HumFrequency:     50.0,  // 50Hz (UK/EU mains), can be set to 60Hz for US
+		HumHarmonics:     4,     // Filter 4 harmonics (50, 100, 150, 200Hz)
+		HumQ:             30.0,  // Narrow notch (Q=30, ~1.7Hz bandwidth)
 
 		// Click/Pop Removal - use overlap-save method with defaults
 		AdeclickEnabled: false, // Disabled: causes artifacts on some recordings
@@ -278,8 +301,11 @@ func DefaultFilterConfig() *FilterChainConfig {
 		SpeechnormChannels:    false, // Coupled channels (default, mono so no effect)
 
 		// RNN Denoise - neural network noise reduction
-		ArnnDnEnabled: false, // Disabled by default (will be enabled adaptively for heavily uplifted audio)
-		ArnnDnMix:     0.8,   // Full filtering when enabled (1.0 = 100% denoised)
+		// Uses cb.rnnn model for speech denoising
+		ArnnDnEnabled:  false, // Disabled by default (enabled adaptively based on LUFS gap + noise floor)
+		ArnnDnMix:      0.8,   // First pass mix (0.8 = 80% denoised, preserves some character)
+		ArnnDnDualPass: false, // Single pass by default (dual-pass for heavily degraded sources)
+		ArnnDnMix2:     0.7,   // Second pass mix (reduced to avoid over-processing)
 
 		// Non-Local Means Denoise - patch-based noise reduction
 		AnlmDnEnabled:  false,   // Disabled by default (will be enabled adaptively for heavily uplifted audio)
@@ -324,6 +350,41 @@ func (cfg *FilterChainConfig) buildHighpassFilter() string {
 	}
 	return fmt.Sprintf("highpass=f=%.0f:poles=2:width_type=q:width=0.707:normalize=1",
 		cfg.HighpassFreq)
+}
+
+// buildBandrejectFilter builds notch filters for mains hum removal.
+// Creates a chain of bandreject filters at the fundamental frequency and harmonics.
+// Only enabled when Pass 1 entropy analysis indicates tonal noise (low entropy).
+//
+// Filter chain example for 50Hz with 4 harmonics:
+// bandreject=f=50:q=30,bandreject=f=100:q=30,bandreject=f=150:q=30,bandreject=f=200:q=30
+func (cfg *FilterChainConfig) buildBandrejectFilter() string {
+	if !cfg.HumFilterEnabled || cfg.HumFrequency <= 0 {
+		return ""
+	}
+
+	// Build chain of notch filters: fundamental + harmonics
+	var filters []string
+	for harmonic := 1; harmonic <= cfg.HumHarmonics; harmonic++ {
+		freq := cfg.HumFrequency * float64(harmonic)
+		// Skip frequencies above Nyquist for 44.1kHz output (22050Hz)
+		if freq >= 22000 {
+			break
+		}
+		filters = append(filters, fmt.Sprintf("bandreject=f=%.0f:width_type=q:w=%.0f",
+			freq, cfg.HumQ))
+	}
+
+	if len(filters) == 0 {
+		return ""
+	}
+
+	// Join multiple notch filters with commas
+	result := filters[0]
+	for i := 1; i < len(filters); i++ {
+		result += "," + filters[i]
+	}
+	return result
 }
 
 // buildAdeclickFilter builds the adeclick (click/pop removal) filter specification.
@@ -487,6 +548,10 @@ func (cfg *FilterChainConfig) buildSpeechnormFilter() string {
 // buildArnnDnFilter builds the arnndn (RNN denoise) filter specification.
 // Neural network noise reduction for heavily uplifted audio.
 // Uses embedded conjoined-burgers model trained for recorded speech.
+//
+// Dual-pass mode: When ArnnDnDualPass is enabled, applies two consecutive
+// arnndn passes for heavily degraded sources. Second pass uses reduced mix
+// (ArnnDnMix2, typically 0.7) to avoid over-processing and reduce artifacts.
 func (cfg *FilterChainConfig) buildArnnDnFilter() string {
 	if !cfg.ArnnDnEnabled {
 		return ""
@@ -496,7 +561,18 @@ func (cfg *FilterChainConfig) buildArnnDnFilter() string {
 		// Gracefully degrade if model unavailable
 		return ""
 	}
-	return fmt.Sprintf("arnndn=m=%s:mix=%.2f", modelPath, cfg.ArnnDnMix)
+
+	// First pass with primary mix
+	firstPass := fmt.Sprintf("arnndn=m=%s:mix=%.2f", modelPath, cfg.ArnnDnMix)
+
+	// Return single pass or dual-pass chain
+	if cfg.ArnnDnDualPass {
+		// Second pass with reduced mix for artifact reduction
+		secondPass := fmt.Sprintf("arnndn=m=%s:mix=%.2f", modelPath, cfg.ArnnDnMix2)
+		return firstPass + "," + secondPass
+	}
+
+	return firstPass
 }
 
 // buildAnlmDnFilter builds the anlmdn (Non-Local Means denoise) filter specification.
@@ -537,6 +613,7 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 	// Map FilterID to builder method
 	builders := map[FilterID]func() string{
 		FilterHighpass:    cfg.buildHighpassFilter,
+		FilterBandreject:  cfg.buildBandrejectFilter,
 		FilterAdeclick:    cfg.buildAdeclickFilter,
 		FilterAfftdn:      cfg.buildAfftdnFilter,
 		FilterAgate:       cfg.buildAgateFilter,

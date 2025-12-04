@@ -99,8 +99,24 @@ const (
 	speechnormPeakTarget         = 0.95  // Headroom for limiter
 	speechnormSmoothingFast      = 0.001 // Fast response time
 
-	// RNN/NLM denoise parameters
-	arnnDnMixDefault    = 0.8     // Full filtering when enabled
+	// Mains hum filter parameters
+	humEntropyThreshold = 0.7  // Below this = tonal noise detected (hum/buzz)
+	humFreq50Hz         = 50.0 // UK/EU mains fundamental frequency
+	humFreq60Hz         = 60.0 // US mains fundamental frequency (TODO: make configurable)
+	humDefaultHarmonics = 4    // Filter fundamental + 3 harmonics (50, 100, 150, 200 Hz)
+	humDefaultQ         = 30.0 // Q factor (higher = narrower notch, less impact on voice)
+
+	// RNN denoise (arnndn) parameters
+	// Primary pass thresholds - enable for moderate noise sources
+	arnnDnLufsGapModerate    = 15.0  // dB - LUFS gap triggering primary arnndn
+	arnnDnNoiseFloorModerate = -55.0 // dBFS - noise floor triggering primary arnndn
+	arnnDnMixDefault         = 0.8   // Mix ratio for arnndn (0.8 = 80% filtered, 20% original)
+	// Dual-pass thresholds - enable for high-noise sources (e.g., SM7B with high gain)
+	arnnDnLufsGapAggressive    = 25.0  // dB - LUFS gap triggering dual-pass
+	arnnDnNoiseFloorAggressive = -45.0 // dBFS - noise floor triggering dual-pass
+	arnnDnMix2Default          = 0.7   // Reduced mix for second pass (artifact reduction)
+
+	// NLM denoise parameters (deprecated, kept for backward compatibility)
 	anlmDnStrengthMin   = 0.0     // Minimum strength
 	anlmDnStrengthMax   = 0.01    // Maximum strength
 	anlmDnStrengthScale = 0.00001 // Scaling factor for expansion
@@ -117,6 +133,10 @@ const (
 	defaultCompThreshold  = -20.0
 	defaultCompMakeup     = 3.0
 	defaultGateThreshold  = 0.01 // -40dBFS
+	defaultHumFrequency   = 50.0 // UK mains
+	defaultHumHarmonics   = 4
+	defaultHumQ           = 30.0
+	defaultArnnDnMix2     = 0.7
 )
 
 // AdaptConfig tunes all filter parameters based on Pass 1 measurements.
@@ -127,14 +147,22 @@ func AdaptConfig(config *FilterChainConfig, measurements *AudioMeasurements) {
 	config.Measurements = measurements
 	config.NoiseFloor = measurements.NoiseFloor
 
+	// Set noise profile path if available (for future afftdn enhancements)
+	if measurements.NoiseProfile != nil && measurements.NoiseProfile.FilePath != "" {
+		config.NoiseProfilePath = measurements.NoiseProfile.FilePath
+	}
+
 	// Calculate LUFS gap once - used by multiple tuning functions
 	lufsGap := calculateLUFSGap(config.TargetI, measurements.InputI)
 
 	// Tune each filter adaptively based on measurements
+	// Order matters: gate threshold calculated BEFORE denoise filters
 	tuneHighpassFreq(config, measurements, lufsGap)
+	tuneHumFilter(config, measurements) // Notch filter for mains hum (entropy-based)
 	tuneNoiseReduction(config, measurements, lufsGap)
+	tuneArnndn(config, measurements, lufsGap) // RNN denoise (LUFS gap + noise floor based)
+	tuneGateThreshold(config, measurements)   // Gate threshold before denoise in chain
 	tuneDeesser(config, measurements)
-	tuneGateThreshold(config, measurements)
 	tuneCompression(config, measurements)
 	tuneDynaudnorm(config)
 	tuneSpeechnorm(config, measurements, lufsGap)
@@ -250,6 +278,80 @@ func tuneNoiseReduction(config *FilterChainConfig, measurements *AudioMeasuremen
 
 	// Clamp to reasonable limits (afftdn stability)
 	config.NoiseReduction = clamp(adaptiveReduction, noiseReductionMin, noiseReductionMax)
+}
+
+// tuneHumFilter adapts bandreject (notch) filter for mains hum removal.
+//
+// Strategy:
+// - Uses NoiseProfile.Entropy from Pass 1 to detect tonal noise (hum)
+// - Low entropy (< 0.7) indicates periodic/tonal noise → enable hum removal
+// - High entropy indicates broadband noise → skip notch filter (use afftdn instead)
+// - Applies notch at fundamental (50Hz default) plus harmonics (100Hz, 150Hz, 200Hz)
+//
+// The entropy is calculated from the extracted silence sample during analysis.
+// Pure tones have low entropy; random noise has high entropy.
+func tuneHumFilter(config *FilterChainConfig, measurements *AudioMeasurements) {
+	// Check if we have noise profile with entropy measurement
+	if measurements.NoiseProfile == nil {
+		config.HumFilterEnabled = false
+		return
+	}
+
+	// Low entropy indicates tonal/periodic noise (likely mains hum)
+	if measurements.NoiseProfile.Entropy < humEntropyThreshold {
+		config.HumFilterEnabled = true
+		config.HumFrequency = humFreq50Hz // Default to 50Hz (UK/EU mains)
+		config.HumHarmonics = humDefaultHarmonics
+		config.HumQ = humDefaultQ
+	} else {
+		// High entropy = broadband noise, notch filter won't help
+		config.HumFilterEnabled = false
+	}
+}
+
+// tuneArnndn adapts RNN-based noise reduction based on measurements.
+//
+// Strategy:
+// - Uses cb.rnnn model exclusively (optimised for speech/voice)
+// - Dual-pass enabled for heavily degraded sources (high LUFS gap + high noise floor)
+// - Mix adjusted based on noise floor: noisier sources get stronger processing
+// - Second pass uses reduced mix (0.7 default) to avoid over-processing
+//
+// Thresholds:
+// - Moderate: LUFS gap >15dB OR noise floor >-55dBFS → enable arnndn
+// - Aggressive (dual-pass): LUFS gap >25dB AND noise floor >-45dBFS
+func tuneArnndn(config *FilterChainConfig, measurements *AudioMeasurements, lufsGap float64) {
+	// Check if we need RNN denoising based on measurements
+	needsModerateNR := lufsGap > arnnDnLufsGapModerate || measurements.NoiseFloor > arnnDnNoiseFloorModerate
+	needsAggressiveNR := lufsGap > arnnDnLufsGapAggressive && measurements.NoiseFloor > arnnDnNoiseFloorAggressive
+
+	if !needsModerateNR {
+		// Clean source - disable arnndn entirely
+		config.ArnnDnEnabled = false
+		config.ArnnDnDualPass = false
+		return
+	}
+
+	// Enable arnndn for moderate or worse noise levels
+	config.ArnnDnEnabled = true
+
+	// Set mix based on noise severity
+	// Higher noise floor → stronger RNN processing (higher mix)
+	if measurements.NoiseFloor > arnnDnNoiseFloorAggressive {
+		config.ArnnDnMix = 0.95 // Very noisy - almost full RNN
+	} else if measurements.NoiseFloor > arnnDnNoiseFloorModerate {
+		config.ArnnDnMix = 0.85 // Moderately noisy
+	} else {
+		config.ArnnDnMix = arnnDnMixDefault // Default 0.8
+	}
+
+	// Enable dual-pass for heavily degraded sources
+	if needsAggressiveNR {
+		config.ArnnDnDualPass = true
+		config.ArnnDnMix2 = arnnDnMix2Default // Reduced mix for second pass
+	} else {
+		config.ArnnDnDualPass = false
+	}
 }
 
 // tuneDeesser adapts de-esser intensity based on spectral analysis.
@@ -518,6 +620,16 @@ func sanitizeConfig(config *FilterChainConfig) {
 	if math.IsNaN(config.GateThreshold) || math.IsInf(config.GateThreshold, 0) || config.GateThreshold <= 0 {
 		config.GateThreshold = defaultGateThreshold
 	}
+
+	// Hum filter sanitization
+	config.HumFrequency = sanitizeFloat(config.HumFrequency, defaultHumFrequency)
+	config.HumQ = sanitizeFloat(config.HumQ, defaultHumQ)
+	if config.HumHarmonics < 1 || config.HumHarmonics > 8 {
+		config.HumHarmonics = defaultHumHarmonics
+	}
+
+	// ArnnDn second pass mix sanitization
+	config.ArnnDnMix2 = sanitizeFloat(config.ArnnDnMix2, defaultArnnDnMix2)
 }
 
 // sanitizeFloat returns defaultVal if val is NaN or Inf
