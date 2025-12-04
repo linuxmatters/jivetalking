@@ -48,6 +48,16 @@ type metadataAccumulators struct {
 	ebur128Found    bool
 }
 
+// getFloatMetadata extracts a float value from the metadata dictionary
+func getFloatMetadata(metadata *ffmpeg.AVDictionary, key *ffmpeg.CStr) (float64, bool) {
+	if entry := ffmpeg.AVDictGet(metadata, key, nil, 0); entry != nil {
+		if value, err := strconv.ParseFloat(entry.Value().String(), 64); err == nil {
+			return value, true
+		}
+	}
+	return 0.0, false
+}
+
 // extractFrameMetadata extracts audio analysis metadata from a filtered frame.
 // Updates accumulators with spectral, astats, and ebur128 measurements.
 // Called from both the main processing loop and the flush loop.
@@ -58,69 +68,51 @@ func extractFrameMetadata(metadata *ffmpeg.AVDictionary, acc *metadataAccumulato
 
 	// Extract spectral centroid (Hz) - where energy is concentrated
 	// For mono audio, spectral stats are under channel .1
-	if centroidEntry := ffmpeg.AVDictGet(metadata, metaKeySpectralCentroid, nil, 0); centroidEntry != nil {
-		if value, err := strconv.ParseFloat(centroidEntry.Value().String(), 64); err == nil {
-			acc.spectralCentroidSum += value
-			acc.spectralFrameCount++
-		}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralCentroid); ok {
+		acc.spectralCentroidSum += value
+		acc.spectralFrameCount++
 	}
 
 	// Extract spectral rolloff (Hz) - high-frequency energy dropoff point
-	if rolloffEntry := ffmpeg.AVDictGet(metadata, metaKeySpectralRolloff, nil, 0); rolloffEntry != nil {
-		if value, err := strconv.ParseFloat(rolloffEntry.Value().String(), 64); err == nil {
-			acc.spectralRolloffSum += value
-		}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralRolloff); ok {
+		acc.spectralRolloffSum += value
 	}
 
 	// Extract astats measurements (cumulative, so we keep the latest)
 	// For mono audio, stats are under channel .1
-	if dynamicRangeEntry := ffmpeg.AVDictGet(metadata, metaKeyDynamicRange, nil, 0); dynamicRangeEntry != nil {
-		if value, err := strconv.ParseFloat(dynamicRangeEntry.Value().String(), 64); err == nil {
-			acc.astatsDynamicRange = value
-			acc.astatsFound = true
-		}
+	if value, ok := getFloatMetadata(metadata, metaKeyDynamicRange); ok {
+		acc.astatsDynamicRange = value
+		acc.astatsFound = true
 	}
 
-	if rmsEntry := ffmpeg.AVDictGet(metadata, metaKeyRMSLevel, nil, 0); rmsEntry != nil {
-		if value, err := strconv.ParseFloat(rmsEntry.Value().String(), 64); err == nil {
-			acc.astatsRMSLevel = value
-		}
+	if value, ok := getFloatMetadata(metadata, metaKeyRMSLevel); ok {
+		acc.astatsRMSLevel = value
 	}
 
-	if peakEntry := ffmpeg.AVDictGet(metadata, metaKeyPeakLevel, nil, 0); peakEntry != nil {
-		if value, err := strconv.ParseFloat(peakEntry.Value().String(), 64); err == nil {
-			acc.astatsPeakLevel = value
-		}
+	if value, ok := getFloatMetadata(metadata, metaKeyPeakLevel); ok {
+		acc.astatsPeakLevel = value
 	}
 
 	// Extract RMS_trough - RMS level of quietest segments (best noise floor indicator for speech)
 	// In speech audio, quiet inter-word periods contain primarily ambient/electronic noise
-	if rmsTroughEntry := ffmpeg.AVDictGet(metadata, metaKeyRMSTrough, nil, 0); rmsTroughEntry != nil {
-		if value, err := strconv.ParseFloat(rmsTroughEntry.Value().String(), 64); err == nil {
-			acc.astatsRMSTrough = value
-		}
+	if value, ok := getFloatMetadata(metadata, metaKeyRMSTrough); ok {
+		acc.astatsRMSTrough = value
 	}
 
 	// Extract ebur128 measurements (cumulative loudness analysis)
 	// ebur128 provides: M.* (momentary), S.* (short-term), I (integrated), LRA, sample_peak, true_peak
 	// We need the integrated loudness measurements for normalization
-	if integratedEntry := ffmpeg.AVDictGet(metadata, metaKeyEbur128I, nil, 0); integratedEntry != nil {
-		if value, err := strconv.ParseFloat(integratedEntry.Value().String(), 64); err == nil {
-			acc.ebur128InputI = value
-			acc.ebur128Found = true
-		}
+	if value, ok := getFloatMetadata(metadata, metaKeyEbur128I); ok {
+		acc.ebur128InputI = value
+		acc.ebur128Found = true
 	}
 
-	if truePeakEntry := ffmpeg.AVDictGet(metadata, metaKeyEbur128TruePeak, nil, 0); truePeakEntry != nil {
-		if value, err := strconv.ParseFloat(truePeakEntry.Value().String(), 64); err == nil {
-			acc.ebur128InputTP = value
-		}
+	if value, ok := getFloatMetadata(metadata, metaKeyEbur128TruePeak); ok {
+		acc.ebur128InputTP = value
 	}
 
-	if lraEntry := ffmpeg.AVDictGet(metadata, metaKeyEbur128LRA, nil, 0); lraEntry != nil {
-		if value, err := strconv.ParseFloat(lraEntry.Value().String(), 64); err == nil {
-			acc.ebur128InputLRA = value
-		}
+	if value, ok := getFloatMetadata(metadata, metaKeyEbur128LRA); ok {
+		acc.ebur128InputLRA = value
 	}
 }
 

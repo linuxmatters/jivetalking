@@ -78,8 +78,6 @@ func main() {
 	go func() {
 		for i, inputPath := range cliArgs.Files {
 			fileStartTime := time.Now()
-			var pass1Time, pass2Time time.Duration
-			var pass1Start time.Time
 
 			// Signal file start
 			log("[MAIN] Sending FileStartMsg for file %d: %s", i, inputPath)
@@ -88,28 +86,16 @@ func main() {
 				FileName:  inputPath,
 			})
 
-			// Create progress callback that sends ui.ProgressMsg
-			progressCallback := func(pass int, passName string, progress float64, level float64, measurements *processor.AudioMeasurements) {
-				log("[MAIN] Sending ProgressMsg: Pass %d (%s), Progress %.1f%%, Level %.1f dB", pass, passName, progress*100, level) // Track pass timing
-				if pass == 1 && progress == 0.0 {
-					pass1Start = time.Now()
-				} else if pass == 1 && progress == 1.0 {
-					pass1Time = time.Since(pass1Start)
-				}
-
-				p.Send(ui.ProgressMsg{
-					Pass:         pass,
-					PassName:     passName,
-					Progress:     progress,
-					Level:        level,
-					Measurements: measurements,
-				})
+			// Create progress handler
+			ph := &progressHandler{
+				p:   p,
+				log: log,
 			}
 
 			// Process the audio file
 			pass2Start := time.Now()
 			log("[MAIN] Starting ProcessAudio for %s", inputPath)
-			result, err := processor.ProcessAudio(inputPath, config, progressCallback)
+			result, err := processor.ProcessAudio(inputPath, config, ph.callback)
 			if err != nil {
 				log("[MAIN] ProcessAudio failed: %v", err)
 				p.Send(ui.FileCompleteMsg{
@@ -118,7 +104,7 @@ func main() {
 				})
 				continue
 			}
-			pass2Time = time.Since(pass2Start) - pass1Time
+			pass2Time := time.Since(pass2Start) - ph.pass1Time
 
 			// Get file metadata for logging
 			var metadata *audio.Metadata
@@ -137,7 +123,7 @@ func main() {
 					OutputPath:   result.OutputPath,
 					StartTime:    fileStartTime,
 					EndTime:      time.Now(),
-					Pass1Time:    pass1Time,
+					Pass1Time:    ph.pass1Time,
 					Pass2Time:    pass2Time,
 					Result:       result,
 					SampleRate:   metadata.SampleRate,
@@ -170,4 +156,31 @@ func main() {
 		cli.PrintError(fmt.Sprintf("UI error: %v", err))
 		os.Exit(1)
 	}
+}
+
+// progressHandler handles progress updates from the processor
+type progressHandler struct {
+	p          *tea.Program
+	log        func(string, ...interface{})
+	pass1Start time.Time
+	pass1Time  time.Duration
+}
+
+func (ph *progressHandler) callback(pass int, passName string, progress float64, level float64, measurements *processor.AudioMeasurements) {
+	ph.log("[MAIN] Sending ProgressMsg: Pass %d (%s), Progress %.1f%%, Level %.1f dB", pass, passName, progress*100, level)
+
+	// Track pass timing
+	if pass == 1 && progress == 0.0 {
+		ph.pass1Start = time.Now()
+	} else if pass == 1 && progress == 1.0 {
+		ph.pass1Time = time.Since(ph.pass1Start)
+	}
+
+	ph.p.Send(ui.ProgressMsg{
+		Pass:         pass,
+		PassName:     passName,
+		Progress:     progress,
+		Level:        level,
+		Measurements: measurements,
+	})
 }

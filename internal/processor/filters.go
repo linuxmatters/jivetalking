@@ -609,61 +609,18 @@ func setupFilterGraph(decCtx *ffmpeg.AVCodecContext, filterSpec string) (
 		return nil, nil, nil, fmt.Errorf("failed to allocate filter graph")
 	}
 
-	// Get abuffer and abuffersink filters
-	bufferSrc := ffmpeg.AVFilterGetByName(ffmpeg.GlobalCStr("abuffer"))
-	bufferSink := ffmpeg.AVFilterGetByName(ffmpeg.GlobalCStr("abuffersink"))
-	if bufferSrc == nil || bufferSink == nil {
-		ffmpeg.AVFilterGraphFree(&filterGraph)
-		return nil, nil, nil, fmt.Errorf("abuffer or abuffersink filter not found")
-	}
-
-	// Get channel layout description
-	layoutPtr := ffmpeg.AllocCStr(64)
-	defer layoutPtr.Free()
-
-	if _, err := ffmpeg.AVChannelLayoutDescribe(decCtx.ChLayout(), layoutPtr, 64); err != nil {
-		ffmpeg.AVFilterGraphFree(&filterGraph)
-		return nil, nil, nil, fmt.Errorf("failed to get channel layout: %w", err)
-	}
-
 	// Create abuffer source
-	pktTimebase := decCtx.PktTimebase()
-	args := fmt.Sprintf(
-		"time_base=%d/%d:sample_rate=%d:sample_fmt=%s:channel_layout=%s",
-		pktTimebase.Num(), pktTimebase.Den(),
-		decCtx.SampleRate(),
-		ffmpeg.AVGetSampleFmtName(decCtx.SampleFmt()).String(),
-		layoutPtr.String(),
-	)
-
-	argsC := ffmpeg.ToCStr(args)
-	defer argsC.Free()
-
-	var bufferSrcCtx *ffmpeg.AVFilterContext
-	if _, err := ffmpeg.AVFilterGraphCreateFilter(
-		&bufferSrcCtx,
-		bufferSrc,
-		ffmpeg.GlobalCStr("in"),
-		argsC,
-		nil,
-		filterGraph,
-	); err != nil {
+	bufferSrcCtx, err := createBufferSource(filterGraph, decCtx)
+	if err != nil {
 		ffmpeg.AVFilterGraphFree(&filterGraph)
-		return nil, nil, nil, fmt.Errorf("failed to create abuffer: %w", err)
+		return nil, nil, nil, err
 	}
 
 	// Create abuffersink
-	var bufferSinkCtx *ffmpeg.AVFilterContext
-	if _, err := ffmpeg.AVFilterGraphCreateFilter(
-		&bufferSinkCtx,
-		bufferSink,
-		ffmpeg.GlobalCStr("out"),
-		nil,
-		nil,
-		filterGraph,
-	); err != nil {
+	bufferSinkCtx, err := createBufferSink(filterGraph)
+	if err != nil {
 		ffmpeg.AVFilterGraphFree(&filterGraph)
-		return nil, nil, nil, fmt.Errorf("failed to create abuffersink: %w", err)
+		return nil, nil, nil, err
 	}
 
 	// Parse filter graph
@@ -697,4 +654,68 @@ func setupFilterGraph(decCtx *ffmpeg.AVCodecContext, filterSpec string) (
 	}
 
 	return filterGraph, bufferSrcCtx, bufferSinkCtx, nil
+}
+
+// createBufferSource creates and configures the abuffer source filter
+func createBufferSource(filterGraph *ffmpeg.AVFilterGraph, decCtx *ffmpeg.AVCodecContext) (*ffmpeg.AVFilterContext, error) {
+	bufferSrc := ffmpeg.AVFilterGetByName(ffmpeg.GlobalCStr("abuffer"))
+	if bufferSrc == nil {
+		return nil, fmt.Errorf("abuffer filter not found")
+	}
+
+	// Get channel layout description
+	layoutPtr := ffmpeg.AllocCStr(64)
+	defer layoutPtr.Free()
+
+	if _, err := ffmpeg.AVChannelLayoutDescribe(decCtx.ChLayout(), layoutPtr, 64); err != nil {
+		return nil, fmt.Errorf("failed to get channel layout: %w", err)
+	}
+
+	pktTimebase := decCtx.PktTimebase()
+	args := fmt.Sprintf(
+		"time_base=%d/%d:sample_rate=%d:sample_fmt=%s:channel_layout=%s",
+		pktTimebase.Num(), pktTimebase.Den(),
+		decCtx.SampleRate(),
+		ffmpeg.AVGetSampleFmtName(decCtx.SampleFmt()).String(),
+		layoutPtr.String(),
+	)
+
+	argsC := ffmpeg.ToCStr(args)
+	defer argsC.Free()
+
+	var bufferSrcCtx *ffmpeg.AVFilterContext
+	if _, err := ffmpeg.AVFilterGraphCreateFilter(
+		&bufferSrcCtx,
+		bufferSrc,
+		ffmpeg.GlobalCStr("in"),
+		argsC,
+		nil,
+		filterGraph,
+	); err != nil {
+		return nil, fmt.Errorf("failed to create abuffer: %w", err)
+	}
+
+	return bufferSrcCtx, nil
+}
+
+// createBufferSink creates and configures the abuffersink filter
+func createBufferSink(filterGraph *ffmpeg.AVFilterGraph) (*ffmpeg.AVFilterContext, error) {
+	bufferSink := ffmpeg.AVFilterGetByName(ffmpeg.GlobalCStr("abuffersink"))
+	if bufferSink == nil {
+		return nil, fmt.Errorf("abuffersink filter not found")
+	}
+
+	var bufferSinkCtx *ffmpeg.AVFilterContext
+	if _, err := ffmpeg.AVFilterGraphCreateFilter(
+		&bufferSinkCtx,
+		bufferSink,
+		ffmpeg.GlobalCStr("out"),
+		nil,
+		nil,
+		filterGraph,
+	); err != nil {
+		return nil, fmt.Errorf("failed to create abuffersink: %w", err)
+	}
+
+	return bufferSinkCtx, nil
 }
