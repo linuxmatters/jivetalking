@@ -1267,24 +1267,16 @@ func TestClamp(t *testing.T) {
 }
 
 func TestTuneSpeechnormDenoise(t *testing.T) {
-	// Tests for tuneSpeechnormDenoise which enables RNN/NLM denoise for heavily expanded audio
+	// Tests for tuneSpeechnormDenoise which enables RNN denoise for heavily expanded audio
 	// Constants from adaptive.go:
 	// speechnormExpansionThreshold = 8.0 (triggers denoise activation)
 	// arnnDnMixDefault             = 0.8 (full filtering when enabled)
-	// anlmDnStrengthMin            = 0.0
-	// anlmDnStrengthMax            = 0.01
-	// anlmDnStrengthScale          = 0.00001
-	//
-	// AnlmDn strength formula: clamp(0.00001 * expansion^2, 0.0, 0.01)
 
 	tests := []struct {
 		name            string
 		expansion       float64
 		wantArnnDn      bool
 		wantArnnDnMix   float64 // only checked if wantArnnDn is true
-		wantAnlmDn      bool
-		wantAnlmDnMin   float64 // minimum expected strength
-		wantAnlmDnMax   float64 // maximum expected strength
 		wantDescription string
 	}{
 		// Below threshold - denoise disabled
@@ -1292,28 +1284,24 @@ func TestTuneSpeechnormDenoise(t *testing.T) {
 			name:            "minimal expansion - denoise disabled",
 			expansion:       1.0,
 			wantArnnDn:      false,
-			wantAnlmDn:      false,
 			wantDescription: "1x expansion (0dB gain) should not enable denoise",
 		},
 		{
 			name:            "moderate expansion - denoise disabled",
 			expansion:       3.0,
 			wantArnnDn:      false,
-			wantAnlmDn:      false,
 			wantDescription: "3x expansion (~10dB gain) still below threshold",
 		},
 		{
 			name:            "typical podcast expansion - denoise disabled",
 			expansion:       5.0,
 			wantArnnDn:      false,
-			wantAnlmDn:      false,
 			wantDescription: "5x expansion (~14dB gain) still below threshold",
 		},
 		{
 			name:            "just below threshold - denoise disabled",
 			expansion:       7.9,
 			wantArnnDn:      false,
-			wantAnlmDn:      false,
 			wantDescription: "7.9x is below 8.0 threshold",
 		},
 
@@ -1323,9 +1311,6 @@ func TestTuneSpeechnormDenoise(t *testing.T) {
 			expansion:       8.0,
 			wantArnnDn:      true,
 			wantArnnDnMix:   0.8,
-			wantAnlmDn:      true,
-			wantAnlmDnMin:   0.00064, // 0.00001 * 8^2 = 0.00064
-			wantAnlmDnMax:   0.00064,
 			wantDescription: "exactly 8.0 threshold should enable denoise",
 		},
 		{
@@ -1333,19 +1318,13 @@ func TestTuneSpeechnormDenoise(t *testing.T) {
 			expansion:       8.1,
 			wantArnnDn:      true,
 			wantArnnDnMix:   0.8,
-			wantAnlmDn:      true,
-			wantAnlmDnMin:   0.000656, // 0.00001 * 8.1^2 ≈ 0.000656
-			wantAnlmDnMax:   0.000657,
-			wantDescription: "8.1 expansion enables denoise with scaled strength",
+			wantDescription: "8.1 expansion enables denoise",
 		},
 		{
 			name:            "high expansion",
 			expansion:       9.0,
 			wantArnnDn:      true,
 			wantArnnDnMix:   0.8,
-			wantAnlmDn:      true,
-			wantAnlmDnMin:   0.00080, // 0.00001 * 9^2 = 0.00081 (allow float tolerance)
-			wantAnlmDnMax:   0.00082,
 			wantDescription: "9x expansion (~19dB gain)",
 		},
 		{
@@ -1353,35 +1332,27 @@ func TestTuneSpeechnormDenoise(t *testing.T) {
 			expansion:       10.0,
 			wantArnnDn:      true,
 			wantArnnDnMix:   0.8,
-			wantAnlmDn:      true,
-			wantAnlmDnMin:   0.001, // 0.00001 * 10^2 = 0.001
-			wantAnlmDnMax:   0.001,
 			wantDescription: "10x expansion (speechnormMaxExpansion)",
 		},
 
 		// Extreme values (beyond normal operating range)
 		{
-			name:            "extreme expansion - clamped strength",
+			name:            "extreme expansion",
 			expansion:       50.0,
 			wantArnnDn:      true,
 			wantArnnDnMix:   0.8,
-			wantAnlmDn:      true,
-			wantAnlmDnMin:   0.01, // clamped to anlmDnStrengthMax
-			wantAnlmDnMax:   0.01, // 0.00001 * 50^2 = 0.025, clamped to 0.01
-			wantDescription: "50x expansion strength clamped to max 0.01",
+			wantDescription: "50x expansion enables denoise",
 		},
 		{
 			name:            "zero expansion - denoise disabled",
 			expansion:       0.0,
 			wantArnnDn:      false,
-			wantAnlmDn:      false,
 			wantDescription: "zero expansion (edge case) below threshold",
 		},
 		{
 			name:            "negative expansion - denoise disabled",
 			expansion:       -1.0,
 			wantArnnDn:      false,
-			wantAnlmDn:      false,
 			wantDescription: "negative expansion (edge case) below threshold",
 		},
 	}
@@ -1401,21 +1372,6 @@ func TestTuneSpeechnormDenoise(t *testing.T) {
 			if tt.wantArnnDn && config.ArnnDnMix != tt.wantArnnDnMix {
 				t.Errorf("ArnnDnMix = %v, want %v - %s",
 					config.ArnnDnMix, tt.wantArnnDnMix, tt.wantDescription)
-			}
-
-			// Check AnlmDn enabled state
-			if config.AnlmDnEnabled != tt.wantAnlmDn {
-				t.Errorf("AnlmDnEnabled = %v, want %v - %s",
-					config.AnlmDnEnabled, tt.wantAnlmDn, tt.wantDescription)
-			}
-
-			// Check AnlmDn strength value when enabled
-			if tt.wantAnlmDn {
-				if config.AnlmDnStrength < tt.wantAnlmDnMin || config.AnlmDnStrength > tt.wantAnlmDnMax {
-					t.Errorf("AnlmDnStrength = %v, want [%v, %v] - %s (expansion=%.1f)",
-						config.AnlmDnStrength, tt.wantAnlmDnMin, tt.wantAnlmDnMax,
-						tt.wantDescription, tt.expansion)
-				}
 			}
 		})
 	}
@@ -1589,9 +1545,9 @@ func TestTuneSpeechnorm(t *testing.T) {
 			}
 
 			// Check denoise activation
-			if config.ArnnDnEnabled != tt.wantDenoiseEnabled || config.AnlmDnEnabled != tt.wantDenoiseEnabled {
-				t.Errorf("DenoiseEnabled (ArnnDn=%v, AnlmDn=%v), want both=%v - %s",
-					config.ArnnDnEnabled, config.AnlmDnEnabled, tt.wantDenoiseEnabled,
+			if config.ArnnDnEnabled != tt.wantDenoiseEnabled {
+				t.Errorf("ArnnDnEnabled = %v, want %v - %s",
+					config.ArnnDnEnabled, tt.wantDenoiseEnabled,
 					tt.wantDescription)
 			}
 

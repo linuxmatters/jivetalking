@@ -100,7 +100,6 @@ func TestBuildFilterSpec(t *testing.T) {
 		config.DynaudnormEnabled = false
 		config.LimiterEnabled = false
 		config.ArnnDnEnabled = false
-		config.AnlmDnEnabled = false
 
 		spec := config.BuildFilterSpec()
 
@@ -531,30 +530,6 @@ func TestBuildDynaudnormFilter(t *testing.T) {
 		spec := config.buildDynaudnormFilter()
 		if spec != "" {
 			t.Errorf("buildDynaudnormFilter() = %q, want empty when disabled", spec)
-		}
-	})
-}
-
-func TestBuildAnlmDnFilter(t *testing.T) {
-	t.Run("light denoising", func(t *testing.T) {
-		config := DefaultFilterConfig()
-		config.AnlmDnEnabled = true
-		config.AnlmDnStrength = 0.0001
-
-		spec := config.buildAnlmDnFilter()
-
-		if !strings.Contains(spec, "anlmdn=s=0.000100") {
-			t.Errorf("buildAnlmDnFilter() = %q, want to contain anlmdn=s=0.000100", spec)
-		}
-	})
-
-	t.Run("disabled returns empty", func(t *testing.T) {
-		config := DefaultFilterConfig()
-		config.AnlmDnEnabled = false
-
-		spec := config.buildAnlmDnFilter()
-		if spec != "" {
-			t.Errorf("buildAnlmDnFilter() = %q, want empty when disabled", spec)
 		}
 	})
 }

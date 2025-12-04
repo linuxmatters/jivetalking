@@ -30,7 +30,6 @@ const (
 	FilterAcompressor FilterID = "acompressor"
 	FilterDeesser     FilterID = "deesser"
 	FilterSpeechnorm  FilterID = "speechnorm"
-	FilterAnlmdn      FilterID = "anlmdn" // Deprecated: use arnndn instead
 	FilterDynaudnorm  FilterID = "dynaudnorm"
 	FilterBleedGate   FilterID = "bleedgate" // Catches amplified bleed/crosstalk after normalisation
 	FilterAlimiter    FilterID = "alimiter"
@@ -202,13 +201,6 @@ type FilterChainConfig struct {
 	ArnnDnDualPass bool    // Enable second arnndn pass for high-noise sources
 	ArnnDnMix2     float64 // Mix amount for second pass (typically 0.7 for artifact reduction)
 
-	// Non-Local Means Denoise (anlmdn) - DEPRECATED: use arnndn instead
-	// Kept for backward compatibility but disabled by default
-	AnlmDnEnabled  bool    // Enable NLM denoise (adaptive, for heavily uplifted audio)
-	AnlmDnStrength float64 // Denoising strength 0.00001-10000.0 (default 0.00001)
-	AnlmDnPatch    float64 // Patch radius in milliseconds 1-100ms (default 2ms)
-	AnlmDnResearch float64 // Research radius in milliseconds 2-300ms (default 6ms)
-
 	// True Peak Limiter (alimiter) - brick-wall safety net
 	LimiterEnabled bool    // Enable alimiter filter
 	LimiterCeiling float64 // 0.0625-1.0, peak ceiling (0.98 = -0.17dBFS)
@@ -327,12 +319,6 @@ func DefaultFilterConfig() *FilterChainConfig {
 		ArnnDnMix:      0.8,   // First pass mix (0.8 = 80% denoised, preserves some character)
 		ArnnDnDualPass: false, // Single pass by default (dual-pass for heavily degraded sources)
 		ArnnDnMix2:     0.7,   // Second pass mix (reduced to avoid over-processing)
-
-		// Non-Local Means Denoise - patch-based noise reduction
-		AnlmDnEnabled:  false,   // Disabled by default (will be enabled adaptively for heavily uplifted audio)
-		AnlmDnStrength: 0.00001, // Very conservative default (will be set adaptively)
-		AnlmDnPatch:    2.0,     // 2ms patch radius (default from docs)
-		AnlmDnResearch: 6.0,     // 6ms research radius (default from docs)
 
 		// Bleed Gate - catches amplified bleed/crosstalk after normalisation
 		// Disabled by default - enabled adaptively when predicted output bleed would be audible
@@ -627,16 +613,6 @@ func (cfg *FilterChainConfig) buildArnnDnFilter() string {
 	return firstPass
 }
 
-// buildAnlmDnFilter builds the anlmdn (Non-Local Means denoise) filter specification.
-// Patch-based noise reduction for heavily uplifted audio.
-// Better at preserving texture/detail than RNN approach.
-func (cfg *FilterChainConfig) buildAnlmDnFilter() string {
-	if !cfg.AnlmDnEnabled {
-		return ""
-	}
-	return fmt.Sprintf("anlmdn=s=%f", cfg.AnlmDnStrength)
-}
-
 // buildBleedGateFilter builds the bleed gate filter specification.
 // Positioned AFTER speechnorm/dynaudnorm to catch bleed/crosstalk that was amplified
 // during normalisation. Uses gentler ratio (4:1) compared to pre-gate (2:1) because
@@ -711,7 +687,6 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 		FilterDeesser:     cfg.buildDeesserFilter,
 		FilterSpeechnorm:  cfg.buildSpeechnormFilter,
 		FilterArnndn:      cfg.buildArnnDnFilter,
-		FilterAnlmdn:      cfg.buildAnlmDnFilter,
 		FilterBleedGate:   cfg.buildBleedGateFilter,
 		FilterDynaudnorm:  cfg.buildDynaudnormFilter,
 		FilterAlimiter:    cfg.buildAlimiterFilter,

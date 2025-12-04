@@ -129,11 +129,6 @@ const (
 	arnnDnNoiseFloorAggressive = -45.0 // dBFS - noise floor triggering dual-pass
 	arnnDnMix2Default          = 0.7   // Reduced mix for second pass (artifact reduction)
 
-	// NLM denoise parameters (deprecated, kept for backward compatibility)
-	anlmDnStrengthMin   = 0.0     // Minimum strength
-	anlmDnStrengthMax   = 0.01    // Maximum strength
-	anlmDnStrengthScale = 0.00001 // Scaling factor for expansion
-
 	// LUFS to RMS conversion constant
 	// Rough conversion: LUFS ≈ -23 + 20*log10(RMS)
 	lufsRmsOffset = 23.0
@@ -605,20 +600,14 @@ func tuneSpeechnorm(config *FilterChainConfig, measurements *AudioMeasurements, 
 	config.SpeechnormFall = speechnormSmoothingFast  // Fast response
 }
 
-// tuneSpeechnormDenoise enables RNN/NLM denoise for heavily expanded audio
+// tuneSpeechnormDenoise enables RNN denoise for heavily expanded audio
 func tuneSpeechnormDenoise(config *FilterChainConfig, expansion float64) {
 	if expansion >= speechnormExpansionThreshold {
 		// Enable RNN denoise (neural network mop-up)
 		config.ArnnDnEnabled = true
 		config.ArnnDnMix = arnnDnMixDefault
-
-		// Enable NLM denoise (patch-based cleanup)
-		config.AnlmDnEnabled = true
-		// Adaptive strength scales with expansion squared
-		config.AnlmDnStrength = clamp(anlmDnStrengthScale*expansion*expansion, anlmDnStrengthMin, anlmDnStrengthMax)
 	} else {
 		config.ArnnDnEnabled = false
-		config.AnlmDnEnabled = false
 	}
 }
 

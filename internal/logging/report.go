@@ -272,8 +272,6 @@ func formatFilter(f *os.File, filterID processor.FilterID, cfg *processor.Filter
 		formatBleedGateFilter(f, cfg, m, prefix)
 	case processor.FilterAlimiter:
 		formatAlimiterFilter(f, cfg, prefix)
-	case processor.FilterAnlmdn:
-		formatAnlmdnFilter(f, cfg, prefix)
 	default:
 		fmt.Fprintf(f, "%s%s: (unknown filter)\n", prefix, filterID)
 	}
@@ -560,16 +558,4 @@ func formatAlimiterFilter(f *os.File, cfg *processor.FilterChainConfig, prefix s
 	fmt.Fprintf(f, "%salimiter: ceiling %.1f dBFS\n", prefix, ceilingDB)
 	fmt.Fprintf(f, "        Timing: attack %.0fms, release %.0fms\n", cfg.LimiterAttack, cfg.LimiterRelease)
 	fmt.Fprintln(f, "        Mode: brick-wall safety limiter")
-}
-
-// formatAnlmdnFilter outputs anlmdn filter details
-func formatAnlmdnFilter(f *os.File, cfg *processor.FilterChainConfig, prefix string) {
-	if !cfg.AnlmDnEnabled {
-		fmt.Fprintf(f, "%sanlmdn: DISABLED — deprecated, use arnndn instead\n", prefix)
-		return
-	}
-
-	fmt.Fprintf(f, "%sanlmdn: strength %.5f, patch %.1fms, research %.1fms\n",
-		prefix, cfg.AnlmDnStrength, cfg.AnlmDnPatch, cfg.AnlmDnResearch)
-	fmt.Fprintln(f, "        Note: deprecated filter, enabled for backward compatibility")
 }
