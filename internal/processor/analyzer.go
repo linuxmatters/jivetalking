@@ -4,7 +4,6 @@ package processor
 import (
 	"errors"
 	"fmt"
-	"log"
 	"math"
 	"path/filepath"
 	"strconv"
@@ -23,13 +22,14 @@ type SilenceRegion struct {
 
 // NoiseProfile contains information about an extracted noise sample
 type NoiseProfile struct {
-	FilePath           string        `json:"file_path"`            // Path to extracted noise sample WAV file
-	Start              time.Duration `json:"start"`                // Start time of silence region used
-	Duration           time.Duration `json:"duration"`             // Duration of extracted sample
-	MeasuredNoiseFloor float64       `json:"measured_noise_floor"` // dBFS, RMS level of silence (average noise)
-	PeakLevel          float64       `json:"peak_level"`           // dBFS, peak level in silence (transient noise indicator)
-	CrestFactor        float64       `json:"crest_factor"`         // Peak - RMS in dB (high = impulsive noise, low = steady noise)
-	Entropy            float64       `json:"entropy"`              // Signal randomness (1.0 = white noise, lower = tonal noise like hum)
+	FilePath           string        `json:"file_path"`                    // Path to extracted noise sample WAV file
+	Start              time.Duration `json:"start"`                        // Start time of silence region used
+	Duration           time.Duration `json:"duration"`                     // Duration of extracted sample
+	MeasuredNoiseFloor float64       `json:"measured_noise_floor"`         // dBFS, RMS level of silence (average noise)
+	PeakLevel          float64       `json:"peak_level"`                   // dBFS, peak level in silence (transient noise indicator)
+	CrestFactor        float64       `json:"crest_factor"`                 // Peak - RMS in dB (high = impulsive noise, low = steady noise)
+	Entropy            float64       `json:"entropy"`                      // Signal randomness (1.0 = white noise, lower = tonal noise like hum)
+	ExtractionWarning  string        `json:"extraction_warning,omitempty"` // Warning message if extraction had issues
 }
 
 // Cached metadata keys for frame extraction - avoids per-frame C string allocations
@@ -272,6 +272,10 @@ type AudioMeasurements struct {
 	// Derived suggestions for Pass 2 adaptive processing
 	SuggestedGateThreshold float64 `json:"suggested_gate_threshold"` // Suggested gate threshold (linear amplitude)
 	NoiseReductionHeadroom float64 `json:"noise_reduction_headroom"` // dB gap between noise and quiet speech
+
+	// Pass 2 noise profile processing stats (populated during processing)
+	NoiseProfileFramesFed int `json:"noise_profile_frames_fed,omitempty"` // Number of noise frames fed for spectral learning
+	MainFramesProcessed   int `json:"main_frames_processed,omitempty"`    // Number of main audio frames processed
 }
 
 // AnalyzeAudio performs Pass 1: ebur128 + astats + aspectralstats analysis to get measurements
@@ -676,15 +680,11 @@ func findBestSilenceRegion(regions []SilenceRegion) *SilenceRegion {
 	}
 
 	if firstAcceptable != nil {
-		log.Printf("Warning: using short silence region (%.1fs) for noise profile - ideally need >=10s",
-			firstAcceptable.Duration.Seconds())
+		// Short but acceptable - warning will be noted in profile
 		return firstAcceptable
 	}
 
-	if longest != nil {
-		log.Printf("Warning: no suitable silence region found for noise profile extraction (longest: %.1fs, need >=2s)",
-			longest.Duration.Seconds())
-	}
+	// No suitable silence region found
 	return nil
 }
 
@@ -706,8 +706,7 @@ func extractNoiseProfile(filename string, region *SilenceRegion, tempDir string)
 	// Open the audio file
 	reader, _, err := audio.OpenAudioFile(filename)
 	if err != nil {
-		log.Printf("Warning: failed to open audio file for noise extraction: %v", err)
-		return nil, nil // Non-fatal
+		return nil, nil // Non-fatal - extraction skipped
 	}
 	defer reader.Close()
 
@@ -725,16 +724,14 @@ func extractNoiseProfile(filename string, region *SilenceRegion, tempDir string)
 
 	filterGraph, bufferSrcCtx, bufferSinkCtx, err := setupFilterGraph(decCtx, filterSpec)
 	if err != nil {
-		log.Printf("Warning: failed to create noise extraction filter graph: %v", err)
-		return nil, nil // Non-fatal
+		return nil, nil // Non-fatal - extraction skipped
 	}
 	defer ffmpeg.AVFilterGraphFree(&filterGraph)
 
 	// Create WAV encoder for writing the noise profile
 	wavEncoder, err := createWAVEncoder(outputPath, bufferSinkCtx)
 	if err != nil {
-		log.Printf("Warning: failed to create WAV encoder for noise profile: %v", err)
-		return nil, nil // Non-fatal - continue with measurement only
+		return nil, nil // Non-fatal - extraction skipped
 	}
 	defer wavEncoder.Close()
 
@@ -753,7 +750,6 @@ func extractNoiseProfile(filename string, region *SilenceRegion, tempDir string)
 	for {
 		frame, err := reader.ReadFrame()
 		if err != nil {
-			log.Printf("Warning: error reading frame during noise extraction: %v", err)
 			break
 		}
 		if frame == nil {
@@ -777,7 +773,6 @@ func extractNoiseProfile(filename string, region *SilenceRegion, tempDir string)
 			// Write frame to WAV file (if encoder available)
 			if wavEncoder != nil && wavWriteError == nil {
 				if err := wavEncoder.WriteFrame(filteredFrame); err != nil {
-					log.Printf("Warning: error writing frame to WAV: %v", err)
 					wavWriteError = err // Stop trying to write after first error
 				}
 			}
@@ -814,7 +809,6 @@ func extractNoiseProfile(filename string, region *SilenceRegion, tempDir string)
 			// Write remaining frames to WAV
 			if wavEncoder != nil && wavWriteError == nil {
 				if err := wavEncoder.WriteFrame(filteredFrame); err != nil {
-					log.Printf("Warning: error writing frame to WAV during flush: %v", err)
 					wavWriteError = err
 				}
 			}
@@ -840,14 +834,12 @@ func extractNoiseProfile(filename string, region *SilenceRegion, tempDir string)
 	// Flush encoder
 	if wavEncoder != nil && wavWriteError == nil {
 		if err := wavEncoder.Flush(); err != nil {
-			log.Printf("Warning: error flushing WAV encoder: %v", err)
 			wavWriteError = err
 		}
 	}
 
 	if framesProcessed == 0 {
-		log.Printf("Warning: no frames processed from silence region")
-		return nil, nil
+		return nil, nil // No frames in silence region
 	}
 
 	// Calculate crest factor from peak and RMS (both in dB)
@@ -871,7 +863,11 @@ func extractNoiseProfile(filename string, region *SilenceRegion, tempDir string)
 	// Set FilePath only if WAV was successfully written
 	if wavEncoder != nil && wavWriteError == nil {
 		profile.FilePath = outputPath
-		log.Printf("Noise profile extracted to: %s (%.1fs)", outputPath, region.Duration.Seconds())
+	}
+
+	// Record warning if using short silence region
+	if region.Duration < idealSilenceDuration {
+		profile.ExtractionWarning = fmt.Sprintf("using short silence region (%.1fs) - ideally need >=10s", region.Duration.Seconds())
 	}
 
 	if noiseFloorFound {
@@ -879,7 +875,11 @@ func extractNoiseProfile(filename string, region *SilenceRegion, tempDir string)
 	} else {
 		// Fallback: use overall noise floor estimate
 		profile.MeasuredNoiseFloor = -60.0 // Conservative estimate
-		log.Printf("Warning: could not measure noise floor from extracted sample, using estimate")
+		if profile.ExtractionWarning != "" {
+			profile.ExtractionWarning += "; noise floor estimated"
+		} else {
+			profile.ExtractionWarning = "noise floor estimated (measurement failed)"
+		}
 	}
 
 	return profile, nil

@@ -147,9 +147,10 @@ func AdaptConfig(config *FilterChainConfig, measurements *AudioMeasurements) {
 	config.Measurements = measurements
 	config.NoiseFloor = measurements.NoiseFloor
 
-	// Set noise profile path if available (for future afftdn enhancements)
+	// Set noise profile path and duration if available (enables precise afftdn sample_noise mode)
 	if measurements.NoiseProfile != nil && measurements.NoiseProfile.FilePath != "" {
 		config.NoiseProfilePath = measurements.NoiseProfile.FilePath
+		config.NoiseProfileDuration = measurements.NoiseProfile.Duration
 	}
 
 	// Calculate LUFS gap once - used by multiple tuning functions

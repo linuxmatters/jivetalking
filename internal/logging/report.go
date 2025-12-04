@@ -98,6 +98,9 @@ func GenerateReport(data ReportData) error {
 				}
 				fmt.Fprintf(f, "  Entropy:           %.3f (%s)\n", m.NoiseProfile.Entropy, noiseType)
 			}
+			if m.NoiseProfile.ExtractionWarning != "" {
+				fmt.Fprintf(f, "  Warning:           %s\n", m.NoiseProfile.ExtractionWarning)
+			}
 		} else if len(m.SilenceRegions) > 0 {
 			// Show first silence region even if profile extraction failed
 			r := m.SilenceRegions[0]
@@ -155,7 +158,20 @@ func GenerateReport(data ReportData) error {
 
 		fmt.Fprintln(f, "Noise Reduction:")
 		fmt.Fprintf(f, "  - Noise floor: %.1f dB (measured)\n", m.NoiseFloor)
-		fmt.Fprintln(f, "  - Method: FFT spectral subtraction with adaptive tracking")
+
+		// Show noise profile usage if applicable
+		if data.Result.Config != nil && data.Result.Config.NoiseProfilePath != "" {
+			fmt.Fprintln(f, "  - Method: FFT spectral subtraction with noise profile")
+			fmt.Fprintf(f, "  - Noise profile: %.2fs sample\n", data.Result.Config.NoiseProfileDuration.Seconds())
+			if m.NoiseProfileFramesFed > 0 {
+				fmt.Fprintf(f, "  - Profile frames fed: %d (for spectral learning)\n", m.NoiseProfileFramesFed)
+			}
+			if m.MainFramesProcessed > 0 {
+				fmt.Fprintf(f, "  - Main frames processed: %d\n", m.MainFramesProcessed)
+			}
+		} else {
+			fmt.Fprintln(f, "  - Method: FFT spectral subtraction with adaptive tracking")
+		}
 
 		if data.Result.Config != nil {
 			fmt.Fprintf(f, "  - Reduction: %.1f dB (adaptive, based on input LUFS)\n", data.Result.Config.NoiseReduction)

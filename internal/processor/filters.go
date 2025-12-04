@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	ffmpeg "github.com/linuxmatters/ffmpeg-statigo"
 )
@@ -127,13 +128,15 @@ type FilterChainConfig struct {
 	AdeclickMethod  string // 'a' = overlap-add, 's' = overlap-save (default: 's')
 
 	// Noise Reduction (afftdn) - profile-based spectral denoising
-	// When NoiseProfilePath is set, uses extracted silence sample for precise spectral subtraction
-	// Falls back to tracking mode (tn=1) when no profile available
-	AfftdnEnabled    bool    // Enable afftdn filter
-	NoiseFloor       float64 // dB, estimated noise floor from Pass 1
-	NoiseReduction   float64 // dB, reduction amount
-	NoiseTrack       bool    // Enable automatic noise tracking (tn=1)
-	NoiseProfilePath string  // Path to extracted noise profile WAV file (empty = use tracking mode)
+	// When NoiseProfilePath is set, uses concat+asendcmd pattern to feed noise sample first,
+	// enabling precise spectral subtraction based on actual room noise.
+	// Falls back to tracking mode (tn=1) when no profile available.
+	AfftdnEnabled        bool          // Enable afftdn filter
+	NoiseFloor           float64       // dB, estimated noise floor from Pass 1
+	NoiseReduction       float64       // dB, reduction amount
+	NoiseTrack           bool          // Enable automatic noise tracking (tn=1) - used when no profile
+	NoiseProfilePath     string        // Path to extracted noise profile WAV file (empty = use tracking mode)
+	NoiseProfileDuration time.Duration // Duration of noise profile sample (for atrim calculation)
 
 	// Gate (agate) - removes silence and low-level noise
 	GateEnabled   bool    // Enable agate filter
@@ -398,7 +401,14 @@ func (cfg *FilterChainConfig) buildAdeclickFilter() string {
 }
 
 // buildAfftdnFilter builds the afftdn (FFT denoise) filter specification.
-// Removes noise using FFT analysis with adaptive tracking.
+// Removes noise using FFT analysis.
+//
+// Two modes of operation:
+//  1. Profile-based (NoiseProfilePath set): Uses @noise label for asendcmd targeting.
+//     The filter will receive sn=start/sn=stop commands during noise profile feeding.
+//     Tracking mode is disabled (tn=0) when using profile.
+//  2. Tracking mode (no profile): Adaptive noise floor tracking (tn=1).
+//
 // Parameters adapt based on noise reduction amount for optimal quality.
 func (cfg *FilterChainConfig) buildAfftdnFilter() string {
 	if !cfg.AfftdnEnabled {
@@ -434,11 +444,25 @@ func (cfg *FilterChainConfig) buildAfftdnFilter() string {
 		gainSmooth = 5
 	}
 
+	// Determine noise mode: profile-based or tracking
+	useNoiseProfile := cfg.NoiseProfilePath != ""
+	trackingMode := 0
+	if cfg.NoiseTrack && !useNoiseProfile {
+		trackingMode = 1 // Only enable tracking if no profile available
+	}
+
+	// Determine filter name - add @noise label when using noise profile for command targeting
+	filterName := "afftdn"
+	if useNoiseProfile {
+		filterName = "afftdn@noise"
+	}
+
 	return fmt.Sprintf(
-		"afftdn=nf=%.1f:nr=%.1f:tn=%d:rf=%.1f:ad=%.2f:fo=%.1f:gs=%d:om=%s:nt=%s",
+		"%s=nf=%.1f:nr=%.1f:tn=%d:rf=%.1f:ad=%.2f:fo=%.1f:gs=%d:om=%s:nt=%s",
+		filterName,
 		noiseFloorClamped,
 		cfg.NoiseReduction,
-		boolToInt(cfg.NoiseTrack),
+		trackingMode,
 		residualFloor,
 		adaptivity,
 		1.0, // Floor offset factor
@@ -661,12 +685,309 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 }
 
 // CreateProcessingFilterGraph creates an AVFilterGraph for complete audio processing
-// This is used in Pass 2 to apply the full filter chain
+// This is used in Pass 2 to apply the full filter chain.
+// When config.NoiseProfilePath is set, returns a dual-input graph for noise profile feeding.
 func CreateProcessingFilterGraph(
 	decCtx *ffmpeg.AVCodecContext,
 	config *FilterChainConfig,
 ) (*ffmpeg.AVFilterGraph, *ffmpeg.AVFilterContext, *ffmpeg.AVFilterContext, error) {
 	return setupFilterGraph(decCtx, config.BuildFilterSpec())
+}
+
+// NoiseProfileFilterGraph holds references for a dual-input noise profile filter graph
+type NoiseProfileFilterGraph struct {
+	Graph           *ffmpeg.AVFilterGraph
+	NoiseBufferSrc  *ffmpeg.AVFilterContext // Buffer source for noise profile
+	MainBufferSrc   *ffmpeg.AVFilterContext // Buffer source for main audio
+	BufferSink      *ffmpeg.AVFilterContext
+	NoiseProfileDur time.Duration // Duration of noise sample (for tracking)
+}
+
+// CreateNoiseProfileFilterGraph creates a dual-input AVFilterGraph that:
+// 1. Accepts noise profile on one input (will receive sn start/stop commands)
+// 2. Accepts main audio on another input
+// 3. Concatenates them, applies afftdn with sample_noise, then trims noise prefix
+//
+// Filter graph structure:
+//
+//	[noise]aformat->asetpts[nf];[main]asetpts[mf];
+//	[nf][mf]concat=n=2:v=0:a=1[concat];
+//	[concat]asendcmd=c='0.0 afftdn@noise sn start; DUR afftdn@noise sn stop'[cmd];
+//	[cmd]afftdn@noise=...[denoised];
+//	[denoised]atrim=start=DUR,asetpts=PTS-STARTPTS[trimmed];
+//	[trimmed]...rest of filter chain...
+//
+// The caller must:
+// 1. Feed all noise profile frames to NoiseBufferSrc first (in order)
+// 2. Then flush NoiseBufferSrc with nil frame
+// 3. Then feed main audio frames to MainBufferSrc
+// 4. Output frames from BufferSink will have the noise prefix automatically trimmed
+func CreateNoiseProfileFilterGraph(
+	mainDecCtx *ffmpeg.AVCodecContext, // Decoder context for main audio
+	noiseDecCtx *ffmpeg.AVCodecContext, // Decoder context for noise profile
+	noiseDuration time.Duration,
+	config *FilterChainConfig,
+) (*NoiseProfileFilterGraph, error) {
+	filterGraph := ffmpeg.AVFilterGraphAlloc()
+	if filterGraph == nil {
+		return nil, fmt.Errorf("failed to allocate filter graph")
+	}
+
+	// Create noise profile buffer source
+	noiseBufferSrc, err := createNamedBufferSource(filterGraph, noiseDecCtx, "noise")
+	if err != nil {
+		ffmpeg.AVFilterGraphFree(&filterGraph)
+		return nil, fmt.Errorf("failed to create noise buffer source: %w", err)
+	}
+
+	// Create main audio buffer source
+	mainBufferSrc, err := createNamedBufferSource(filterGraph, mainDecCtx, "main")
+	if err != nil {
+		ffmpeg.AVFilterGraphFree(&filterGraph)
+		return nil, fmt.Errorf("failed to create main buffer source: %w", err)
+	}
+
+	// Create buffer sink
+	bufferSinkCtx, err := createBufferSink(filterGraph)
+	if err != nil {
+		ffmpeg.AVFilterGraphFree(&filterGraph)
+		return nil, fmt.Errorf("failed to create buffer sink: %w", err)
+	}
+
+	// Build the filter spec for noise profile processing
+	filterSpec := buildNoiseProfileFilterSpec(noiseDuration, config)
+
+	// Set up filter graph with two inputs
+	// outputs: link from noise and main buffer sources
+	// inputs: link to buffer sink
+	noiseOutput := ffmpeg.AVFilterInoutAlloc()
+	mainOutput := ffmpeg.AVFilterInoutAlloc()
+	inputs := ffmpeg.AVFilterInoutAlloc()
+	defer ffmpeg.AVFilterInoutFree(&inputs)
+	// Note: noiseOutput and mainOutput are freed by AVFilterGraphParsePtr or need careful handling
+
+	// Set up noise output: [noise] label
+	noiseOutput.SetName(ffmpeg.ToCStr("noise"))
+	noiseOutput.SetFilterCtx(noiseBufferSrc)
+	noiseOutput.SetPadIdx(0)
+	noiseOutput.SetNext(mainOutput) // Chain to main output
+
+	// Set up main output: [main] label
+	mainOutput.SetName(ffmpeg.ToCStr("main"))
+	mainOutput.SetFilterCtx(mainBufferSrc)
+	mainOutput.SetPadIdx(0)
+	mainOutput.SetNext(nil)
+
+	// Set up input: [out] label
+	inputs.SetName(ffmpeg.ToCStr("out"))
+	inputs.SetFilterCtx(bufferSinkCtx)
+	inputs.SetPadIdx(0)
+	inputs.SetNext(nil)
+
+	filterSpecC := ffmpeg.ToCStr(filterSpec)
+	defer filterSpecC.Free()
+
+	outputs := noiseOutput // Start of linked list
+	if _, err := ffmpeg.AVFilterGraphParsePtr(filterGraph, filterSpecC, &inputs, &outputs, nil); err != nil {
+		ffmpeg.AVFilterInoutFree(&noiseOutput)
+		ffmpeg.AVFilterInoutFree(&mainOutput)
+		ffmpeg.AVFilterGraphFree(&filterGraph)
+		return nil, fmt.Errorf("failed to parse filter graph: %w (spec: %s)", err, filterSpec)
+	}
+
+	// Free any remaining outputs (should be consumed by parse)
+	ffmpeg.AVFilterInoutFree(&outputs)
+
+	// Configure filter graph
+	if _, err := ffmpeg.AVFilterGraphConfig(filterGraph, nil); err != nil {
+		ffmpeg.AVFilterGraphFree(&filterGraph)
+		return nil, fmt.Errorf("failed to configure filter graph: %w", err)
+	}
+
+	return &NoiseProfileFilterGraph{
+		Graph:           filterGraph,
+		NoiseBufferSrc:  noiseBufferSrc,
+		MainBufferSrc:   mainBufferSrc,
+		BufferSink:      bufferSinkCtx,
+		NoiseProfileDur: noiseDuration,
+	}, nil
+}
+
+// buildNoiseProfileFilterSpec builds the filter specification for noise profile processing.
+// This creates a complex filter graph that concatenates noise profile with main audio,
+// uses asendcmd to trigger sample_noise learning, and trims the noise prefix from output.
+func buildNoiseProfileFilterSpec(noiseDuration time.Duration, config *FilterChainConfig) string {
+	// Noise duration in seconds for filter parameters
+	noiseDurSec := noiseDuration.Seconds()
+
+	// Build the main filter chain (everything except afftdn which we handle specially)
+	var mainChainFilters []string
+
+	// Collect non-afftdn filters from the config
+	filterBuilders := map[FilterID]func() string{
+		FilterHighpass:   config.buildHighpassFilter,
+		FilterBandreject: config.buildBandrejectFilter,
+		FilterAdeclick:   config.buildAdeclickFilter,
+		// FilterAfftdn handled separately with noise profile integration
+		FilterArnndn:      config.buildArnnDnFilter,
+		FilterAgate:       config.buildAgateFilter,
+		FilterAcompressor: config.buildAcompressorFilter,
+		FilterDeesser:     config.buildDeesserFilter,
+		FilterSpeechnorm:  config.buildSpeechnormFilter,
+		FilterDynaudnorm:  config.buildDynaudnormFilter,
+		FilterAlimiter:    config.buildAlimiterFilter,
+	}
+
+	// Use config filter order, collecting filters before and after afftdn position
+	var preAfftdnFilters []string
+	var postAfftdnFilters []string
+	passedAfftdn := false
+
+	for _, filterID := range config.FilterOrder {
+		if filterID == FilterAfftdn {
+			passedAfftdn = true
+			continue // We build afftdn specially
+		}
+
+		builder, exists := filterBuilders[filterID]
+		if !exists {
+			continue
+		}
+
+		spec := builder()
+		if spec == "" {
+			continue
+		}
+
+		if passedAfftdn {
+			postAfftdnFilters = append(postAfftdnFilters, spec)
+		} else {
+			preAfftdnFilters = append(preAfftdnFilters, spec)
+		}
+	}
+
+	// Build afftdn filter spec (with @noise label for command targeting)
+	afftdnSpec := config.buildAfftdnFilter()
+
+	// Construct the full filter graph:
+	// 1. Format noise profile to match expected format
+	// 2. Format main audio (identity pass-through initially)
+	// 3. Concatenate noise + main
+	// 4. Apply pre-afftdn filters
+	// 5. Apply asendcmd for sn start/stop timing
+	// 6. Apply afftdn@noise
+	// 7. Apply atrim to remove noise prefix
+	// 8. Apply post-afftdn filters
+	// 9. Apply output format filters
+
+	// [noise] input: format to match main audio parameters
+	// The noise profile WAV is 44100Hz mono S16, we need to ensure format compatibility
+	noiseFormat := "[noise]aformat=sample_rates=44100:channel_layouts=mono:sample_fmts=s16,asetpts=PTS-STARTPTS[nf]"
+
+	// [main] input: reset PTS
+	mainFormat := "[main]asetpts=PTS-STARTPTS[mf]"
+
+	// Concatenate: noise first, then main
+	concat := "[nf][mf]concat=n=2:v=0:a=1[concat]"
+
+	// Build pre-afftdn chain
+	preChain := ""
+	if len(preAfftdnFilters) > 0 {
+		preChain = "[concat]" + joinFilters(preAfftdnFilters) + "[pre];"
+		preChain += "[pre]"
+	} else {
+		preChain = "[concat]"
+	}
+
+	// asendcmd: send sn start at 0.0, sn stop at end of noise duration
+	// The sn commands tell afftdn to learn the noise profile during that period
+	asendcmd := fmt.Sprintf("asendcmd=c='0.0 afftdn@noise sn start\\; %.3f afftdn@noise sn stop'[cmd]", noiseDurSec)
+
+	// afftdn with learned noise profile
+	afftdn := "[cmd]" + afftdnSpec + "[denoised]"
+
+	// atrim: remove the noise prefix, reset PTS
+	atrim := fmt.Sprintf("[denoised]atrim=start=%.3f,asetpts=PTS-STARTPTS[trimmed]", noiseDurSec)
+
+	// Build post-afftdn chain including output format
+	postChain := "[trimmed]"
+	if len(postAfftdnFilters) > 0 {
+		postChain += joinFilters(postAfftdnFilters) + ","
+	}
+
+	// Output format filters (always applied)
+	mainChainFilters = append(mainChainFilters, "aformat=sample_rates=44100:channel_layouts=mono:sample_fmts=s16")
+	mainChainFilters = append(mainChainFilters, "asetnsamples=n=4096")
+	postChain += joinFilters(mainChainFilters)
+
+	// Assemble full filter spec
+	// Format: noise_format;main_format;concat;pre_chain+asendcmd;afftdn;atrim;post_chain
+	filterSpec := noiseFormat + ";" +
+		mainFormat + ";" +
+		concat + ";" +
+		preChain + asendcmd + ";" +
+		afftdn + ";" +
+		atrim + ";" +
+		postChain
+
+	return filterSpec
+}
+
+// joinFilters joins filter specifications with commas
+func joinFilters(filters []string) string {
+	result := ""
+	for i, f := range filters {
+		if i > 0 {
+			result += ","
+		}
+		result += f
+	}
+	return result
+}
+
+// createNamedBufferSource creates an abuffer source filter with a specific name
+func createNamedBufferSource(filterGraph *ffmpeg.AVFilterGraph, decCtx *ffmpeg.AVCodecContext, name string) (*ffmpeg.AVFilterContext, error) {
+	bufferSrc := ffmpeg.AVFilterGetByName(ffmpeg.GlobalCStr("abuffer"))
+	if bufferSrc == nil {
+		return nil, fmt.Errorf("abuffer filter not found")
+	}
+
+	// Get channel layout description
+	layoutPtr := ffmpeg.AllocCStr(64)
+	defer layoutPtr.Free()
+
+	if _, err := ffmpeg.AVChannelLayoutDescribe(decCtx.ChLayout(), layoutPtr, 64); err != nil {
+		return nil, fmt.Errorf("failed to get channel layout: %w", err)
+	}
+
+	pktTimebase := decCtx.PktTimebase()
+	args := fmt.Sprintf(
+		"time_base=%d/%d:sample_rate=%d:sample_fmt=%s:channel_layout=%s",
+		pktTimebase.Num(), pktTimebase.Den(),
+		decCtx.SampleRate(),
+		ffmpeg.AVGetSampleFmtName(decCtx.SampleFmt()).String(),
+		layoutPtr.String(),
+	)
+
+	argsC := ffmpeg.ToCStr(args)
+	defer argsC.Free()
+
+	nameC := ffmpeg.ToCStr(name)
+	defer nameC.Free()
+
+	var bufferSrcCtx *ffmpeg.AVFilterContext
+	if _, err := ffmpeg.AVFilterGraphCreateFilter(
+		&bufferSrcCtx,
+		bufferSrc,
+		nameC,
+		argsC,
+		nil,
+		filterGraph,
+	); err != nil {
+		return nil, fmt.Errorf("failed to create abuffer '%s': %w", name, err)
+	}
+
+	return bufferSrcCtx, nil
 }
 
 // setupFilterGraph creates and configures an FFmpeg filter graph with the given

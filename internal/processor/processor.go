@@ -74,10 +74,28 @@ type ProcessingResult struct {
 	NoiseFloor   float64
 	Measurements *AudioMeasurements
 	Config       *FilterChainConfig // Contains adaptive parameters used
+
+	// Noise profile processing stats (populated when using noise profile)
+	NoiseProfileUsed    bool // Whether noise profile was used for afftdn
+	NoiseProfileFrames  int  // Number of frames fed for spectral learning
+	MainFramesProcessed int  // Number of main audio frames processed
 }
 
-// processWithFilters performs the actual audio processing with the complete filter chain
+// processWithFilters performs the actual audio processing with the complete filter chain.
+// If a noise profile is available in the config, uses the dual-input noise profile filter graph
+// for precise spectral denoising based on the extracted silence sample.
 func processWithFilters(inputPath, outputPath string, config *FilterChainConfig, progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements), measurements *AudioMeasurements) error {
+	// Check if we should use noise profile processing
+	if config.NoiseProfilePath != "" && config.NoiseProfileDuration > 0 {
+		return processWithNoiseProfile(inputPath, outputPath, config, progressCallback, measurements)
+	}
+
+	// Standard processing without noise profile
+	return processWithStandardFilters(inputPath, outputPath, config, progressCallback, measurements)
+}
+
+// processWithStandardFilters performs audio processing using the standard single-input filter graph
+func processWithStandardFilters(inputPath, outputPath string, config *FilterChainConfig, progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements), measurements *AudioMeasurements) error {
 	// Open input audio file
 	reader, metadata, err := audio.OpenAudioFile(inputPath)
 	if err != nil {
@@ -198,6 +216,180 @@ func processWithFilters(inputPath, outputPath string, config *FilterChainConfig,
 	// Flush the encoder
 	if err := encoder.Flush(); err != nil {
 		return fmt.Errorf("failed to flush encoder: %w", err)
+	}
+
+	return nil
+}
+
+// processWithNoiseProfile performs audio processing using a dual-input filter graph
+// that feeds the noise profile first to train afftdn before processing main audio.
+//
+// The filter graph uses concat to join noise profile + main audio, asendcmd to trigger
+// afftdn's sample_noise learning phase, and atrim to remove the noise prefix from output.
+func processWithNoiseProfile(inputPath, outputPath string, config *FilterChainConfig, progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements), measurements *AudioMeasurements) error {
+
+	// Open noise profile WAV file
+	noiseReader, _, err := audio.OpenAudioFile(config.NoiseProfilePath)
+	if err != nil {
+		// Fall back to standard processing (warning will appear in report via NoiseProfileUsed=false)
+		config.NoiseProfilePath = ""
+		return processWithStandardFilters(inputPath, outputPath, config, progressCallback, measurements)
+	}
+	defer noiseReader.Close()
+
+	// Open main input audio file
+	mainReader, metadata, err := audio.OpenAudioFile(inputPath)
+	if err != nil {
+		return fmt.Errorf("failed to open input file: %w", err)
+	}
+	defer mainReader.Close()
+
+	// Get total duration for progress calculation (main audio only, noise is trimmed)
+	totalDuration := metadata.Duration
+	sampleRate := float64(metadata.SampleRate)
+	samplesPerFrame := 4096.0
+	estimatedTotalFrames := (totalDuration * sampleRate) / samplesPerFrame
+
+	// Create dual-input noise profile filter graph
+	npGraph, err := CreateNoiseProfileFilterGraph(
+		mainReader.GetDecoderContext(),
+		noiseReader.GetDecoderContext(),
+		config.NoiseProfileDuration,
+		config,
+	)
+	if err != nil {
+		// Fall back to standard processing (will be noted in report via NoiseProfileUsed=false)
+		config.NoiseProfilePath = ""
+		return processWithStandardFilters(inputPath, outputPath, config, progressCallback, measurements)
+	}
+	defer ffmpeg.AVFilterGraphFree(&npGraph.Graph)
+
+	// Create output encoder
+	encoder, err := createOutputEncoder(outputPath, metadata, npGraph.BufferSink)
+	if err != nil {
+		return fmt.Errorf("failed to create encoder: %w", err)
+	}
+	defer encoder.Close()
+
+	// Allocate frames for processing
+	filteredFrame := ffmpeg.AVFrameAlloc()
+	defer ffmpeg.AVFrameFree(&filteredFrame)
+
+	// Phase 1: Feed noise profile frames to train afftdn
+	noiseFrameCount := 0
+	for {
+		frame, err := noiseReader.ReadFrame()
+		if err != nil {
+			return fmt.Errorf("failed to read noise profile frame: %w", err)
+		}
+		if frame == nil {
+			break // EOF
+		}
+
+		noiseFrameCount++
+
+		// Push noise frame to noise input
+		if _, err := ffmpeg.AVBuffersrcAddFrameFlags(npGraph.NoiseBufferSrc, frame, 0); err != nil {
+			return fmt.Errorf("failed to add noise frame to filter: %w", err)
+		}
+	}
+
+	// Flush noise input to signal EOF
+	if _, err := ffmpeg.AVBuffersrcAddFrameFlags(npGraph.NoiseBufferSrc, nil, 0); err != nil {
+		return fmt.Errorf("failed to flush noise buffer: %w", err)
+	}
+
+	// Store noise profile stats for reporting
+	if measurements != nil {
+		measurements.NoiseProfileFramesFed = noiseFrameCount
+	}
+
+	// Phase 2: Feed main audio frames
+	frameCount := 0
+	currentLevel := 0.0
+
+	for {
+		// Read frame from main input
+		frame, err := mainReader.ReadFrame()
+		if err != nil {
+			return fmt.Errorf("failed to read frame: %w", err)
+		}
+		if frame == nil {
+			break // EOF
+		}
+
+		frameCount++
+
+		// Push frame to main input
+		if _, err := ffmpeg.AVBuffersrcAddFrameFlags(npGraph.MainBufferSrc, frame, 0); err != nil {
+			return fmt.Errorf("failed to add frame to filter: %w", err)
+		}
+
+		// Pull filtered frames and encode them
+		for {
+			if _, err := ffmpeg.AVBuffersinkGetFrame(npGraph.BufferSink, filteredFrame); err != nil {
+				if errors.Is(err, ffmpeg.EAgain) || errors.Is(err, ffmpeg.AVErrorEOF) {
+					break
+				}
+				return fmt.Errorf("failed to get filtered frame: %w", err)
+			}
+
+			// Calculate audio level from FILTERED frame
+			currentLevel = calculateFrameLevel(filteredFrame)
+
+			// Set timebase for the filtered frame
+			filteredFrame.SetTimeBase(ffmpeg.AVBuffersinkGetTimeBase(npGraph.BufferSink))
+
+			// Encode and write the filtered frame
+			if err := encoder.WriteFrame(filteredFrame); err != nil {
+				return fmt.Errorf("failed to write frame: %w", err)
+			}
+
+			ffmpeg.AVFrameUnref(filteredFrame)
+		}
+
+		// Send periodic progress updates
+		updateInterval := 100
+		if frameCount%updateInterval == 0 && progressCallback != nil && estimatedTotalFrames > 0 {
+			progress := float64(frameCount) / estimatedTotalFrames
+			if progress > 1.0 {
+				progress = 1.0
+			}
+			progressCallback(2, "Processing", progress, currentLevel, measurements)
+		}
+	}
+
+	// Flush the main buffer
+	if _, err := ffmpeg.AVBuffersrcAddFrameFlags(npGraph.MainBufferSrc, nil, 0); err != nil {
+		return fmt.Errorf("failed to flush main filter: %w", err)
+	}
+
+	// Pull remaining filtered frames
+	for {
+		if _, err := ffmpeg.AVBuffersinkGetFrame(npGraph.BufferSink, filteredFrame); err != nil {
+			if errors.Is(err, ffmpeg.EAgain) || errors.Is(err, ffmpeg.AVErrorEOF) {
+				break
+			}
+			return fmt.Errorf("failed to get filtered frame: %w", err)
+		}
+
+		filteredFrame.SetTimeBase(ffmpeg.AVBuffersinkGetTimeBase(npGraph.BufferSink))
+
+		if err := encoder.WriteFrame(filteredFrame); err != nil {
+			return fmt.Errorf("failed to write frame: %w", err)
+		}
+
+		ffmpeg.AVFrameUnref(filteredFrame)
+	}
+
+	// Flush the encoder
+	if err := encoder.Flush(); err != nil {
+		return fmt.Errorf("failed to flush encoder: %w", err)
+	}
+
+	// Store main frame count for reporting
+	if measurements != nil {
+		measurements.MainFramesProcessed = frameCount
 	}
 
 	return nil
