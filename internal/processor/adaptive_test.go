@@ -4,6 +4,111 @@ import (
 	"testing"
 )
 
+func TestTuneNoiseReduction(t *testing.T) {
+	// Constants from adaptive.go for reference:
+	// noiseReductionBase = 12.0 dB
+	// noiseReductionMin  = 6.0 dB
+	// noiseReductionMax  = 40.0 dB
+
+	tests := []struct {
+		name          string
+		inputI        float64 // measured input LUFS
+		targetI       float64 // target LUFS (typically -16)
+		wantReduction float64 // expected noise reduction in dB
+	}{
+		// Normal scaling: base (12) + LUFS gap
+		{
+			name:          "near target - minimal boost",
+			inputI:        -18,
+			targetI:       -16,
+			wantReduction: 14, // 12 + 2
+		},
+		{
+			name:          "moderate gap",
+			inputI:        -26,
+			targetI:       -16,
+			wantReduction: 22, // 12 + 10
+		},
+		{
+			name:          "typical podcast gap",
+			inputI:        -30,
+			targetI:       -16,
+			wantReduction: 26, // 12 + 14
+		},
+
+		// Clamping behaviour
+		{
+			name:          "very quiet source - clamped to max",
+			inputI:        -46,
+			targetI:       -16,
+			wantReduction: 40, // 12 + 30 = 42, clamped to noiseReductionMax (40)
+		},
+		{
+			name:          "extremely quiet source - clamped to max",
+			inputI:        -60,
+			targetI:       -16,
+			wantReduction: 40, // 12 + 44 = 56, clamped to 40
+		},
+		{
+			name:          "loud source - negative gap uses base only",
+			inputI:        -12,
+			targetI:       -16,
+			wantReduction: 8, // 12 + (-4) = 8, above min
+		},
+		{
+			name:          "very loud source - clamped to min",
+			inputI:        -6,
+			targetI:       -16,
+			wantReduction: 6, // 12 + (-10) = 2, clamped to noiseReductionMin (6)
+		},
+
+		// Edge cases
+		{
+			name:          "no LUFS measurement - fallback to base",
+			inputI:        0, // triggers fallback
+			targetI:       -16,
+			wantReduction: 12, // noiseReductionBase
+		},
+		{
+			name:          "exact target - base only",
+			inputI:        -16,
+			targetI:       -16,
+			wantReduction: 12, // 12 + 0
+		},
+
+		// Boundary: exactly at max before clamping
+		{
+			name:          "boundary: exactly 28dB gap",
+			inputI:        -44,
+			targetI:       -16,
+			wantReduction: 40, // 12 + 28 = 40, exactly at max
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Setup
+			config := DefaultFilterConfig()
+			config.TargetI = tt.targetI
+			measurements := &AudioMeasurements{
+				InputI: tt.inputI,
+			}
+
+			// Calculate LUFS gap as done in AdaptConfig
+			lufsGap := calculateLUFSGap(tt.targetI, tt.inputI)
+
+			// Execute
+			tuneNoiseReduction(config, measurements, lufsGap)
+
+			// Verify
+			if config.NoiseReduction != tt.wantReduction {
+				t.Errorf("NoiseReduction = %.1f dB, want %.1f dB (inputI=%.1f, targetI=%.1f, gap=%.1f)",
+					config.NoiseReduction, tt.wantReduction, tt.inputI, tt.targetI, lufsGap)
+			}
+		})
+	}
+}
+
 func TestTuneHighpassFreq(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -62,7 +167,7 @@ func TestTuneHighpassFreq(t *testing.T) {
 		{
 			name:        "dark voice, aggressive gain",
 			centroid:    3500,
-			lufsGap:     30, // above lufsGapAggressive (25)
+			lufsGap:     30,  // above lufsGapAggressive (25)
 			wantFreqMin: 100, // 60 + 40
 			wantFreqMax: 100,
 		},
@@ -120,7 +225,7 @@ func TestTuneHighpassFreq(t *testing.T) {
 		{
 			name:        "boundary: exactly at lufsGapAggressive",
 			centroid:    5000,
-			lufsGap:     25, // exactly at lufsGapAggressive threshold
+			lufsGap:     25,  // exactly at lufsGapAggressive threshold
 			wantFreqMin: 100, // moderate boost (not > lufsGapAggressive)
 			wantFreqMax: 100,
 		},
