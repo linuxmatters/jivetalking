@@ -590,3 +590,672 @@ func linearToDB(linear float64) float64 {
 	}
 	return 20 * math.Log10(linear)
 }
+
+func TestSanitizeFloat(t *testing.T) {
+	// Tests for the sanitizeFloat helper function
+	// Returns default value for NaN and Inf, otherwise returns original value
+
+	const defaultVal = 42.0
+
+	tests := []struct {
+		name     string
+		input    float64
+		want     float64
+		wantDesc string
+	}{
+		// NaN cases
+		{
+			name:     "NaN returns default",
+			input:    math.NaN(),
+			want:     defaultVal,
+			wantDesc: "NaN should be replaced with default",
+		},
+
+		// Inf cases
+		{
+			name:     "positive Inf returns default",
+			input:    math.Inf(1),
+			want:     defaultVal,
+			wantDesc: "+Inf should be replaced with default",
+		},
+		{
+			name:     "negative Inf returns default",
+			input:    math.Inf(-1),
+			want:     defaultVal,
+			wantDesc: "-Inf should be replaced with default",
+		},
+
+		// Valid values pass through unchanged
+		{
+			name:     "zero passes through",
+			input:    0.0,
+			want:     0.0,
+			wantDesc: "zero is valid and should pass through",
+		},
+		{
+			name:     "negative value passes through",
+			input:    -25.5,
+			want:     -25.5,
+			wantDesc: "negative values are valid (e.g., dB thresholds)",
+		},
+		{
+			name:     "positive value passes through",
+			input:    80.0,
+			want:     80.0,
+			wantDesc: "positive values are valid",
+		},
+		{
+			name:     "very small positive passes through",
+			input:    1e-10,
+			want:     1e-10,
+			wantDesc: "small positive values are valid",
+		},
+		{
+			name:     "very large positive passes through",
+			input:    1e10,
+			want:     1e10,
+			wantDesc: "large positive values are valid (clamping is separate)",
+		},
+		{
+			name:     "very small negative passes through",
+			input:    -1e-10,
+			want:     -1e-10,
+			wantDesc: "small negative values are valid",
+		},
+		{
+			name:     "very large negative passes through",
+			input:    -1e10,
+			want:     -1e10,
+			wantDesc: "large negative values are valid (clamping is separate)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sanitizeFloat(tt.input, defaultVal)
+
+			// Handle NaN comparison specially
+			if math.IsNaN(tt.want) {
+				if !math.IsNaN(got) {
+					t.Errorf("sanitizeFloat() = %v, want NaN - %s", got, tt.wantDesc)
+				}
+				return
+			}
+
+			if got != tt.want {
+				t.Errorf("sanitizeFloat() = %v, want %v - %s", got, tt.want, tt.wantDesc)
+			}
+		})
+	}
+}
+
+func TestSanitizeConfig(t *testing.T) {
+	// Tests for sanitizeConfig which sanitizes all tunable parameters in FilterChainConfig
+	// Uses defaults from adaptive.go:
+	// defaultHighpassFreq   = 80.0
+	// defaultDeessIntensity = 0.0
+	// defaultNoiseReduction = 12.0
+	// defaultCompRatio      = 2.5
+	// defaultCompThreshold  = -20.0
+	// defaultCompMakeup     = 3.0
+	// defaultGateThreshold  = 0.01 (linear, ~-40dBFS)
+
+	tests := []struct {
+		name   string
+		config FilterChainConfig // input config
+		want   FilterChainConfig // expected after sanitization
+	}{
+		// Clean config should pass through unchanged
+		{
+			name: "valid config passes through unchanged",
+			config: FilterChainConfig{
+				HighpassFreq:   100.0,
+				DeessIntensity: 0.3,
+				NoiseReduction: 18.0,
+				CompRatio:      3.0,
+				CompThreshold:  -24.0,
+				CompMakeup:     4.0,
+				GateThreshold:  0.02,
+			},
+			want: FilterChainConfig{
+				HighpassFreq:   100.0,
+				DeessIntensity: 0.3,
+				NoiseReduction: 18.0,
+				CompRatio:      3.0,
+				CompThreshold:  -24.0,
+				CompMakeup:     4.0,
+				GateThreshold:  0.02,
+			},
+		},
+
+		// NaN in each field
+		{
+			name: "NaN HighpassFreq gets default",
+			config: FilterChainConfig{
+				HighpassFreq:   math.NaN(),
+				DeessIntensity: 0.3,
+				NoiseReduction: 18.0,
+				CompRatio:      3.0,
+				CompThreshold:  -24.0,
+				CompMakeup:     4.0,
+				GateThreshold:  0.02,
+			},
+			want: FilterChainConfig{
+				HighpassFreq:   80.0, // defaultHighpassFreq
+				DeessIntensity: 0.3,
+				NoiseReduction: 18.0,
+				CompRatio:      3.0,
+				CompThreshold:  -24.0,
+				CompMakeup:     4.0,
+				GateThreshold:  0.02,
+			},
+		},
+		{
+			name: "NaN DeessIntensity gets default",
+			config: FilterChainConfig{
+				HighpassFreq:   100.0,
+				DeessIntensity: math.NaN(),
+				NoiseReduction: 18.0,
+				CompRatio:      3.0,
+				CompThreshold:  -24.0,
+				CompMakeup:     4.0,
+				GateThreshold:  0.02,
+			},
+			want: FilterChainConfig{
+				HighpassFreq:   100.0,
+				DeessIntensity: 0.0, // defaultDeessIntensity
+				NoiseReduction: 18.0,
+				CompRatio:      3.0,
+				CompThreshold:  -24.0,
+				CompMakeup:     4.0,
+				GateThreshold:  0.02,
+			},
+		},
+		{
+			name: "NaN NoiseReduction gets default",
+			config: FilterChainConfig{
+				HighpassFreq:   100.0,
+				DeessIntensity: 0.3,
+				NoiseReduction: math.NaN(),
+				CompRatio:      3.0,
+				CompThreshold:  -24.0,
+				CompMakeup:     4.0,
+				GateThreshold:  0.02,
+			},
+			want: FilterChainConfig{
+				HighpassFreq:   100.0,
+				DeessIntensity: 0.3,
+				NoiseReduction: 12.0, // defaultNoiseReduction
+				CompRatio:      3.0,
+				CompThreshold:  -24.0,
+				CompMakeup:     4.0,
+				GateThreshold:  0.02,
+			},
+		},
+		{
+			name: "NaN CompRatio gets default",
+			config: FilterChainConfig{
+				HighpassFreq:   100.0,
+				DeessIntensity: 0.3,
+				NoiseReduction: 18.0,
+				CompRatio:      math.NaN(),
+				CompThreshold:  -24.0,
+				CompMakeup:     4.0,
+				GateThreshold:  0.02,
+			},
+			want: FilterChainConfig{
+				HighpassFreq:   100.0,
+				DeessIntensity: 0.3,
+				NoiseReduction: 18.0,
+				CompRatio:      2.5, // defaultCompRatio
+				CompThreshold:  -24.0,
+				CompMakeup:     4.0,
+				GateThreshold:  0.02,
+			},
+		},
+		{
+			name: "NaN CompThreshold gets default",
+			config: FilterChainConfig{
+				HighpassFreq:   100.0,
+				DeessIntensity: 0.3,
+				NoiseReduction: 18.0,
+				CompRatio:      3.0,
+				CompThreshold:  math.NaN(),
+				CompMakeup:     4.0,
+				GateThreshold:  0.02,
+			},
+			want: FilterChainConfig{
+				HighpassFreq:   100.0,
+				DeessIntensity: 0.3,
+				NoiseReduction: 18.0,
+				CompRatio:      3.0,
+				CompThreshold:  -20.0, // defaultCompThreshold
+				CompMakeup:     4.0,
+				GateThreshold:  0.02,
+			},
+		},
+		{
+			name: "NaN CompMakeup gets default",
+			config: FilterChainConfig{
+				HighpassFreq:   100.0,
+				DeessIntensity: 0.3,
+				NoiseReduction: 18.0,
+				CompRatio:      3.0,
+				CompThreshold:  -24.0,
+				CompMakeup:     math.NaN(),
+				GateThreshold:  0.02,
+			},
+			want: FilterChainConfig{
+				HighpassFreq:   100.0,
+				DeessIntensity: 0.3,
+				NoiseReduction: 18.0,
+				CompRatio:      3.0,
+				CompThreshold:  -24.0,
+				CompMakeup:     3.0, // defaultCompMakeup
+				GateThreshold:  0.02,
+			},
+		},
+		{
+			name: "NaN GateThreshold gets default",
+			config: FilterChainConfig{
+				HighpassFreq:   100.0,
+				DeessIntensity: 0.3,
+				NoiseReduction: 18.0,
+				CompRatio:      3.0,
+				CompThreshold:  -24.0,
+				CompMakeup:     4.0,
+				GateThreshold:  math.NaN(),
+			},
+			want: FilterChainConfig{
+				HighpassFreq:   100.0,
+				DeessIntensity: 0.3,
+				NoiseReduction: 18.0,
+				CompRatio:      3.0,
+				CompThreshold:  -24.0,
+				CompMakeup:     4.0,
+				GateThreshold:  0.01, // defaultGateThreshold
+			},
+		},
+
+		// Inf cases
+		{
+			name: "positive Inf values get defaults",
+			config: FilterChainConfig{
+				HighpassFreq:   math.Inf(1),
+				DeessIntensity: math.Inf(1),
+				NoiseReduction: math.Inf(1),
+				CompRatio:      math.Inf(1),
+				CompThreshold:  math.Inf(1),
+				CompMakeup:     math.Inf(1),
+				GateThreshold:  math.Inf(1),
+			},
+			want: FilterChainConfig{
+				HighpassFreq:   80.0,
+				DeessIntensity: 0.0,
+				NoiseReduction: 12.0,
+				CompRatio:      2.5,
+				CompThreshold:  -20.0,
+				CompMakeup:     3.0,
+				GateThreshold:  0.01,
+			},
+		},
+		{
+			name: "negative Inf values get defaults",
+			config: FilterChainConfig{
+				HighpassFreq:   math.Inf(-1),
+				DeessIntensity: math.Inf(-1),
+				NoiseReduction: math.Inf(-1),
+				CompRatio:      math.Inf(-1),
+				CompThreshold:  math.Inf(-1),
+				CompMakeup:     math.Inf(-1),
+				GateThreshold:  math.Inf(-1),
+			},
+			want: FilterChainConfig{
+				HighpassFreq:   80.0,
+				DeessIntensity: 0.0,
+				NoiseReduction: 12.0,
+				CompRatio:      2.5,
+				CompThreshold:  -20.0,
+				CompMakeup:     3.0,
+				GateThreshold:  0.01,
+			},
+		},
+
+		// GateThreshold special cases: zero and negative get default
+		// (other fields allow zero/negative values)
+		{
+			name: "zero GateThreshold gets default",
+			config: FilterChainConfig{
+				HighpassFreq:   100.0,
+				DeessIntensity: 0.0, // zero is valid for DeessIntensity
+				NoiseReduction: 18.0,
+				CompRatio:      3.0,
+				CompThreshold:  -24.0,
+				CompMakeup:     4.0,
+				GateThreshold:  0.0, // zero is NOT valid for GateThreshold
+			},
+			want: FilterChainConfig{
+				HighpassFreq:   100.0,
+				DeessIntensity: 0.0,
+				NoiseReduction: 18.0,
+				CompRatio:      3.0,
+				CompThreshold:  -24.0,
+				CompMakeup:     4.0,
+				GateThreshold:  0.01, // defaultGateThreshold
+			},
+		},
+		{
+			name: "negative GateThreshold gets default",
+			config: FilterChainConfig{
+				HighpassFreq:   100.0,
+				DeessIntensity: 0.3,
+				NoiseReduction: 18.0,
+				CompRatio:      3.0,
+				CompThreshold:  -24.0,
+				CompMakeup:     4.0,
+				GateThreshold:  -0.5, // negative is NOT valid for GateThreshold
+			},
+			want: FilterChainConfig{
+				HighpassFreq:   100.0,
+				DeessIntensity: 0.3,
+				NoiseReduction: 18.0,
+				CompRatio:      3.0,
+				CompThreshold:  -24.0,
+				CompMakeup:     4.0,
+				GateThreshold:  0.01, // defaultGateThreshold
+			},
+		},
+
+		// Zero values for other fields pass through
+		// (sanitizeFloat doesn't treat zero specially)
+		{
+			name: "zero values for non-GateThreshold fields pass through",
+			config: FilterChainConfig{
+				HighpassFreq:   0.0, // passes through (edge case: probably invalid, but sanitize doesn't clamp)
+				DeessIntensity: 0.0, // valid: de-essing disabled
+				NoiseReduction: 0.0, // passes through (edge case: no reduction)
+				CompRatio:      0.0, // passes through (edge case: probably invalid)
+				CompThreshold:  0.0, // passes through (0 dB threshold)
+				CompMakeup:     0.0, // passes through (0 dB makeup)
+				GateThreshold:  0.02,
+			},
+			want: FilterChainConfig{
+				HighpassFreq:   0.0,
+				DeessIntensity: 0.0,
+				NoiseReduction: 0.0,
+				CompRatio:      0.0,
+				CompThreshold:  0.0,
+				CompMakeup:     0.0,
+				GateThreshold:  0.02,
+			},
+		},
+
+		// Negative values for fields that legitimately use them
+		{
+			name: "negative CompThreshold passes through (valid dB value)",
+			config: FilterChainConfig{
+				HighpassFreq:   100.0,
+				DeessIntensity: 0.3,
+				NoiseReduction: 18.0,
+				CompRatio:      3.0,
+				CompThreshold:  -40.0, // very aggressive threshold
+				CompMakeup:     4.0,
+				GateThreshold:  0.02,
+			},
+			want: FilterChainConfig{
+				HighpassFreq:   100.0,
+				DeessIntensity: 0.3,
+				NoiseReduction: 18.0,
+				CompRatio:      3.0,
+				CompThreshold:  -40.0,
+				CompMakeup:     4.0,
+				GateThreshold:  0.02,
+			},
+		},
+
+		// All fields NaN - complete fallback to defaults
+		{
+			name: "all NaN values get all defaults",
+			config: FilterChainConfig{
+				HighpassFreq:   math.NaN(),
+				DeessIntensity: math.NaN(),
+				NoiseReduction: math.NaN(),
+				CompRatio:      math.NaN(),
+				CompThreshold:  math.NaN(),
+				CompMakeup:     math.NaN(),
+				GateThreshold:  math.NaN(),
+			},
+			want: FilterChainConfig{
+				HighpassFreq:   80.0,
+				DeessIntensity: 0.0,
+				NoiseReduction: 12.0,
+				CompRatio:      2.5,
+				CompThreshold:  -20.0,
+				CompMakeup:     3.0,
+				GateThreshold:  0.01,
+			},
+		},
+
+		// Very small positive GateThreshold passes through
+		{
+			name: "very small positive GateThreshold passes through",
+			config: FilterChainConfig{
+				HighpassFreq:   100.0,
+				DeessIntensity: 0.3,
+				NoiseReduction: 18.0,
+				CompRatio:      3.0,
+				CompThreshold:  -24.0,
+				CompMakeup:     4.0,
+				GateThreshold:  1e-10, // very small but positive
+			},
+			want: FilterChainConfig{
+				HighpassFreq:   100.0,
+				DeessIntensity: 0.3,
+				NoiseReduction: 18.0,
+				CompRatio:      3.0,
+				CompThreshold:  -24.0,
+				CompMakeup:     4.0,
+				GateThreshold:  1e-10,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Make a copy to avoid mutating test data
+			config := tt.config
+			sanitizeConfig(&config)
+
+			// Check each field
+			if config.HighpassFreq != tt.want.HighpassFreq {
+				t.Errorf("HighpassFreq = %v, want %v", config.HighpassFreq, tt.want.HighpassFreq)
+			}
+			if config.DeessIntensity != tt.want.DeessIntensity {
+				t.Errorf("DeessIntensity = %v, want %v", config.DeessIntensity, tt.want.DeessIntensity)
+			}
+			if config.NoiseReduction != tt.want.NoiseReduction {
+				t.Errorf("NoiseReduction = %v, want %v", config.NoiseReduction, tt.want.NoiseReduction)
+			}
+			if config.CompRatio != tt.want.CompRatio {
+				t.Errorf("CompRatio = %v, want %v", config.CompRatio, tt.want.CompRatio)
+			}
+			if config.CompThreshold != tt.want.CompThreshold {
+				t.Errorf("CompThreshold = %v, want %v", config.CompThreshold, tt.want.CompThreshold)
+			}
+			if config.CompMakeup != tt.want.CompMakeup {
+				t.Errorf("CompMakeup = %v, want %v", config.CompMakeup, tt.want.CompMakeup)
+			}
+			if config.GateThreshold != tt.want.GateThreshold {
+				t.Errorf("GateThreshold = %v, want %v", config.GateThreshold, tt.want.GateThreshold)
+			}
+		})
+	}
+}
+
+func TestClamp(t *testing.T) {
+	// Tests for the clamp helper function
+	// clamp(val, min, max) returns val constrained to [min, max]
+
+	tests := []struct {
+		name string
+		val  float64
+		min  float64
+		max  float64
+		want float64
+	}{
+		// Value within range
+		{
+			name: "value within range passes through",
+			val:  50.0,
+			min:  0.0,
+			max:  100.0,
+			want: 50.0,
+		},
+		{
+			name: "value at min boundary passes through",
+			val:  0.0,
+			min:  0.0,
+			max:  100.0,
+			want: 0.0,
+		},
+		{
+			name: "value at max boundary passes through",
+			val:  100.0,
+			min:  0.0,
+			max:  100.0,
+			want: 100.0,
+		},
+
+		// Value below min
+		{
+			name: "value below min clamped to min",
+			val:  -10.0,
+			min:  0.0,
+			max:  100.0,
+			want: 0.0,
+		},
+		{
+			name: "value far below min clamped to min",
+			val:  -1000.0,
+			min:  0.0,
+			max:  100.0,
+			want: 0.0,
+		},
+
+		// Value above max
+		{
+			name: "value above max clamped to max",
+			val:  150.0,
+			min:  0.0,
+			max:  100.0,
+			want: 100.0,
+		},
+		{
+			name: "value far above max clamped to max",
+			val:  1e10,
+			min:  0.0,
+			max:  100.0,
+			want: 100.0,
+		},
+
+		// Negative ranges
+		{
+			name: "negative range - value within",
+			val:  -25.0,
+			min:  -40.0,
+			max:  -10.0,
+			want: -25.0,
+		},
+		{
+			name: "negative range - value below min",
+			val:  -50.0,
+			min:  -40.0,
+			max:  -10.0,
+			want: -40.0,
+		},
+		{
+			name: "negative range - value above max",
+			val:  0.0,
+			min:  -40.0,
+			max:  -10.0,
+			want: -10.0,
+		},
+
+		// Single-point range (min == max)
+		{
+			name: "single point range - value equals",
+			val:  42.0,
+			min:  42.0,
+			max:  42.0,
+			want: 42.0,
+		},
+		{
+			name: "single point range - value below",
+			val:  10.0,
+			min:  42.0,
+			max:  42.0,
+			want: 42.0,
+		},
+		{
+			name: "single point range - value above",
+			val:  100.0,
+			min:  42.0,
+			max:  42.0,
+			want: 42.0,
+		},
+
+		// Real-world audio processing ranges
+		{
+			name: "highpass freq clamping - below min",
+			val:  30.0,
+			min:  60.0,  // minHighpassFreq
+			max:  120.0, // maxHighpassFreq
+			want: 60.0,
+		},
+		{
+			name: "highpass freq clamping - above max",
+			val:  200.0,
+			min:  60.0,
+			max:  120.0,
+			want: 120.0,
+		},
+		{
+			name: "noise reduction clamping - below min",
+			val:  2.0,
+			min:  6.0,  // noiseReductionMin
+			max:  40.0, // noiseReductionMax
+			want: 6.0,
+		},
+		{
+			name: "noise reduction clamping - above max",
+			val:  60.0,
+			min:  6.0,
+			max:  40.0,
+			want: 40.0,
+		},
+		{
+			name: "deess intensity clamping - below min",
+			val:  -0.1,
+			min:  0.0, // minDeessIntensity
+			max:  0.6, // maxDeessIntensity
+			want: 0.0,
+		},
+		{
+			name: "deess intensity clamping - above max",
+			val:  0.9,
+			min:  0.0,
+			max:  0.6,
+			want: 0.6,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := clamp(tt.val, tt.min, tt.max)
+			if got != tt.want {
+				t.Errorf("clamp(%v, %v, %v) = %v, want %v",
+					tt.val, tt.min, tt.max, got, tt.want)
+			}
+		})
+	}
+}
