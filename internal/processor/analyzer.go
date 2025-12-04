@@ -25,6 +25,105 @@ var (
 	metaKeyEbur128LRA       = ffmpeg.GlobalCStr("lavfi.r128.LRA")
 )
 
+// metadataAccumulators holds all accumulator variables for frame metadata extraction.
+// Spectral stats (centroid, rolloff) are averaged across all frames.
+// astats and ebur128 values are cumulative, so we keep the latest.
+type metadataAccumulators struct {
+	// Spectral statistics (averaged across frames)
+	spectralCentroidSum float64
+	spectralRolloffSum  float64
+	spectralFrameCount  int
+
+	// astats measurements (cumulative - we keep latest values)
+	astatsDynamicRange float64
+	astatsRMSLevel     float64
+	astatsPeakLevel    float64
+	astatsRMSTrough    float64
+	astatsFound        bool
+
+	// ebur128 measurements (cumulative - we keep latest values)
+	ebur128InputI   float64
+	ebur128InputTP  float64
+	ebur128InputLRA float64
+	ebur128Found    bool
+}
+
+// extractFrameMetadata extracts audio analysis metadata from a filtered frame.
+// Updates accumulators with spectral, astats, and ebur128 measurements.
+// Called from both the main processing loop and the flush loop.
+func extractFrameMetadata(metadata *ffmpeg.AVDictionary, acc *metadataAccumulators) {
+	if metadata == nil {
+		return
+	}
+
+	// Extract spectral centroid (Hz) - where energy is concentrated
+	// For mono audio, spectral stats are under channel .1
+	if centroidEntry := ffmpeg.AVDictGet(metadata, metaKeySpectralCentroid, nil, 0); centroidEntry != nil {
+		if value, err := strconv.ParseFloat(centroidEntry.Value().String(), 64); err == nil {
+			acc.spectralCentroidSum += value
+			acc.spectralFrameCount++
+		}
+	}
+
+	// Extract spectral rolloff (Hz) - high-frequency energy dropoff point
+	if rolloffEntry := ffmpeg.AVDictGet(metadata, metaKeySpectralRolloff, nil, 0); rolloffEntry != nil {
+		if value, err := strconv.ParseFloat(rolloffEntry.Value().String(), 64); err == nil {
+			acc.spectralRolloffSum += value
+		}
+	}
+
+	// Extract astats measurements (cumulative, so we keep the latest)
+	// For mono audio, stats are under channel .1
+	if dynamicRangeEntry := ffmpeg.AVDictGet(metadata, metaKeyDynamicRange, nil, 0); dynamicRangeEntry != nil {
+		if value, err := strconv.ParseFloat(dynamicRangeEntry.Value().String(), 64); err == nil {
+			acc.astatsDynamicRange = value
+			acc.astatsFound = true
+		}
+	}
+
+	if rmsEntry := ffmpeg.AVDictGet(metadata, metaKeyRMSLevel, nil, 0); rmsEntry != nil {
+		if value, err := strconv.ParseFloat(rmsEntry.Value().String(), 64); err == nil {
+			acc.astatsRMSLevel = value
+		}
+	}
+
+	if peakEntry := ffmpeg.AVDictGet(metadata, metaKeyPeakLevel, nil, 0); peakEntry != nil {
+		if value, err := strconv.ParseFloat(peakEntry.Value().String(), 64); err == nil {
+			acc.astatsPeakLevel = value
+		}
+	}
+
+	// Extract RMS_trough - RMS level of quietest segments (best noise floor indicator for speech)
+	// In speech audio, quiet inter-word periods contain primarily ambient/electronic noise
+	if rmsTroughEntry := ffmpeg.AVDictGet(metadata, metaKeyRMSTrough, nil, 0); rmsTroughEntry != nil {
+		if value, err := strconv.ParseFloat(rmsTroughEntry.Value().String(), 64); err == nil {
+			acc.astatsRMSTrough = value
+		}
+	}
+
+	// Extract ebur128 measurements (cumulative loudness analysis)
+	// ebur128 provides: M.* (momentary), S.* (short-term), I (integrated), LRA, sample_peak, true_peak
+	// We need the integrated loudness measurements for normalization
+	if integratedEntry := ffmpeg.AVDictGet(metadata, metaKeyEbur128I, nil, 0); integratedEntry != nil {
+		if value, err := strconv.ParseFloat(integratedEntry.Value().String(), 64); err == nil {
+			acc.ebur128InputI = value
+			acc.ebur128Found = true
+		}
+	}
+
+	if truePeakEntry := ffmpeg.AVDictGet(metadata, metaKeyEbur128TruePeak, nil, 0); truePeakEntry != nil {
+		if value, err := strconv.ParseFloat(truePeakEntry.Value().String(), 64); err == nil {
+			acc.ebur128InputTP = value
+		}
+	}
+
+	if lraEntry := ffmpeg.AVDictGet(metadata, metaKeyEbur128LRA, nil, 0); lraEntry != nil {
+		if value, err := strconv.ParseFloat(lraEntry.Value().String(), 64); err == nil {
+			acc.ebur128InputLRA = value
+		}
+	}
+}
+
 // AudioMeasurements contains the measurements from Pass 1 analysis
 // Uses ebur128 (LUFS/LRA), astats (dynamic range/noise floor), and aspectralstats (spectral analysis)
 type AudioMeasurements struct {
@@ -97,19 +196,8 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 	updateInterval := 100 // Send progress update every N frames
 	currentLevel := 0.0
 
-	// Accumulators for spectral statistics
-	var spectralCentroidSum float64
-	var spectralRolloffSum float64
-	var spectralFrameCount int
-
-	// Accumulators for astats measurements (will extract from last frame metadata)
-	var astatsDynamicRange, astatsRMSLevel, astatsPeakLevel, astatsRMSTrough float64
-	var astatsFound bool
-
-	// Accumulators for ebur128 measurements (will extract from last frame metadata)
-	// ebur128 writes cumulative measurements to frame metadata with lavfi.r128.* keys
-	var ebur128InputI, ebur128InputTP, ebur128InputLRA float64
-	var ebur128Found bool
+	// Accumulators for frame metadata extraction
+	acc := &metadataAccumulators{}
 
 	for {
 		frame, err := reader.ReadFrame()
@@ -147,76 +235,8 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 				return nil, fmt.Errorf("failed to get filtered frame: %w", err)
 			}
 
-			// Extract spectral statistics from frame metadata
-			metadata := filteredFrame.Metadata()
-			if metadata != nil {
-				// Get spectral centroid if available
-				// For mono audio, spectral stats are under channel .1
-				if centroidEntry := ffmpeg.AVDictGet(metadata, metaKeySpectralCentroid, nil, 0); centroidEntry != nil {
-					if centroidValue, err := strconv.ParseFloat(centroidEntry.Value().String(), 64); err == nil {
-						spectralCentroidSum += centroidValue
-						spectralFrameCount++
-					}
-				}
-				// Get spectral rolloff if available
-				if rolloffEntry := ffmpeg.AVDictGet(metadata, metaKeySpectralRolloff, nil, 0); rolloffEntry != nil {
-					if rolloffValue, err := strconv.ParseFloat(rolloffEntry.Value().String(), 64); err == nil {
-						spectralRolloffSum += rolloffValue
-					}
-				}
-
-				// Extract astats measurements (cumulative, so we just get the latest)
-				// For mono audio, stats are under channel .1; for stereo, use .Overall or average channels
-				// Since podcast audio is typically mono, we check channel 1 first, then Overall as fallback
-				if dynamicRangeEntry := ffmpeg.AVDictGet(metadata, metaKeyDynamicRange, nil, 0); dynamicRangeEntry != nil {
-					if value, err := strconv.ParseFloat(dynamicRangeEntry.Value().String(), 64); err == nil {
-						astatsDynamicRange = value
-						astatsFound = true
-					}
-				}
-
-				if rmsEntry := ffmpeg.AVDictGet(metadata, metaKeyRMSLevel, nil, 0); rmsEntry != nil {
-					if value, err := strconv.ParseFloat(rmsEntry.Value().String(), 64); err == nil {
-						astatsRMSLevel = value
-					}
-				}
-
-				if peakEntry := ffmpeg.AVDictGet(metadata, metaKeyPeakLevel, nil, 0); peakEntry != nil {
-					if value, err := strconv.ParseFloat(peakEntry.Value().String(), 64); err == nil {
-						astatsPeakLevel = value
-					}
-				}
-
-				// Extract RMS_trough - RMS level of quietest segments (best noise floor indicator for speech)
-				// In speech audio, quiet inter-word periods contain primarily ambient/electronic noise
-				if rmsTroughEntry := ffmpeg.AVDictGet(metadata, metaKeyRMSTrough, nil, 0); rmsTroughEntry != nil {
-					if value, err := strconv.ParseFloat(rmsTroughEntry.Value().String(), 64); err == nil {
-						astatsRMSTrough = value
-					}
-				}
-
-				// Extract ebur128 measurements (cumulative loudness analysis)
-				// ebur128 provides: M.* (momentary), S.* (short-term), I (integrated), LRA, sample_peak, true_peak
-				// We need the integrated loudness measurements for normalization
-				if integratedEntry := ffmpeg.AVDictGet(metadata, metaKeyEbur128I, nil, 0); integratedEntry != nil {
-					if value, err := strconv.ParseFloat(integratedEntry.Value().String(), 64); err == nil {
-						ebur128InputI = value
-						ebur128Found = true
-					}
-				}
-				if truePeakEntry := ffmpeg.AVDictGet(metadata, metaKeyEbur128TruePeak, nil, 0); truePeakEntry != nil {
-					if value, err := strconv.ParseFloat(truePeakEntry.Value().String(), 64); err == nil {
-						ebur128InputTP = value
-					}
-				}
-				if lraEntry := ffmpeg.AVDictGet(metadata, metaKeyEbur128LRA, nil, 0); lraEntry != nil {
-					if value, err := strconv.ParseFloat(lraEntry.Value().String(), 64); err == nil {
-						ebur128InputLRA = value
-					}
-				}
-				// Note: ebur128 doesn't provide threshold directly
-				// We'll calculate it from the integrated loudness if needed
-			}
+			// Extract measurements from frame metadata
+			extractFrameMetadata(filteredFrame.Metadata(), acc)
 
 			ffmpeg.AVFrameUnref(filteredFrame)
 		}
@@ -236,67 +256,8 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 			return nil, fmt.Errorf("failed to get filtered frame: %w", err)
 		}
 
-		// Extract spectral statistics from remaining frames
-		metadata := filteredFrame.Metadata()
-		if metadata != nil {
-			// Use channel 1 keys for mono audio (same as main loop)
-			if centroidEntry := ffmpeg.AVDictGet(metadata, metaKeySpectralCentroid, nil, 0); centroidEntry != nil {
-				if centroidValue, err := strconv.ParseFloat(centroidEntry.Value().String(), 64); err == nil {
-					spectralCentroidSum += centroidValue
-					spectralFrameCount++
-				}
-			}
-			if rolloffEntry := ffmpeg.AVDictGet(metadata, metaKeySpectralRolloff, nil, 0); rolloffEntry != nil {
-				if rolloffValue, err := strconv.ParseFloat(rolloffEntry.Value().String(), 64); err == nil {
-					spectralRolloffSum += rolloffValue
-				}
-			}
-
-			// Extract astats measurements from remaining frames
-			// Use channel 1 keys for mono audio (same as main loop)
-			if dynamicRangeEntry := ffmpeg.AVDictGet(metadata, metaKeyDynamicRange, nil, 0); dynamicRangeEntry != nil {
-				if value, err := strconv.ParseFloat(dynamicRangeEntry.Value().String(), 64); err == nil {
-					astatsDynamicRange = value
-					astatsFound = true
-				}
-			}
-
-			if rmsEntry := ffmpeg.AVDictGet(metadata, metaKeyRMSLevel, nil, 0); rmsEntry != nil {
-				if value, err := strconv.ParseFloat(rmsEntry.Value().String(), 64); err == nil {
-					astatsRMSLevel = value
-				}
-			}
-
-			if peakEntry := ffmpeg.AVDictGet(metadata, metaKeyPeakLevel, nil, 0); peakEntry != nil {
-				if value, err := strconv.ParseFloat(peakEntry.Value().String(), 64); err == nil {
-					astatsPeakLevel = value
-				}
-			}
-
-			if rmsTroughEntry := ffmpeg.AVDictGet(metadata, metaKeyRMSTrough, nil, 0); rmsTroughEntry != nil {
-				if value, err := strconv.ParseFloat(rmsTroughEntry.Value().String(), 64); err == nil {
-					astatsRMSTrough = value
-				}
-			}
-
-			// Extract ebur128 measurements from remaining frames
-			if integratedEntry := ffmpeg.AVDictGet(metadata, metaKeyEbur128I, nil, 0); integratedEntry != nil {
-				if value, err := strconv.ParseFloat(integratedEntry.Value().String(), 64); err == nil {
-					ebur128InputI = value
-					ebur128Found = true
-				}
-			}
-			if truePeakEntry := ffmpeg.AVDictGet(metadata, metaKeyEbur128TruePeak, nil, 0); truePeakEntry != nil {
-				if value, err := strconv.ParseFloat(truePeakEntry.Value().String(), 64); err == nil {
-					ebur128InputTP = value
-				}
-			}
-			if lraEntry := ffmpeg.AVDictGet(metadata, metaKeyEbur128LRA, nil, 0); lraEntry != nil {
-				if value, err := strconv.ParseFloat(lraEntry.Value().String(), 64); err == nil {
-					ebur128InputLRA = value
-				}
-			}
-		}
+		// Extract measurements from remaining frames
+		extractFrameMetadata(filteredFrame.Metadata(), acc)
 
 		ffmpeg.AVFrameUnref(filteredFrame)
 	}
@@ -305,35 +266,35 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 	ffmpeg.AVFilterGraphFree(&filterGraph)
 	filterFreed = true
 
-	// Create measurements struct and populate from metadata
+	// Create measurements struct and populate from accumulators
 	measurements := &AudioMeasurements{}
 
-	// Populate ebur128 loudness measurements from metadata
-	if ebur128Found {
-		measurements.InputI = ebur128InputI
-		measurements.InputTP = ebur128InputTP
-		measurements.InputLRA = ebur128InputLRA
+	// Populate ebur128 loudness measurements
+	if acc.ebur128Found {
+		measurements.InputI = acc.ebur128InputI
+		measurements.InputTP = acc.ebur128InputTP
+		measurements.InputLRA = acc.ebur128InputLRA
 		// Calculate threshold based on integrated loudness (ebur128 doesn't provide this directly)
 		// Threshold is typically around 10 LU below the integrated loudness
-		measurements.InputThresh = ebur128InputI - 10.0
+		measurements.InputThresh = acc.ebur128InputI - 10.0
 		// Target offset for normalization (difference between measured and target)
-		measurements.TargetOffset = targetI - ebur128InputI
+		measurements.TargetOffset = targetI - acc.ebur128InputI
 	} else {
 		return nil, fmt.Errorf("ebur128 measurements not found in metadata")
 	}
 
 	// Calculate average spectral statistics
-	if spectralFrameCount > 0 {
-		measurements.SpectralCentroid = spectralCentroidSum / float64(spectralFrameCount)
-		measurements.SpectralRolloff = spectralRolloffSum / float64(spectralFrameCount)
+	if acc.spectralFrameCount > 0 {
+		measurements.SpectralCentroid = acc.spectralCentroidSum / float64(acc.spectralFrameCount)
+		measurements.SpectralRolloff = acc.spectralRolloffSum / float64(acc.spectralFrameCount)
 	}
 
 	// Store astats measurements (if captured)
-	if astatsFound {
-		measurements.DynamicRange = astatsDynamicRange
-		measurements.RMSLevel = astatsRMSLevel
-		measurements.PeakLevel = astatsPeakLevel
-		measurements.RMSTrough = astatsRMSTrough
+	if acc.astatsFound {
+		measurements.DynamicRange = acc.astatsDynamicRange
+		measurements.RMSLevel = acc.astatsRMSLevel
+		measurements.PeakLevel = acc.astatsPeakLevel
+		measurements.RMSTrough = acc.astatsRMSTrough
 	}
 
 	// Derive noise floor using three-tier approach based on audio engineering best practices:
@@ -348,13 +309,13 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 	//   - Fallback for when astats data is completely unavailable
 	//   - Uses integrated loudness to infer likely noise floor characteristics
 
-	if astatsRMSTrough != 0 && !math.IsInf(astatsRMSTrough, -1) {
+	if acc.astatsRMSTrough != 0 && !math.IsInf(acc.astatsRMSTrough, -1) {
 		// Tier 1: Use RMS_trough (best - actual measurement of quiet segments)
-		measurements.NoiseFloor = astatsRMSTrough
-	} else if astatsRMSLevel != 0 && !math.IsInf(astatsRMSLevel, -1) {
+		measurements.NoiseFloor = acc.astatsRMSTrough
+	} else if acc.astatsRMSLevel != 0 && !math.IsInf(acc.astatsRMSLevel, -1) {
 		// Tier 2: Estimate from overall RMS level
 		// Typical speech has quiet segments 12-18dB below average RMS; use 15dB as balanced estimate
-		measurements.NoiseFloor = astatsRMSLevel - 15.0
+		measurements.NoiseFloor = acc.astatsRMSLevel - 15.0
 	} else {
 		// Tier 3: Estimate from ebur128 integrated loudness threshold
 		// Louder recordings typically have better SNR (lower relative noise floor)
