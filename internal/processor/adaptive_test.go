@@ -1,6 +1,7 @@
 package processor
 
 import (
+	"math"
 	"testing"
 )
 
@@ -455,4 +456,137 @@ func TestTuneDeesser(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTuneGateThreshold(t *testing.T) {
+	// Constants from adaptive.go for reference:
+	// gateOffsetClean    = 10.0 dB (above noise floor for clean recordings)
+	// gateOffsetTypical  = 8.0 dB  (above noise floor for typical podcasts)
+	// gateOffsetNoisy    = 6.0 dB  (above noise floor for noisy recordings)
+	// gateThresholdMinDB = -70.0 dB (professional studio clean)
+	// gateThresholdMaxDB = -25.0 dB (very noisy environment)
+	// noiseFloorClean    = -60.0 dBFS
+	// noiseFloorTypical  = -50.0 dBFS
+	// noiseFloorNoisy    = -40.0 dBFS
+	// dbToLinear(db) = 10^(db/20)
+
+	tests := []struct {
+		name              string
+		noiseFloor        float64 // dBFS input
+		wantThresholdDB   float64 // expected threshold in dB (before linear conversion)
+		wantThresholdDesc string  // description of expected behaviour
+	}{
+		// Clean recording tier (noise floor < -60 dBFS) - uses 10dB offset
+		{
+			name:              "professional studio, very clean",
+			noiseFloor:        -70,
+			wantThresholdDB:   -60, // -70 + 10, but clamped to -70 min? No: -60 > -70, OK
+			wantThresholdDesc: "clean offset applied",
+		},
+		{
+			name:              "clean home studio",
+			noiseFloor:        -65,
+			wantThresholdDB:   -55, // -65 + 10
+			wantThresholdDesc: "clean offset applied",
+		},
+		{
+			name:              "boundary: exactly at noiseFloorClean",
+			noiseFloor:        -60,
+			wantThresholdDB:   -52, // -60 + 8 (not < -60, so uses typical offset)
+			wantThresholdDesc: "typical offset (boundary)",
+		},
+
+		// Typical podcast tier (noise floor -60 to -50 dBFS) - uses 8dB offset
+		{
+			name:              "typical podcast recording",
+			noiseFloor:        -55,
+			wantThresholdDB:   -47, // -55 + 8
+			wantThresholdDesc: "typical offset applied",
+		},
+		{
+			name:              "boundary: exactly at noiseFloorTypical",
+			noiseFloor:        -50,
+			wantThresholdDB:   -44, // -50 + 6 (not < -50, so uses noisy offset)
+			wantThresholdDesc: "noisy offset (boundary)",
+		},
+
+		// Noisy recording tier (noise floor >= -50 dBFS) - uses 6dB offset
+		{
+			name:              "noisy home recording",
+			noiseFloor:        -45,
+			wantThresholdDB:   -39, // -45 + 6
+			wantThresholdDesc: "noisy offset applied",
+		},
+		{
+			name:              "very noisy room",
+			noiseFloor:        -35,
+			wantThresholdDB:   -29, // -35 + 6
+			wantThresholdDesc: "noisy offset applied",
+		},
+
+		// Clamping behaviour
+		{
+			name:              "extreme noise - clamped to max",
+			noiseFloor:        -20,
+			wantThresholdDB:   -25, // -20 + 6 = -14, clamped to gateThresholdMaxDB (-25)
+			wantThresholdDesc: "clamped to max threshold",
+		},
+		{
+			name:              "extremely clean - clamped to min",
+			noiseFloor:        -85,
+			wantThresholdDB:   -70, // -85 + 10 = -75, clamped to gateThresholdMinDB (-70)
+			wantThresholdDesc: "clamped to min threshold",
+		},
+
+		// Edge cases
+		{
+			name:              "boundary: exactly produces max threshold",
+			noiseFloor:        -31,
+			wantThresholdDB:   -25, // -31 + 6 = -25, exactly at max
+			wantThresholdDesc: "at max boundary",
+		},
+		{
+			name:              "boundary: exactly produces min threshold",
+			noiseFloor:        -80,
+			wantThresholdDB:   -70, // -80 + 10 = -70, exactly at min
+			wantThresholdDesc: "at min boundary",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Setup
+			config := DefaultFilterConfig()
+			measurements := &AudioMeasurements{
+				NoiseFloor: tt.noiseFloor,
+			}
+
+			// Execute
+			tuneGateThreshold(config, measurements)
+
+			// Calculate expected linear value from expected dB
+			wantLinear := dbToLinear(tt.wantThresholdDB)
+
+			// Verify with tolerance for floating point
+			tolerance := 0.0001
+			diff := config.GateThreshold - wantLinear
+			if diff < 0 {
+				diff = -diff
+			}
+			if diff > tolerance {
+				// Convert actual back to dB for clearer error message
+				actualDB := linearToDB(config.GateThreshold)
+				t.Errorf("GateThreshold = %.6f (%.1f dB), want %.6f (%.1f dB) [noiseFloor=%.1f dB, %s]",
+					config.GateThreshold, actualDB, wantLinear, tt.wantThresholdDB, tt.noiseFloor, tt.wantThresholdDesc)
+			}
+		})
+	}
+}
+
+// linearToDB converts linear amplitude to dB for test error messages
+func linearToDB(linear float64) float64 {
+	if linear <= 0 {
+		return -1000 // avoid math.Log10(0) = -Inf
+	}
+	return 20 * math.Log10(linear)
 }
