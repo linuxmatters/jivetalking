@@ -4,25 +4,60 @@ package processor
 import (
 	"errors"
 	"fmt"
+	"log"
 	"math"
+	"path/filepath"
 	"strconv"
+	"time"
 
 	ffmpeg "github.com/linuxmatters/ffmpeg-statigo"
 	"github.com/linuxmatters/jivetalking/internal/audio"
 )
 
+// SilenceRegion represents a detected silence period in the audio
+type SilenceRegion struct {
+	Start    time.Duration `json:"start"`
+	End      time.Duration `json:"end"`
+	Duration time.Duration `json:"duration"`
+}
+
+// NoiseProfile contains information about an extracted noise sample
+type NoiseProfile struct {
+	FilePath           string        `json:"file_path"`            // Path to extracted noise sample WAV file
+	Start              time.Duration `json:"start"`                // Start time of silence region used
+	Duration           time.Duration `json:"duration"`             // Duration of extracted sample
+	MeasuredNoiseFloor float64       `json:"measured_noise_floor"` // dBFS, RMS level of silence (average noise)
+	PeakLevel          float64       `json:"peak_level"`           // dBFS, peak level in silence (transient noise indicator)
+	CrestFactor        float64       `json:"crest_factor"`         // Peak - RMS in dB (high = impulsive noise, low = steady noise)
+	Entropy            float64       `json:"entropy"`              // Signal randomness (1.0 = white noise, lower = tonal noise like hum)
+}
+
 // Cached metadata keys for frame extraction - avoids per-frame C string allocations
 // These use GlobalCStr which maintains an internal cache, so identical strings share the same CStr
 var (
-	metaKeySpectralCentroid = ffmpeg.GlobalCStr("lavfi.aspectralstats.1.centroid")
-	metaKeySpectralRolloff  = ffmpeg.GlobalCStr("lavfi.aspectralstats.1.rolloff")
-	metaKeyDynamicRange     = ffmpeg.GlobalCStr("lavfi.astats.1.Dynamic_range")
-	metaKeyRMSLevel         = ffmpeg.GlobalCStr("lavfi.astats.1.RMS_level")
-	metaKeyPeakLevel        = ffmpeg.GlobalCStr("lavfi.astats.1.Peak_level")
-	metaKeyRMSTrough        = ffmpeg.GlobalCStr("lavfi.astats.1.RMS_trough")
-	metaKeyEbur128I         = ffmpeg.GlobalCStr("lavfi.r128.I")
-	metaKeyEbur128TruePeak  = ffmpeg.GlobalCStr("lavfi.r128.true_peak")
-	metaKeyEbur128LRA       = ffmpeg.GlobalCStr("lavfi.r128.LRA")
+	metaKeySpectralCentroid  = ffmpeg.GlobalCStr("lavfi.aspectralstats.1.centroid")
+	metaKeySpectralRolloff   = ffmpeg.GlobalCStr("lavfi.aspectralstats.1.rolloff")
+	metaKeyDynamicRange      = ffmpeg.GlobalCStr("lavfi.astats.1.Dynamic_range")
+	metaKeyRMSLevel          = ffmpeg.GlobalCStr("lavfi.astats.1.RMS_level")
+	metaKeyPeakLevel         = ffmpeg.GlobalCStr("lavfi.astats.1.Peak_level")
+	metaKeyRMSTrough         = ffmpeg.GlobalCStr("lavfi.astats.1.RMS_trough")
+	metaKeyDCOffset          = ffmpeg.GlobalCStr("lavfi.astats.1.DC_offset")
+	metaKeyFlatFactor        = ffmpeg.GlobalCStr("lavfi.astats.1.Flat_factor")
+	metaKeyZeroCrossingsRate = ffmpeg.GlobalCStr("lavfi.astats.1.Zero_crossings_rate")
+	metaKeyMaxDifference     = ffmpeg.GlobalCStr("lavfi.astats.1.Max_difference")
+	metaKeyEntropy           = ffmpeg.GlobalCStr("lavfi.astats.1.Entropy")
+	metaKeyEbur128I          = ffmpeg.GlobalCStr("lavfi.r128.I")
+	metaKeyEbur128TruePeak   = ffmpeg.GlobalCStr("lavfi.r128.true_peak")
+	metaKeyEbur128LRA        = ffmpeg.GlobalCStr("lavfi.r128.LRA")
+
+	// Silence detection metadata keys (from silencedetect filter)
+	// For mono audio these are lavfi.silence_start.1, lavfi.silence_end.1, lavfi.silence_duration.1
+	metaKeySilenceStart    = ffmpeg.GlobalCStr("lavfi.silence_start")
+	metaKeySilenceStart1   = ffmpeg.GlobalCStr("lavfi.silence_start.1")
+	metaKeySilenceEnd      = ffmpeg.GlobalCStr("lavfi.silence_end")
+	metaKeySilenceEnd1     = ffmpeg.GlobalCStr("lavfi.silence_end.1")
+	metaKeySilenceDuration = ffmpeg.GlobalCStr("lavfi.silence_duration")
+	metaKeySilenceDur1     = ffmpeg.GlobalCStr("lavfi.silence_duration.1")
 )
 
 // metadataAccumulators holds all accumulator variables for frame metadata extraction.
@@ -35,17 +70,28 @@ type metadataAccumulators struct {
 	spectralFrameCount  int
 
 	// astats measurements (cumulative - we keep latest values)
-	astatsDynamicRange float64
-	astatsRMSLevel     float64
-	astatsPeakLevel    float64
-	astatsRMSTrough    float64
-	astatsFound        bool
+	astatsDynamicRange      float64
+	astatsRMSLevel          float64
+	astatsPeakLevel         float64
+	astatsRMSTrough         float64
+	astatsDCOffset          float64
+	astatsFlatFactor        float64
+	astatsZeroCrossingsRate float64
+	astatsMaxDifference     float64
+	astatsFound             bool
 
 	// ebur128 measurements (cumulative - we keep latest values)
 	ebur128InputI   float64
 	ebur128InputTP  float64
 	ebur128InputLRA float64
 	ebur128Found    bool
+
+	// Silence detection (collected across frames)
+	// silencedetect sets lavfi.silence_start on first frame of silence,
+	// then lavfi.silence_end and lavfi.silence_duration on first frame after silence ends
+	silenceRegions      []SilenceRegion
+	pendingSilenceStart float64 // Pending silence start timestamp (seconds)
+	hasPendingSilence   bool    // Whether we have a pending silence start
 }
 
 // getFloatMetadata extracts a float value from the metadata dictionary
@@ -99,6 +145,30 @@ func extractFrameMetadata(metadata *ffmpeg.AVDictionary, acc *metadataAccumulato
 		acc.astatsRMSTrough = value
 	}
 
+	// Extract DC_offset - mean amplitude displacement from zero
+	// High values indicate DC bias that should be removed before processing
+	if value, ok := getFloatMetadata(metadata, metaKeyDCOffset); ok {
+		acc.astatsDCOffset = value
+	}
+
+	// Extract Flat_factor - consecutive samples at peak levels (indicates clipping)
+	// High values suggest pre-existing limiting or clipping damage
+	if value, ok := getFloatMetadata(metadata, metaKeyFlatFactor); ok {
+		acc.astatsFlatFactor = value
+	}
+
+	// Extract Zero_crossings_rate - rate of zero crossings per sample
+	// Low ZCR = bass-heavy/sustained tones, High ZCR = noise/sibilance
+	if value, ok := getFloatMetadata(metadata, metaKeyZeroCrossingsRate); ok {
+		acc.astatsZeroCrossingsRate = value
+	}
+
+	// Extract Max_difference - largest sample-to-sample change
+	// High values indicate impulsive sounds (clicks, pops) - useful for adeclick tuning
+	if value, ok := getFloatMetadata(metadata, metaKeyMaxDifference); ok {
+		acc.astatsMaxDifference = value
+	}
+
 	// Extract ebur128 measurements (cumulative loudness analysis)
 	// ebur128 provides: M.* (momentary), S.* (short-term), I (integrated), LRA, sample_peak, true_peak
 	// We need the integrated loudness measurements for normalization
@@ -114,10 +184,61 @@ func extractFrameMetadata(metadata *ffmpeg.AVDictionary, acc *metadataAccumulato
 	if value, ok := getFloatMetadata(metadata, metaKeyEbur128LRA); ok {
 		acc.ebur128InputLRA = value
 	}
+
+	// Extract silence detection metadata
+	// silencedetect sets lavfi.silence_start on the first frame of a silence region,
+	// then lavfi.silence_end and lavfi.silence_duration on the first frame after silence ends.
+	// For mono audio, these may be suffixed with .1
+	var silenceStart float64
+	var hasSilenceStart bool
+	if value, ok := getFloatMetadata(metadata, metaKeySilenceStart); ok {
+		silenceStart = value
+		hasSilenceStart = true
+	} else if value, ok := getFloatMetadata(metadata, metaKeySilenceStart1); ok {
+		silenceStart = value
+		hasSilenceStart = true
+	}
+
+	if hasSilenceStart {
+		acc.pendingSilenceStart = silenceStart
+		acc.hasPendingSilence = true
+	}
+
+	// Check for silence end - this completes a silence region
+	var silenceEnd, silenceDuration float64
+	var hasSilenceEnd bool
+	if value, ok := getFloatMetadata(metadata, metaKeySilenceEnd); ok {
+		silenceEnd = value
+		hasSilenceEnd = true
+	} else if value, ok := getFloatMetadata(metadata, metaKeySilenceEnd1); ok {
+		silenceEnd = value
+		hasSilenceEnd = true
+	}
+
+	if hasSilenceEnd {
+		// Get duration - try both keys
+		if value, ok := getFloatMetadata(metadata, metaKeySilenceDuration); ok {
+			silenceDuration = value
+		} else if value, ok := getFloatMetadata(metadata, metaKeySilenceDur1); ok {
+			silenceDuration = value
+		}
+
+		// Record the completed silence region
+		if acc.hasPendingSilence {
+			region := SilenceRegion{
+				Start:    time.Duration(acc.pendingSilenceStart * float64(time.Second)),
+				End:      time.Duration(silenceEnd * float64(time.Second)),
+				Duration: time.Duration(silenceDuration * float64(time.Second)),
+			}
+			acc.silenceRegions = append(acc.silenceRegions, region)
+			acc.hasPendingSilence = false
+		}
+	}
 }
 
 // AudioMeasurements contains the measurements from Pass 1 analysis
-// Uses ebur128 (LUFS/LRA), astats (dynamic range/noise floor), and aspectralstats (spectral analysis)
+// Uses ebur128 (LUFS/LRA), astats (dynamic range/noise floor), aspectralstats (spectral analysis),
+// and silencedetect (silence regions for noise profile extraction)
 type AudioMeasurements struct {
 	InputI       float64 `json:"input_i"`       // Integrated loudness (LUFS)
 	InputTP      float64 `json:"input_tp"`      // True peak (dBTP)
@@ -135,6 +256,22 @@ type AudioMeasurements struct {
 	RMSLevel     float64 `json:"rms_level"`     // Overall RMS level (dBFS)
 	PeakLevel    float64 `json:"peak_level"`    // Overall peak level (dBFS)
 	RMSTrough    float64 `json:"rms_trough"`    // RMS level of quietest segments - best noise floor indicator (dBFS)
+
+	// Additional astats measurements for adaptive processing
+	DCOffset          float64 `json:"dc_offset"`           // Mean amplitude displacement from zero (needs dcshift if significant)
+	FlatFactor        float64 `json:"flat_factor"`         // Consecutive samples at peak (indicates clipping/limiting)
+	ZeroCrossingsRate float64 `json:"zero_crossings_rate"` // Zero crossing rate (low=bass, high=noise/sibilance)
+	MaxDifference     float64 `json:"max_difference"`      // Largest sample-to-sample change (indicates clicks/pops)
+
+	// Silence detection results from silencedetect filter
+	SilenceRegions []SilenceRegion `json:"silence_regions,omitempty"` // Detected silence regions
+
+	// Noise profile extracted from longest silence region
+	NoiseProfile *NoiseProfile `json:"noise_profile,omitempty"` // nil if extraction failed
+
+	// Derived suggestions for Pass 2 adaptive processing
+	SuggestedGateThreshold float64 `json:"suggested_gate_threshold"` // Suggested gate threshold (linear amplitude)
+	NoiseReductionHeadroom float64 `json:"noise_reduction_headroom"` // dB gap between noise and quiet speech
 }
 
 // AnalyzeAudio performs Pass 1: ebur128 + astats + aspectralstats analysis to get measurements
@@ -285,6 +422,12 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 		measurements.RMSLevel = acc.astatsRMSLevel
 		measurements.PeakLevel = acc.astatsPeakLevel
 		measurements.RMSTrough = acc.astatsRMSTrough
+
+		// Additional astats measurements for adaptive processing
+		measurements.DCOffset = acc.astatsDCOffset
+		measurements.FlatFactor = acc.astatsFlatFactor
+		measurements.ZeroCrossingsRate = acc.astatsZeroCrossingsRate
+		measurements.MaxDifference = acc.astatsMaxDifference
 	}
 
 	// Derive noise floor using three-tier approach based on audio engineering best practices:
@@ -328,23 +471,376 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 		measurements.NoiseFloor = -30.0
 	}
 
+	// Store detected silence regions
+	measurements.SilenceRegions = acc.silenceRegions
+
+	// Extract noise profile from best silence region (if available)
+	// This provides precise noise floor measurement from actual silence in the recording
+	if bestRegion := findBestSilenceRegion(acc.silenceRegions); bestRegion != nil {
+		tempDir := filepath.Dir(filename) // Use same directory as input file
+		if profile, err := extractNoiseProfile(filename, bestRegion, tempDir); err == nil && profile != nil {
+			measurements.NoiseProfile = profile
+			// If we got a noise profile measurement, use it as the primary noise floor
+			// This is more accurate than the overall RMS_trough because it's from pure silence
+			if profile.MeasuredNoiseFloor != 0 && !math.IsInf(profile.MeasuredNoiseFloor, -1) {
+				measurements.NoiseFloor = profile.MeasuredNoiseFloor
+			}
+		}
+	}
+
+	// Calculate derived suggestions for Pass 2 adaptive processing
+	// These are data-driven values based on actual measurements
+
+	// SuggestedGateThreshold: linear amplitude threshold for gate
+	// Data-driven calculation based on actual noise floor and quiet speech measurements
+	// Gate should open above noise floor but below quiet speech
+	//
+	// Strategy:
+	// - Use RMSTrough (quietest segments with speech) as reference for quiet speech
+	// - Calculate adaptive offset based on gap between noise floor and quiet speech
+	// - Smaller gap = smaller offset (preserve speech in noisy recordings)
+	// - Larger gap = larger offset (more aggressive gating for clean recordings)
+	gateThresholdDB := calculateAdaptiveGateThreshold(measurements.NoiseFloor, measurements.RMSTrough)
+	measurements.SuggestedGateThreshold = math.Pow(10, gateThresholdDB/20.0)
+
+	// NoiseReductionHeadroom: dB gap between noise floor and quiet speech
+	// This determines how aggressively we can apply noise reduction
+	// RMS_trough represents the quietest RMS segments (should be near noise floor)
+	// RMS_level represents average level (speech)
+	// The gap tells us how much "room" we have to reduce noise without affecting speech
+	if measurements.RMSLevel != 0 && measurements.NoiseFloor != 0 {
+		// Headroom is the gap between average speech level and noise floor
+		// Larger headroom = more aggressive NR possible
+		measurements.NoiseReductionHeadroom = measurements.RMSLevel - measurements.NoiseFloor
+		if measurements.NoiseReductionHeadroom < 0 {
+			measurements.NoiseReductionHeadroom = 0 // Sanity check
+		}
+		if measurements.NoiseReductionHeadroom > 60 {
+			measurements.NoiseReductionHeadroom = 60 // Cap at 60dB (very clean recording)
+		}
+	} else {
+		// Fallback: estimate based on integrated loudness
+		// Louder recordings typically have better SNR
+		if measurements.InputI > -20 {
+			measurements.NoiseReductionHeadroom = 40.0 // Professional recording
+		} else if measurements.InputI > -30 {
+			measurements.NoiseReductionHeadroom = 25.0 // Typical podcast
+		} else {
+			measurements.NoiseReductionHeadroom = 15.0 // Quiet recording
+		}
+	}
+
 	return measurements, nil
 }
 
+// calculateAdaptiveGateThreshold computes a data-driven gate threshold based on
+// the measured noise floor and RMS trough (quiet speech indicator).
+//
+// Strategy:
+//   - The gate threshold should be above the noise floor but below quiet speech
+//   - RMSTrough represents the quietest RMS segments (breaths, quiet consonants)
+//   - We place the threshold at a data-driven position between noise and quiet speech
+//
+// Calculation:
+//   - Gap = RMSTrough - NoiseFloor (how much "room" between noise and speech)
+//   - If gap is small (<10dB): recording is noisy, threshold at 30% into gap
+//   - If gap is moderate (10-20dB): typical, threshold at 40% into gap
+//   - If gap is large (>20dB): clean recording, threshold at 50% into gap
+//
+// Safety bounds:
+//   - Never below noise floor (would gate during silence)
+//   - Never above -35dBFS (would cut quiet speech)
+func calculateAdaptiveGateThreshold(noiseFloor, rmsTrough float64) float64 {
+	// If RMSTrough is unavailable or invalid, use a sensible fallback
+	if rmsTrough == 0 || rmsTrough <= noiseFloor {
+		// Fallback: 6dB above noise floor (conservative default)
+		threshold := noiseFloor + 6.0
+		if threshold > -35.0 {
+			threshold = -35.0
+		}
+		return threshold
+	}
+
+	// Calculate the gap between quiet speech and noise
+	gap := rmsTrough - noiseFloor
+
+	// Determine the adaptive offset percentage based on gap size
+	var offsetPercent float64
+	switch {
+	case gap < 10.0:
+		// Noisy recording: small gap, be conservative (30% into gap)
+		// This preserves more speech at the cost of some noise bleed
+		offsetPercent = 0.30
+	case gap < 20.0:
+		// Typical recording: moderate gap (40% into gap)
+		offsetPercent = 0.40
+	default:
+		// Clean recording: large gap, more aggressive (50% into gap)
+		offsetPercent = 0.50
+	}
+
+	// Calculate threshold: noise floor + (gap * percentage)
+	threshold := noiseFloor + (gap * offsetPercent)
+
+	// Safety bounds
+	if threshold < noiseFloor+3.0 {
+		// Always at least 3dB above noise floor
+		threshold = noiseFloor + 3.0
+	}
+	if threshold > -35.0 {
+		// Never gate above -35dBFS (would cut quiet speech)
+		threshold = -35.0
+	}
+
+	return threshold
+}
+
 // createAnalysisFilterGraph creates an AVFilterGraph for Pass 1 analysis
-// Uses astats, aspectralstats, and ebur128 filters to extract measurements
+// Uses astats, aspectralstats, silencedetect, and ebur128 filters to extract measurements
 func createAnalysisFilterGraph(
 	decCtx *ffmpeg.AVCodecContext,
 	targetI, targetTP, targetLRA float64,
 ) (*ffmpeg.AVFilterGraph, *ffmpeg.AVFilterContext, *ffmpeg.AVFilterContext, error) {
 	// Build filter string for analysis pass
-	// astats provides noise floor and dynamic range measurements for adaptive gate and compression
-	// aspectralstats measures spectral centroid and rolloff for adaptive de-esser targeting
-	// ebur128 provides integrated loudness (LUFS), true peak, and LRA via metadata
+	// Filter chain order:
+	// 1. silencedetect - detect silence regions for noise profile extraction
+	//    - noise=-50dB: threshold for silence detection (fairly sensitive)
+	//    - duration=0.5: minimum silence duration to detect (0.5s catches most pauses)
+	// 2. astats - provides noise floor, dynamic range, and additional measurements for adaptive processing:
+	//    - Noise_floor, Dynamic_range, RMS_level, Peak_level: core measurements
+	//    - DC_offset: detects DC bias needing removal
+	//    - Flat_factor: detects pre-existing clipping/limiting
+	//    - Zero_crossings_rate: helps classify noise type
+	//    - Max_difference: detects impulsive sounds (clicks/pops)
+	// 3. aspectralstats - measures spectral centroid and rolloff for adaptive de-esser targeting
+	// 4. ebur128 - provides integrated loudness (LUFS), true peak, and LRA via metadata
 	// Note: reset=0 (default) allows astats to accumulate statistics across all frames for Overall measurements
 	// ebur128 metadata=1 writes per-frame loudness data to frame metadata (lavfi.r128.* keys)
-	filterSpec := fmt.Sprintf("astats=metadata=1:measure_overall=Noise_floor+Dynamic_range+RMS_level+Peak_level,aspectralstats=win_size=2048:win_func=hann:measure=centroid+rolloff,ebur128=metadata=1:target=%.0f",
+	filterSpec := fmt.Sprintf("silencedetect=noise=-50dB:duration=0.5,astats=metadata=1:measure_perchannel=Noise_floor+Dynamic_range+RMS_level+Peak_level+DC_offset+Flat_factor+Zero_crossings_rate+Max_difference,aspectralstats=win_size=2048:win_func=hann:measure=centroid+rolloff,ebur128=metadata=1:target=%.0f",
 		targetI)
 
 	return setupFilterGraph(decCtx, filterSpec)
+}
+
+// Minimum silence durations for noise profile extraction
+const (
+	idealSilenceDuration   = 10 * time.Second // Prefer silence regions >= 10s
+	minimumSilenceDuration = 2 * time.Second  // Accept >= 2s with warning
+	minimumSilenceStart    = 30 * time.Second // Only consider silence regions starting after 30s
+)
+
+// findBestSilenceRegion finds the best silence region for noise profile extraction.
+// Returns the FIRST region meeting the length criteria (>= 2s), since room noise
+// is typically recorded at the start of podcast recordings.
+// Prefers regions >= 10s, accepts >= 2s with a warning.
+// Returns nil if no suitable region is found.
+func findBestSilenceRegion(regions []SilenceRegion) *SilenceRegion {
+	if len(regions) == 0 {
+		return nil
+	}
+
+	// Find the first region meeting our criteria
+	// Regions are already in chronological order from silencedetect
+	// Only consider regions starting after minimumSilenceStart (30s) to skip intro music/jingles
+	var firstIdeal *SilenceRegion
+	var firstAcceptable *SilenceRegion
+	var longest *SilenceRegion
+
+	for i := range regions {
+		r := &regions[i]
+
+		// Track longest for warning message (regardless of start time)
+		if longest == nil || r.Duration > longest.Duration {
+			longest = r
+		}
+
+		// Skip regions that start too early (before 30s)
+		if r.Start < minimumSilenceStart {
+			continue
+		}
+
+		// Prefer first ideal region (>= 10s)
+		if firstIdeal == nil && r.Duration >= idealSilenceDuration {
+			firstIdeal = r
+			break // Found ideal, no need to continue
+		}
+
+		// Track first acceptable region (>= 2s)
+		if firstAcceptable == nil && r.Duration >= minimumSilenceDuration {
+			firstAcceptable = r
+		}
+	}
+
+	if firstIdeal != nil {
+		return firstIdeal
+	}
+
+	if firstAcceptable != nil {
+		log.Printf("Warning: using short silence region (%.1fs) for noise profile - ideally need >=10s",
+			firstAcceptable.Duration.Seconds())
+		return firstAcceptable
+	}
+
+	if longest != nil {
+		log.Printf("Warning: no suitable silence region found for noise profile extraction (longest: %.1fs, need >=2s)",
+			longest.Duration.Seconds())
+	}
+	return nil
+}
+
+// extractNoiseProfile measures the noise floor from the specified silence region.
+// Uses atrim + astats filter chain to measure RMS level of the silence segment.
+// Returns nil, nil if no suitable silence region exists or extraction fails non-fatally.
+func extractNoiseProfile(filename string, region *SilenceRegion, tempDir string) (*NoiseProfile, error) {
+	if region == nil {
+		return nil, nil
+	}
+
+	// Generate output filename (for future file extraction support)
+	baseName := filepath.Base(filename)
+	ext := filepath.Ext(baseName)
+	nameWithoutExt := baseName[:len(baseName)-len(ext)]
+	outputPath := filepath.Join(tempDir, nameWithoutExt+"_noise_profile.wav")
+
+	// Open the audio file
+	reader, _, err := audio.OpenAudioFile(filename)
+	if err != nil {
+		log.Printf("Warning: failed to open audio file for noise extraction: %v", err)
+		return nil, nil // Non-fatal
+	}
+	defer reader.Close()
+
+	decCtx := reader.GetDecoderContext()
+
+	// Create filter graph for extraction with trimming and measurement
+	// atrim: extract only the silence region
+	// astats: measure noise floor + entropy of extracted sample
+	//   - RMS_level, Peak_level: noise characteristics
+	//   - Entropy: 1.0 = white noise (broadband), lower = tonal noise (hum/buzz)
+	filterSpec := fmt.Sprintf("atrim=start=%f:end=%f,astats=metadata=1:measure_perchannel=RMS_level+Peak_level+Entropy",
+		region.Start.Seconds(), region.End.Seconds())
+
+	filterGraph, bufferSrcCtx, bufferSinkCtx, err := setupFilterGraph(decCtx, filterSpec)
+	if err != nil {
+		log.Printf("Warning: failed to create noise extraction filter graph: %v", err)
+		return nil, nil // Non-fatal
+	}
+	defer ffmpeg.AVFilterGraphFree(&filterGraph)
+
+	// Process frames through filter to measure noise
+	filteredFrame := ffmpeg.AVFrameAlloc()
+	defer ffmpeg.AVFrameFree(&filteredFrame)
+
+	// Track measurements from astats
+	var measuredNoiseFloor float64
+	var peakLevel float64
+	var entropy float64
+	var noiseFloorFound bool
+	var framesProcessed int64
+
+	for {
+		frame, err := reader.ReadFrame()
+		if err != nil {
+			log.Printf("Warning: error reading frame during noise extraction: %v", err)
+			break
+		}
+		if frame == nil {
+			break // EOF
+		}
+
+		// Push frame into filter graph
+		if _, err := ffmpeg.AVBuffersrcAddFrameFlags(bufferSrcCtx, frame, 0); err != nil {
+			continue // Skip problematic frames
+		}
+
+		// Pull filtered frames
+		for {
+			if _, err := ffmpeg.AVBuffersinkGetFrame(bufferSinkCtx, filteredFrame); err != nil {
+				if errors.Is(err, ffmpeg.EAgain) || errors.Is(err, ffmpeg.AVErrorEOF) {
+					break
+				}
+				continue
+			}
+
+			// Extract noise measurements from metadata
+			if metadata := filteredFrame.Metadata(); metadata != nil {
+				// RMS_level: average noise floor
+				if value, ok := getFloatMetadata(metadata, metaKeyRMSLevel); ok {
+					measuredNoiseFloor = value
+					noiseFloorFound = true
+				}
+				// Peak_level: transient noise indicator
+				if value, ok := getFloatMetadata(metadata, metaKeyPeakLevel); ok {
+					peakLevel = value
+				}
+				// Entropy: noise type classifier (1.0 = broadband/white, lower = tonal/hum)
+				if value, ok := getFloatMetadata(metadata, metaKeyEntropy); ok {
+					entropy = value
+				}
+			}
+
+			framesProcessed++
+			ffmpeg.AVFrameUnref(filteredFrame)
+		}
+	}
+
+	// Flush filter graph
+	if _, err := ffmpeg.AVBuffersrcAddFrameFlags(bufferSrcCtx, nil, 0); err == nil {
+		for {
+			if _, err := ffmpeg.AVBuffersinkGetFrame(bufferSinkCtx, filteredFrame); err != nil {
+				break
+			}
+
+			if metadata := filteredFrame.Metadata(); metadata != nil {
+				if value, ok := getFloatMetadata(metadata, metaKeyRMSLevel); ok {
+					measuredNoiseFloor = value
+					noiseFloorFound = true
+				}
+				if value, ok := getFloatMetadata(metadata, metaKeyPeakLevel); ok {
+					peakLevel = value
+				}
+				if value, ok := getFloatMetadata(metadata, metaKeyEntropy); ok {
+					entropy = value
+				}
+			}
+
+			framesProcessed++
+			ffmpeg.AVFrameUnref(filteredFrame)
+		}
+	}
+
+	if framesProcessed == 0 {
+		log.Printf("Warning: no frames processed from silence region")
+		return nil, nil
+	}
+
+	// Calculate crest factor from peak and RMS (both in dB)
+	// Crest factor (dB) = Peak_level - RMS_level
+	// This is more reliable than FFmpeg's linear Crest_factor output for very quiet signals
+	crestFactorDB := 0.0
+	if noiseFloorFound && peakLevel != 0 {
+		crestFactorDB = peakLevel - measuredNoiseFloor
+	}
+
+	// Build noise profile result
+	// Note: FilePath is set but file is not currently written - this can be extended
+	// in the future to actually extract the audio segment to disk for afftdn sample_noise
+	profile := &NoiseProfile{
+		FilePath:    outputPath, // Placeholder for future file extraction
+		Start:       region.Start,
+		Duration:    region.Duration,
+		PeakLevel:   peakLevel,
+		CrestFactor: crestFactorDB, // Stored in dB (peak - RMS)
+		Entropy:     entropy,       // 1.0 = broadband noise, lower = tonal noise
+	}
+
+	if noiseFloorFound {
+		profile.MeasuredNoiseFloor = measuredNoiseFloor
+	} else {
+		// Fallback: use overall noise floor estimate
+		profile.MeasuredNoiseFloor = -60.0 // Conservative estimate
+		log.Printf("Warning: could not measure noise floor from extracted sample, using estimate")
+	}
+
+	return profile, nil
 }

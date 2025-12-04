@@ -112,3 +112,91 @@ func TestAnalyzeAudio(t *testing.T) {
 		})
 	}
 }
+
+func TestCalculateAdaptiveGateThreshold(t *testing.T) {
+	// Tests for the data-driven gate threshold calculation
+	// The function uses noise floor and RMS trough (quiet speech) to calculate
+	// an adaptive threshold positioned between noise and quiet speech.
+
+	tests := []struct {
+		name       string
+		noiseFloor float64
+		rmsTrough  float64
+		wantMin    float64 // minimum acceptable threshold (dB)
+		wantMax    float64 // maximum acceptable threshold (dB)
+		desc       string
+	}{
+		// Normal cases with valid RMS trough measurements
+		{
+			name:       "clean recording, large gap",
+			noiseFloor: -70,
+			rmsTrough:  -40, // 30dB gap, uses 50% offset
+			wantMin:    -56, // -70 + (30 * 0.5) = -55, allow tolerance
+			wantMax:    -54,
+			desc:       "clean recording with large headroom",
+		},
+		{
+			name:       "typical podcast, moderate gap",
+			noiseFloor: -55,
+			rmsTrough:  -40, // 15dB gap, uses 40% offset
+			wantMin:    -50, // -55 + (15 * 0.4) = -49, allow tolerance
+			wantMax:    -48,
+			desc:       "typical podcast recording",
+		},
+		{
+			name:       "noisy recording, small gap",
+			noiseFloor: -45,
+			rmsTrough:  -40, // 5dB gap, uses 30% offset
+			wantMin:    -44, // -45 + (5 * 0.3) = -43.5, allow tolerance
+			wantMax:    -41, // But minimum offset is 3dB, so -42
+			desc:       "noisy recording with limited headroom",
+		},
+
+		// Fallback cases - no RMS trough measurement
+		{
+			name:       "fallback: zero rmsTrough",
+			noiseFloor: -55,
+			rmsTrough:  0,   // No measurement
+			wantMin:    -50, // -55 + 6 = -49 (fallback)
+			wantMax:    -48,
+			desc:       "fallback to 6dB offset",
+		},
+		{
+			name:       "fallback: rmsTrough below noise floor",
+			noiseFloor: -50,
+			rmsTrough:  -60, // Invalid: below noise floor
+			wantMin:    -45, // -50 + 6 = -44 (fallback)
+			wantMax:    -43,
+			desc:       "fallback when rmsTrough invalid",
+		},
+
+		// Safety bounds
+		{
+			name:       "clamped to max (-35dB)",
+			noiseFloor: -30,
+			rmsTrough:  -20, // Would give -25dB
+			wantMin:    -36,
+			wantMax:    -35, // Clamped to -35dB max
+			desc:       "never gate above -35dB",
+		},
+		{
+			name:       "minimum offset ensures above noise",
+			noiseFloor: -55,
+			rmsTrough:  -54, // Only 1dB gap, but minimum offset is 3dB
+			wantMin:    -53, // -55 + 3 = -52
+			wantMax:    -51,
+			desc:       "minimum 3dB offset applied",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := calculateAdaptiveGateThreshold(tt.noiseFloor, tt.rmsTrough)
+
+			if result < tt.wantMin || result > tt.wantMax {
+				t.Errorf("calculateAdaptiveGateThreshold(%.1f, %.1f) = %.1f dB, want %.1f to %.1f dB [%s]",
+					tt.noiseFloor, tt.rmsTrough, result, tt.wantMin, tt.wantMax, tt.desc)
+			}
+		})
+	}
+}

@@ -459,97 +459,98 @@ func TestTuneDeesser(t *testing.T) {
 }
 
 func TestTuneGateThreshold(t *testing.T) {
-	// Constants from adaptive.go for reference:
-	// gateOffsetClean    = 10.0 dB (above noise floor for clean recordings)
-	// gateOffsetTypical  = 8.0 dB  (above noise floor for typical podcasts)
-	// gateOffsetNoisy    = 6.0 dB  (above noise floor for noisy recordings)
-	// gateThresholdMinDB = -70.0 dB (professional studio clean)
-	// gateThresholdMaxDB = -25.0 dB (very noisy environment)
-	// noiseFloorClean    = -60.0 dBFS
-	// noiseFloorTypical  = -50.0 dBFS
-	// noiseFloorNoisy    = -40.0 dBFS
+	// tuneGateThreshold now uses SuggestedGateThreshold from measurements
+	// which is pre-calculated during Pass 1 analysis based on actual noise floor
+	// and quiet speech measurements (RMSTrough).
+	//
+	// Constants from adaptive.go for safety bounds:
+	// gateThresholdMinDB = -70.0 dB (professional studio floor)
+	// gateThresholdMaxDB = -25.0 dB (never gate above this - would cut speech)
 	// dbToLinear(db) = 10^(db/20)
 
 	tests := []struct {
-		name              string
-		noiseFloor        float64 // dBFS input
-		wantThresholdDB   float64 // expected threshold in dB (before linear conversion)
-		wantThresholdDesc string  // description of expected behaviour
+		name                 string
+		suggestedThresholdDB float64 // Pre-calculated threshold in dB (converted to linear)
+		noiseFloor           float64 // For fallback case
+		wantThresholdDB      float64 // expected threshold in dB
+		wantThresholdDesc    string  // description of expected behaviour
 	}{
-		// Clean recording tier (noise floor < -60 dBFS) - uses 10dB offset
+		// Normal cases - uses SuggestedGateThreshold directly
 		{
-			name:              "professional studio, very clean",
-			noiseFloor:        -70,
-			wantThresholdDB:   -60, // -70 + 10, but clamped to -70 min? No: -60 > -70, OK
-			wantThresholdDesc: "clean offset applied",
+			name:                 "professional studio, pre-calculated threshold",
+			suggestedThresholdDB: -60,
+			noiseFloor:           -70,
+			wantThresholdDB:      -60,
+			wantThresholdDesc:    "uses pre-calculated threshold",
 		},
 		{
-			name:              "clean home studio",
-			noiseFloor:        -65,
-			wantThresholdDB:   -55, // -65 + 10
-			wantThresholdDesc: "clean offset applied",
+			name:                 "clean home studio",
+			suggestedThresholdDB: -55,
+			noiseFloor:           -65,
+			wantThresholdDB:      -55,
+			wantThresholdDesc:    "uses pre-calculated threshold",
 		},
 		{
-			name:              "boundary: exactly at noiseFloorClean",
-			noiseFloor:        -60,
-			wantThresholdDB:   -52, // -60 + 8 (not < -60, so uses typical offset)
-			wantThresholdDesc: "typical offset (boundary)",
-		},
-
-		// Typical podcast tier (noise floor -60 to -50 dBFS) - uses 8dB offset
-		{
-			name:              "typical podcast recording",
-			noiseFloor:        -55,
-			wantThresholdDB:   -47, // -55 + 8
-			wantThresholdDesc: "typical offset applied",
+			name:                 "typical podcast recording",
+			suggestedThresholdDB: -47,
+			noiseFloor:           -55,
+			wantThresholdDB:      -47,
+			wantThresholdDesc:    "uses pre-calculated threshold",
 		},
 		{
-			name:              "boundary: exactly at noiseFloorTypical",
-			noiseFloor:        -50,
-			wantThresholdDB:   -44, // -50 + 6 (not < -50, so uses noisy offset)
-			wantThresholdDesc: "noisy offset (boundary)",
-		},
-
-		// Noisy recording tier (noise floor >= -50 dBFS) - uses 6dB offset
-		{
-			name:              "noisy home recording",
-			noiseFloor:        -45,
-			wantThresholdDB:   -39, // -45 + 6
-			wantThresholdDesc: "noisy offset applied",
+			name:                 "noisy home recording",
+			suggestedThresholdDB: -39,
+			noiseFloor:           -45,
+			wantThresholdDB:      -39,
+			wantThresholdDesc:    "uses pre-calculated threshold",
 		},
 		{
-			name:              "very noisy room",
-			noiseFloor:        -35,
-			wantThresholdDB:   -29, // -35 + 6
-			wantThresholdDesc: "noisy offset applied",
+			name:                 "very noisy room",
+			suggestedThresholdDB: -29,
+			noiseFloor:           -35,
+			wantThresholdDB:      -29,
+			wantThresholdDesc:    "uses pre-calculated threshold",
 		},
 
-		// Clamping behaviour
+		// Clamping behaviour - safety bounds applied
 		{
-			name:              "extreme noise - clamped to max",
-			noiseFloor:        -20,
-			wantThresholdDB:   -25, // -20 + 6 = -14, clamped to gateThresholdMaxDB (-25)
-			wantThresholdDesc: "clamped to max threshold",
+			name:                 "extreme noise - clamped to max",
+			suggestedThresholdDB: -20, // Would be too high
+			noiseFloor:           -20,
+			wantThresholdDB:      -25, // Clamped to gateThresholdMaxDB
+			wantThresholdDesc:    "clamped to max threshold",
 		},
 		{
-			name:              "extremely clean - clamped to min",
-			noiseFloor:        -85,
-			wantThresholdDB:   -70, // -85 + 10 = -75, clamped to gateThresholdMinDB (-70)
-			wantThresholdDesc: "clamped to min threshold",
+			name:                 "extremely clean - clamped to min",
+			suggestedThresholdDB: -75, // Would be too low
+			noiseFloor:           -85,
+			wantThresholdDB:      -70, // Clamped to gateThresholdMinDB
+			wantThresholdDesc:    "clamped to min threshold",
 		},
 
-		// Edge cases
+		// Fallback case - no SuggestedGateThreshold, uses noise floor + 6dB
 		{
-			name:              "boundary: exactly produces max threshold",
-			noiseFloor:        -31,
-			wantThresholdDB:   -25, // -31 + 6 = -25, exactly at max
-			wantThresholdDesc: "at max boundary",
+			name:                 "fallback: no suggested threshold",
+			suggestedThresholdDB: 0, // Not set (0 means not calculated)
+			noiseFloor:           -55,
+			wantThresholdDB:      -49, // -55 + 6dB fallback
+			wantThresholdDesc:    "fallback to noise floor + 6dB",
+		},
+
+		// Boundary cases
+		{
+			name:                 "boundary: exactly at max threshold",
+			suggestedThresholdDB: -25,
+			noiseFloor:           -31,
+			wantThresholdDB:      -25,
+			wantThresholdDesc:    "at max boundary",
 		},
 		{
-			name:              "boundary: exactly produces min threshold",
-			noiseFloor:        -80,
-			wantThresholdDB:   -70, // -80 + 10 = -70, exactly at min
-			wantThresholdDesc: "at min boundary",
+			name:                 "boundary: exactly at min threshold",
+			suggestedThresholdDB: -70,
+			noiseFloor:           -80,
+			wantThresholdDB:      -70,
+			wantThresholdDesc:    "at min boundary",
 		},
 	}
 
@@ -559,6 +560,11 @@ func TestTuneGateThreshold(t *testing.T) {
 			config := DefaultFilterConfig()
 			measurements := &AudioMeasurements{
 				NoiseFloor: tt.noiseFloor,
+			}
+
+			// Set SuggestedGateThreshold if provided (convert dB to linear)
+			if tt.suggestedThresholdDB != 0 {
+				measurements.SuggestedGateThreshold = dbToLinear(tt.suggestedThresholdDB)
 			}
 
 			// Execute
@@ -576,8 +582,8 @@ func TestTuneGateThreshold(t *testing.T) {
 			if diff > tolerance {
 				// Convert actual back to dB for clearer error message
 				actualDB := linearToDB(config.GateThreshold)
-				t.Errorf("GateThreshold = %.6f (%.1f dB), want %.6f (%.1f dB) [noiseFloor=%.1f dB, %s]",
-					config.GateThreshold, actualDB, wantLinear, tt.wantThresholdDB, tt.noiseFloor, tt.wantThresholdDesc)
+				t.Errorf("GateThreshold = %.6f (%.1f dB), want %.6f (%.1f dB) [suggestedDB=%.1f, noiseFloor=%.1f dB, %s]",
+					config.GateThreshold, actualDB, wantLinear, tt.wantThresholdDB, tt.suggestedThresholdDB, tt.noiseFloor, tt.wantThresholdDesc)
 			}
 		})
 	}

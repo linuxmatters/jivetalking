@@ -62,6 +62,48 @@ func GenerateReport(data ReportData) error {
 		fmt.Fprintf(f, "Peak Level:          %.1f dBFS\n", m.PeakLevel)
 		fmt.Fprintf(f, "Spectral Centroid:   %.0f Hz\n", m.SpectralCentroid)
 		fmt.Fprintf(f, "Spectral Rolloff:    %.0f Hz\n", m.SpectralRolloff)
+
+		// Additional signal quality measurements
+		if m.DCOffset != 0 {
+			fmt.Fprintf(f, "DC Offset:           %.6f\n", m.DCOffset)
+		}
+		if m.FlatFactor > 0 {
+			fmt.Fprintf(f, "Flat Factor:         %.1f (clipping indicator)\n", m.FlatFactor)
+		}
+		if m.ZeroCrossingsRate > 0 {
+			fmt.Fprintf(f, "Zero Crossings Rate: %.4f\n", m.ZeroCrossingsRate)
+		}
+		if m.MaxDifference > 0 {
+			// Convert to percentage of full scale for readability
+			// Max difference is in sample units; 32768 is full scale for 16-bit
+			maxDiffPercent := (m.MaxDifference / 32768.0) * 100.0
+			fmt.Fprintf(f, "Max Difference:      %.1f%% FS (transient indicator)\n", maxDiffPercent)
+		}
+
+		// Silence sample details (used for noise profile extraction)
+		if m.NoiseProfile != nil {
+			fmt.Fprintf(f, "Silence Sample:      %.1fs at %.1fs\n",
+				m.NoiseProfile.Duration.Seconds(),
+				m.NoiseProfile.Start.Seconds())
+			fmt.Fprintf(f, "  Noise Floor:       %.1f dBFS (RMS)\n", m.NoiseProfile.MeasuredNoiseFloor)
+			fmt.Fprintf(f, "  Peak Level:        %.1f dBFS\n", m.NoiseProfile.PeakLevel)
+			fmt.Fprintf(f, "  Crest Factor:      %.1f dB\n", m.NoiseProfile.CrestFactor)
+			if m.NoiseProfile.Entropy > 0 {
+				// Classify noise type based on entropy
+				noiseType := "broadband (hiss)"
+				if m.NoiseProfile.Entropy < 0.7 {
+					noiseType = "tonal (hum/buzz)"
+				} else if m.NoiseProfile.Entropy < 0.9 {
+					noiseType = "mixed"
+				}
+				fmt.Fprintf(f, "  Entropy:           %.3f (%s)\n", m.NoiseProfile.Entropy, noiseType)
+			}
+		} else if len(m.SilenceRegions) > 0 {
+			// Show first silence region even if profile extraction failed
+			r := m.SilenceRegions[0]
+			fmt.Fprintf(f, "Silence Detected:    %.1fs at %.1fs (no profile extracted)\n",
+				r.Duration.Seconds(), r.Start.Seconds())
+		}
 	}
 	fmt.Fprintf(f, "Sample Rate:         %d Hz\n", data.SampleRate)
 	fmt.Fprintf(f, "Channels:            %d (%s)\n", data.Channels, channelName(data.Channels))

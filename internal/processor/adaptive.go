@@ -40,12 +40,9 @@ const (
 	deessIntensityMax    = 0.8 // Maximum intensity limit
 	deessIntensityMin    = 0.3 // Minimum before disabling
 
-	// Gate threshold parameters
-	gateOffsetClean    = 10.0  // dB above noise floor for clean recordings
-	gateOffsetTypical  = 8.0   // dB above noise floor for typical podcasts
-	gateOffsetNoisy    = 6.0   // dB above noise floor for noisy recordings
-	gateThresholdMinDB = -70.0 // dB - professional studio (clean)
-	gateThresholdMaxDB = -25.0 // dB - very noisy environment
+	// Gate threshold safety bounds (applied after data-driven calculation)
+	gateThresholdMinDB = -70.0 // dB - professional studio floor
+	gateThresholdMaxDB = -25.0 // dB - never gate above this (would cut speech)
 
 	// Noise floor quality thresholds
 	noiseFloorClean   = -60.0 // dBFS - very clean recording
@@ -205,14 +202,19 @@ func tuneHighpassFreq(config *FilterChainConfig, measurements *AudioMeasurements
 	}
 }
 
-// tuneNoiseReduction adapts FFT noise reduction based on upcoming gain.
+// tuneNoiseReduction adapts FFT noise reduction based on measurements.
 //
 // Key insight: If we apply 30dB of gain later (via speechnorm/dynaudnorm),
 // we need to remove 30dB of noise NOW, or it will be amplified with speech.
 //
-// Strategy:
-// 1. Base reduction (12dB) for recordings already near target
-// 2. Add LUFS gap to account for upcoming amplification
+// Data-driven strategy using NoiseReductionHeadroom:
+// - NoiseReductionHeadroom = gap between RMS level (speech) and noise floor
+// - Larger headroom means cleaner recording = more aggressive NR is safe
+// - Smaller headroom means noise is close to speech = be conservative
+//
+// Combined approach:
+// 1. Use LUFS gap to determine how much gain will be applied later
+// 2. Scale by headroom factor: high headroom allows more reduction
 // 3. Clamp to 6-40dB (afftdn stability limits)
 func tuneNoiseReduction(config *FilterChainConfig, measurements *AudioMeasurements, lufsGap float64) {
 	if measurements.InputI == 0.0 {
@@ -221,8 +223,30 @@ func tuneNoiseReduction(config *FilterChainConfig, measurements *AudioMeasuremen
 		return
 	}
 
-	// Add the LUFS gap to noise reduction
+	// Start with base reduction plus LUFS gap (the gain we'll apply later)
 	adaptiveReduction := noiseReductionBase + lufsGap
+
+	// Adjust based on noise reduction headroom (data-driven)
+	// This tells us how much "room" we have between speech and noise
+	if measurements.NoiseReductionHeadroom > 0 {
+		// Scale factor based on headroom:
+		// - Headroom < 15dB: noisy recording, reduce NR intensity (scale 0.7)
+		// - Headroom 15-30dB: typical, use calculated value (scale 1.0)
+		// - Headroom > 30dB: clean recording, can be more aggressive (scale 1.2)
+		var headroomScale float64
+		switch {
+		case measurements.NoiseReductionHeadroom < 15.0:
+			// Noisy recording - be conservative to avoid speech artifacts
+			headroomScale = 0.7
+		case measurements.NoiseReductionHeadroom < 30.0:
+			// Typical recording - use calculated value
+			headroomScale = 1.0
+		default:
+			// Clean recording - can be more aggressive
+			headroomScale = 1.2
+		}
+		adaptiveReduction *= headroomScale
+	}
 
 	// Clamp to reasonable limits (afftdn stability)
 	config.NoiseReduction = clamp(adaptiveReduction, noiseReductionMin, noiseReductionMax)
@@ -300,31 +324,25 @@ func tuneDeesserCentroidOnly(config *FilterChainConfig, measurements *AudioMeasu
 	}
 }
 
-// tuneGateThreshold adapts noise gate based on measured noise floor.
+// tuneGateThreshold adapts noise gate based on pre-calculated threshold from Pass 1.
 //
-// Gate threshold = noise floor + offset (dB above noise)
-// Offset varies by recording quality:
-// - Clean (<-60dB): 10dB offset for safety margin
-// - Moderate (-60 to -50dB): 8dB offset for balance
-// - Noisy (>-50dB): 6dB offset to preserve more speech
+// The SuggestedGateThreshold is calculated during analysis using actual measurements:
+// - Noise floor (measured from silence regions or RMS trough)
+// - Quiet speech level (RMS trough - quietest segments with speech)
+// - The threshold is placed adaptively between noise and quiet speech
+//
+// This function applies safety bounds for extreme cases.
 func tuneGateThreshold(config *FilterChainConfig, measurements *AudioMeasurements) {
-	// Determine offset based on noise floor quality
-	var gateOffsetDB float64
-	switch {
-	case measurements.NoiseFloor < noiseFloorClean:
-		// Very clean recording - larger margin avoids false triggers
-		gateOffsetDB = gateOffsetClean
-	case measurements.NoiseFloor < noiseFloorTypical:
-		// Typical podcast recording
-		gateOffsetDB = gateOffsetTypical
-	default:
-		// Noisy recording - smaller margin preserves more speech
-		gateOffsetDB = gateOffsetNoisy
+	// Use the data-driven threshold calculated during Pass 1 analysis
+	// SuggestedGateThreshold is already in linear amplitude
+	if measurements.SuggestedGateThreshold > 0 {
+		config.GateThreshold = measurements.SuggestedGateThreshold
+	} else {
+		// Fallback if SuggestedGateThreshold not available (shouldn't happen)
+		// Use a conservative threshold: noise floor + 6dB
+		gateThresholdDB := measurements.NoiseFloor + 6.0
+		config.GateThreshold = dbToLinear(gateThresholdDB)
 	}
-
-	// Calculate threshold: noise floor + offset, convert to linear
-	gateThresholdDB := measurements.NoiseFloor + gateOffsetDB
-	config.GateThreshold = dbToLinear(gateThresholdDB)
 
 	// Safety limits for extreme cases
 	minThresholdLinear := dbToLinear(gateThresholdMinDB)
