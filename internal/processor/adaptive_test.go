@@ -614,135 +614,276 @@ func TestTuneDeesser(t *testing.T) {
 	}
 }
 
-func TestTuneGateThreshold(t *testing.T) {
-	// tuneGateThreshold now uses SuggestedGateThreshold from measurements
-	// which is pre-calculated during Pass 1 analysis based on actual noise floor
-	// and quiet speech measurements (RMSTrough).
+func TestTuneGate(t *testing.T) {
+	// Tests the comprehensive gate tuning which calculates all gate parameters
+	// based on measurements including NoiseProfile (silence sample analysis).
 	//
-	// Constants from adaptive.go for safety bounds:
+	// Key constants from adaptive.go:
 	// gateThresholdMinDB = -70.0 dB (professional studio floor)
 	// gateThresholdMaxDB = -25.0 dB (never gate above this - would cut speech)
-	// dbToLinear(db) = 10^(db/20)
+	// gateCrestFactorThreshold = 20.0 dB (when to use peak vs floor)
+	// gateHeadroomClean = 3.0 dB, gateHeadroomModerate = 6.0 dB, gateHeadroomNoisy = 10.0 dB
+	// gateRatioGentle = 1.5, gateRatioMod = 2.0, gateRatioTight = 2.5
 
-	tests := []struct {
-		name                 string
-		suggestedThresholdDB float64 // Pre-calculated threshold in dB (converted to linear)
-		noiseFloor           float64 // For fallback case
-		wantThresholdDB      float64 // expected threshold in dB
-		wantThresholdDesc    string  // description of expected behaviour
-	}{
-		// Normal cases - uses SuggestedGateThreshold directly
-		{
-			name:                 "professional studio, pre-calculated threshold",
-			suggestedThresholdDB: -60,
-			noiseFloor:           -70,
-			wantThresholdDB:      -60,
-			wantThresholdDesc:    "uses pre-calculated threshold",
-		},
-		{
-			name:                 "clean home studio",
-			suggestedThresholdDB: -55,
-			noiseFloor:           -65,
-			wantThresholdDB:      -55,
-			wantThresholdDesc:    "uses pre-calculated threshold",
-		},
-		{
-			name:                 "typical podcast recording",
-			suggestedThresholdDB: -47,
-			noiseFloor:           -55,
-			wantThresholdDB:      -47,
-			wantThresholdDesc:    "uses pre-calculated threshold",
-		},
-		{
-			name:                 "noisy home recording",
-			suggestedThresholdDB: -39,
-			noiseFloor:           -45,
-			wantThresholdDB:      -39,
-			wantThresholdDesc:    "uses pre-calculated threshold",
-		},
-		{
-			name:                 "very noisy room",
-			suggestedThresholdDB: -29,
-			noiseFloor:           -35,
-			wantThresholdDB:      -29,
-			wantThresholdDesc:    "uses pre-calculated threshold",
-		},
+	t.Run("threshold calculation", func(t *testing.T) {
+		tests := []struct {
+			name            string
+			noiseFloor      float64 // dB
+			silencePeak     float64 // dB
+			silenceCrest    float64 // dB - determines if we use peak or floor
+			wantThresholdDB float64 // expected threshold dB
+			tolerance       float64 // tolerance in dB
+			desc            string
+		}{
+			{
+				name:            "clean studio - uses floor + 3dB headroom",
+				noiseFloor:      -75.0,
+				silencePeak:     -70.0,
+				silenceCrest:    10.0,  // Low crest = stable noise, use floor
+				wantThresholdDB: -70.0, // Clamped to min (-70)
+				tolerance:       1.0,
+				desc:            "very clean, clamped to min",
+			},
+			{
+				name:            "typical podcast - uses floor + 6dB headroom",
+				noiseFloor:      -55.0,
+				silencePeak:     -50.0,
+				silenceCrest:    10.0,  // Low crest = stable noise
+				wantThresholdDB: -49.0, // -55 + 6dB headroom (moderate: ref < -50)
+				tolerance:       1.0,
+				desc:            "moderate noise floor",
+			},
+			{
+				name:            "noisy room - uses floor + 10dB headroom",
+				noiseFloor:      -42.0,
+				silencePeak:     -38.0,
+				silenceCrest:    10.0,
+				wantThresholdDB: -32.0, // -42 + 10dB headroom (noisy: ref >= -50)
+				tolerance:       1.0,
+				desc:            "noisy floor needs generous headroom",
+			},
+			{
+				name:            "bleed with high crest - uses peak + headroom",
+				noiseFloor:      -55.0,
+				silencePeak:     -48.0, // Transient spikes
+				silenceCrest:    25.0,  // High crest = transient bleed
+				wantThresholdDB: -38.0, // -48 (peak) + 10dB headroom (peak >= -50)
+				tolerance:       1.0,
+				desc:            "high crest factor triggers peak reference",
+			},
+			{
+				name:            "extreme noise - clamped to max",
+				noiseFloor:      -20.0,
+				silencePeak:     -15.0,
+				silenceCrest:    25.0,
+				wantThresholdDB: -25.0, // Clamped to max
+				tolerance:       0.5,
+				desc:            "threshold capped to avoid cutting speech",
+			},
+		}
 
-		// Clamping behaviour - safety bounds applied
-		{
-			name:                 "extreme noise - clamped to max",
-			suggestedThresholdDB: -20, // Would be too high
-			noiseFloor:           -20,
-			wantThresholdDB:      -25, // Clamped to gateThresholdMaxDB
-			wantThresholdDesc:    "clamped to max threshold",
-		},
-		{
-			name:                 "extremely clean - clamped to min",
-			suggestedThresholdDB: -75, // Would be too low
-			noiseFloor:           -85,
-			wantThresholdDB:      -70, // Clamped to gateThresholdMinDB
-			wantThresholdDesc:    "clamped to min threshold",
-		},
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				config := newTestConfig()
+				measurements := &AudioMeasurements{
+					NoiseFloor: tt.noiseFloor,
+					NoiseProfile: &NoiseProfile{
+						PeakLevel:   tt.silencePeak,
+						CrestFactor: tt.silenceCrest,
+						Entropy:     0.5, // Moderate entropy
+					},
+				}
 
-		// Fallback case - no SuggestedGateThreshold, uses noise floor + 6dB
-		{
-			name:                 "fallback: no suggested threshold",
-			suggestedThresholdDB: 0, // Not set (0 means not calculated)
-			noiseFloor:           -55,
-			wantThresholdDB:      -49, // -55 + 6dB fallback
-			wantThresholdDesc:    "fallback to noise floor + 6dB",
-		},
+				tuneGate(config, measurements)
 
-		// Boundary cases
-		{
-			name:                 "boundary: exactly at max threshold",
-			suggestedThresholdDB: -25,
-			noiseFloor:           -31,
-			wantThresholdDB:      -25,
-			wantThresholdDesc:    "at max boundary",
-		},
-		{
-			name:                 "boundary: exactly at min threshold",
-			suggestedThresholdDB: -70,
-			noiseFloor:           -80,
-			wantThresholdDB:      -70,
-			wantThresholdDesc:    "at min boundary",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Setup
-			config := newTestConfig()
-			measurements := &AudioMeasurements{
-				NoiseFloor: tt.noiseFloor,
-			}
-
-			// Set SuggestedGateThreshold if provided (convert dB to linear)
-			if tt.suggestedThresholdDB != 0 {
-				measurements.SuggestedGateThreshold = dbToLinear(tt.suggestedThresholdDB)
-			}
-
-			// Execute
-			tuneGateThreshold(config, measurements)
-
-			// Calculate expected linear value from expected dB
-			wantLinear := dbToLinear(tt.wantThresholdDB)
-
-			// Verify with tolerance for floating point
-			tolerance := 0.0001
-			diff := config.GateThreshold - wantLinear
-			if diff < 0 {
-				diff = -diff
-			}
-			if diff > tolerance {
-				// Convert actual back to dB for clearer error message
 				actualDB := linearToDB(config.GateThreshold)
-				t.Errorf("GateThreshold = %.6f (%.1f dB), want %.6f (%.1f dB) [suggestedDB=%.1f, noiseFloor=%.1f dB, %s]",
-					config.GateThreshold, actualDB, wantLinear, tt.wantThresholdDB, tt.suggestedThresholdDB, tt.noiseFloor, tt.wantThresholdDesc)
-			}
-		})
-	}
+				diff := actualDB - tt.wantThresholdDB
+				if diff < 0 {
+					diff = -diff
+				}
+				if diff > tt.tolerance {
+					t.Errorf("GateThreshold = %.1f dB, want %.1f dB ±%.1f [%s]",
+						actualDB, tt.wantThresholdDB, tt.tolerance, tt.desc)
+				}
+			})
+		}
+	})
+
+	t.Run("ratio based on LRA", func(t *testing.T) {
+		// LRA thresholds: gateLRAWide=15 LU, gateLRAModerate=10 LU
+		// Ratios: gateRatioGentle=1.5, gateRatioMod=2.0, gateRatioTight=2.5
+		tests := []struct {
+			name      string
+			lra       float64
+			wantRatio float64
+			desc      string
+		}{
+			{"wide dynamics", 18.0, 1.5, "gentle ratio for expressive speech"},
+			{"moderate dynamics", 12.0, 2.0, "moderate ratio"},
+			{"narrow dynamics", 6.0, 2.5, "tighter ratio for compressed audio"},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				config := newTestConfig()
+				measurements := &AudioMeasurements{
+					NoiseFloor: -55.0,
+					InputLRA:   tt.lra,
+				}
+
+				tuneGate(config, measurements)
+
+				if config.GateRatio != tt.wantRatio {
+					t.Errorf("GateRatio = %.1f, want %.1f [%s]", config.GateRatio, tt.wantRatio, tt.desc)
+				}
+			})
+		}
+	})
+
+	t.Run("attack based on transients", func(t *testing.T) {
+		// gateMaxDiffHigh = 25%, gateMaxDiffMod = 10%
+		// gateAttackFast = 7ms, gateAttackMod = 12ms, gateAttackSlow = 17ms
+		// gateFluxDynamicThres = 0.05 (above: apply 0.8 multiplier)
+		tests := []struct {
+			name         string
+			maxDiff      float64 // 0-1 range (MaxDifference)
+			spectralFlux float64
+			wantAttackMS float64
+			tolerance    float64
+			desc         string
+		}{
+			{"fast transients", 0.3, 1.0, 5.6, 1.0, "fast attack (7*0.8) for sharp transients with dynamic flux"},
+			{"slow transients no flux", 0.05, 0.02, 17.0, 1.0, "slow attack 17ms for gentle speech with low flux"},
+			{"moderate with flux", 0.15, 0.1, 9.6, 1.0, "moderate attack (12*0.8) with dynamic flux"},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				config := newTestConfig()
+				measurements := &AudioMeasurements{
+					NoiseFloor:    -55.0,
+					MaxDifference: tt.maxDiff,
+					SpectralFlux:  tt.spectralFlux,
+				}
+
+				tuneGate(config, measurements)
+
+				diff := config.GateAttack - tt.wantAttackMS
+				if diff < 0 {
+					diff = -diff
+				}
+				if diff > tt.tolerance {
+					t.Errorf("GateAttack = %.1f ms, want %.1f ms ±%.1f [%s]",
+						config.GateAttack, tt.wantAttackMS, tt.tolerance, tt.desc)
+				}
+			})
+		}
+	})
+
+	t.Run("detection mode based on noise character", func(t *testing.T) {
+		// Detection uses RMS for tonal or spiky noise, peak for clean
+		// gateEntropyTonal = 0.3, gateSilenceCrestThreshold = 25.0
+		// gateEntropyClean = 0.7 (above this + crest < 15 = peak)
+		tests := []struct {
+			name           string
+			silenceEntropy float64
+			silenceCrest   float64
+			wantDetection  string
+			desc           string
+		}{
+			{"tonal noise", 0.2, 10.0, "rms", "low entropy = tonal, use RMS"},
+			{"transient bleed", 0.5, 28.0, "rms", "high crest > 25 = bleed spikes, use RMS"},
+			{"clean recording", 0.8, 8.0, "peak", "entropy > 0.7 + crest < 15 = peak"},
+			{"borderline case", 0.5, 20.0, "rms", "moderate entropy + crest, defaults to RMS"},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				config := newTestConfig()
+				measurements := &AudioMeasurements{
+					NoiseFloor: -55.0,
+					NoiseProfile: &NoiseProfile{
+						PeakLevel:   -55.0,
+						CrestFactor: tt.silenceCrest,
+						Entropy:     tt.silenceEntropy,
+					},
+				}
+
+				tuneGate(config, measurements)
+
+				if config.GateDetection != tt.wantDetection {
+					t.Errorf("GateDetection = %q, want %q [%s]",
+						config.GateDetection, tt.wantDetection, tt.desc)
+				}
+			})
+		}
+	})
+
+	t.Run("range based on entropy", func(t *testing.T) {
+		// gateEntropyTonal=0.3, gateEntropyMixed=0.6
+		// gateRangeTonalDB=-16, gateRangeMixedDB=-21, gateRangeBroadbandDB=-27
+		tests := []struct {
+			name        string
+			entropy     float64
+			noiseFloor  float64
+			wantRangeDB float64
+			tolerance   float64
+			desc        string
+		}{
+			{"tonal noise - gentle range", 0.2, -55.0, -16.0, 2.0, "low entropy = tonal, gentle range"},
+			{"mixed noise - moderate range", 0.5, -55.0, -21.0, 2.0, "mixed entropy, moderate range"},
+			{"broadband noise - aggressive", 0.7, -55.0, -27.0, 2.0, "high entropy, aggressive range"},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				config := newTestConfig()
+				measurements := &AudioMeasurements{
+					NoiseFloor: tt.noiseFloor,
+					NoiseProfile: &NoiseProfile{
+						PeakLevel:   tt.noiseFloor + 5,
+						CrestFactor: 10.0,
+						Entropy:     tt.entropy,
+					},
+				}
+
+				tuneGate(config, measurements)
+
+				actualDB := linearToDB(config.GateRange)
+				diff := actualDB - tt.wantRangeDB
+				if diff < 0 {
+					diff = -diff
+				}
+				if diff > tt.tolerance {
+					t.Errorf("GateRange = %.1f dB, want %.1f dB ±%.1f [%s]",
+						actualDB, tt.wantRangeDB, tt.tolerance, tt.desc)
+				}
+			})
+		}
+	})
+
+	t.Run("handles nil NoiseProfile gracefully", func(t *testing.T) {
+		config := newTestConfig()
+		measurements := &AudioMeasurements{
+			NoiseFloor: -55.0,
+			InputLRA:   12.0,
+			// NoiseProfile is nil
+		}
+
+		// Should not panic
+		tuneGate(config, measurements)
+
+		// Should still calculate threshold from noise floor
+		thresholdDB := linearToDB(config.GateThreshold)
+		if thresholdDB < -70 || thresholdDB > -25 {
+			t.Errorf("GateThreshold = %.1f dB, want within bounds [-70, -25]", thresholdDB)
+		}
+
+		// Detection should default to RMS when no profile
+		if config.GateDetection != "rms" {
+			t.Errorf("GateDetection = %q, want 'rms' (default for missing profile)", config.GateDetection)
+		}
+	})
 }
 
 // linearToDB converts linear amplitude to dB for test error messages

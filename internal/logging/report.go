@@ -853,13 +853,47 @@ func formatAgateFilter(f *os.File, cfg *processor.FilterChainConfig, m *processo
 	thresholdDB := linearToDb(cfg.GateThreshold)
 	rangeDB := linearToDb(cfg.GateRange)
 
-	fmt.Fprintf(f, "%sagate: threshold %.1f dB, ratio %.1f:1\n", prefix, thresholdDB, cfg.GateRatio)
+	detection := cfg.GateDetection
+	if detection == "" {
+		detection = "rms"
+	}
+
+	fmt.Fprintf(f, "%sagate: threshold %.1f dB, ratio %.1f:1, detection %s\n", prefix, thresholdDB, cfg.GateRatio, detection)
 	fmt.Fprintf(f, "        Timing: attack %.0fms, release %.0fms\n", cfg.GateAttack, cfg.GateRelease)
 	fmt.Fprintf(f, "        Range: %.1f dB reduction, knee %.1f\n", rangeDB, cfg.GateKnee)
 
-	// Show rationale
+	// Show rationale based on measurements
 	if m != nil {
-		fmt.Fprintf(f, "        Rationale: noise floor %.1f dB + margin\n", m.NoiseFloor)
+		var rationale []string
+
+		// Threshold rationale
+		if m.NoiseProfile != nil && m.NoiseProfile.CrestFactor > 20 {
+			rationale = append(rationale, fmt.Sprintf("peak ref %.1f dB (crest %.1f dB)", m.NoiseProfile.PeakLevel, m.NoiseProfile.CrestFactor))
+		} else {
+			rationale = append(rationale, fmt.Sprintf("noise floor %.1f dB", m.NoiseFloor))
+		}
+
+		// Ratio rationale
+		if m.InputLRA > 0 {
+			lraType := "moderate"
+			if m.InputLRA > 15 {
+				lraType = "wide"
+			} else if m.InputLRA < 10 {
+				lraType = "narrow"
+			}
+			rationale = append(rationale, fmt.Sprintf("LRA %.1f LU (%s)", m.InputLRA, lraType))
+		}
+
+		// Noise character for range/detection
+		if m.NoiseProfile != nil {
+			if m.NoiseProfile.Entropy < 0.3 {
+				rationale = append(rationale, "tonal noise detected")
+			}
+		}
+
+		if len(rationale) > 0 {
+			fmt.Fprintf(f, "        Rationale: %s\n", strings.Join(rationale, ", "))
+		}
 	}
 }
 

@@ -205,6 +205,7 @@ type FilterChainConfig struct {
 	GateRange     float64 // Level of gain reduction below threshold (0.0-1.0)
 	GateKnee      float64 // Knee curve softness (1.0-8.0)
 	GateMakeup    float64 // Makeup gain after gating (1.0-64.0)
+	GateDetection string  // Level detection mode: "rms" (default, smoother) or "peak" (tighter)
 
 	// Compression (acompressor) - evens out dynamic range
 	CompEnabled   bool    // Enable acompressor filter
@@ -344,15 +345,16 @@ func DefaultFilterConfig() *FilterChainConfig {
 		NoiseTrack:     true,  // Enable adaptive tracking
 
 		// Gate - remove silence and low-level noise between speech
-		// Threshold will be set adaptively based on noise floor in Pass 2
-		GateEnabled:   false,
-		GateThreshold: 0.01,   // -40dBFS default (will be adaptive)
-		GateRatio:     2.0,    // 2:1 expansion ratio (gentle, preserves natural pauses)
-		GateAttack:    20,     // 20ms attack (protects speech onset, prevents clipping)
-		GateRelease:   250,    // 250ms release (smooth, natural decay)
-		GateRange:     0.0625, // -24dB reduction (moderate, avoids voice ducking)
-		GateKnee:      2.828,  // Soft knee (2.828 = default, smooth engagement)
-		GateMakeup:    1.0,    // No makeup gain (normalization handled by dynaudnorm)
+		// All parameters set adaptively based on Pass 1 measurements
+		GateEnabled:   true,
+		GateThreshold: 0.01,   // -40dBFS default (adaptive: based on silence peak + headroom)
+		GateRatio:     2.0,    // 2:1 ratio (adaptive: based on LRA)
+		GateAttack:    12,     // 12ms attack (adaptive: based on MaxDifference)
+		GateRelease:   350,    // 350ms release (adaptive: based on flux/ZCR, +50ms hold compensation)
+		GateRange:     0.0625, // -24dB reduction (adaptive: based on silence entropy)
+		GateKnee:      3.0,    // Soft knee (adaptive: based on spectral crest)
+		GateMakeup:    1.0,    // No makeup gain (normalization handles it)
+		GateDetection: "rms",  // RMS detection (adaptive: rms for bleed, peak for clean)
 
 		// Compression - even out dynamics naturally
 		// LA-2A-style gentle compression for podcast speech
@@ -733,20 +735,25 @@ func (cfg *FilterChainConfig) buildAfftdnFilter() string {
 
 // buildAgateFilter builds the agate (noise gate) filter specification.
 // Removes low-level noise between speech while preserving natural pauses.
-// Uses RMS detection for smooth, natural speech gating.
+// Detection mode is adaptive: RMS for tonal bleed, peak for clean recordings.
 func (cfg *FilterChainConfig) buildAgateFilter() string {
 	if !cfg.GateEnabled {
 		return ""
 	}
+	detection := cfg.GateDetection
+	if detection == "" {
+		detection = "rms" // Safe default for speech
+	}
 	return fmt.Sprintf(
-		"agate=threshold=%.3f:ratio=%.1f:attack=%.0f:release=%.0f:"+
-			"range=%.3f:knee=%.1f:detection=rms:makeup=%.1f",
+		"agate=threshold=%.6f:ratio=%.1f:attack=%.0f:release=%.0f:"+
+			"range=%.4f:knee=%.1f:detection=%s:makeup=%.1f",
 		cfg.GateThreshold,
 		cfg.GateRatio,
 		cfg.GateAttack,
 		cfg.GateRelease,
 		cfg.GateRange,
 		cfg.GateKnee,
+		detection,
 		cfg.GateMakeup,
 	)
 }

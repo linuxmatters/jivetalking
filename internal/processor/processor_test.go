@@ -22,8 +22,8 @@ func TestProcessAudio(t *testing.T) {
 	config.DownmixEnabled = true
 	config.AnalysisEnabled = true
 	config.ResampleEnabled = true
-	config.HighpassEnabled = true  // Basic processing
-	config.LimiterEnabled = true   // Safety limiter
+	config.HighpassEnabled = true // Basic processing
+	config.LimiterEnabled = true  // Safety limiter
 
 	// Process the audio with a no-op progress callback
 	result, err := ProcessAudio(testFile, config, func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements) {

@@ -67,9 +67,65 @@ const (
 	deessIntensityMax    = 0.8 // Maximum intensity limit
 	deessIntensityMin    = 0.3 // Minimum before disabling
 
-	// Gate threshold safety bounds (applied after data-driven calculation)
-	gateThresholdMinDB = -70.0 // dB - professional studio floor
-	gateThresholdMaxDB = -25.0 // dB - never gate above this (would cut speech)
+	// Gate tuning constants
+	// Threshold calculation: sits above noise/bleed peaks, below quiet speech
+	gateThresholdMinDB       = -70.0 // dB - professional studio floor
+	gateThresholdMaxDB       = -25.0 // dB - never gate above this (would cut speech)
+	gateCrestFactorThreshold = 20.0  // dB - above this, use peak reference instead of RMS
+	gateHeadroomClean        = 3.0   // dB - headroom above reference for clean recordings
+	gateHeadroomModerate     = 6.0   // dB - headroom for moderate noise
+	gateHeadroomNoisy        = 10.0  // dB - headroom for noisy recordings
+
+	// Ratio: based on LRA (loudness range)
+	gateLRAWide     = 15.0 // LU - above: wide dynamics, gentle ratio
+	gateLRAModerate = 10.0 // LU - above: moderate dynamics
+	gateRatioGentle = 1.5  // For wide LRA (preserve expression)
+	gateRatioMod    = 2.0  // For moderate LRA
+	gateRatioTight  = 2.5  // For narrow LRA (tighter control OK)
+
+	// Attack: based on MaxDifference (transient indicator)
+	// Fast transients need fast attack to avoid clipping word onsets
+	gateMaxDiffHigh      = 25.0 // % - sharp transients
+	gateMaxDiffMod       = 10.0 // % - moderate transients
+	gateAttackFast       = 7.0  // ms - for sharp transients
+	gateAttackMod        = 12.0 // ms - standard speech
+	gateAttackSlow       = 17.0 // ms - soft onsets
+	gateFluxDynamicThres = 0.05 // SpectralFlux threshold for dynamic content
+
+	// Release: based on flux, ZCR, and noise character
+	// No hold parameter exists - release must compensate
+	gateFluxLow          = 0.01 // Low flux threshold
+	gateZCRLow           = 0.08 // Low zero crossings rate
+	gateFluxHigh         = 0.05 // High flux threshold
+	gateReleaseSustained = 400  // ms - for sustained speech
+	gateReleaseMod       = 300  // ms - standard
+	gateReleaseDynamic   = 200  // ms - for dynamic content
+	gateReleaseHoldComp  = 50   // ms - compensation for lack of hold parameter
+	gateReleaseTonalComp = 75   // ms - extra for tonal bleed (hide pump)
+	gateReleaseMin       = 150  // ms - minimum release
+	gateReleaseMax       = 500  // ms - maximum release
+
+	// Range: based on silence entropy and noise floor
+	// Tonal noise sounds worse when hard-gated - gentler range hides pumping
+	gateEntropyTonal     = 0.3 // Below: tonal noise (bleed/hum)
+	gateEntropyMixed     = 0.6 // Below: mixed noise
+	gateRangeTonalDB     = -16 // dB - gentle for tonal noise
+	gateRangeMixedDB     = -21 // dB - moderate for mixed
+	gateRangeBroadbandDB = -27 // dB - aggressive for broadband
+	gateRangeCleanBoost  = -6  // dB - extra depth for very clean
+	gateRangeMinDB       = -36 // dB - minimum (deepest)
+	gateRangeMaxDB       = -12 // dB - maximum (gentlest)
+
+	// Knee: based on spectral crest
+	gateSpectralCrestHigh = 35.0 // High crest threshold
+	gateSpectralCrestMod  = 20.0 // Moderate crest threshold
+	gateKneeSoft          = 5.0  // For dynamic content with prominent peaks
+	gateKneeMod           = 3.0  // Standard
+	gateKneeSharp         = 2.0  // For less dynamic content
+
+	// Detection: based on silence entropy and crest factor
+	gateSilenceCrestThreshold = 25.0 // dB - above: use RMS (noise has spikes)
+	gateEntropyClean          = 0.7  // Above: can use peak detection
 
 	// Noise floor quality thresholds
 	noiseFloorClean   = -60.0 // dBFS - very clean recording
@@ -584,31 +640,231 @@ func tuneDeesserCentroidOnly(config *FilterChainConfig, measurements *AudioMeasu
 	}
 }
 
-// tuneGateThreshold adapts noise gate based on pre-calculated threshold from Pass 1.
+// tuneGate adapts all noise gate parameters based on Pass 1 measurements.
 //
-// The SuggestedGateThreshold is calculated during analysis using actual measurements:
-// - Noise floor (measured from silence regions or RMS trough)
-// - Quiet speech level (RMS trough - quietest segments with speech)
-// - The threshold is placed adaptively between noise and quiet speech
-//
-// This function applies safety bounds for extreme cases.
-func tuneGateThreshold(config *FilterChainConfig, measurements *AudioMeasurements) {
-	// Use the data-driven threshold calculated during Pass 1 analysis
-	// SuggestedGateThreshold is already in linear amplitude
-	if measurements.SuggestedGateThreshold > 0 {
-		config.GateThreshold = measurements.SuggestedGateThreshold
-	} else {
-		// Fallback if SuggestedGateThreshold not available (shouldn't happen)
-		// Use a conservative threshold: noise floor + 6dB
-		gateThresholdDB := measurements.NoiseFloor + 6.0
-		config.GateThreshold = dbToLinear(gateThresholdDB)
+// Parameters are tuned as follows:
+//   - Threshold: above silence peak (if crest > 20dB) or noise floor, with headroom
+//   - Ratio: based on LRA (wide dynamics = gentle ratio)
+//   - Attack: based on MaxDifference (fast transients = fast attack to avoid clipping onsets)
+//   - Release: based on flux/ZCR + hold compensation (no hold param in agate)
+//   - Range: based on silence entropy (tonal noise = gentle range to hide pumping)
+//   - Knee: based on spectral crest (dynamic content = soft knee)
+//   - Detection: RMS for tonal bleed/noisy silence, peak for clean recordings
+//   - Makeup: 1.0 (loudness normalisation handles level compensation)
+func tuneGate(config *FilterChainConfig, measurements *AudioMeasurements) {
+	// Determine if we have tonal noise (likely bleed/hum)
+	var tonalNoise bool
+	var silenceEntropy, silenceCrest, silencePeak float64
+
+	if measurements.NoiseProfile != nil {
+		silenceEntropy = measurements.NoiseProfile.Entropy
+		silenceCrest = measurements.NoiseProfile.CrestFactor
+		silencePeak = measurements.NoiseProfile.PeakLevel
+		tonalNoise = silenceEntropy < gateEntropyTonal
 	}
 
-	// Safety limits for extreme cases
-	minThresholdLinear := dbToLinear(gateThresholdMinDB)
-	maxThresholdLinear := dbToLinear(gateThresholdMaxDB)
+	// 1. Threshold: sits above noise/bleed peaks, below quiet speech
+	config.GateThreshold = calculateGateThreshold(
+		measurements.NoiseFloor,
+		silencePeak,
+		silenceCrest,
+	)
 
-	config.GateThreshold = clamp(config.GateThreshold, minThresholdLinear, maxThresholdLinear)
+	// 2. Ratio: based on LRA (loudness range)
+	config.GateRatio = calculateGateRatio(measurements.InputLRA)
+
+	// 3. Attack: based on MaxDifference (transient indicator)
+	config.GateAttack = calculateGateAttack(
+		measurements.MaxDifference,
+		measurements.SpectralFlux,
+	)
+
+	// 4. Release: based on flux, ZCR, and noise character
+	config.GateRelease = calculateGateRelease(
+		measurements.SpectralFlux,
+		measurements.ZeroCrossingsRate,
+		tonalNoise,
+	)
+
+	// 5. Range: based on silence entropy and noise floor
+	config.GateRange = calculateGateRange(
+		silenceEntropy,
+		measurements.NoiseFloor,
+	)
+
+	// 6. Knee: based on spectral crest
+	config.GateKnee = calculateGateKnee(measurements.SpectralCrest)
+
+	// 7. Detection: RMS for bleed, peak for clean
+	config.GateDetection = calculateGateDetection(silenceEntropy, silenceCrest)
+
+	// 8. Makeup: 1.0 (loudness normalisation handles it)
+	config.GateMakeup = 1.0
+}
+
+// calculateGateThreshold determines the gate threshold based on noise characteristics.
+// When silence has high crest factor (transient spikes), use peak as reference.
+// Otherwise use noise floor. Add headroom based on noise severity.
+func calculateGateThreshold(noiseFloorDB, silencePeakDB, silenceCrestDB float64) float64 {
+	var referenceDB float64
+
+	// Determine reference level based on crest factor
+	if silenceCrestDB > gateCrestFactorThreshold && silencePeakDB != 0 {
+		// Noise has transients (e.g., bleed) - use peak as reference
+		referenceDB = silencePeakDB
+	} else {
+		// Stable noise - use floor
+		referenceDB = noiseFloorDB
+	}
+
+	// Determine headroom based on reference level (higher = more noisy = more headroom)
+	var headroomDB float64
+	switch {
+	case referenceDB < -70:
+		// Very clean - tight threshold safe
+		headroomDB = gateHeadroomClean
+	case referenceDB < -50:
+		// Moderate - standard headroom
+		headroomDB = gateHeadroomModerate
+	default:
+		// Noisy - generous headroom to avoid cutting quiet speech
+		headroomDB = gateHeadroomNoisy
+	}
+
+	thresholdDB := referenceDB + headroomDB
+
+	// Safety limits
+	thresholdDB = clamp(thresholdDB, gateThresholdMinDB, gateThresholdMaxDB)
+
+	return dbToLinear(thresholdDB)
+}
+
+// calculateGateRatio determines ratio based on LRA (loudness range).
+// Wide dynamics = gentle ratio to preserve expression.
+func calculateGateRatio(lra float64) float64 {
+	switch {
+	case lra > gateLRAWide:
+		return gateRatioGentle // Wide dynamics - preserve expression
+	case lra > gateLRAModerate:
+		return gateRatioMod // Moderate dynamics
+	default:
+		return gateRatioTight // Narrow dynamics - tighter control OK
+	}
+}
+
+// calculateGateAttack determines attack time based on transient characteristics.
+// Fast transients need fast attack to avoid clipping word onsets.
+// MaxDifference is expressed as a fraction (0.0-1.0), convert to percentage.
+func calculateGateAttack(maxDiff, spectralFlux float64) float64 {
+	// MaxDifference is 0.0-1.0 fraction, convert to percentage for comparison
+	maxDiffPercent := maxDiff * 100.0
+
+	var baseAttack float64
+	switch {
+	case maxDiffPercent > gateMaxDiffHigh:
+		baseAttack = gateAttackFast // Sharp transients - fast opening
+	case maxDiffPercent > gateMaxDiffMod:
+		baseAttack = gateAttackMod // Standard speech
+	default:
+		baseAttack = gateAttackSlow // Soft onsets - gentler OK
+	}
+
+	// Bias faster for dynamic content
+	if spectralFlux > gateFluxDynamicThres {
+		baseAttack *= 0.8
+	}
+
+	return clamp(baseAttack, 5.0, 25.0)
+}
+
+// calculateGateRelease determines release time based on content and noise character.
+// Compensates for lack of hold parameter by extending release.
+// Tonal bleed needs slower release to hide the pumping artifact.
+func calculateGateRelease(spectralFlux, zcr float64, tonalNoise bool) float64 {
+	var baseRelease float64
+
+	switch {
+	case spectralFlux < gateFluxLow && zcr < gateZCRLow:
+		// Sustained speech with low activity
+		baseRelease = gateReleaseSustained
+	case spectralFlux > gateFluxHigh:
+		// Dynamic content - more responsive
+		baseRelease = gateReleaseDynamic
+	default:
+		baseRelease = gateReleaseMod
+	}
+
+	// Compensate for lack of hold parameter
+	baseRelease += gateReleaseHoldComp
+
+	// Tonal bleed needs slower release to hide pumping
+	if tonalNoise {
+		baseRelease += gateReleaseTonalComp
+	}
+
+	return clamp(baseRelease, float64(gateReleaseMin), float64(gateReleaseMax))
+}
+
+// calculateGateRange determines maximum attenuation depth based on noise character.
+// Tonal noise (bleed, hum) sounds worse when hard-gated - use gentler range.
+// Broadband noise can be gated more aggressively.
+func calculateGateRange(silenceEntropy, noiseFloorDB float64) float64 {
+	var rangeDB float64
+
+	switch {
+	case silenceEntropy < gateEntropyTonal:
+		rangeDB = gateRangeTonalDB // Tonal - gentle
+	case silenceEntropy < gateEntropyMixed:
+		rangeDB = gateRangeMixedDB // Mixed - moderate
+	default:
+		rangeDB = gateRangeBroadbandDB // Broadband - aggressive
+	}
+
+	// Can go deeper if very clean recording
+	if noiseFloorDB < -70 {
+		rangeDB += gateRangeCleanBoost // More negative = deeper
+	}
+
+	rangeDB = clamp(rangeDB, float64(gateRangeMinDB), float64(gateRangeMaxDB))
+
+	return dbToLinear(rangeDB)
+}
+
+// calculateGateKnee determines knee softness based on spectral crest.
+// Dynamic content with prominent peaks benefits from softer knee.
+func calculateGateKnee(spectralCrest float64) float64 {
+	switch {
+	case spectralCrest > gateSpectralCrestHigh:
+		return gateKneeSoft // Dynamic - soft engagement
+	case spectralCrest > gateSpectralCrestMod:
+		return gateKneeMod // Standard
+	default:
+		return gateKneeSharp // Less dynamic - sharper OK
+	}
+}
+
+// calculateGateDetection determines whether to use RMS or peak detection.
+// RMS is safer for speech and handles tonal bleed better.
+// Peak provides tighter tracking for very clean recordings.
+func calculateGateDetection(silenceEntropy, silenceCrestDB float64) string {
+	// Tonal noise or high crest in silence - use RMS
+	if silenceEntropy < gateEntropyTonal || silenceCrestDB > gateSilenceCrestThreshold {
+		return "rms"
+	}
+
+	// Very clean with low crest - can use peak for tighter tracking
+	if silenceEntropy > gateEntropyClean && silenceCrestDB < 15 {
+		return "peak"
+	}
+
+	// Default: RMS is safer for speech
+	return "rms"
+}
+
+// tuneGateThreshold is deprecated - use tuneGate instead.
+// Kept for backwards compatibility during transition.
+func tuneGateThreshold(config *FilterChainConfig, measurements *AudioMeasurements) {
+	tuneGate(config, measurements)
 }
 
 // tuneCompression adapts dynamics processing based on:

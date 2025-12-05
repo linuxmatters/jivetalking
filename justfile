@@ -124,3 +124,6 @@ popey: build
     rm -f testdata/LMP-69-popey-processed.*
     ./jivetalking --logs testdata/LMP-69-popey.flac
     cat testdata/LMP-69-popey-processed.log
+
+# Process all presenters
+presenters: mark martin popey
