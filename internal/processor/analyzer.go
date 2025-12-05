@@ -778,7 +778,8 @@ func createAnalysisFilterGraph(
 	// 4. ebur128 - provides integrated loudness (LUFS), true peak, and LRA via metadata
 	// Note: reset=0 (default) allows astats to accumulate statistics across all frames for Overall measurements
 	// ebur128 metadata=1 writes per-frame loudness data to frame metadata (lavfi.r128.* keys)
-	filterSpec := fmt.Sprintf("silencedetect=noise=-50dB:duration=0.5,astats=metadata=1:measure_perchannel=Noise_floor+Dynamic_range+RMS_level+Peak_level+DC_offset+Flat_factor+Zero_crossings_rate+Max_difference,aspectralstats=win_size=2048:win_func=hann:measure=centroid+rolloff,ebur128=metadata=1:target=%.0f",
+	// peak=true enables true peak measurement (required for lavfi.r128.true_peak metadata)
+	filterSpec := fmt.Sprintf("silencedetect=noise=-50dB:duration=0.5,astats=metadata=1:measure_perchannel=Noise_floor+Dynamic_range+RMS_level+Peak_level+DC_offset+Flat_factor+Zero_crossings_rate+Max_difference,aspectralstats=win_size=2048:win_func=hann:measure=centroid+rolloff,ebur128=metadata=1:peak=true:target=%.0f",
 		targetI)
 
 	return setupFilterGraph(decCtx, filterSpec)

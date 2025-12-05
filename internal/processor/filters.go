@@ -672,7 +672,8 @@ func (cfg *FilterChainConfig) buildOutputAnalysisFilters() string {
 	// astats: provides noise floor, dynamic range, RMS, peak, DC offset, flat factor, zero crossings, max difference
 	// aspectralstats: provides spectral centroid and rolloff
 	// ebur128: provides integrated loudness (LUFS), true peak, and LRA
-	return "astats=metadata=1:measure_perchannel=Noise_floor+Dynamic_range+RMS_level+Peak_level+DC_offset+Flat_factor+Zero_crossings_rate+Max_difference,aspectralstats=win_size=2048:win_func=hann:measure=centroid+rolloff,ebur128=metadata=1:target=-16"
+	// peak=true enables true peak measurement (required for lavfi.r128.true_peak metadata)
+	return "astats=metadata=1:measure_perchannel=Noise_floor+Dynamic_range+RMS_level+Peak_level+DC_offset+Flat_factor+Zero_crossings_rate+Max_difference,aspectralstats=win_size=2048:win_func=hann:measure=centroid+rolloff,ebur128=metadata=1:peak=true:target=-16"
 }
 
 // BuildFilterSpec builds the FFmpeg filter specification string for Pass 2 processing.
