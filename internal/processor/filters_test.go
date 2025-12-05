@@ -12,7 +12,18 @@ import (
 // This isolates tests from application default configuration changes.
 func newTestConfig() *FilterChainConfig {
 	return &FilterChainConfig{
-		// All filters disabled by default
+		// Infrastructure filters (disabled by default for isolated tests)
+		DownmixEnabled:        false,
+		AnalysisEnabled:       false,
+		SilenceDetectEnabled:  false,
+		SilenceDetectLevel:    -50.0,
+		SilenceDetectDuration: 0.5,
+		ResampleEnabled:       false,
+		ResampleSampleRate:    44100,
+		ResampleFormat:        "s16",
+		ResampleFrameSize:     4096,
+
+		// Processing filters (all disabled by default)
 		HighpassEnabled:   false,
 		HumFilterEnabled:  false,
 		AdeclickEnabled:   false,
@@ -87,16 +98,23 @@ func newTestConfig() *FilterChainConfig {
 }
 
 func TestBuildFilterSpec(t *testing.T) {
-	t.Run("empty config produces only output format filters", func(t *testing.T) {
+	t.Run("empty config produces empty filter spec", func(t *testing.T) {
 		config := newTestConfig()
 		spec := config.BuildFilterSpec()
 
-		// Should not be empty - output format filters are always present
-		if spec == "" {
-			t.Fatal("BuildFilterSpec returned empty string")
+		// With all filters disabled, spec should be empty
+		if spec != "" {
+			t.Errorf("BuildFilterSpec with all disabled should return empty, got: %s", spec)
 		}
+	})
 
-		// Output format filters should always be present
+	t.Run("resample enabled produces output format filters", func(t *testing.T) {
+		config := newTestConfig()
+		config.ResampleEnabled = true
+
+		spec := config.BuildFilterSpec()
+
+		// Output format filters should be present when ResampleEnabled
 		if !strings.Contains(spec, "aformat=sample_rates=44100") {
 			t.Error("Missing aformat output filter")
 		}
@@ -124,6 +142,7 @@ func TestBuildFilterSpec(t *testing.T) {
 		config.SpeechnormEnabled = true
 		config.DynaudnormEnabled = true
 		config.LimiterEnabled = true
+		config.ResampleEnabled = true // Required for output format filters
 
 		spec := config.BuildFilterSpec()
 
@@ -211,9 +230,10 @@ func TestBuildFilterSpec(t *testing.T) {
 			t.Error("Disabled alimiter filter present in spec")
 		}
 
-		// But output format should still be present
-		if !strings.Contains(spec, "aformat=sample_rates=44100") {
-			t.Error("Missing aformat output filter even with all processing disabled")
+		// With ResampleEnabled=false (from newTestConfig), no aformat should be present
+		// This is intentional - infrastructure filters are now controlled by flags
+		if strings.Contains(spec, "aformat=sample_rates=44100") {
+			t.Error("aformat should not appear when ResampleEnabled=false")
 		}
 	})
 
@@ -229,15 +249,18 @@ func TestBuildFilterSpec(t *testing.T) {
 		}
 	})
 
-	t.Run("aformat appears after output analysis filters", func(t *testing.T) {
+	t.Run("aformat appears after analysis filters when both enabled", func(t *testing.T) {
 		config := newTestConfig()
-		config.OutputAnalysisEnabled = true
+		config.AnalysisEnabled = true
+		config.ResampleEnabled = true
+		// Use Pass2FilterOrder which has Analysis before Resample
+		config.FilterOrder = Pass2FilterOrder
 
 		spec := config.BuildFilterSpec()
 
 		// Should contain ebur128 analysis filter
 		if !strings.Contains(spec, "ebur128=") {
-			t.Fatal("Missing ebur128 filter when OutputAnalysisEnabled=true")
+			t.Fatal("Missing ebur128 filter when AnalysisEnabled=true")
 		}
 
 		// ebur128 converts to f64 internally - aformat must come after to convert back to s16
@@ -658,6 +681,8 @@ func TestFilterOrderRespected(t *testing.T) {
 	config.LimiterEnabled = true
 	config.DeessEnabled = true
 	config.DeessIntensity = 0.5
+	config.ResampleEnabled = true // Required for aformat output filter
+	config.FilterOrder = Pass2FilterOrder
 
 	spec := config.BuildFilterSpec()
 
@@ -665,7 +690,7 @@ func TestFilterOrderRespected(t *testing.T) {
 	highpassPos := strings.Index(spec, "highpass=")
 	afftdnPos := strings.Index(spec, "afftdn=")
 	limiterPos := strings.Index(spec, "alimiter=")
-	aformatPos := strings.Index(spec, "aformat=")
+	aformatPos := strings.Index(spec, "aformat=sample_rates=")
 
 	// Verify order: highpass < afftdn < limiter < aformat
 	if highpassPos >= afftdnPos {
@@ -722,4 +747,290 @@ func TestDbToLinearFormula(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Tests for infrastructure filters (Downmix, Analysis, SilenceDetect, Resample)
+
+func TestBuildDownmixFilter(t *testing.T) {
+	t.Run("enabled returns aformat mono", func(t *testing.T) {
+		config := newTestConfig()
+		config.DownmixEnabled = true
+
+		result := config.buildDownmixFilter()
+
+		if result != "aformat=channel_layouts=mono" {
+			t.Errorf("buildDownmixFilter() = %q, want %q", result, "aformat=channel_layouts=mono")
+		}
+	})
+
+	t.Run("disabled returns empty string", func(t *testing.T) {
+		config := newTestConfig()
+		config.DownmixEnabled = false
+
+		result := config.buildDownmixFilter()
+
+		if result != "" {
+			t.Errorf("buildDownmixFilter() = %q, want empty string", result)
+		}
+	})
+}
+
+func TestBuildAnalysisFilter(t *testing.T) {
+	t.Run("enabled returns astats+aspectralstats+ebur128 chain", func(t *testing.T) {
+		config := newTestConfig()
+		config.AnalysisEnabled = true
+		config.TargetI = -16.0
+
+		result := config.buildAnalysisFilter()
+
+		// Check for key components
+		if !strings.Contains(result, "astats=metadata=1") {
+			t.Error("buildAnalysisFilter() missing astats filter")
+		}
+		if !strings.Contains(result, "measure_perchannel=Noise_floor+Dynamic_range+RMS_level+Peak_level") {
+			t.Error("buildAnalysisFilter() missing detailed astats measurements")
+		}
+		if !strings.Contains(result, "aspectralstats=win_size=2048") {
+			t.Error("buildAnalysisFilter() missing aspectralstats filter")
+		}
+		if !strings.Contains(result, "measure=centroid+rolloff") {
+			t.Error("buildAnalysisFilter() missing spectral measurements")
+		}
+		if !strings.Contains(result, "ebur128=metadata=1:peak=true") {
+			t.Error("buildAnalysisFilter() missing ebur128 filter")
+		}
+		if !strings.Contains(result, "target=-16") {
+			t.Errorf("buildAnalysisFilter() missing target=-16, got %q", result)
+		}
+	})
+
+	t.Run("uses configured TargetI", func(t *testing.T) {
+		config := newTestConfig()
+		config.AnalysisEnabled = true
+		config.TargetI = -14.0
+
+		result := config.buildAnalysisFilter()
+
+		if !strings.Contains(result, "target=-14") {
+			t.Errorf("buildAnalysisFilter() should use TargetI=-14, got %q", result)
+		}
+	})
+
+	t.Run("disabled returns empty string", func(t *testing.T) {
+		config := newTestConfig()
+		config.AnalysisEnabled = false
+
+		result := config.buildAnalysisFilter()
+
+		if result != "" {
+			t.Errorf("buildAnalysisFilter() = %q, want empty string", result)
+		}
+	})
+}
+
+func TestBuildSilenceDetectFilter(t *testing.T) {
+	t.Run("enabled returns silencedetect with threshold and duration", func(t *testing.T) {
+		config := newTestConfig()
+		config.SilenceDetectEnabled = true
+		config.SilenceDetectLevel = -50.0
+		config.SilenceDetectDuration = 0.5
+
+		result := config.buildSilenceDetectFilter()
+
+		expected := "silencedetect=noise=-50dB:duration=0.50"
+		if result != expected {
+			t.Errorf("buildSilenceDetectFilter() = %q, want %q", result, expected)
+		}
+	})
+
+	t.Run("uses configured parameters", func(t *testing.T) {
+		config := newTestConfig()
+		config.SilenceDetectEnabled = true
+		config.SilenceDetectLevel = -40.0
+		config.SilenceDetectDuration = 1.0
+
+		result := config.buildSilenceDetectFilter()
+
+		expected := "silencedetect=noise=-40dB:duration=1.00"
+		if result != expected {
+			t.Errorf("buildSilenceDetectFilter() = %q, want %q", result, expected)
+		}
+	})
+
+	t.Run("disabled returns empty string", func(t *testing.T) {
+		config := newTestConfig()
+		config.SilenceDetectEnabled = false
+
+		result := config.buildSilenceDetectFilter()
+
+		if result != "" {
+			t.Errorf("buildSilenceDetectFilter() = %q, want empty string", result)
+		}
+	})
+}
+
+func TestBuildResampleFilter(t *testing.T) {
+	t.Run("enabled returns aformat+asetnsamples with default params", func(t *testing.T) {
+		config := newTestConfig()
+		config.ResampleEnabled = true
+		config.ResampleSampleRate = 44100
+		config.ResampleFormat = "s16"
+		config.ResampleFrameSize = 4096
+
+		result := config.buildResampleFilter()
+
+		expected := "aformat=sample_rates=44100:channel_layouts=mono:sample_fmts=s16,asetnsamples=n=4096"
+		if result != expected {
+			t.Errorf("buildResampleFilter() = %q, want %q", result, expected)
+		}
+	})
+
+	t.Run("uses configured parameters", func(t *testing.T) {
+		config := newTestConfig()
+		config.ResampleEnabled = true
+		config.ResampleSampleRate = 48000
+		config.ResampleFormat = "s32"
+		config.ResampleFrameSize = 2048
+
+		result := config.buildResampleFilter()
+
+		expected := "aformat=sample_rates=48000:channel_layouts=mono:sample_fmts=s32,asetnsamples=n=2048"
+		if result != expected {
+			t.Errorf("buildResampleFilter() = %q, want %q", result, expected)
+		}
+	})
+
+	t.Run("disabled returns empty string", func(t *testing.T) {
+		config := newTestConfig()
+		config.ResampleEnabled = false
+
+		result := config.buildResampleFilter()
+
+		if result != "" {
+			t.Errorf("buildResampleFilter() = %q, want empty string", result)
+		}
+	})
+}
+
+func TestPass1FilterOrder(t *testing.T) {
+	t.Run("includes correct filters in order", func(t *testing.T) {
+		expected := []FilterID{FilterDownmix, FilterAnalysis, FilterSilenceDetect}
+
+		if len(Pass1FilterOrder) != len(expected) {
+			t.Fatalf("Pass1FilterOrder has %d filters, want %d", len(Pass1FilterOrder), len(expected))
+		}
+
+		for i, id := range expected {
+			if Pass1FilterOrder[i] != id {
+				t.Errorf("Pass1FilterOrder[%d] = %q, want %q", i, Pass1FilterOrder[i], id)
+			}
+		}
+	})
+
+	t.Run("starts with Downmix", func(t *testing.T) {
+		if Pass1FilterOrder[0] != FilterDownmix {
+			t.Errorf("Pass1FilterOrder should start with FilterDownmix, got %q", Pass1FilterOrder[0])
+		}
+	})
+
+	t.Run("ends with SilenceDetect", func(t *testing.T) {
+		last := Pass1FilterOrder[len(Pass1FilterOrder)-1]
+		if last != FilterSilenceDetect {
+			t.Errorf("Pass1FilterOrder should end with FilterSilenceDetect, got %q", last)
+		}
+	})
+}
+
+func TestPass2FilterOrder(t *testing.T) {
+	t.Run("starts with Downmix", func(t *testing.T) {
+		if Pass2FilterOrder[0] != FilterDownmix {
+			t.Errorf("Pass2FilterOrder should start with FilterDownmix, got %q", Pass2FilterOrder[0])
+		}
+	})
+
+	t.Run("ends with Resample", func(t *testing.T) {
+		last := Pass2FilterOrder[len(Pass2FilterOrder)-1]
+		if last != FilterResample {
+			t.Errorf("Pass2FilterOrder should end with FilterResample, got %q", last)
+		}
+	})
+
+	t.Run("Analysis comes before Resample", func(t *testing.T) {
+		var analysisIdx, resampleIdx int
+		for i, id := range Pass2FilterOrder {
+			if id == FilterAnalysis {
+				analysisIdx = i
+			}
+			if id == FilterResample {
+				resampleIdx = i
+			}
+		}
+		if analysisIdx >= resampleIdx {
+			t.Errorf("FilterAnalysis (idx %d) should come before FilterResample (idx %d)",
+				analysisIdx, resampleIdx)
+		}
+	})
+
+	t.Run("includes all processing filters", func(t *testing.T) {
+		requiredFilters := []FilterID{
+			FilterDownmix,
+			FilterHighpass,
+			FilterBandreject,
+			FilterAdeclick,
+			FilterAfftdn,
+			FilterArnndn,
+			FilterAgate,
+			FilterAcompressor,
+			FilterDeesser,
+			FilterSpeechnorm,
+			FilterDynaudnorm,
+			FilterBleedGate,
+			FilterAlimiter,
+			FilterAnalysis,
+			FilterResample,
+		}
+
+		filterSet := make(map[FilterID]bool)
+		for _, id := range Pass2FilterOrder {
+			filterSet[id] = true
+		}
+
+		for _, required := range requiredFilters {
+			if !filterSet[required] {
+				t.Errorf("Pass2FilterOrder missing required filter %q", required)
+			}
+		}
+	})
+
+	t.Run("Alimiter comes before Analysis", func(t *testing.T) {
+		var alimiterIdx, analysisIdx int
+		for i, id := range Pass2FilterOrder {
+			if id == FilterAlimiter {
+				alimiterIdx = i
+			}
+			if id == FilterAnalysis {
+				analysisIdx = i
+			}
+		}
+		if alimiterIdx >= analysisIdx {
+			t.Errorf("FilterAlimiter (idx %d) should come before FilterAnalysis (idx %d)",
+				alimiterIdx, analysisIdx)
+		}
+	})
+}
+
+func TestDefaultFilterOrder(t *testing.T) {
+	t.Run("equals Pass2FilterOrder", func(t *testing.T) {
+		if len(DefaultFilterOrder) != len(Pass2FilterOrder) {
+			t.Fatalf("DefaultFilterOrder length %d != Pass2FilterOrder length %d",
+				len(DefaultFilterOrder), len(Pass2FilterOrder))
+		}
+
+		for i := range DefaultFilterOrder {
+			if DefaultFilterOrder[i] != Pass2FilterOrder[i] {
+				t.Errorf("DefaultFilterOrder[%d] = %q, Pass2FilterOrder[%d] = %q",
+					i, DefaultFilterOrder[i], i, Pass2FilterOrder[i])
+			}
+		}
+	})
 }

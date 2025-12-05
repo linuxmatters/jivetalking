@@ -21,6 +21,13 @@ type FilterID string
 
 // Filter identifiers for the audio processing chain
 const (
+	// Infrastructure filters (applied in both passes or pass-specific)
+	FilterDownmix       FilterID = "downmix"       // Stereo → mono conversion (both passes)
+	FilterAnalysis      FilterID = "analysis"      // ebur128 + astats + aspectralstats (both passes)
+	FilterSilenceDetect FilterID = "silencedetect" // Silence region detection (Pass 1 only)
+	FilterResample      FilterID = "resample"      // Output format: 44.1kHz/16-bit/mono (Pass 2 only)
+
+	// Processing filters (Pass 2 only)
 	FilterHighpass    FilterID = "highpass"
 	FilterBandreject  FilterID = "bandreject" // Mains hum notch filter
 	FilterAdeclick    FilterID = "adeclick"
@@ -35,11 +42,21 @@ const (
 	FilterAlimiter    FilterID = "alimiter"
 )
 
-// DefaultFilterOrder defines the standard filter chain order for podcast audio processing.
+// Pass1FilterOrder defines the filter chain for analysis pass.
+// Downmix → Analysis → SilenceDetect
+// No processing filters - just measurement and silence detection for noise profiling.
+var Pass1FilterOrder = []FilterID{
+	FilterDownmix,
+	FilterAnalysis,
+	FilterSilenceDetect,
+}
+
+// Pass2FilterOrder defines the filter chain for processing pass.
 // Order rationale:
-// - Highpass first: removes rumble before it affects other filters
-// - Bandreject second: surgical notch filtering for mains hum (conditional)
-// - Adeclick early: removes impulse noise before spectral processing (currently disabled)
+// - Downmix first: ensures all downstream filters work with mono
+// - Highpass: removes rumble before it affects other filters
+// - Bandreject: surgical notch filtering for mains hum (conditional)
+// - Adeclick: removes impulse noise before spectral processing (currently disabled)
 // - Afftdn: profile-based spectral noise reduction using silence sample
 // - Arnndn: AI-based denoising for complex/dynamic noise patterns
 // - Agate: soft gate for inter-speech cleanup (after denoising lowers floor)
@@ -47,8 +64,12 @@ const (
 // - Deesser: after compression (which emphasises sibilance)
 // - Speechnorm: cycle-level normalisation for speech
 // - Dynaudnorm: frame-level normalisation for final consistency
-// - Alimiter: brick-wall safety net at the end
-var DefaultFilterOrder = []FilterID{
+// - BleedGate: catches amplified bleed/crosstalk after normalisation
+// - Alimiter: brick-wall safety net
+// - Analysis: measures output for comparison with Pass 1
+// - Resample: standardises output format (44.1kHz/16-bit/mono)
+var Pass2FilterOrder = []FilterID{
+	FilterDownmix,
 	FilterHighpass,
 	FilterBandreject,
 	FilterAdeclick,
@@ -59,9 +80,14 @@ var DefaultFilterOrder = []FilterID{
 	FilterDeesser,
 	FilterSpeechnorm,
 	FilterDynaudnorm,
-	FilterBleedGate, // Catches amplified bleed/crosstalk after normalisation
+	FilterBleedGate,
 	FilterAlimiter,
+	FilterAnalysis,
+	FilterResample,
 }
+
+// DefaultFilterOrder kept for backwards compatibility, points to Pass2FilterOrder
+var DefaultFilterOrder = Pass2FilterOrder
 
 var (
 	cachedModelPath string
@@ -113,6 +139,31 @@ func getRNNModelPath() (string, error) {
 
 // FilterChainConfig holds configuration for the audio processing filter chain
 type FilterChainConfig struct {
+	// Pass indicates which processing pass is being executed (1 = analysis, 2 = processing)
+	// Used by filters that need pass-specific behaviour
+	Pass int
+
+	// Downmix (pan) - stereo to mono conversion
+	// Applied first to ensure all downstream filters work with mono
+	DownmixEnabled bool
+
+	// Analysis (ebur128 + astats + aspectralstats) - audio measurement collection
+	// Captures loudness, dynamics, spectral characteristics
+	AnalysisEnabled bool
+
+	// Silence Detection (silencedetect) - finds quiet regions for noise profiling
+	// Pass 1 only - identifies silence regions for noise sample extraction
+	SilenceDetectEnabled  bool
+	SilenceDetectLevel    float64 // dB threshold for silence detection
+	SilenceDetectDuration float64 // Minimum silence duration in seconds
+
+	// Resample (aformat) - output format standardisation
+	// Pass 2 only - ensures consistent output format
+	ResampleEnabled    bool
+	ResampleSampleRate int    // Output sample rate (default: 44100)
+	ResampleFormat     string // Output sample format (default: s16)
+	ResampleFrameSize  int    // Samples per frame (default: 4096)
+
 	// High-Pass Filter (highpass) - removes subsonic rumble
 	HighpassEnabled bool    // Enable highpass filter
 	HighpassFreq    float64 // Hz, cutoff frequency (removes frequencies below this)
@@ -239,6 +290,26 @@ type FilterChainConfig struct {
 // being recalibrated. Other filters have been disabled to establish a clean baseline.
 func DefaultFilterConfig() *FilterChainConfig {
 	return &FilterChainConfig{
+		// Pass (set by caller, defaults to 0 meaning unset)
+		Pass: 0,
+
+		// Downmix - always enabled to ensure mono processing
+		DownmixEnabled: true,
+
+		// Analysis - always enabled to collect measurements
+		AnalysisEnabled: true,
+
+		// Silence Detection - enabled by default (Pass 1 only via filter order)
+		SilenceDetectEnabled:  true,
+		SilenceDetectLevel:    -50.0, // -50dB threshold
+		SilenceDetectDuration: 0.5,   // 0.5 second minimum
+
+		// Resample - enabled by default (Pass 2 only via filter order)
+		ResampleEnabled:    true,
+		ResampleSampleRate: 44100,
+		ResampleFormat:     "s16",
+		ResampleFrameSize:  4096,
+
 		// High-pass - remove subsonic rumble
 		HighpassEnabled: false,
 		HighpassFreq:    80.0, // 80Hz cutoff
@@ -358,6 +429,105 @@ func boolToInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// buildDownmixFilter builds the stereo-to-mono downmix filter specification.
+// Uses FFmpeg's built-in channel layout conversion which handles various input
+// configurations (stereo, mono, single-channel recordings) correctly.
+func (cfg *FilterChainConfig) buildDownmixFilter() string {
+	if !cfg.DownmixEnabled {
+		return ""
+	}
+	// aformat with channel_layouts=mono uses FFmpeg's standard downmix matrix
+	// which handles stereo, mono, and single-channel recordings appropriately
+	return "aformat=channel_layouts=mono"
+}
+
+// buildAnalysisFilter builds the audio analysis filter chain.
+// Combines astats, aspectralstats, and ebur128 for comprehensive measurement.
+// Used in both Pass 1 (input analysis) and Pass 2 (output analysis).
+//
+// Filter order: astats → aspectralstats → ebur128
+// ebur128 is placed LAST because it upsamples to 192kHz internally and outputs f64,
+// which would skew spectral measurements if placed first. astats and aspectralstats
+// measure the original signal format, then ebur128 does its own internal upsampling
+// for accurate true peak detection without affecting other measurements.
+func (cfg *FilterChainConfig) buildAnalysisFilter() string {
+	if !cfg.AnalysisEnabled {
+		return ""
+	}
+	// astats: provides noise floor, dynamic range, and additional measurements for adaptive processing:
+	//   - Noise_floor, Dynamic_range, RMS_level, Peak_level: core measurements
+	//   - DC_offset: detects DC bias needing removal
+	//   - Flat_factor: detects pre-existing clipping/limiting
+	//   - Zero_crossings_rate: helps classify noise type
+	//   - Max_difference: detects impulsive sounds (clicks/pops)
+	// Note: reset=0 (default) allows astats to accumulate statistics across all frames
+	// aspectralstats: measures spectral centroid and rolloff for adaptive de-esser targeting
+	// ebur128: provides integrated loudness (LUFS), true peak, and LRA via metadata
+	//   Upsamples to 192kHz internally for accurate true peak detection
+	//   metadata=1 writes per-frame loudness data to frame metadata (lavfi.r128.* keys)
+	//   peak=true enables true peak measurement (required for lavfi.r128.true_peak metadata)
+	return fmt.Sprintf(
+		"astats=metadata=1:measure_perchannel=Noise_floor+Dynamic_range+RMS_level+Peak_level+DC_offset+Flat_factor+Zero_crossings_rate+Max_difference,"+
+			"aspectralstats=win_size=2048:win_func=hann:measure=centroid+rolloff,"+
+			"ebur128=metadata=1:peak=true:target=%.0f",
+		cfg.TargetI)
+}
+
+// buildSilenceDetectFilter builds the silence detection filter.
+// Identifies quiet regions for noise sample extraction in Pass 1.
+func (cfg *FilterChainConfig) buildSilenceDetectFilter() string {
+	if !cfg.SilenceDetectEnabled {
+		return ""
+	}
+	return fmt.Sprintf("silencedetect=noise=%.0fdB:duration=%.2f",
+		cfg.SilenceDetectLevel, cfg.SilenceDetectDuration)
+}
+
+// buildResampleFilter builds the output format standardisation filter.
+// Ensures consistent output: 44.1kHz, 16-bit, mono, fixed frame size.
+// Pass 2 only - applied after all processing and analysis.
+func (cfg *FilterChainConfig) buildResampleFilter() string {
+	if !cfg.ResampleEnabled {
+		return ""
+	}
+	return fmt.Sprintf("aformat=sample_rates=%d:channel_layouts=mono:sample_fmts=%s,asetnsamples=n=%d",
+		cfg.ResampleSampleRate, cfg.ResampleFormat, cfg.ResampleFrameSize)
+}
+
+// buildDownmixReport returns the report entry for the downmix filter.
+func (cfg *FilterChainConfig) buildDownmixReport() string {
+	if !cfg.DownmixEnabled {
+		return ""
+	}
+	return "Downmix: stereo → mono (FFmpeg builtin)"
+}
+
+// buildAnalysisReport returns the report entry for the analysis filter.
+func (cfg *FilterChainConfig) buildAnalysisReport() string {
+	if !cfg.AnalysisEnabled {
+		return ""
+	}
+	return "Analysis: collect audio measurements (ebur128 + astats + aspectralstats)"
+}
+
+// buildSilenceDetectReport returns the report entry for the silence detection filter.
+func (cfg *FilterChainConfig) buildSilenceDetectReport() string {
+	if !cfg.SilenceDetectEnabled {
+		return ""
+	}
+	return fmt.Sprintf("SilenceDetect: threshold %.0fdB, min duration %.2fs",
+		cfg.SilenceDetectLevel, cfg.SilenceDetectDuration)
+}
+
+// buildResampleReport returns the report entry for the resample filter.
+func (cfg *FilterChainConfig) buildResampleReport() string {
+	if !cfg.ResampleEnabled {
+		return ""
+	}
+	return fmt.Sprintf("Resample: %dHz %s mono, %d samples/frame",
+		cfg.ResampleSampleRate, cfg.ResampleFormat, cfg.ResampleFrameSize)
 }
 
 // buildHighpassFilter builds the highpass (rumble removal) filter specification.
@@ -660,42 +830,28 @@ func (cfg *FilterChainConfig) buildAlimiterFilter() string {
 	)
 }
 
-// buildOutputAnalysisFilters builds analysis filters for Pass 2 output measurement.
-// Appends astats, aspectralstats, and ebur128 to measure the processed audio,
-// enabling direct comparison with Pass 1 input measurements.
-// These filters write measurements to frame metadata that is extracted during processing.
-func (cfg *FilterChainConfig) buildOutputAnalysisFilters() string {
-	if !cfg.OutputAnalysisEnabled {
-		return ""
-	}
-	// Same filter chain as Pass 1 analysis, minus silencedetect (not needed for output)
-	// aformat: downmix to mono first for consistent analysis with Pass 1
-	//   This ensures spectral measurements (centroid/rolloff) are identical between passes
-	// astats: provides noise floor, dynamic range, RMS, peak, DC offset, flat factor, zero crossings, max difference
-	// aspectralstats: provides spectral centroid and rolloff
-	// ebur128: provides integrated loudness (LUFS), true peak, and LRA
-	// peak=true enables true peak measurement (required for lavfi.r128.true_peak metadata)
-	return "aformat=channel_layouts=mono,astats=metadata=1:measure_perchannel=Noise_floor+Dynamic_range+RMS_level+Peak_level+DC_offset+Flat_factor+Zero_crossings_rate+Max_difference,aspectralstats=win_size=2048:win_func=hann:measure=centroid+rolloff,ebur128=metadata=1:peak=true:target=-16"
-}
-
 // BuildFilterSpec builds the FFmpeg filter specification string for Pass 2 processing.
 // Filter order is determined by cfg.FilterOrder (or DefaultFilterOrder if empty).
 // Each filter checks its Enabled flag and returns empty string if disabled.
 func (cfg *FilterChainConfig) BuildFilterSpec() string {
 	// Map FilterID to builder method
 	builders := map[FilterID]func() string{
-		FilterHighpass:    cfg.buildHighpassFilter,
-		FilterBandreject:  cfg.buildBandrejectFilter,
-		FilterAdeclick:    cfg.buildAdeclickFilter,
-		FilterAfftdn:      cfg.buildAfftdnFilter,
-		FilterAgate:       cfg.buildAgateFilter,
-		FilterAcompressor: cfg.buildAcompressorFilter,
-		FilterDeesser:     cfg.buildDeesserFilter,
-		FilterSpeechnorm:  cfg.buildSpeechnormFilter,
-		FilterArnndn:      cfg.buildArnnDnFilter,
-		FilterBleedGate:   cfg.buildBleedGateFilter,
-		FilterDynaudnorm:  cfg.buildDynaudnormFilter,
-		FilterAlimiter:    cfg.buildAlimiterFilter,
+		FilterDownmix:       cfg.buildDownmixFilter,
+		FilterAnalysis:      cfg.buildAnalysisFilter,
+		FilterSilenceDetect: cfg.buildSilenceDetectFilter,
+		FilterResample:      cfg.buildResampleFilter,
+		FilterHighpass:      cfg.buildHighpassFilter,
+		FilterBandreject:    cfg.buildBandrejectFilter,
+		FilterAdeclick:      cfg.buildAdeclickFilter,
+		FilterAfftdn:        cfg.buildAfftdnFilter,
+		FilterAgate:         cfg.buildAgateFilter,
+		FilterAcompressor:   cfg.buildAcompressorFilter,
+		FilterDeesser:       cfg.buildDeesserFilter,
+		FilterSpeechnorm:    cfg.buildSpeechnormFilter,
+		FilterArnndn:        cfg.buildArnnDnFilter,
+		FilterBleedGate:     cfg.buildBleedGateFilter,
+		FilterDynaudnorm:    cfg.buildDynaudnormFilter,
+		FilterAlimiter:      cfg.buildAlimiterFilter,
 	}
 
 	// Use configured order or default
@@ -713,24 +869,6 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 			}
 		}
 	}
-
-	// Add output analysis filters if enabled (for Pass 2 measurement comparison)
-	// These MUST come BEFORE aformat/asetnsamples because ebur128 can change frame sizes
-	// The filters write to frame metadata which is preserved through the filter chain
-	// Note: Analysis filters include aformat=channel_layouts=mono to ensure consistent
-	// spectral measurements with Pass 1 (which also downmixes to mono before analysis)
-	if analysisFilters := cfg.buildOutputAnalysisFilters(); analysisFilters != "" {
-		filters = append(filters, analysisFilters)
-	}
-
-	// Add output format filter (always enabled, must be after ebur128 which outputs f64)
-	// aformat: podcast-standard output (44.1kHz, mono, s16)
-	// Note: channel_layouts=mono is redundant when OutputAnalysisEnabled (already mono from
-	// analysis filters), but included for robustness when analysis is disabled
-	filters = append(filters, "aformat=sample_rates=44100:channel_layouts=mono:sample_fmts=s16")
-
-	// asetnsamples: fixed frame size for FLAC encoder (must be last to ensure consistent frame sizes)
-	filters = append(filters, "asetnsamples=n=4096")
 
 	// Join with commas
 	filterChain := ""
@@ -884,6 +1022,8 @@ func buildNoiseProfileFilterSpec(noiseDuration time.Duration, config *FilterChai
 	var mainChainFilters []string
 
 	// Collect non-afftdn filters from the config
+	// Note: FilterDownmix is handled by initial format conversion
+	// FilterResample and FilterAnalysis are handled at the end
 	filterBuilders := map[FilterID]func() string{
 		FilterHighpass:   config.buildHighpassFilter,
 		FilterBandreject: config.buildBandrejectFilter,
@@ -895,6 +1035,7 @@ func buildNoiseProfileFilterSpec(noiseDuration time.Duration, config *FilterChai
 		FilterDeesser:     config.buildDeesserFilter,
 		FilterSpeechnorm:  config.buildSpeechnormFilter,
 		FilterDynaudnorm:  config.buildDynaudnormFilter,
+		FilterBleedGate:   config.buildBleedGateFilter,
 		FilterAlimiter:    config.buildAlimiterFilter,
 	}
 
@@ -975,17 +1116,16 @@ func buildNoiseProfileFilterSpec(noiseDuration time.Duration, config *FilterChai
 		postChain += joinFilters(postAfftdnFilters) + ","
 	}
 
-	// Output format filters (always applied)
-	mainChainFilters = append(mainChainFilters, "aformat=sample_rates=44100:channel_layouts=mono:sample_fmts=s16")
-
 	// Add output analysis filters if enabled (for Pass 2 measurement comparison)
-	// These MUST come BEFORE asetnsamples because ebur128 can change frame sizes
-	if analysisFilters := config.buildOutputAnalysisFilters(); analysisFilters != "" {
-		mainChainFilters = append(mainChainFilters, analysisFilters)
+	// Analysis must come BEFORE resample because ebur128 can change frame sizes
+	if analysisFilter := config.buildAnalysisFilter(); analysisFilter != "" {
+		mainChainFilters = append(mainChainFilters, analysisFilter)
 	}
 
-	// asetnsamples: fixed frame size for FLAC encoder (must be last to ensure consistent frame sizes)
-	mainChainFilters = append(mainChainFilters, "asetnsamples=n=4096")
+	// Add resample filter (44.1kHz/s16/mono + fixed frame size)
+	if resampleFilter := config.buildResampleFilter(); resampleFilter != "" {
+		mainChainFilters = append(mainChainFilters, resampleFilter)
+	}
 
 	postChain += joinFilters(mainChainFilters)
 

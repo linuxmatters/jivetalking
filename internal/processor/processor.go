@@ -46,6 +46,10 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 	// Enable output analysis to measure processed audio characteristics
 	config.OutputAnalysisEnabled = true
 
+	// Set Pass 2 configuration for filter chain
+	config.Pass = 2
+	config.FilterOrder = Pass2FilterOrder
+
 	// Track output measurements from Pass 2
 	var outputMeasurements *OutputMeasurements
 

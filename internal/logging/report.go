@@ -316,6 +316,14 @@ func formatFilterChain(f *os.File, cfg *processor.FilterChainConfig, m *processo
 // formatFilter outputs details for a single filter
 func formatFilter(f *os.File, filterID processor.FilterID, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
 	switch filterID {
+	case processor.FilterDownmix:
+		formatDownmixFilter(f, cfg, prefix)
+	case processor.FilterAnalysis:
+		formatAnalysisFilter(f, cfg, prefix)
+	case processor.FilterSilenceDetect:
+		formatSilenceDetectFilter(f, cfg, prefix)
+	case processor.FilterResample:
+		formatResampleFilter(f, cfg, prefix)
 	case processor.FilterHighpass:
 		formatHighpassFilter(f, cfg, m, prefix)
 	case processor.FilterBandreject:
@@ -606,4 +614,42 @@ func formatAlimiterFilter(f *os.File, cfg *processor.FilterChainConfig, prefix s
 	fmt.Fprintf(f, "%salimiter: ceiling %.1f dBFS\n", prefix, ceilingDB)
 	fmt.Fprintf(f, "        Timing: attack %.0fms, release %.0fms\n", cfg.LimiterAttack, cfg.LimiterRelease)
 	fmt.Fprintln(f, "        Mode: brick-wall safety limiter")
+}
+
+// formatDownmixFilter outputs downmix filter details
+func formatDownmixFilter(f *os.File, cfg *processor.FilterChainConfig, prefix string) {
+	if !cfg.DownmixEnabled {
+		fmt.Fprintf(f, "%sdownmix: DISABLED\n", prefix)
+		return
+	}
+	fmt.Fprintf(f, "%sdownmix: stereo → mono (FFmpeg builtin)\n", prefix)
+}
+
+// formatAnalysisFilter outputs analysis filter details
+func formatAnalysisFilter(f *os.File, cfg *processor.FilterChainConfig, prefix string) {
+	if !cfg.AnalysisEnabled {
+		fmt.Fprintf(f, "%sanalysis: DISABLED\n", prefix)
+		return
+	}
+	fmt.Fprintf(f, "%sanalysis: collect audio measurements (ebur128 + astats + aspectralstats)\n", prefix)
+}
+
+// formatSilenceDetectFilter outputs silence detection filter details
+func formatSilenceDetectFilter(f *os.File, cfg *processor.FilterChainConfig, prefix string) {
+	if !cfg.SilenceDetectEnabled {
+		fmt.Fprintf(f, "%ssilencedetect: DISABLED\n", prefix)
+		return
+	}
+	fmt.Fprintf(f, "%ssilencedetect: threshold %.0f dB, min duration %.2fs\n",
+		prefix, cfg.SilenceDetectLevel, cfg.SilenceDetectDuration)
+}
+
+// formatResampleFilter outputs resample filter details
+func formatResampleFilter(f *os.File, cfg *processor.FilterChainConfig, prefix string) {
+	if !cfg.ResampleEnabled {
+		fmt.Fprintf(f, "%sresample: DISABLED\n", prefix)
+		return
+	}
+	fmt.Fprintf(f, "%sresample: %d Hz %s mono, %d samples/frame\n",
+		prefix, cfg.ResampleSampleRate, cfg.ResampleFormat, cfg.ResampleFrameSize)
 }
