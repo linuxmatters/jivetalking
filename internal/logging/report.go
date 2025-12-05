@@ -142,24 +142,18 @@ func GenerateReport(data ReportData) error {
 			fmt.Fprintf(f, "Peak Level:          %.1f dBFS\n", om.PeakLevel)
 			fmt.Fprintf(f, "Spectral Centroid:   %.0f Hz\n", om.SpectralCentroid)
 			fmt.Fprintf(f, "Spectral Rolloff:    %.0f Hz\n", om.SpectralRolloff)
-
-			// Show deltas vs input for easy comparison
-			if data.Result.Measurements != nil {
-				m := data.Result.Measurements
-				fmt.Fprintln(f, "")
-				fmt.Fprintln(f, "Changes from Input:")
-				fmt.Fprintf(f, "  LUFS:              %+.1f dB\n", om.OutputI-m.InputI)
-				fmt.Fprintf(f, "  True Peak:         %+.1f dB\n", om.OutputTP-m.InputTP)
-				fmt.Fprintf(f, "  Loudness Range:    %+.1f LU\n", om.OutputLRA-m.InputLRA)
-				fmt.Fprintf(f, "  Dynamic Range:     %+.1f dB\n", om.DynamicRange-m.DynamicRange)
-				fmt.Fprintf(f, "  Spectral Centroid: %+.0f Hz\n", om.SpectralCentroid-m.SpectralCentroid)
+			if om.ZeroCrossingsRate > 0 {
+				fmt.Fprintf(f, "Zero Crossings Rate: %.4f\n", om.ZeroCrossingsRate)
+			}
+			if om.MaxDifference > 0 {
+				maxDiffPercent := (om.MaxDifference / 32768.0) * 100.0
+				fmt.Fprintf(f, "Max Difference:      %.1f%% FS (transient indicator)\n", maxDiffPercent)
 			}
 
 			// Show silence sample comparison (same region as Pass 1)
 			if om.SilenceSample != nil && data.Result.Measurements != nil && data.Result.Measurements.NoiseProfile != nil {
 				ss := om.SilenceSample
 				np := data.Result.Measurements.NoiseProfile
-				fmt.Fprintln(f, "")
 				fmt.Fprintf(f, "Silence Sample:      %.1fs at %.1fs\n", ss.Duration.Seconds(), ss.Start.Seconds())
 				fmt.Fprintf(f, "  Noise Floor:       %.1f dBFS (was %.1f dBFS, %+.1f dB)\n",
 					ss.NoiseFloor, np.MeasuredNoiseFloor, ss.NoiseFloor-np.MeasuredNoiseFloor)
@@ -178,6 +172,19 @@ func GenerateReport(data ReportData) error {
 					fmt.Fprintf(f, "  Entropy:           %.3f (%s)\n", ss.Entropy, noiseType)
 				}
 			}
+
+			// Show deltas vs input for easy comparison
+			if data.Result.Measurements != nil {
+				m := data.Result.Measurements
+				fmt.Fprintln(f, "")
+				fmt.Fprintln(f, "Changes from Input:")
+				fmt.Fprintf(f, "  LUFS:              %+.1f dB\n", om.OutputI-m.InputI)
+				fmt.Fprintf(f, "  True Peak:         %+.1f dB\n", om.OutputTP-m.InputTP)
+				fmt.Fprintf(f, "  Loudness Range:    %+.1f LU\n", om.OutputLRA-m.InputLRA)
+				fmt.Fprintf(f, "  Dynamic Range:     %+.1f dB\n", om.DynamicRange-m.DynamicRange)
+				fmt.Fprintf(f, "  Spectral Centroid: %+.0f Hz\n", om.SpectralCentroid-m.SpectralCentroid)
+			}
+
 		} else {
 			fmt.Fprintln(f, "Note: Output measurements not available")
 		}
