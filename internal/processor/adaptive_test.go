@@ -1359,7 +1359,8 @@ func TestTuneSpeechnormDenoise(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config := &FilterChainConfig{}
+			// Start with ArnnDn enabled - tuning only affects enabled filters
+			config := &FilterChainConfig{ArnnDnEnabled: true}
 			tuneSpeechnormDenoise(config, tt.expansion)
 
 			// Check ArnnDn enabled state
@@ -1375,6 +1376,16 @@ func TestTuneSpeechnormDenoise(t *testing.T) {
 			}
 		})
 	}
+
+	// Test that disabled filters stay disabled
+	t.Run("respects user disabled state", func(t *testing.T) {
+		config := &FilterChainConfig{ArnnDnEnabled: false}
+		tuneSpeechnormDenoise(config, 50.0) // High expansion would normally enable
+
+		if config.ArnnDnEnabled {
+			t.Error("ArnnDnEnabled should stay false when user disabled it")
+		}
+	})
 }
 
 func TestTuneSpeechnorm(t *testing.T) {
@@ -1405,8 +1416,8 @@ func TestTuneSpeechnorm(t *testing.T) {
 			targetI:            -16.0,
 			wantExpansionMin:   0.0, // unchanged from default
 			wantExpansionMax:   0.0,
-			wantDenoiseEnabled: false,
-			wantRMSApprox:      0.0, // unchanged (early return)
+			wantDenoiseEnabled: true, // unchanged - early return preserves initial state
+			wantRMSApprox:      0.0,  // unchanged (early return)
 			wantDescription:    "zero input LUFS triggers early return, no changes",
 		},
 
@@ -1528,7 +1539,8 @@ func TestTuneSpeechnorm(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			config := &FilterChainConfig{
-				TargetI: tt.targetI,
+				TargetI:       tt.targetI,
+				ArnnDnEnabled: true, // Start enabled - tuning only affects enabled filters
 			}
 			measurements := &AudioMeasurements{
 				InputI: tt.inputI,

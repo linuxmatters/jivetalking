@@ -301,6 +301,11 @@ func tuneNoiseReduction(config *FilterChainConfig, measurements *AudioMeasuremen
 // The entropy is calculated from the extracted silence sample during analysis.
 // Pure tones have low entropy; random noise has high entropy.
 func tuneHumFilter(config *FilterChainConfig, measurements *AudioMeasurements) {
+	// Respect user's intent: if filter is disabled, don't touch it
+	if !config.HumFilterEnabled {
+		return
+	}
+
 	// Check if we have noise profile with entropy measurement
 	if measurements.NoiseProfile == nil {
 		config.HumFilterEnabled = false
@@ -309,7 +314,7 @@ func tuneHumFilter(config *FilterChainConfig, measurements *AudioMeasurements) {
 
 	// Low entropy indicates tonal/periodic noise (likely mains hum)
 	if measurements.NoiseProfile.Entropy < humEntropyThreshold {
-		config.HumFilterEnabled = true
+		// Filter stays enabled, tune parameters
 		config.HumFrequency = humFreq50Hz // Default to 50Hz (UK/EU mains)
 		config.HumHarmonics = humDefaultHarmonics
 		config.HumQ = humDefaultQ
@@ -331,6 +336,11 @@ func tuneHumFilter(config *FilterChainConfig, measurements *AudioMeasurements) {
 // - Moderate: LUFS gap >15dB OR noise floor >-55dBFS → enable arnndn
 // - Aggressive (dual-pass): LUFS gap >25dB AND noise floor >-45dBFS
 func tuneArnndn(config *FilterChainConfig, measurements *AudioMeasurements, lufsGap float64) {
+	// Respect user's intent: if filter is disabled, don't touch it
+	if !config.ArnnDnEnabled {
+		return
+	}
+
 	// Check if we need RNN denoising based on measurements
 	needsModerateNR := lufsGap > arnnDnLufsGapModerate || measurements.NoiseFloor > arnnDnNoiseFloorModerate
 	needsAggressiveNR := lufsGap > arnnDnLufsGapAggressive && measurements.NoiseFloor > arnnDnNoiseFloorAggressive
@@ -342,8 +352,7 @@ func tuneArnndn(config *FilterChainConfig, measurements *AudioMeasurements, lufs
 		return
 	}
 
-	// Enable arnndn for moderate or worse noise levels
-	config.ArnnDnEnabled = true
+	// Filter stays enabled, tune parameters
 
 	// Set mix based on noise severity
 	// Higher noise floor → stronger RNN processing (higher mix)
@@ -600,11 +609,16 @@ func tuneSpeechnorm(config *FilterChainConfig, measurements *AudioMeasurements, 
 	config.SpeechnormFall = speechnormSmoothingFast  // Fast response
 }
 
-// tuneSpeechnormDenoise enables RNN denoise for heavily expanded audio
+// tuneSpeechnormDenoise enables RNN denoise for heavily expanded audio.
+// Only takes effect if ArnnDnEnabled is already true (respects user config).
 func tuneSpeechnormDenoise(config *FilterChainConfig, expansion float64) {
+	// Respect user's intent: if filter is disabled, don't touch it
+	if !config.ArnnDnEnabled {
+		return
+	}
+
 	if expansion >= speechnormExpansionThreshold {
-		// Enable RNN denoise (neural network mop-up)
-		config.ArnnDnEnabled = true
+		// Filter stays enabled, tune parameters
 		config.ArnnDnMix = arnnDnMixDefault
 	} else {
 		config.ArnnDnEnabled = false
@@ -636,6 +650,11 @@ func tuneSpeechnormDenoise(config *FilterChainConfig, expansion float64) {
 // - NoiseProfile.CrestFactor: high crest = impulsive content (bleed), low = steady hiss
 // - NoiseProfile.Entropy: low entropy = tonal (hum), high = broadband (hiss/bleed)
 func tuneBleedGate(config *FilterChainConfig, measurements *AudioMeasurements, lufsGap float64) {
+	// Respect user's intent: if filter is disabled, don't touch it
+	if !config.BleedGateEnabled {
+		return
+	}
+
 	// Need noise profile with measurements to calculate threshold
 	if measurements.NoiseProfile == nil {
 		config.BleedGateEnabled = false

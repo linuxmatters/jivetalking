@@ -232,33 +232,37 @@ type FilterChainConfig struct {
 }
 
 // DefaultFilterConfig returns the scientifically-tuned default filter configuration
-// for podcast spoken word audio processing
+// for podcast spoken word audio processing.
+//
+// FILTER ENABLE/DISABLE STATUS:
+// Currently only highpass and bandreject are enabled while the filter chain is
+// being recalibrated. Other filters have been disabled to establish a clean baseline.
 func DefaultFilterConfig() *FilterChainConfig {
 	return &FilterChainConfig{
 		// High-pass - remove subsonic rumble
-		HighpassEnabled: true,
+		HighpassEnabled: false,
 		HighpassFreq:    80.0, // 80Hz cutoff
 
 		// Mains Hum Notch Filter - removes 50/60Hz hum and harmonics
-		// Disabled by default - enabled adaptively when Pass 1 entropy indicates tonal noise
-		HumFilterEnabled: false, // Enabled conditionally by tuneHumFilter
-		HumFrequency:     50.0,  // 50Hz (UK/EU mains), can be set to 60Hz for US
-		HumHarmonics:     4,     // Filter 4 harmonics (50, 100, 150, 200Hz)
-		HumQ:             30.0,  // Narrow notch (Q=30, ~1.7Hz bandwidth)
+		// Enabled conditionally by tuneHumFilter when Pass 1 entropy indicates tonal noise
+		HumFilterEnabled: false,
+		HumFrequency:     50.0, // 50Hz (UK/EU mains), can be set to 60Hz for US
+		HumHarmonics:     4,    // Filter 4 harmonics (50, 100, 150, 200Hz)
+		HumQ:             30.0, // Narrow notch (Q=30, ~1.7Hz bandwidth)
 
 		// Click/Pop Removal - use overlap-save method with defaults
-		AdeclickEnabled: false, // Disabled: causes artifacts on some recordings
-		AdeclickMethod:  "s",   // overlap-save (default for better quality)
+		AdeclickEnabled: false,
+		AdeclickMethod:  "s", // overlap-save (default for better quality)
 
 		// Noise Reduction - will use Pass 1 noise floor estimate
-		AfftdnEnabled:  true,
+		AfftdnEnabled:  false,
 		NoiseFloor:     -25.0, // Placeholder, will be updated from measurements
 		NoiseReduction: 12.0,  // 12 dB reduction (FFT denoise default, good for speech)
 		NoiseTrack:     true,  // Enable adaptive tracking
 
 		// Gate - remove silence and low-level noise between speech
 		// Threshold will be set adaptively based on noise floor in Pass 2
-		GateEnabled:   true,
+		GateEnabled:   false,
 		GateThreshold: 0.01,   // -40dBFS default (will be adaptive)
 		GateRatio:     2.0,    // 2:1 expansion ratio (gentle, preserves natural pauses)
 		GateAttack:    20,     // 20ms attack (protects speech onset, prevents clipping)
@@ -269,7 +273,7 @@ func DefaultFilterConfig() *FilterChainConfig {
 
 		// Compression - even out dynamics naturally
 		// LA-2A-style gentle compression for podcast speech
-		CompEnabled:   true,
+		CompEnabled:   false,
 		CompThreshold: -20, // -20dB threshold (gentle, preserves dynamics)
 		CompRatio:     2.5, // 2.5:1 ratio (gentle compression)
 		CompAttack:    15,  // 15ms attack (preserves transients)
@@ -279,10 +283,10 @@ func DefaultFilterConfig() *FilterChainConfig {
 		CompMix:       1.0, // 100% compressed signal (no parallel compression)
 
 		// De-esser - automatic sibilance reduction
-		DeessEnabled:   true, // Enabled, but intensity set adaptively (0.0 = effectively off)
-		DeessIntensity: 0.0,  // 0.0 = disabled by default, will be set adaptively if enabled
-		DeessAmount:    0.5,  // 50% ducking on treble (moderate reduction)
-		DeessFreq:      0.5,  // Keep 50% of original frequency content (balanced)
+		DeessEnabled:   false,
+		DeessIntensity: 0.0, // 0.0 = disabled by default, will be set adaptively if enabled
+		DeessAmount:    0.5, // 50% ducking on treble (moderate reduction)
+		DeessFreq:      0.5, // Keep 50% of original frequency content (balanced)
 
 		// Target values (for reference only)
 		TargetI:   -16.0, // Reference LUFS target (not enforced)
@@ -290,7 +294,7 @@ func DefaultFilterConfig() *FilterChainConfig {
 		TargetLRA: 7.0,   // Reference loudness range (EBU R128 default)
 
 		// Dynamic Audio Normalizer - adaptive loudness normalization
-		DynaudnormEnabled:     true,
+		DynaudnormEnabled:     false,
 		DynaudnormFrameLen:    500,   // 500ms frames (default, good for speech)
 		DynaudnormFilterSize:  31,    // Gaussian filter size (default, smooth transitions)
 		DynaudnormPeakValue:   0.95,  // Target peak 0.95 (default, leaves headroom)
@@ -303,7 +307,7 @@ func DefaultFilterConfig() *FilterChainConfig {
 		DynaudnormAltBoundary: false, // Standard boundary mode (default)
 
 		// Speech Normalizer - alternative cycle-level normalization
-		SpeechnormEnabled:     true,
+		SpeechnormEnabled:     false,
 		SpeechnormPeak:        0.95,  // Target peak 0.95 (matches dynaudnorm)
 		SpeechnormExpansion:   3.0,   // Max 3x expansion (moderate, tames loud peaks)
 		SpeechnormCompression: 2.0,   // Max 2x compression (gentle, lifts quiet sections)
@@ -315,14 +319,13 @@ func DefaultFilterConfig() *FilterChainConfig {
 
 		// RNN Denoise - neural network noise reduction
 		// Uses cb.rnnn model for speech denoising
-		ArnnDnEnabled:  false, // Disabled by default (enabled adaptively based on LUFS gap + noise floor)
+		ArnnDnEnabled:  false,
 		ArnnDnMix:      0.8,   // First pass mix (0.8 = 80% denoised, preserves some character)
 		ArnnDnDualPass: false, // Single pass by default (dual-pass for heavily degraded sources)
 		ArnnDnMix2:     0.7,   // Second pass mix (reduced to avoid over-processing)
 
 		// Bleed Gate - catches amplified bleed/crosstalk after normalisation
-		// Disabled by default - enabled adaptively when predicted output bleed would be audible
-		BleedGateEnabled:   false, // Enabled adaptively when normalisation amplifies bleed above threshold
+		BleedGateEnabled:   false,
 		BleedGateThreshold: 0.01,  // -40dBFS default (will be calculated from predicted output bleed level)
 		BleedGateRatio:     4.0,   // 4:1 ratio (gentler than pre-gate, suppresses rather than cuts)
 		BleedGateAttack:    15,    // 15ms attack (faster than pre-gate to catch transient bleed)
@@ -331,7 +334,7 @@ func DefaultFilterConfig() *FilterChainConfig {
 		BleedGateKnee:      3.0,   // Soft knee for smooth engagement
 
 		// Limiter - brick-wall safety net with soft knee (via ASC)
-		LimiterEnabled: true,
+		LimiterEnabled: false,
 		LimiterCeiling: 0.84, // -1.5dBTP (actual limiting target)
 		LimiterAttack:  5.0,  // 5ms lookahead for smooth limiting
 		LimiterRelease: 50.0, // 50ms release for natural sound

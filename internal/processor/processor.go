@@ -113,7 +113,9 @@ type ProcessingResult struct {
 // If outputMeasurements is non-nil and config.OutputAnalysisEnabled is true, populates it with Pass 2 output analysis.
 func processWithFilters(inputPath, outputPath string, config *FilterChainConfig, progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements), measurements *AudioMeasurements, outputMeasurements **OutputMeasurements) error {
 	// Check if we should use noise profile processing
-	if config.NoiseProfilePath != "" && config.NoiseProfileDuration > 0 {
+	// Only use noise profile path if afftdn is enabled - the noise profile is used for afftdn's
+	// spectral learning, so it's useless (and causes crashes) without afftdn enabled
+	if config.NoiseProfilePath != "" && config.NoiseProfileDuration > 0 && config.AfftdnEnabled {
 		return processWithNoiseProfile(inputPath, outputPath, config, progressCallback, measurements, outputMeasurements)
 	}
 

@@ -307,13 +307,7 @@ func formatHighpassFilter(f *os.File, cfg *processor.FilterChainConfig, m *proce
 // formatBandrejectFilter outputs bandreject (hum notch) filter details
 func formatBandrejectFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
 	if !cfg.HumFilterEnabled {
-		reason := "broadband noise detected"
-		if m != nil && m.NoiseProfile != nil && m.NoiseProfile.Entropy >= 0.7 {
-			reason = fmt.Sprintf("entropy %.3f >= 0.7 (broadband)", m.NoiseProfile.Entropy)
-		} else if m == nil || m.NoiseProfile == nil {
-			reason = "no noise profile available"
-		}
-		fmt.Fprintf(f, "%sbandreject: DISABLED — %s\n", prefix, reason)
+		fmt.Fprintf(f, "%sbandreject: DISABLED\n", prefix)
 		return
 	}
 
@@ -328,7 +322,7 @@ func formatBandrejectFilter(f *os.File, cfg *processor.FilterChainConfig, m *pro
 // formatAdeclickFilter outputs adeclick filter details
 func formatAdeclickFilter(f *os.File, cfg *processor.FilterChainConfig, prefix string) {
 	if !cfg.AdeclickEnabled {
-		fmt.Fprintf(f, "%sadeclick: DISABLED — causes artifacts on some recordings\n", prefix)
+		fmt.Fprintf(f, "%sadeclick: DISABLED\n", prefix)
 		return
 	}
 
@@ -377,13 +371,7 @@ func formatAfftdnFilter(f *os.File, cfg *processor.FilterChainConfig, m *process
 // formatArnndnFilter outputs arnndn filter details
 func formatArnndnFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
 	if !cfg.ArnnDnEnabled {
-		reason := "clean source"
-		if m != nil {
-			if m.InputI != 0 && cfg.TargetI-m.InputI <= 15 && m.NoiseFloor <= -55 {
-				reason = fmt.Sprintf("LUFS gap %.1f dB <= 15, floor %.1f dB <= -55", cfg.TargetI-m.InputI, m.NoiseFloor)
-			}
-		}
-		fmt.Fprintf(f, "%sarnndn: DISABLED — %s\n", prefix, reason)
+		fmt.Fprintf(f, "%sarnndn: DISABLED\n", prefix)
 		return
 	}
 
@@ -448,11 +436,7 @@ func formatAcompressorFilter(f *os.File, cfg *processor.FilterChainConfig, m *pr
 // formatDeesserFilter outputs deesser filter details
 func formatDeesserFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
 	if !cfg.DeessEnabled || cfg.DeessIntensity == 0 {
-		reason := "insufficient HF content"
-		if m != nil && m.SpectralRolloff > 0 && m.SpectralRolloff < 6000 {
-			reason = fmt.Sprintf("rolloff %.0f Hz < 6000 (no sibilance expected)", m.SpectralRolloff)
-		}
-		fmt.Fprintf(f, "%sdeesser: DISABLED — %s\n", prefix, reason)
+		fmt.Fprintf(f, "%sdeesser: DISABLED\n", prefix)
 		return
 	}
 
@@ -519,11 +503,7 @@ func formatDynaudnormFilter(f *os.File, cfg *processor.FilterChainConfig, prefix
 // formatBleedGateFilter outputs bleed gate filter details
 func formatBleedGateFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
 	if !cfg.BleedGateEnabled {
-		reason := "predicted bleed below audible threshold"
-		if m != nil && m.NoiseProfile == nil {
-			reason = "no noise profile available"
-		}
-		fmt.Fprintf(f, "%sbleedgate: DISABLED — %s\n", prefix, reason)
+		fmt.Fprintf(f, "%sbleedgate: DISABLED\n", prefix)
 		return
 	}
 

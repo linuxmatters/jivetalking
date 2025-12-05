@@ -7,13 +7,91 @@ import (
 	"testing"
 )
 
+// newTestConfig creates a minimal FilterChainConfig for testing.
+// All filters are disabled by default - enable only what you need for each test.
+// This isolates tests from application default configuration changes.
+func newTestConfig() *FilterChainConfig {
+	return &FilterChainConfig{
+		// All filters disabled by default
+		HighpassEnabled:   false,
+		HumFilterEnabled:  false,
+		AdeclickEnabled:   false,
+		AfftdnEnabled:     false,
+		GateEnabled:       false,
+		CompEnabled:       false,
+		DeessEnabled:      false,
+		DynaudnormEnabled: false,
+		SpeechnormEnabled: false,
+		ArnnDnEnabled:     false,
+		BleedGateEnabled:  false,
+		LimiterEnabled:    false,
+
+		// Sensible defaults for parameters (used when filter is enabled)
+		HighpassFreq:   80.0,
+		HumFrequency:   50.0,
+		HumHarmonics:   4,
+		HumQ:           30.0,
+		AdeclickMethod: "s",
+		NoiseFloor:     -50.0,
+		NoiseReduction: 12.0,
+		NoiseTrack:     true,
+		GateThreshold:  0.01,
+		GateRatio:      2.0,
+		GateAttack:     20,
+		GateRelease:    250,
+		GateRange:      0.0625,
+		GateKnee:       2.828,
+		GateMakeup:     1.0,
+		CompThreshold:  -20,
+		CompRatio:      2.5,
+		CompAttack:     15,
+		CompRelease:    80,
+		CompMakeup:     3,
+		CompKnee:       2.5,
+		CompMix:        1.0,
+		DeessIntensity: 0.5,
+		DeessAmount:    0.5,
+		DeessFreq:      0.5,
+		TargetI:        -16.0,
+		TargetTP:       -0.3,
+		TargetLRA:      7.0,
+
+		DynaudnormFrameLen:   500,
+		DynaudnormFilterSize: 31,
+		DynaudnormPeakValue:  0.95,
+		DynaudnormMaxGain:    10.0,
+
+		SpeechnormPeak:        0.95,
+		SpeechnormExpansion:   3.0,
+		SpeechnormCompression: 2.0,
+		SpeechnormThreshold:   0.10,
+		SpeechnormRaise:       0.001,
+		SpeechnormFall:        0.001,
+
+		ArnnDnMix:  0.8,
+		ArnnDnMix2: 0.7,
+
+		BleedGateThreshold: 0.01,
+		BleedGateRatio:     4.0,
+		BleedGateAttack:    15,
+		BleedGateRelease:   200,
+		BleedGateRange:     0.125,
+		BleedGateKnee:      3.0,
+
+		LimiterCeiling: 0.84,
+		LimiterAttack:  5.0,
+		LimiterRelease: 50.0,
+
+		FilterOrder: DefaultFilterOrder,
+	}
+}
+
 func TestBuildFilterSpec(t *testing.T) {
-	// Test complete filter chain generation with default config
-	t.Run("default config produces valid filter chain", func(t *testing.T) {
-		config := DefaultFilterConfig()
+	t.Run("empty config produces only output format filters", func(t *testing.T) {
+		config := newTestConfig()
 		spec := config.BuildFilterSpec()
 
-		// Should not be empty
+		// Should not be empty - output format filters are always present
 		if spec == "" {
 			t.Fatal("BuildFilterSpec returned empty string")
 		}
@@ -25,20 +103,31 @@ func TestBuildFilterSpec(t *testing.T) {
 		if !strings.Contains(spec, "asetnsamples=n=4096") {
 			t.Error("Missing asetnsamples output filter")
 		}
+
+		// Processing filters should NOT be present when disabled
+		processingFilters := []string{"highpass=", "afftdn=", "agate=", "acompressor=", "alimiter="}
+		for _, pf := range processingFilters {
+			if strings.Contains(spec, pf) {
+				t.Errorf("Disabled filter %q should not appear in spec", pf)
+			}
+		}
 	})
 
-	t.Run("typical podcast config includes all core filters", func(t *testing.T) {
-		config := DefaultFilterConfig()
-		config.Measurements = &AudioMeasurements{
-			InputI:     -30,
-			NoiseFloor: -50,
-		}
-		// Enable a de-esser for this test
-		config.DeessIntensity = 0.5
+	t.Run("enabled filters appear in spec", func(t *testing.T) {
+		config := newTestConfig()
+		// Enable specific filters for this test
+		config.HighpassEnabled = true
+		config.AfftdnEnabled = true
+		config.GateEnabled = true
+		config.CompEnabled = true
+		config.DeessEnabled = true
+		config.SpeechnormEnabled = true
+		config.DynaudnormEnabled = true
+		config.LimiterEnabled = true
 
 		spec := config.BuildFilterSpec()
 
-		// Verify required filters are present
+		// Verify enabled filters are present
 		requiredFilters := []struct {
 			prefix string
 			name   string
@@ -62,11 +151,16 @@ func TestBuildFilterSpec(t *testing.T) {
 	})
 
 	t.Run("no NaN values in filter spec", func(t *testing.T) {
-		config := DefaultFilterConfig()
-		config.Measurements = &AudioMeasurements{
-			InputI:     -25,
-			NoiseFloor: -55,
-		}
+		config := newTestConfig()
+		// Enable all filters to maximize coverage
+		config.HighpassEnabled = true
+		config.AfftdnEnabled = true
+		config.GateEnabled = true
+		config.CompEnabled = true
+		config.DeessEnabled = true
+		config.SpeechnormEnabled = true
+		config.DynaudnormEnabled = true
+		config.LimiterEnabled = true
 
 		spec := config.BuildFilterSpec()
 
@@ -76,11 +170,16 @@ func TestBuildFilterSpec(t *testing.T) {
 	})
 
 	t.Run("no Inf values in filter spec", func(t *testing.T) {
-		config := DefaultFilterConfig()
-		config.Measurements = &AudioMeasurements{
-			InputI:     -25,
-			NoiseFloor: -55,
-		}
+		config := newTestConfig()
+		// Enable all filters to maximize coverage
+		config.HighpassEnabled = true
+		config.AfftdnEnabled = true
+		config.GateEnabled = true
+		config.CompEnabled = true
+		config.DeessEnabled = true
+		config.SpeechnormEnabled = true
+		config.DynaudnormEnabled = true
+		config.LimiterEnabled = true
 
 		spec := config.BuildFilterSpec()
 
@@ -90,16 +189,8 @@ func TestBuildFilterSpec(t *testing.T) {
 	})
 
 	t.Run("disabled filters are excluded", func(t *testing.T) {
-		config := DefaultFilterConfig()
-		config.HighpassEnabled = false
-		config.AfftdnEnabled = false
-		config.GateEnabled = false
-		config.CompEnabled = false
-		config.DeessEnabled = false
-		config.SpeechnormEnabled = false
-		config.DynaudnormEnabled = false
-		config.LimiterEnabled = false
-		config.ArnnDnEnabled = false
+		config := newTestConfig()
+		// All filters already disabled by newTestConfig()
 
 		spec := config.BuildFilterSpec()
 
@@ -127,7 +218,7 @@ func TestBuildFilterSpec(t *testing.T) {
 	})
 
 	t.Run("de-esser excluded when intensity is zero", func(t *testing.T) {
-		config := DefaultFilterConfig()
+		config := newTestConfig()
 		config.DeessEnabled = true
 		config.DeessIntensity = 0.0 // Disabled by intensity
 
@@ -174,7 +265,7 @@ func TestBuildHighpassFilter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config := DefaultFilterConfig()
+			config := newTestConfig()
 			config.HighpassEnabled = tt.enabled
 			config.HighpassFreq = tt.freq
 
@@ -241,7 +332,7 @@ func TestBuildAfftdnFilter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config := DefaultFilterConfig()
+			config := newTestConfig()
 			config.AfftdnEnabled = tt.enabled
 			config.NoiseFloor = tt.noiseFloor
 			config.NoiseReduction = tt.noiseReduction
@@ -264,7 +355,7 @@ func TestBuildAfftdnFilter(t *testing.T) {
 	}
 
 	t.Run("disabled returns empty", func(t *testing.T) {
-		config := DefaultFilterConfig()
+		config := newTestConfig()
 		config.AfftdnEnabled = false
 
 		spec := config.buildAfftdnFilter()
@@ -303,7 +394,7 @@ func TestBuildAgateFilter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config := DefaultFilterConfig()
+			config := newTestConfig()
 			config.GateEnabled = tt.enabled
 			config.GateThreshold = tt.threshold
 
@@ -321,7 +412,7 @@ func TestBuildAgateFilter(t *testing.T) {
 	}
 
 	t.Run("disabled returns empty", func(t *testing.T) {
-		config := DefaultFilterConfig()
+		config := newTestConfig()
 		config.GateEnabled = false
 
 		spec := config.buildAgateFilter()
@@ -333,7 +424,7 @@ func TestBuildAgateFilter(t *testing.T) {
 
 func TestBuildAcompressorFilter(t *testing.T) {
 	t.Run("typical podcast compression", func(t *testing.T) {
-		config := DefaultFilterConfig()
+		config := newTestConfig()
 		config.CompEnabled = true
 		config.CompThreshold = -20.0
 		config.CompRatio = 2.5
@@ -360,7 +451,7 @@ func TestBuildAcompressorFilter(t *testing.T) {
 	})
 
 	t.Run("disabled returns empty", func(t *testing.T) {
-		config := DefaultFilterConfig()
+		config := newTestConfig()
 		config.CompEnabled = false
 
 		spec := config.buildAcompressorFilter()
@@ -412,7 +503,7 @@ func TestBuildDeesserFilter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config := DefaultFilterConfig()
+			config := newTestConfig()
 			config.DeessEnabled = tt.enabled
 			config.DeessIntensity = tt.intensity
 
@@ -434,7 +525,7 @@ func TestBuildDeesserFilter(t *testing.T) {
 
 func TestBuildAlimiterFilter(t *testing.T) {
 	t.Run("typical podcast limiter", func(t *testing.T) {
-		config := DefaultFilterConfig()
+		config := newTestConfig()
 		config.LimiterEnabled = true
 		config.LimiterCeiling = 0.98 // -0.17dBFS
 
@@ -454,7 +545,7 @@ func TestBuildAlimiterFilter(t *testing.T) {
 	})
 
 	t.Run("conservative ceiling", func(t *testing.T) {
-		config := DefaultFilterConfig()
+		config := newTestConfig()
 		config.LimiterEnabled = true
 		config.LimiterCeiling = 0.95
 
@@ -466,7 +557,7 @@ func TestBuildAlimiterFilter(t *testing.T) {
 	})
 
 	t.Run("disabled returns empty", func(t *testing.T) {
-		config := DefaultFilterConfig()
+		config := newTestConfig()
 		config.LimiterEnabled = false
 
 		spec := config.buildAlimiterFilter()
@@ -478,7 +569,7 @@ func TestBuildAlimiterFilter(t *testing.T) {
 
 func TestBuildSpeechnormFilter(t *testing.T) {
 	t.Run("default speech normalization", func(t *testing.T) {
-		config := DefaultFilterConfig()
+		config := newTestConfig()
 		config.SpeechnormEnabled = true
 		config.SpeechnormPeak = 0.95
 		config.SpeechnormExpansion = 12.5
@@ -495,7 +586,7 @@ func TestBuildSpeechnormFilter(t *testing.T) {
 	})
 
 	t.Run("disabled returns empty", func(t *testing.T) {
-		config := DefaultFilterConfig()
+		config := newTestConfig()
 		config.SpeechnormEnabled = false
 
 		spec := config.buildSpeechnormFilter()
@@ -507,7 +598,7 @@ func TestBuildSpeechnormFilter(t *testing.T) {
 
 func TestBuildDynaudnormFilter(t *testing.T) {
 	t.Run("default dynaudnorm", func(t *testing.T) {
-		config := DefaultFilterConfig()
+		config := newTestConfig()
 		config.DynaudnormEnabled = true
 		config.DynaudnormFrameLen = 500
 		config.DynaudnormMaxGain = 10.0
@@ -524,7 +615,7 @@ func TestBuildDynaudnormFilter(t *testing.T) {
 	})
 
 	t.Run("disabled returns empty", func(t *testing.T) {
-		config := DefaultFilterConfig()
+		config := newTestConfig()
 		config.DynaudnormEnabled = false
 
 		spec := config.buildDynaudnormFilter()
@@ -535,12 +626,13 @@ func TestBuildDynaudnormFilter(t *testing.T) {
 }
 
 func TestFilterOrderRespected(t *testing.T) {
-	config := DefaultFilterConfig()
+	config := newTestConfig()
 	// Enable filters that appear at start and end
 	config.HighpassEnabled = true
 	config.AfftdnEnabled = true
 	config.LimiterEnabled = true
-	config.DeessIntensity = 0.5 // Enable de-esser
+	config.DeessEnabled = true
+	config.DeessIntensity = 0.5
 
 	spec := config.BuildFilterSpec()
 
