@@ -88,7 +88,9 @@ func TestAnalyzeAudio(t *testing.T) {
 				t.Errorf("InputI out of reasonable range: %.2f", measurements.InputI)
 			}
 
-			if measurements.InputTP > 0 || measurements.InputTP < -100 {
+			// True peak can exceed 0 dBFS due to inter-sample peaks in hot recordings
+			// Allow up to +3 dBTP which is typical for unprocessed podcast audio
+			if measurements.InputTP > 3 || measurements.InputTP < -100 {
 				t.Errorf("InputTP out of reasonable range: %.2f", measurements.InputTP)
 			}
 

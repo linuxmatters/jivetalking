@@ -669,11 +669,13 @@ func (cfg *FilterChainConfig) buildOutputAnalysisFilters() string {
 		return ""
 	}
 	// Same filter chain as Pass 1 analysis, minus silencedetect (not needed for output)
+	// aformat: downmix to mono first for consistent analysis with Pass 1
+	//   This ensures spectral measurements (centroid/rolloff) are identical between passes
 	// astats: provides noise floor, dynamic range, RMS, peak, DC offset, flat factor, zero crossings, max difference
 	// aspectralstats: provides spectral centroid and rolloff
 	// ebur128: provides integrated loudness (LUFS), true peak, and LRA
 	// peak=true enables true peak measurement (required for lavfi.r128.true_peak metadata)
-	return "astats=metadata=1:measure_perchannel=Noise_floor+Dynamic_range+RMS_level+Peak_level+DC_offset+Flat_factor+Zero_crossings_rate+Max_difference,aspectralstats=win_size=2048:win_func=hann:measure=centroid+rolloff,ebur128=metadata=1:peak=true:target=-16"
+	return "aformat=channel_layouts=mono,astats=metadata=1:measure_perchannel=Noise_floor+Dynamic_range+RMS_level+Peak_level+DC_offset+Flat_factor+Zero_crossings_rate+Max_difference,aspectralstats=win_size=2048:win_func=hann:measure=centroid+rolloff,ebur128=metadata=1:peak=true:target=-16"
 }
 
 // BuildFilterSpec builds the FFmpeg filter specification string for Pass 2 processing.
@@ -715,12 +717,16 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 	// Add output analysis filters if enabled (for Pass 2 measurement comparison)
 	// These MUST come BEFORE aformat/asetnsamples because ebur128 can change frame sizes
 	// The filters write to frame metadata which is preserved through the filter chain
+	// Note: Analysis filters include aformat=channel_layouts=mono to ensure consistent
+	// spectral measurements with Pass 1 (which also downmixes to mono before analysis)
 	if analysisFilters := cfg.buildOutputAnalysisFilters(); analysisFilters != "" {
 		filters = append(filters, analysisFilters)
 	}
 
 	// Add output format filter (always enabled, must be after ebur128 which outputs f64)
 	// aformat: podcast-standard output (44.1kHz, mono, s16)
+	// Note: channel_layouts=mono is redundant when OutputAnalysisEnabled (already mono from
+	// analysis filters), but included for robustness when analysis is disabled
 	filters = append(filters, "aformat=sample_rates=44100:channel_layouts=mono:sample_fmts=s16")
 
 	// asetnsamples: fixed frame size for FLAC encoder (must be last to ensure consistent frame sizes)

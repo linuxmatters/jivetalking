@@ -765,21 +765,24 @@ func createAnalysisFilterGraph(
 ) (*ffmpeg.AVFilterGraph, *ffmpeg.AVFilterContext, *ffmpeg.AVFilterContext, error) {
 	// Build filter string for analysis pass
 	// Filter chain order:
-	// 1. silencedetect - detect silence regions for noise profile extraction
+	// 1. aformat - downmix to mono for consistent analysis with Pass 2
+	//    This ensures spectral measurements (centroid/rolloff) are identical between passes
+	//    since Pass 2 also measures mono audio after processing
+	// 2. silencedetect - detect silence regions for noise profile extraction
 	//    - noise=-50dB: threshold for silence detection (fairly sensitive)
 	//    - duration=0.5: minimum silence duration to detect (0.5s catches most pauses)
-	// 2. astats - provides noise floor, dynamic range, and additional measurements for adaptive processing:
+	// 3. astats - provides noise floor, dynamic range, and additional measurements for adaptive processing:
 	//    - Noise_floor, Dynamic_range, RMS_level, Peak_level: core measurements
 	//    - DC_offset: detects DC bias needing removal
 	//    - Flat_factor: detects pre-existing clipping/limiting
 	//    - Zero_crossings_rate: helps classify noise type
 	//    - Max_difference: detects impulsive sounds (clicks/pops)
-	// 3. aspectralstats - measures spectral centroid and rolloff for adaptive de-esser targeting
-	// 4. ebur128 - provides integrated loudness (LUFS), true peak, and LRA via metadata
+	// 4. aspectralstats - measures spectral centroid and rolloff for adaptive de-esser targeting
+	// 5. ebur128 - provides integrated loudness (LUFS), true peak, and LRA via metadata
 	// Note: reset=0 (default) allows astats to accumulate statistics across all frames for Overall measurements
 	// ebur128 metadata=1 writes per-frame loudness data to frame metadata (lavfi.r128.* keys)
 	// peak=true enables true peak measurement (required for lavfi.r128.true_peak metadata)
-	filterSpec := fmt.Sprintf("silencedetect=noise=-50dB:duration=0.5,astats=metadata=1:measure_perchannel=Noise_floor+Dynamic_range+RMS_level+Peak_level+DC_offset+Flat_factor+Zero_crossings_rate+Max_difference,aspectralstats=win_size=2048:win_func=hann:measure=centroid+rolloff,ebur128=metadata=1:peak=true:target=%.0f",
+	filterSpec := fmt.Sprintf("aformat=channel_layouts=mono,silencedetect=noise=-50dB:duration=0.5,astats=metadata=1:measure_perchannel=Noise_floor+Dynamic_range+RMS_level+Peak_level+DC_offset+Flat_factor+Zero_crossings_rate+Max_difference,aspectralstats=win_size=2048:win_func=hann:measure=centroid+rolloff,ebur128=metadata=1:peak=true:target=%.0f",
 		targetI)
 
 	return setupFilterGraph(decCtx, filterSpec)

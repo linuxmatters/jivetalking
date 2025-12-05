@@ -21,6 +21,27 @@ func linearToDb(linear float64) float64 {
 	return 20.0 * math.Log10(linear)
 }
 
+// formatComparison returns "(unchanged)" if values match within tolerance, otherwise "(was X unit)"
+func formatComparison(output, input float64, unit string, decimals int) string {
+	// Use tolerance based on decimal places shown
+	tolerance := math.Pow(10, -float64(decimals)) * 0.5
+	if math.Abs(output-input) < tolerance {
+		return "(unchanged)"
+	}
+	format := fmt.Sprintf("(was %%.%df %s)", decimals, unit)
+	return fmt.Sprintf(format, input)
+}
+
+// formatComparisonNoUnit returns "(unchanged)" if values match within tolerance, otherwise "(was X)"
+func formatComparisonNoUnit(output, input float64, decimals int) string {
+	tolerance := math.Pow(10, -float64(decimals)) * 0.5
+	if math.Abs(output-input) < tolerance {
+		return "(unchanged)"
+	}
+	format := fmt.Sprintf("(was %%.%df)", decimals)
+	return fmt.Sprintf(format, input)
+}
+
 // ReportData contains all the information needed to generate an analysis report
 type ReportData struct {
 	InputPath    string
@@ -104,7 +125,7 @@ func GenerateReport(data ReportData) error {
 				} else if m.NoiseProfile.Entropy < 0.9 {
 					noiseType = "mixed"
 				}
-				fmt.Fprintf(f, "  Entropy:           %.3f (%s)\n", m.NoiseProfile.Entropy, noiseType)
+				fmt.Fprintf(f, "  Noise Character:   %s (entropy %.3f)\n", noiseType, m.NoiseProfile.Entropy)
 			}
 			if m.NoiseProfile.ExtractionWarning != "" {
 				fmt.Fprintf(f, "  Warning:           %s\n", m.NoiseProfile.ExtractionWarning)
@@ -134,20 +155,42 @@ func GenerateReport(data ReportData) error {
 
 		if data.Result.OutputMeasurements != nil {
 			om := data.Result.OutputMeasurements
-			fmt.Fprintf(f, "Integrated Loudness: %.1f LUFS\n", om.OutputI)
-			fmt.Fprintf(f, "True Peak:           %.1f dBTP\n", om.OutputTP)
-			fmt.Fprintf(f, "Loudness Range:      %.1f LU\n", om.OutputLRA)
-			fmt.Fprintf(f, "Dynamic Range:       %.1f dB\n", om.DynamicRange)
-			fmt.Fprintf(f, "RMS Level:           %.1f dBFS\n", om.RMSLevel)
-			fmt.Fprintf(f, "Peak Level:          %.1f dBFS\n", om.PeakLevel)
-			fmt.Fprintf(f, "Spectral Centroid:   %.0f Hz\n", om.SpectralCentroid)
-			fmt.Fprintf(f, "Spectral Rolloff:    %.0f Hz\n", om.SpectralRolloff)
+			m := data.Result.Measurements // Input measurements for comparison
+
+			if m != nil {
+				fmt.Fprintf(f, "Integrated Loudness: %.1f LUFS %s\n", om.OutputI, formatComparison(om.OutputI, m.InputI, "LUFS", 1))
+				fmt.Fprintf(f, "True Peak:           %.1f dBTP %s\n", om.OutputTP, formatComparison(om.OutputTP, m.InputTP, "dBTP", 1))
+				fmt.Fprintf(f, "Loudness Range:      %.1f LU %s\n", om.OutputLRA, formatComparison(om.OutputLRA, m.InputLRA, "LU", 1))
+				fmt.Fprintf(f, "Dynamic Range:       %.1f dB %s\n", om.DynamicRange, formatComparison(om.DynamicRange, m.DynamicRange, "dB", 1))
+				fmt.Fprintf(f, "RMS Level:           %.1f dBFS %s\n", om.RMSLevel, formatComparison(om.RMSLevel, m.RMSLevel, "dBFS", 1))
+				fmt.Fprintf(f, "Peak Level:          %.1f dBFS %s\n", om.PeakLevel, formatComparison(om.PeakLevel, m.PeakLevel, "dBFS", 1))
+				fmt.Fprintf(f, "Spectral Centroid:   %.0f Hz %s\n", om.SpectralCentroid, formatComparison(om.SpectralCentroid, m.SpectralCentroid, "Hz", 0))
+				fmt.Fprintf(f, "Spectral Rolloff:    %.0f Hz %s\n", om.SpectralRolloff, formatComparison(om.SpectralRolloff, m.SpectralRolloff, "Hz", 0))
+			} else {
+				fmt.Fprintf(f, "Integrated Loudness: %.1f LUFS\n", om.OutputI)
+				fmt.Fprintf(f, "True Peak:           %.1f dBTP\n", om.OutputTP)
+				fmt.Fprintf(f, "Loudness Range:      %.1f LU\n", om.OutputLRA)
+				fmt.Fprintf(f, "Dynamic Range:       %.1f dB\n", om.DynamicRange)
+				fmt.Fprintf(f, "RMS Level:           %.1f dBFS\n", om.RMSLevel)
+				fmt.Fprintf(f, "Peak Level:          %.1f dBFS\n", om.PeakLevel)
+				fmt.Fprintf(f, "Spectral Centroid:   %.0f Hz\n", om.SpectralCentroid)
+				fmt.Fprintf(f, "Spectral Rolloff:    %.0f Hz\n", om.SpectralRolloff)
+			}
 			if om.ZeroCrossingsRate > 0 {
-				fmt.Fprintf(f, "Zero Crossings Rate: %.4f\n", om.ZeroCrossingsRate)
+				if m != nil && m.ZeroCrossingsRate > 0 {
+					fmt.Fprintf(f, "Zero Crossings Rate: %.4f %s\n", om.ZeroCrossingsRate, formatComparisonNoUnit(om.ZeroCrossingsRate, m.ZeroCrossingsRate, 4))
+				} else {
+					fmt.Fprintf(f, "Zero Crossings Rate: %.4f\n", om.ZeroCrossingsRate)
+				}
 			}
 			if om.MaxDifference > 0 {
 				maxDiffPercent := (om.MaxDifference / 32768.0) * 100.0
-				fmt.Fprintf(f, "Max Difference:      %.1f%% FS (transient indicator)\n", maxDiffPercent)
+				if m != nil && m.MaxDifference > 0 {
+					inputMaxDiffPercent := (m.MaxDifference / 32768.0) * 100.0
+					fmt.Fprintf(f, "Max Difference:      %.1f%% FS %s\n", maxDiffPercent, formatComparison(maxDiffPercent, inputMaxDiffPercent, "% FS", 1))
+				} else {
+					fmt.Fprintf(f, "Max Difference:      %.1f%% FS (transient indicator)\n", maxDiffPercent)
+				}
 			}
 
 			// Show silence sample comparison (same region as Pass 1)
@@ -155,12 +198,30 @@ func GenerateReport(data ReportData) error {
 				ss := om.SilenceSample
 				np := data.Result.Measurements.NoiseProfile
 				fmt.Fprintf(f, "Silence Sample:      %.1fs at %.1fs\n", ss.Duration.Seconds(), ss.Start.Seconds())
-				fmt.Fprintf(f, "  Noise Floor:       %.1f dBFS (was %.1f dBFS, %+.1f dB)\n",
-					ss.NoiseFloor, np.MeasuredNoiseFloor, ss.NoiseFloor-np.MeasuredNoiseFloor)
-				fmt.Fprintf(f, "  Peak Level:        %.1f dBFS (was %.1f dBFS, %+.1f dB)\n",
-					ss.PeakLevel, np.PeakLevel, ss.PeakLevel-np.PeakLevel)
-				fmt.Fprintf(f, "  Crest Factor:      %.1f dB (was %.1f dB)\n",
-					ss.CrestFactor, np.CrestFactor)
+
+				// Noise Floor with delta if changed
+				if math.Abs(ss.NoiseFloor-np.MeasuredNoiseFloor) < 0.05 {
+					fmt.Fprintf(f, "  Noise Floor:       %.1f dBFS (unchanged)\n", ss.NoiseFloor)
+				} else {
+					fmt.Fprintf(f, "  Noise Floor:       %.1f dBFS (was %.1f dBFS, %+.1f dB)\n",
+						ss.NoiseFloor, np.MeasuredNoiseFloor, ss.NoiseFloor-np.MeasuredNoiseFloor)
+				}
+
+				// Peak Level with delta if changed
+				if math.Abs(ss.PeakLevel-np.PeakLevel) < 0.05 {
+					fmt.Fprintf(f, "  Peak Level:        %.1f dBFS (unchanged)\n", ss.PeakLevel)
+				} else {
+					fmt.Fprintf(f, "  Peak Level:        %.1f dBFS (was %.1f dBFS, %+.1f dB)\n",
+						ss.PeakLevel, np.PeakLevel, ss.PeakLevel-np.PeakLevel)
+				}
+
+				// Crest Factor
+				if math.Abs(ss.CrestFactor-np.CrestFactor) < 0.05 {
+					fmt.Fprintf(f, "  Crest Factor:      %.1f dB (unchanged)\n", ss.CrestFactor)
+				} else {
+					fmt.Fprintf(f, "  Crest Factor:      %.1f dB %s\n", ss.CrestFactor, formatComparison(ss.CrestFactor, np.CrestFactor, "dB", 1))
+				}
+
 				if ss.Entropy > 0 {
 					// Classify noise type based on entropy
 					noiseType := "broadband (hiss)"
@@ -169,22 +230,22 @@ func GenerateReport(data ReportData) error {
 					} else if ss.Entropy < 0.9 {
 						noiseType = "mixed"
 					}
-					fmt.Fprintf(f, "  Entropy:           %.3f (%s)\n", ss.Entropy, noiseType)
+					// Show with comparison to input
+					inputNoiseType := "broadband (hiss)"
+					if np.Entropy < 0.7 {
+						inputNoiseType = "tonal (hum/buzz)"
+					} else if np.Entropy < 0.9 {
+						inputNoiseType = "mixed"
+					}
+					if noiseType == inputNoiseType && math.Abs(ss.Entropy-np.Entropy) < 0.0005 {
+						fmt.Fprintf(f, "  Noise Character:   %s (unchanged)\n", noiseType)
+					} else if noiseType == inputNoiseType {
+						fmt.Fprintf(f, "  Noise Character:   %s (entropy %.3f, was %.3f)\n", noiseType, ss.Entropy, np.Entropy)
+					} else {
+						fmt.Fprintf(f, "  Noise Character:   %s (was %s)\n", noiseType, inputNoiseType)
+					}
 				}
 			}
-
-			// Show deltas vs input for easy comparison
-			if data.Result.Measurements != nil {
-				m := data.Result.Measurements
-				fmt.Fprintln(f, "")
-				fmt.Fprintln(f, "Changes from Input:")
-				fmt.Fprintf(f, "  LUFS:              %+.1f dB\n", om.OutputI-m.InputI)
-				fmt.Fprintf(f, "  True Peak:         %+.1f dB\n", om.OutputTP-m.InputTP)
-				fmt.Fprintf(f, "  Loudness Range:    %+.1f LU\n", om.OutputLRA-m.InputLRA)
-				fmt.Fprintf(f, "  Dynamic Range:     %+.1f dB\n", om.DynamicRange-m.DynamicRange)
-				fmt.Fprintf(f, "  Spectral Centroid: %+.0f Hz\n", om.SpectralCentroid-m.SpectralCentroid)
-			}
-
 		} else {
 			fmt.Fprintln(f, "Note: Output measurements not available")
 		}
