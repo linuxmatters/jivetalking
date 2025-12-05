@@ -167,6 +167,7 @@ type FilterChainConfig struct {
 	// High-Pass Filter (highpass) - removes subsonic rumble
 	HighpassEnabled bool    // Enable highpass filter
 	HighpassFreq    float64 // Hz, cutoff frequency (removes frequencies below this)
+	HighpassPoles   int     // Filter poles: 1=6dB/oct (gentle), 2=12dB/oct (standard)
 
 	// Mains Hum Filter (bandreject) - removes 50/60Hz hum and harmonics
 	// Enabled conditionally when Pass 1 entropy indicates tonal noise
@@ -311,8 +312,9 @@ func DefaultFilterConfig() *FilterChainConfig {
 		ResampleFrameSize:  4096,
 
 		// High-pass - remove subsonic rumble
-		HighpassEnabled: false,
+		HighpassEnabled: true,
 		HighpassFreq:    80.0, // 80Hz cutoff
+		HighpassPoles:   2,    // 12dB/oct standard slope (1=gentle 6dB/oct for warm voices)
 
 		// Mains Hum Notch Filter - removes 50/60Hz hum and harmonics
 		// Enabled conditionally by tuneHumFilter when Pass 1 entropy indicates tonal noise
@@ -543,13 +545,18 @@ func (cfg *FilterChainConfig) buildResampleReport() string {
 // buildHighpassFilter builds the highpass (rumble removal) filter specification.
 // Removes subsonic frequencies below cutoff (HVAC, handling noise, etc.)
 // Uses Butterworth response (Q=0.707) for maximally flat passband.
-// poles=2 gives 12dB/octave rolloff, normalize=1 prevents level shift.
+// poles=1 gives 6dB/octave rolloff (gentle), poles=2 gives 12dB/octave (standard).
+// normalize=1 prevents level shift.
 func (cfg *FilterChainConfig) buildHighpassFilter() string {
 	if !cfg.HighpassEnabled {
 		return ""
 	}
-	return fmt.Sprintf("highpass=f=%.0f:poles=2:width_type=q:width=0.707:normalize=1",
-		cfg.HighpassFreq)
+	poles := cfg.HighpassPoles
+	if poles < 1 {
+		poles = 2 // Default to standard 12dB/oct
+	}
+	return fmt.Sprintf("highpass=f=%.0f:poles=%d:width_type=q:width=0.707:normalize=1",
+		cfg.HighpassFreq, poles)
 }
 
 // buildBandrejectFilter builds notch filters for mains hum removal.

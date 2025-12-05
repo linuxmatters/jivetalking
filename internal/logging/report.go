@@ -639,11 +639,21 @@ func formatFilter(f *os.File, filterID processor.FilterID, cfg *processor.Filter
 // formatHighpassFilter outputs highpass filter details
 func formatHighpassFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
 	if !cfg.HighpassEnabled {
-		fmt.Fprintf(f, "%shighpass: DISABLED\n", prefix)
+		fmt.Fprintf(f, "%shighpass: DISABLED", prefix)
+		// Show why it was disabled if we have measurements
+		if m != nil && m.SpectralDecrease < -0.08 {
+			fmt.Fprintf(f, " (very warm voice, decrease %.3f — preserving bass foundation)", m.SpectralDecrease)
+		}
+		fmt.Fprintln(f, "")
 		return
 	}
 
-	fmt.Fprintf(f, "%shighpass: %.0f Hz cutoff\n", prefix, cfg.HighpassFreq)
+	// Show slope (6dB/oct for gentle, 12dB/oct for standard)
+	slope := "12dB/oct"
+	if cfg.HighpassPoles == 1 {
+		slope = "6dB/oct gentle"
+	}
+	fmt.Fprintf(f, "%shighpass: %.0f Hz cutoff (%s)\n", prefix, cfg.HighpassFreq, slope)
 
 	// Show adaptive rationale
 	if m != nil && m.SpectralCentroid > 0 {
@@ -655,10 +665,16 @@ func formatHighpassFilter(f *os.File, cfg *processor.FilterChainConfig, m *proce
 		}
 		fmt.Fprintf(f, "        Rationale: %s voice (centroid %.0f Hz)", voiceType, m.SpectralCentroid)
 
-		// Show LUFS gap boost if applicable
-		if m.InputI != 0 && cfg.TargetI-m.InputI > 15 {
-			fmt.Fprintf(f, ", +boost for %.0f dB LUFS gap", cfg.TargetI-m.InputI)
+		// Show warm voice protection if applicable
+		if m.SpectralDecrease < -0.05 {
+			fmt.Fprintf(f, ", gentle slope (warm, decrease %.3f)", m.SpectralDecrease)
 		}
+
+		// Show noise character if tonal (explains why no boost)
+		if m.NoiseProfile != nil && m.NoiseProfile.Entropy < 0.5 {
+			fmt.Fprintf(f, ", no boost (tonal noise, entropy %.3f)", m.NoiseProfile.Entropy)
+		}
+
 		fmt.Fprintln(f, "")
 	}
 }

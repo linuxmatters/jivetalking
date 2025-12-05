@@ -111,124 +111,228 @@ func TestTuneNoiseReduction(t *testing.T) {
 }
 
 func TestTuneHighpassFreq(t *testing.T) {
+	// Helper to create noise profile with given characteristics
+	makeNoiseProfile := func(noiseFloor, entropy float64) *NoiseProfile {
+		return &NoiseProfile{
+			MeasuredNoiseFloor: noiseFloor,
+			Entropy:            entropy,
+		}
+	}
+
 	tests := []struct {
-		name        string
-		centroid    float64 // spectral centroid (Hz)
-		lufsGap     float64 // target - input LUFS (dB)
-		wantFreqMin float64 // minimum expected frequency
-		wantFreqMax float64 // maximum expected frequency
+		name             string
+		centroid         float64       // spectral centroid (Hz)
+		spectralDecrease float64       // spectral decrease (negative = warm voice)
+		spectralSkewness float64       // spectral skewness (positive = LF emphasis)
+		noiseProfile     *NoiseProfile // silence sample characteristics
+		wantFreqMin      float64       // minimum expected frequency (ignored if wantDisabled)
+		wantFreqMax      float64       // maximum expected frequency (ignored if wantDisabled)
+		wantPoles        int           // expected poles (0 = don't check, 1 = gentle, 2 = standard)
+		wantDisabled     bool          // expect highpass to be disabled entirely
 	}{
-		// Voice brightness classification (normal gain, lufsGap <= 15)
+		// Voice brightness classification (no noise profile - base frequencies only)
 		{
-			name:        "dark voice, normal gain",
-			centroid:    3500, // below centroidNormal (4000)
-			lufsGap:     10,   // below lufsGapModerate (15)
-			wantFreqMin: 60,   // highpassMinFreq
-			wantFreqMax: 60,
+			name:             "dark voice, no noise profile",
+			centroid:         3500, // below centroidNormal (4000)
+			spectralDecrease: 0.0,
+			noiseProfile:     nil,
+			wantFreqMin:      60, // highpassMinFreq
+			wantFreqMax:      60,
 		},
 		{
-			name:        "normal voice, normal gain",
-			centroid:    5000, // between centroidNormal (4000) and centroidBright (6000)
-			lufsGap:     10,
-			wantFreqMin: 80, // highpassDefaultFreq
-			wantFreqMax: 80,
+			name:             "normal voice, no noise profile",
+			centroid:         5000, // between centroidNormal (4000) and centroidBright (6000)
+			spectralDecrease: 0.0,
+			noiseProfile:     nil,
+			wantFreqMin:      80, // highpassDefaultFreq
+			wantFreqMax:      80,
 		},
 		{
-			name:        "bright voice, normal gain",
-			centroid:    7000, // above centroidBright (6000)
-			lufsGap:     10,
-			wantFreqMin: 100, // highpassBrightFreq
-			wantFreqMax: 100,
-		},
-
-		// LUFS gap boost (moderate: 15-25 dB gap adds 20Hz)
-		{
-			name:        "dark voice, moderate gain",
-			centroid:    3500,
-			lufsGap:     20, // between lufsGapModerate (15) and lufsGapAggressive (25)
-			wantFreqMin: 80, // 60 + 20
-			wantFreqMax: 80,
-		},
-		{
-			name:        "normal voice, moderate gain",
-			centroid:    5000,
-			lufsGap:     20,
-			wantFreqMin: 100, // 80 + 20
-			wantFreqMax: 100,
-		},
-		{
-			name:        "bright voice, moderate gain",
-			centroid:    7000,
-			lufsGap:     20,
-			wantFreqMin: 120, // 100 + 20, capped at highpassMaxFreq
-			wantFreqMax: 120,
+			name:             "bright voice, no noise profile",
+			centroid:         7000, // above centroidBright (6000)
+			spectralDecrease: 0.0,
+			noiseProfile:     nil,
+			wantFreqMin:      100, // highpassBrightFreq
+			wantFreqMax:      100,
 		},
 
-		// LUFS gap boost (aggressive: >25 dB gap adds 40Hz)
+		// Clean silence sample (< -70 dBFS) - no boost regardless of entropy
 		{
-			name:        "dark voice, aggressive gain",
-			centroid:    3500,
-			lufsGap:     30,  // above lufsGapAggressive (25)
-			wantFreqMin: 100, // 60 + 40
-			wantFreqMax: 100,
+			name:             "normal voice, clean silence, broadband noise",
+			centroid:         5000,
+			spectralDecrease: 0.0,
+			noiseProfile:     makeNoiseProfile(-75.0, 0.8), // clean, broadband
+			wantFreqMin:      80,                           // no boost - too clean
+			wantFreqMax:      80,
+		},
+
+		// Moderate noise (> -70 dBFS) with broadband character - moderate boost
+		{
+			name:             "normal voice, moderate noise, broadband",
+			centroid:         5000,
+			spectralDecrease: 0.0,
+			noiseProfile:     makeNoiseProfile(-65.0, 0.7), // moderate, broadband
+			wantFreqMin:      90,                           // 80 + 10 boost
+			wantFreqMax:      90,
+		},
+
+		// Noisy silence (> -55 dBFS) with broadband character - aggressive boost
+		{
+			name:             "normal voice, noisy silence, broadband",
+			centroid:         5000,
+			spectralDecrease: 0.0,
+			noiseProfile:     makeNoiseProfile(-50.0, 0.8), // noisy, broadband
+			wantFreqMin:      100,                          // 80 + 20 boost
+			wantFreqMax:      100,
+		},
+
+		// Tonal noise (low entropy) - no boost, bandreject handles it
+		{
+			name:             "normal voice, noisy silence, tonal (hum)",
+			centroid:         5000,
+			spectralDecrease: 0.0,
+			noiseProfile:     makeNoiseProfile(-50.0, 0.3), // noisy but tonal
+			wantFreqMin:      80,                           // no boost - tonal noise
+			wantFreqMax:      80,
+		},
+
+		// Warm voice protection (spectral decrease < -0.05, tiered at -0.08)
+		{
+			name:             "warm voice, noisy broadband - capped at 80Hz",
+			centroid:         5000,
+			spectralDecrease: -0.06, // warm voice (between -0.05 and -0.08)
+			noiseProfile:     makeNoiseProfile(-50.0, 0.8),
+			wantFreqMin:      80, // would be 100, but capped at 80Hz due to warm voice
+			wantFreqMax:      80,
+			wantPoles:        0, // standard slope (don't check, defaults to 2)
 		},
 		{
-			name:        "normal voice, aggressive gain",
-			centroid:    5000,
-			lufsGap:     30,
-			wantFreqMin: 120, // 80 + 40, capped at highpassMaxFreq
-			wantFreqMax: 120,
+			name:             "very warm voice - highpass disabled",
+			centroid:         5000,                         // normal voice base = 80Hz (unused)
+			spectralDecrease: -0.095,                       // very warm voice (< -0.08)
+			noiseProfile:     makeNoiseProfile(-50.0, 0.8), // (unused - disabled)
+			wantDisabled:     true,                         // highpass disabled entirely for very warm voices
 		},
 		{
-			name:        "bright voice, aggressive gain",
-			centroid:    7000,
-			lufsGap:     30,
-			wantFreqMin: 120, // 100 + 40 = 140, capped at highpassMaxFreq (120)
-			wantFreqMax: 120,
+			name:             "very warm dark voice - highpass disabled",
+			centroid:         3500,                         // dark voice base = 60Hz (unused)
+			spectralDecrease: -0.15,                        // very warm (< -0.08)
+			noiseProfile:     makeNoiseProfile(-45.0, 0.9), // (unused - disabled)
+			wantDisabled:     true,                         // highpass disabled entirely for very warm voices
+		},
+
+		// Bright voice with warm spectral decrease (unusual but possible)
+		{
+			name:             "bright voice, warm characteristics - capped at 80Hz",
+			centroid:         7000,
+			spectralDecrease: -0.06, // warm despite bright centroid (between -0.05 and -0.08)
+			noiseProfile:     makeNoiseProfile(-50.0, 0.8),
+			wantFreqMin:      80, // would be 120, but capped at 80Hz due to warm voice
+			wantFreqMax:      80,
+			wantPoles:        0, // standard slope (don't check)
+		},
+		{
+			name:             "bright voice, very warm characteristics - highpass disabled",
+			centroid:         7000,
+			spectralDecrease: -0.10,                        // very warm despite bright centroid (< -0.08)
+			noiseProfile:     makeNoiseProfile(-50.0, 0.8), // (unused - disabled)
+			wantDisabled:     true,                         // highpass disabled entirely for very warm voices
+		},
+
+		// Skewness-based protection (moderate decrease but LF emphasis)
+		{
+			name:             "Mark's voice profile - moderate decrease, high skewness - disabled",
+			centroid:         5785,                           // bright centroid
+			spectralDecrease: -0.026,                         // moderate decrease (between -0.05 and 0)
+			spectralSkewness: 1.132,                          // LF emphasis (> 1.0)
+			noiseProfile:     makeNoiseProfile(-80.0, 0.076), // tonal noise
+			wantFreqMin:      80,                             // base freq for normal voice
+			wantFreqMax:      80,
+			wantPoles:        2,
+			wantDisabled:     true, // skewness > 1.0 disables highpass
+		},
+		{
+			name:             "moderate decrease, low skewness - standard slope",
+			centroid:         5000,
+			spectralDecrease: -0.03,                        // moderate decrease
+			spectralSkewness: 0.8,                          // NOT LF emphasis (< 1.0)
+			noiseProfile:     makeNoiseProfile(-75.0, 0.3), // clean, tonal - no boost
+			wantFreqMin:      80,
+			wantFreqMax:      80,
+			wantPoles:        2,
+			wantDisabled:     false, // skewness < 1.0, highpass enabled
+		},
+		{
+			name:             "balanced decrease, high skewness - disabled",
+			centroid:         4500,
+			spectralDecrease: -0.01,                        // balanced (between -0.05 and 0)
+			spectralSkewness: 1.5,                          // strong LF emphasis
+			noiseProfile:     makeNoiseProfile(-75.0, 0.3), // clean, tonal - no boost
+			wantFreqMin:      80,
+			wantFreqMax:      80,
+			wantPoles:        2,
+			wantDisabled:     true, // skewness > 1.0 disables highpass
+		},
+		{
+			name:             "thin voice, high skewness - skewness still protects",
+			centroid:         6500,                         // > 6000 centroidBright threshold
+			spectralDecrease: 0.02,                         // thin voice (> 0)
+			spectralSkewness: 1.2,                          // > 1.0 triggers protection regardless of decrease
+			noiseProfile:     makeNoiseProfile(-75.0, 0.3), // clean, tonal - no boost
+			wantFreqMin:      100,                          // bright voice base freq (centroid > 6000)
+			wantFreqMax:      100,
+			wantPoles:        2,
+			wantDisabled:     true, // skewness > 1.0 disables highpass
 		},
 
 		// Edge cases
 		{
-			name:        "no spectral data - keeps default",
-			centroid:    0, // triggers early return
-			lufsGap:     20,
-			wantFreqMin: 80, // DefaultFilterConfig().HighpassFreq
-			wantFreqMax: 80,
+			name:             "no spectral data - keeps default",
+			centroid:         0, // triggers early return
+			spectralDecrease: 0.0,
+			noiseProfile:     makeNoiseProfile(-50.0, 0.8),
+			wantFreqMin:      80, // DefaultFilterConfig().HighpassFreq
+			wantFreqMax:      80,
 		},
 		{
-			name:        "negative centroid - keeps default",
-			centroid:    -100,
-			lufsGap:     10,
-			wantFreqMin: 80,
-			wantFreqMax: 80,
+			name:             "negative centroid - keeps default",
+			centroid:         -100,
+			spectralDecrease: 0.0,
+			noiseProfile:     nil,
+			wantFreqMin:      80,
+			wantFreqMax:      80,
 		},
 		{
-			name:        "boundary: exactly at centroidNormal",
-			centroid:    4000, // exactly at centroidNormal threshold
-			lufsGap:     10,
-			wantFreqMin: 60, // dark voice (not > centroidNormal)
-			wantFreqMax: 60,
+			name:             "boundary: exactly at centroidNormal",
+			centroid:         4000, // exactly at centroidNormal threshold
+			spectralDecrease: 0.0,
+			noiseProfile:     nil,
+			wantFreqMin:      60, // dark voice (not > centroidNormal)
+			wantFreqMax:      60,
 		},
 		{
-			name:        "boundary: exactly at centroidBright",
-			centroid:    6000, // exactly at centroidBright threshold
-			lufsGap:     10,
-			wantFreqMin: 80, // normal voice (not > centroidBright)
-			wantFreqMax: 80,
+			name:             "boundary: exactly at centroidBright",
+			centroid:         6000, // exactly at centroidBright threshold
+			spectralDecrease: 0.0,
+			noiseProfile:     nil,
+			wantFreqMin:      80, // normal voice (not > centroidBright)
+			wantFreqMax:      80,
 		},
 		{
-			name:        "boundary: exactly at lufsGapModerate",
-			centroid:    5000,
-			lufsGap:     15, // exactly at lufsGapModerate threshold
-			wantFreqMin: 80, // no boost (not > lufsGapModerate)
-			wantFreqMax: 80,
+			name:             "boundary: exactly at silenceEntropyTonal",
+			centroid:         5000,
+			spectralDecrease: 0.0,
+			noiseProfile:     makeNoiseProfile(-50.0, 0.5), // exactly at threshold
+			wantFreqMin:      100,                          // broadband (>= 0.5), gets boost
+			wantFreqMax:      100,
 		},
 		{
-			name:        "boundary: exactly at lufsGapAggressive",
-			centroid:    5000,
-			lufsGap:     25,  // exactly at lufsGapAggressive threshold
-			wantFreqMin: 100, // moderate boost (not > lufsGapAggressive)
-			wantFreqMax: 100,
+			name:             "boundary: exactly at silenceNoiseFloorClean",
+			centroid:         5000,
+			spectralDecrease: 0.0,
+			noiseProfile:     makeNoiseProfile(-70.0, 0.8), // exactly at clean threshold
+			wantFreqMin:      80,                           // no boost (not > -70)
+			wantFreqMax:      80,
 		},
 	}
 
@@ -238,15 +342,36 @@ func TestTuneHighpassFreq(t *testing.T) {
 			config := DefaultFilterConfig()
 			measurements := &AudioMeasurements{
 				SpectralCentroid: tt.centroid,
+				SpectralDecrease: tt.spectralDecrease,
+				SpectralSkewness: tt.spectralSkewness,
+				NoiseProfile:     tt.noiseProfile,
 			}
 
-			// Execute
-			tuneHighpassFreq(config, measurements, tt.lufsGap)
+			// Execute (lufsGap is no longer used for highpass tuning)
+			tuneHighpassFreq(config, measurements, 0.0)
 
-			// Verify
+			// Verify disabled state
+			if tt.wantDisabled {
+				if config.HighpassEnabled {
+					t.Errorf("HighpassEnabled = true, want false (disabled for very warm voice)")
+				}
+				return // no further checks needed for disabled
+			}
+
+			// Verify enabled (default expectation)
+			if !config.HighpassEnabled {
+				t.Errorf("HighpassEnabled = false, want true")
+			}
+
+			// Verify frequency
 			if config.HighpassFreq < tt.wantFreqMin || config.HighpassFreq > tt.wantFreqMax {
 				t.Errorf("HighpassFreq = %.1f Hz, want [%.1f, %.1f] Hz",
 					config.HighpassFreq, tt.wantFreqMin, tt.wantFreqMax)
+			}
+
+			// Verify poles (slope) if specified
+			if tt.wantPoles > 0 && config.HighpassPoles != tt.wantPoles {
+				t.Errorf("HighpassPoles = %d, want %d", config.HighpassPoles, tt.wantPoles)
 			}
 		})
 	}

@@ -11,8 +11,26 @@ const (
 	highpassDefaultFreq     = 80.0  // Hz - normal voice cutoff
 	highpassBrightFreq      = 100.0 // Hz - bright voice cutoff
 	highpassMaxFreq         = 120.0 // Hz - maximum to preserve voice fundamentals
-	highpassBoostModerate   = 20.0  // Hz - added for moderate noise reduction needs
-	highpassBoostAggressive = 40.0  // Hz - added for heavy noise reduction needs
+	highpassBoostModerate   = 10.0  // Hz - added when silence sample shows LF noise
+	highpassBoostAggressive = 20.0  // Hz - added for noisy silence sample (> -55 dBFS)
+
+	// Spectral decrease thresholds for LF voice content protection
+	spectralDecreaseVeryWarm = -0.08 // Below: very warm voice, needs maximum LF protection
+	spectralDecreaseWarm     = -0.05 // Below: warm voice with significant LF body
+	spectralDecreaseBalanced = 0.0   // Near zero: balanced voice
+	// Above 0: thin voice, highpass safe
+
+	// Spectral skewness threshold for LF emphasis detection
+	// Positive skewness indicates energy concentrated in lower frequencies
+	// Used as secondary protection when spectral decrease alone doesn't catch warm voices
+	spectralSkewnessLFEmphasis = 1.0 // Above: significant LF emphasis, needs gentle HPF
+
+	// Silence sample noise floor thresholds for highpass boost decision
+	silenceNoiseFloorClean = -70.0 // dBFS - very clean, no boost needed
+	silenceNoiseFloorNoisy = -55.0 // dBFS - noisy, may need boost
+
+	// Silence entropy threshold for noise character
+	silenceEntropyTonal = 0.5 // Below: tonal noise (hum), bandreject better than highpass
 
 	// Spectral centroid thresholds (Hz) for voice brightness classification
 	centroidBright     = 6000.0 // Above: bright voice
@@ -192,12 +210,16 @@ func calculateLUFSGap(targetI, inputI float64) float64 {
 
 // tuneHighpassFreq adapts highpass filter cutoff frequency based on:
 // - Spectral centroid (voice brightness/warmth)
-// - LUFS gap (noise reduction needs)
+// - Spectral decrease (LF voice content - protects warm voices)
+// - Silence sample noise floor (actual LF noise level)
+// - Silence sample entropy (noise character - tonal vs broadband)
 //
 // Strategy:
 // - Lower centroid (darker voice) → lower cutoff to preserve warmth
 // - Higher centroid (brighter voice) → higher cutoff, safe for rumble removal
-// - Heavy noise reduction needed → boost cutoff to remove low-frequency room noise
+// - Negative spectral decrease (warm voice) → cap cutoff to protect LF body
+// - Tonal noise (low entropy) → don't boost, let bandreject handle hum
+// - Only boost cutoff if silence sample shows actual broadband LF noise
 func tuneHighpassFreq(config *FilterChainConfig, measurements *AudioMeasurements, lufsGap float64) {
 	if measurements.SpectralCentroid <= 0 {
 		// No spectral analysis available - keep default
@@ -221,20 +243,63 @@ func tuneHighpassFreq(config *FilterChainConfig, measurements *AudioMeasurements
 		baseFreq = highpassMinFreq
 	}
 
-	// Boost cutoff for heavy noise reduction needs (removes low-frequency room noise)
-	switch {
-	case lufsGap > lufsGapAggressive:
-		// Very quiet source needing aggressive processing
-		config.HighpassFreq = baseFreq + highpassBoostAggressive
-	case lufsGap > lufsGapModerate:
-		// Moderately quiet source
-		config.HighpassFreq = baseFreq + highpassBoostModerate
-	default:
-		// Normal source
+	// Check if we should boost cutoff based on actual noise characteristics
+	// Only boost if silence sample shows broadband LF noise (not tonal hum)
+	shouldBoost := false
+	boostAmount := 0.0
+
+	if measurements.NoiseProfile != nil {
+		silenceNoiseFloor := measurements.NoiseProfile.MeasuredNoiseFloor
+		silenceEntropy := measurements.NoiseProfile.Entropy
+
+		// Only consider boost if noise is broadband (not tonal hum)
+		// Tonal noise (low entropy) is better handled by bandreject filter
+		if silenceEntropy >= silenceEntropyTonal {
+			// Broadband noise - highpass can help
+			switch {
+			case silenceNoiseFloor > silenceNoiseFloorNoisy:
+				// Noisy silence sample - aggressive boost warranted
+				shouldBoost = true
+				boostAmount = highpassBoostAggressive
+			case silenceNoiseFloor > silenceNoiseFloorClean:
+				// Moderate noise - gentle boost
+				shouldBoost = true
+				boostAmount = highpassBoostModerate
+			}
+		}
+	}
+
+	// Apply boost if warranted by noise characteristics
+	if shouldBoost {
+		config.HighpassFreq = baseFreq + boostAmount
+	} else {
 		config.HighpassFreq = baseFreq
 	}
 
-	// Cap at maximum to avoid affecting voice fundamentals
+	// Protect warm voices with significant LF body
+	// Two independent triggers for disabling highpass:
+	// 1. Spectral decrease < -0.08 (very warm voice with strong bass)
+	// 2. Spectral skewness > 1.0 (significant LF emphasis/bass character)
+	if measurements.SpectralDecrease < spectralDecreaseVeryWarm {
+		// Very warm voice (e.g. Popey -0.095, Martin -0.238)
+		// Strong bass foundation that any HPF will damage
+		config.HighpassEnabled = false
+		return
+	} else if measurements.SpectralSkewness > spectralSkewnessLFEmphasis {
+		// Significant LF emphasis (e.g. Mark: skewness 1.132)
+		// Voice has bass character that even gentle HPF removes
+		// All three presenters have skewness > 1.0
+		config.HighpassEnabled = false
+		return
+	} else if measurements.SpectralDecrease < spectralDecreaseWarm {
+		// Warm voice - cap at default with gentle slope to preserve body
+		if config.HighpassFreq > highpassDefaultFreq {
+			config.HighpassFreq = highpassDefaultFreq
+		}
+		config.HighpassPoles = 1 // Gentle 6dB/oct slope
+	}
+
+	// Final cap at maximum to avoid affecting voice fundamentals
 	if config.HighpassFreq > highpassMaxFreq {
 		config.HighpassFreq = highpassMaxFreq
 	}
