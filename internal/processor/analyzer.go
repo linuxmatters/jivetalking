@@ -871,14 +871,17 @@ func extractNoiseProfile(filename string, region *SilenceRegion, tempDir string)
 	decCtx := reader.GetDecoderContext()
 
 	// Create filter graph for extraction with trimming, format conversion, and measurement
-	// atrim: extract only the silence region
-	// aformat: convert to WAV-compatible format (44100Hz, mono, S16)
-	// astats: measure noise floor + entropy of extracted sample
-	//   - RMS_level, Peak_level: noise characteristics
-	//   - Entropy: 1.0 = white noise (broadband), lower = tonal noise (hum/buzz)
+	// Filter chain:
+	// 1. atrim: extract only the silence region (using start/duration for consistency with Pass 2)
+	// 2. aformat: convert to S16 format BEFORE measuring for consistency with Pass 2
+	//    Pass 2's output file is always S16 (from processing chain's aformat), so we must
+	//    measure in the same format to get comparable results
+	// 3. astats: measure noise characteristics on S16 samples
+	//    - RMS_level, Peak_level: noise characteristics
+	//    - Entropy: 1.0 = white noise (broadband), lower = tonal noise (hum/buzz)
 	filterSpec := fmt.Sprintf(
-		"atrim=start=%f:end=%f,aformat=sample_rates=44100:channel_layouts=mono:sample_fmts=s16,astats=metadata=1:measure_perchannel=RMS_level+Peak_level+Entropy",
-		region.Start.Seconds(), region.End.Seconds())
+		"atrim=start=%f:duration=%f,aformat=sample_rates=44100:channel_layouts=mono:sample_fmts=s16,astats=metadata=1:measure_perchannel=RMS_level+Peak_level+Entropy",
+		region.Start.Seconds(), region.Duration.Seconds())
 
 	filterGraph, bufferSrcCtx, bufferSinkCtx, err := setupFilterGraph(decCtx, filterSpec)
 	if err != nil {
@@ -1065,10 +1068,14 @@ func MeasureOutputSilenceRegion(outputPath string, region SilenceRegion) (*Silen
 	defer reader.Close()
 
 	// Build filter spec to extract and analyze the silence region
-	// atrim: extract the specific time region
-	// astats: measure noise floor, peak, entropy
+	// Filter chain mirrors Pass 1's extractNoiseProfile for consistent measurements:
+	// 1. atrim: extract the specific time region (start/duration format)
+	// 2. astats: measure noise floor, peak, entropy on native format
+	//
+	// Note: No aformat needed here - the output file is already processed and in final format.
+	// The key is measuring on identical audio data, not forcing format conversion.
 	filterSpec := fmt.Sprintf(
-		"atrim=start=%.3f:duration=%.3f,asetpts=PTS-STARTPTS,astats=metadata=1:measure_perchannel=RMS_level+Peak_level+Entropy",
+		"atrim=start=%f:duration=%f,astats=metadata=1:measure_perchannel=RMS_level+Peak_level+Entropy",
 		region.Start.Seconds(),
 		region.Duration.Seconds(),
 	)
