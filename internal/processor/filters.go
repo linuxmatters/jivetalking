@@ -711,16 +711,16 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 		}
 	}
 
-	// Add output format filters (always enabled)
-	// aformat: podcast-standard output (44.1kHz, mono, s16)
-	filters = append(filters, "aformat=sample_rates=44100:channel_layouts=mono:sample_fmts=s16")
-
 	// Add output analysis filters if enabled (for Pass 2 measurement comparison)
-	// These MUST come BEFORE asetnsamples because ebur128 can change frame sizes
+	// These MUST come BEFORE aformat/asetnsamples because ebur128 can change frame sizes
 	// The filters write to frame metadata which is preserved through the filter chain
 	if analysisFilters := cfg.buildOutputAnalysisFilters(); analysisFilters != "" {
 		filters = append(filters, analysisFilters)
 	}
+
+	// Add output format filter (always enabled, must be after ebur128 which outputs f64)
+	// aformat: podcast-standard output (44.1kHz, mono, s16)
+	filters = append(filters, "aformat=sample_rates=44100:channel_layouts=mono:sample_fmts=s16")
 
 	// asetnsamples: fixed frame size for FLAC encoder (must be last to ensure consistent frame sizes)
 	filters = append(filters, "asetnsamples=n=4096")

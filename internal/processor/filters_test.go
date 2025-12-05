@@ -228,6 +228,31 @@ func TestBuildFilterSpec(t *testing.T) {
 			t.Error("De-esser should not appear when intensity is 0")
 		}
 	})
+
+	t.Run("aformat appears after output analysis filters", func(t *testing.T) {
+		config := newTestConfig()
+		config.OutputAnalysisEnabled = true
+
+		spec := config.BuildFilterSpec()
+
+		// Should contain ebur128 analysis filter
+		if !strings.Contains(spec, "ebur128=") {
+			t.Fatal("Missing ebur128 filter when OutputAnalysisEnabled=true")
+		}
+
+		// ebur128 converts to f64 internally - aformat must come after to convert back to s16
+		// The spec should have: ebur128=...,aformat=...,asetnsamples=...
+		ebur128Idx := strings.Index(spec, "ebur128=")
+		aformatIdx := strings.Index(spec, "aformat=sample_rates=44100")
+		asetnsamplesIdx := strings.Index(spec, "asetnsamples=")
+
+		if aformatIdx < ebur128Idx {
+			t.Errorf("aformat must appear AFTER ebur128 (ebur128 outputs f64)\nSpec: %s", spec)
+		}
+		if asetnsamplesIdx < aformatIdx {
+			t.Errorf("asetnsamples must appear AFTER aformat\nSpec: %s", spec)
+		}
+	})
 }
 
 func TestBuildHighpassFilter(t *testing.T) {
