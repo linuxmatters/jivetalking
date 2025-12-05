@@ -641,8 +641,14 @@ func formatHighpassFilter(f *os.File, cfg *processor.FilterChainConfig, m *proce
 	if !cfg.HighpassEnabled {
 		fmt.Fprintf(f, "%shighpass: DISABLED", prefix)
 		// Show why it was disabled if we have measurements
-		if m != nil && m.SpectralDecrease < -0.08 {
-			fmt.Fprintf(f, " (very warm voice, decrease %.3f — preserving bass foundation)", m.SpectralDecrease)
+		if m != nil {
+			if m.SpectralDecrease < -0.08 {
+				// Very warm voice (primary trigger)
+				fmt.Fprintf(f, " (very warm voice, decrease %.3f — preserving bass foundation)", m.SpectralDecrease)
+			} else if m.SpectralSkewness > 1.0 {
+				// LF emphasis detected via skewness (secondary trigger)
+				fmt.Fprintf(f, " (LF emphasis, skewness %.3f — preserving bass character)", m.SpectralSkewness)
+			}
 		}
 		fmt.Fprintln(f, "")
 		return
@@ -686,11 +692,63 @@ func formatBandrejectFilter(f *os.File, cfg *processor.FilterChainConfig, m *pro
 		return
 	}
 
-	fmt.Fprintf(f, "%sbandreject: %.0f Hz + %d harmonics (Q=%.0f)\n",
-		prefix, cfg.HumFrequency, cfg.HumHarmonics, cfg.HumQ)
+	// Build the header with width and transform info
+	transformInfo := ""
+	if cfg.HumTransform == "tdii" {
+		transformInfo = ", tdii"
+	} else if cfg.HumTransform != "" {
+		transformInfo = ", " + cfg.HumTransform
+	}
+	fmt.Fprintf(f, "%sbandreject: %.0f Hz + %d harmonics (%.1f Hz wide%s)\n",
+		prefix, cfg.HumFrequency, cfg.HumHarmonics, cfg.HumWidth, transformInfo)
 
 	if m != nil && m.NoiseProfile != nil {
 		fmt.Fprintf(f, "        Rationale: tonal noise detected (entropy %.3f < 0.7)\n", m.NoiseProfile.Entropy)
+
+		// Explain reduced harmonics for warm voices
+		if cfg.HumHarmonics <= 2 {
+			isWarmSkewness := m.SpectralSkewness > 1.0
+			isWarmDecrease := m.SpectralDecrease < -0.02
+			if isWarmSkewness || isWarmDecrease {
+				reason := ""
+				if isWarmSkewness && isWarmDecrease {
+					reason = fmt.Sprintf("skewness %.2f, decrease %.3f", m.SpectralSkewness, m.SpectralDecrease)
+				} else if isWarmSkewness {
+					reason = fmt.Sprintf("skewness %.2f", m.SpectralSkewness)
+				} else {
+					reason = fmt.Sprintf("decrease %.3f", m.SpectralDecrease)
+				}
+				fmt.Fprintf(f, "        Harmonics: reduced to %d (warm voice: %s — protecting vocal fundamentals)\n",
+					cfg.HumHarmonics, reason)
+			}
+		}
+
+		// Explain notch width choice
+		if cfg.HumWidth != 1.0 { // Not the default
+			if cfg.HumWidth <= 0.3 {
+				fmt.Fprintf(f, "        Width: %.1f Hz (very narrow — warm voice protection)\n", cfg.HumWidth)
+			} else if cfg.HumWidth < 1.0 {
+				fmt.Fprintf(f, "        Width: %.1f Hz (narrow surgical notch — very tonal hum)\n", cfg.HumWidth)
+			} else {
+				fmt.Fprintf(f, "        Width: %.1f Hz (wider notch — mixed tonal noise)\n", cfg.HumWidth)
+			}
+		}
+
+		// Explain transform type
+		if cfg.HumTransform == "tdii" {
+			fmt.Fprintf(f, "        Transform: TDII (transposed direct form II — best floating-point accuracy)\n")
+		} else if cfg.HumTransform != "" && cfg.HumTransform != "di" {
+			fmt.Fprintf(f, "        Transform: %s\n", cfg.HumTransform)
+		}
+
+		// Explain mix if not full wet
+		if cfg.HumMix > 0 && cfg.HumMix < 1.0 {
+			mixReason := "warm voice"
+			if cfg.HumMix <= 0.7 {
+				mixReason = "very warm voice"
+			}
+			fmt.Fprintf(f, "        Mix: %.0f%% (%s — blending filtered with dry signal)\n", cfg.HumMix*100, mixReason)
+		}
 	}
 }
 

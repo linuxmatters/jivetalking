@@ -131,11 +131,23 @@ const (
 	bleedGateDefaultKnee       = 3.0   // Soft knee
 
 	// Mains hum filter parameters
-	humEntropyThreshold = 0.7  // Below this = tonal noise detected (hum/buzz)
-	humFreq50Hz         = 50.0 // UK/EU mains fundamental frequency
-	humFreq60Hz         = 60.0 // US mains fundamental frequency (TODO: make configurable)
-	humDefaultHarmonics = 4    // Filter fundamental + 3 harmonics (50, 100, 150, 200 Hz)
-	humDefaultQ         = 30.0 // Q factor (higher = narrower notch, less impact on voice)
+	humEntropyThreshold   = 0.7  // Below this = tonal noise detected (hum/buzz)
+	humFreq50Hz           = 50.0 // UK/EU mains fundamental frequency
+	humFreq60Hz           = 60.0 // US mains fundamental frequency (TODO: make configurable)
+	humDefaultHarmonics   = 4    // Filter fundamental + 3 harmonics (50, 100, 150, 200 Hz)
+	humWarmVoiceHarmonics = 2    // For warm voices: fundamental + 1 harmonic (50, 100 Hz)
+	humDefaultWidth       = 1.0  // Hz - default notch width (1Hz wide at each harmonic)
+	humWideWidth          = 2.0  // Hz - wider notch for stronger hum (more aggressive)
+	humNarrowWidth        = 0.5  // Hz - narrower notch for pure tonal hum (more surgical)
+	humWarmVoiceWidth     = 0.5  // Hz - narrow notch for warm voices
+	humVeryWarmVoiceWidth = 0.3  // Hz - very narrow notch for very warm voices (safe with 2 harmonics)
+	humMixDefault         = 1.0  // Full wet signal (100% filtered)
+	humMixWarmVoice       = 0.8  // Reduced mix for warm voices (80% filtered, 20% dry)
+	humMixVeryWarmVoice   = 0.7  // Further reduced for very warm voices (70% filtered, 30% dry)
+	// Voice protection thresholds - reduce harmonics when voice has strong LF content
+	humSkewnessWarm     = 1.0   // Above this = warm voice, reduce harmonics to protect fundamentals
+	humDecreaseWarm     = -0.02 // Below this = warm voice, reduce harmonics
+	humDecreaseVeryWarm = -0.1  // Below this = very warm voice (e.g., deep male), extra protection
 
 	// RNN denoise (arnndn) parameters
 	// Primary pass thresholds - enable for moderate noise sources
@@ -161,7 +173,7 @@ const (
 	defaultGateThreshold  = 0.01 // -40dBFS
 	defaultHumFrequency   = 50.0 // UK mains
 	defaultHumHarmonics   = 4
-	defaultHumQ           = 30.0
+	defaultHumWidth       = 1.0 // Hz
 	defaultArnnDnMix2     = 0.7
 )
 
@@ -358,10 +370,13 @@ func tuneNoiseReduction(config *FilterChainConfig, measurements *AudioMeasuremen
 // tuneHumFilter adapts bandreject (notch) filter for mains hum removal.
 //
 // Strategy:
-// - Uses NoiseProfile.Entropy from Pass 1 to detect tonal noise (hum)
-// - Low entropy (< 0.7) indicates periodic/tonal noise → enable hum removal
-// - High entropy indicates broadband noise → skip notch filter (use afftdn instead)
-// - Applies notch at fundamental (50Hz default) plus harmonics (100Hz, 150Hz, 200Hz)
+//   - Uses NoiseProfile.Entropy from Pass 1 to detect tonal noise (hum)
+//   - Low entropy (< 0.7) indicates periodic/tonal noise → enable hum removal
+//   - High entropy indicates broadband noise → skip notch filter (use afftdn instead)
+//   - Applies notch at fundamental (50Hz default) plus harmonics
+//   - Voice-aware: reduces harmonics for warm/bassy voices to protect vocal fundamentals
+//     The 3rd harmonic (150Hz) and 4th harmonic (200Hz) overlap male vocal fundamentals,
+//     causing a "hollow" or "metal bath" sound if filtered on warm voices.
 //
 // The entropy is calculated from the extracted silence sample during analysis.
 // Pure tones have low entropy; random noise has high entropy.
@@ -378,14 +393,53 @@ func tuneHumFilter(config *FilterChainConfig, measurements *AudioMeasurements) {
 	}
 
 	// Low entropy indicates tonal/periodic noise (likely mains hum)
-	if measurements.NoiseProfile.Entropy < humEntropyThreshold {
-		// Filter stays enabled, tune parameters
-		config.HumFrequency = humFreq50Hz // Default to 50Hz (UK/EU mains)
-		config.HumHarmonics = humDefaultHarmonics
-		config.HumQ = humDefaultQ
-	} else {
+	if measurements.NoiseProfile.Entropy >= humEntropyThreshold {
 		// High entropy = broadband noise, notch filter won't help
 		config.HumFilterEnabled = false
+		return
+	}
+
+	// Filter enabled - tune parameters based on voice characteristics
+	config.HumFrequency = humFreq50Hz // Default to 50Hz (UK/EU mains)
+
+	// Determine harmonic count based on voice characteristics
+	// Warm/bassy voices need fewer harmonics to avoid cutting into vocal fundamentals
+	isWarmVoice := measurements.SpectralSkewness > humSkewnessWarm ||
+		measurements.SpectralDecrease < humDecreaseWarm
+
+	if isWarmVoice {
+		// Warm voice: only filter fundamental + 1 harmonic (50Hz, 100Hz)
+		// Avoids 150Hz and 200Hz which overlap male vocal fundamentals
+		config.HumHarmonics = humWarmVoiceHarmonics
+
+		// Adjust width and mix based on how warm the voice is
+		// Very warm voices (decrease < -0.1) get narrower notch and more dry signal
+		if measurements.SpectralDecrease < humDecreaseVeryWarm {
+			config.HumWidth = humVeryWarmVoiceWidth // 0.3Hz - very surgical
+			config.HumMix = humMixVeryWarmVoice     // 70% wet
+		} else {
+			config.HumWidth = humWarmVoiceWidth // 0.5Hz
+			config.HumMix = humMixWarmVoice     // 80% wet
+		}
+	} else {
+		// Brighter voice: safe to filter more harmonics, full wet
+		config.HumHarmonics = humDefaultHarmonics
+		config.HumMix = humMixDefault
+
+		// Adaptive width based on noise severity (only for non-warm voices)
+		// Warm voices always use humWarmVoiceWidth for maximum protection
+		// Lower entropy = more tonal/pure hum = can use narrower notch
+		// Higher entropy (but still below threshold) = mixed noise = use wider notch
+		if measurements.NoiseProfile.Entropy < 0.3 {
+			// Very tonal hum - use narrow surgical notch
+			config.HumWidth = humNarrowWidth
+		} else if measurements.NoiseProfile.Entropy > 0.5 {
+			// Borderline tonal - use wider notch to catch it
+			config.HumWidth = humWideWidth
+		} else {
+			// Standard case
+			config.HumWidth = humDefaultWidth
+		}
 	}
 }
 
@@ -811,7 +865,7 @@ func sanitizeConfig(config *FilterChainConfig) {
 
 	// Hum filter sanitization
 	config.HumFrequency = sanitizeFloat(config.HumFrequency, defaultHumFrequency)
-	config.HumQ = sanitizeFloat(config.HumQ, defaultHumQ)
+	config.HumWidth = sanitizeFloat(config.HumWidth, defaultHumWidth)
 	if config.HumHarmonics < 1 || config.HumHarmonics > 8 {
 		config.HumHarmonics = defaultHumHarmonics
 	}

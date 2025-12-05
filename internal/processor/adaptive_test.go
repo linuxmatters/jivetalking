@@ -340,6 +340,9 @@ func TestTuneHighpassFreq(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Setup: create default config and measurements
 			config := DefaultFilterConfig()
+			// Start with highpass enabled to test tuning behavior
+			// (default is disabled, but we want to test when it's on)
+			config.HighpassEnabled = true
 			measurements := &AudioMeasurements{
 				SpectralCentroid: tt.centroid,
 				SpectralDecrease: tt.spectralDecrease,
@@ -358,7 +361,7 @@ func TestTuneHighpassFreq(t *testing.T) {
 				return // no further checks needed for disabled
 			}
 
-			// Verify enabled (default expectation)
+			// Verify enabled (expected to remain enabled for non-warm voices)
 			if !config.HighpassEnabled {
 				t.Errorf("HighpassEnabled = false, want true")
 			}

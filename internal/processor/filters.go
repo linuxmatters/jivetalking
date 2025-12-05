@@ -174,7 +174,9 @@ type FilterChainConfig struct {
 	HumFilterEnabled bool    // Enable mains hum notch filtering
 	HumFrequency     float64 // Fundamental frequency (50Hz UK/EU, 60Hz US)
 	HumHarmonics     int     // Number of harmonics to filter (1-4, default 4)
-	HumQ             float64 // Q factor for notch filters (higher = narrower notch)
+	HumWidth         float64 // Notch width in Hz (e.g., 0.5 = 0.5Hz wide notch at each harmonic)
+	HumTransform     string  // Filter transform type: "tdii" (transposed direct form II, best floating-point accuracy)
+	HumMix           float64 // Wet/dry mix (0-1, 1=full filter, 0.9=subtle)
 
 	// Click/Pop Removal (adeclick) - removes clicks and pops
 	AdeclickEnabled bool   // Enable adeclick filter
@@ -312,16 +314,18 @@ func DefaultFilterConfig() *FilterChainConfig {
 		ResampleFrameSize:  4096,
 
 		// High-pass - remove subsonic rumble
-		HighpassEnabled: true,
+		HighpassEnabled: false,
 		HighpassFreq:    80.0, // 80Hz cutoff
 		HighpassPoles:   2,    // 12dB/oct standard slope (1=gentle 6dB/oct for warm voices)
 
 		// Mains Hum Notch Filter - removes 50/60Hz hum and harmonics
 		// Enabled conditionally by tuneHumFilter when Pass 1 entropy indicates tonal noise
-		HumFilterEnabled: false,
-		HumFrequency:     50.0, // 50Hz (UK/EU mains), can be set to 60Hz for US
-		HumHarmonics:     4,    // Filter 4 harmonics (50, 100, 150, 200Hz)
-		HumQ:             30.0, // Narrow notch (Q=30, ~1.7Hz bandwidth)
+		HumFilterEnabled: true,
+		HumFrequency:     50.0,   // 50Hz (UK/EU mains), can be set to 60Hz for US
+		HumHarmonics:     4,      // Filter 4 harmonics (50, 100, 150, 200Hz)
+		HumWidth:         1.0,    // 1Hz wide notch at each harmonic
+		HumTransform:     "tdii", // Transposed Direct Form II - best floating-point numerical accuracy
+		HumMix:           1.0,    // Full wet signal (can reduce for subtle application)
 
 		// Click/Pop Removal - use overlap-save method with defaults
 		AdeclickEnabled: false,
@@ -563,8 +567,11 @@ func (cfg *FilterChainConfig) buildHighpassFilter() string {
 // Creates a chain of bandreject filters at the fundamental frequency and harmonics.
 // Only enabled when Pass 1 entropy analysis indicates tonal noise (low entropy).
 //
-// Filter chain example for 50Hz with 4 harmonics:
-// bandreject=f=50:q=30,bandreject=f=100:q=30,bandreject=f=150:q=30,bandreject=f=200:q=30
+// Uses ZDF (Zero Delay Feedback) transform to minimise phase distortion and ringing.
+// Optional mix parameter allows subtle application (mix=0.9 blends 90% filtered + 10% dry).
+//
+// Filter chain example for 50Hz with 2 harmonics (zdf transform):
+// bandreject=f=50:width_type=q:w=50:a=zdf,bandreject=f=100:width_type=q:w=50:a=zdf
 func (cfg *FilterChainConfig) buildBandrejectFilter() string {
 	if !cfg.HumFilterEnabled || cfg.HumFrequency <= 0 {
 		return ""
@@ -578,8 +585,22 @@ func (cfg *FilterChainConfig) buildBandrejectFilter() string {
 		if freq >= 22000 {
 			break
 		}
-		filters = append(filters, fmt.Sprintf("bandreject=f=%.0f:width_type=q:w=%.0f",
-			freq, cfg.HumQ))
+
+		// Build filter with Hz-based width for consistent notch size across harmonics
+		// width_type=h specifies width in Hz (more predictable than Q)
+		filterSpec := fmt.Sprintf("bandreject=f=%.0f:width_type=h:w=%.2f", freq, cfg.HumWidth)
+
+		// Add transform type if specified (zdf = zero delay feedback, less ringing)
+		if cfg.HumTransform != "" {
+			filterSpec += fmt.Sprintf(":a=%s", cfg.HumTransform)
+		}
+
+		// Add mix parameter if not full wet (1.0)
+		if cfg.HumMix > 0 && cfg.HumMix < 1.0 {
+			filterSpec += fmt.Sprintf(":m=%.2f", cfg.HumMix)
+		}
+
+		filters = append(filters, filterSpec)
 	}
 
 	if len(filters) == 0 {

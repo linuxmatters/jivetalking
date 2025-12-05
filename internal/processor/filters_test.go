@@ -41,7 +41,7 @@ func newTestConfig() *FilterChainConfig {
 		HighpassFreq:   80.0,
 		HumFrequency:   50.0,
 		HumHarmonics:   4,
-		HumQ:           30.0,
+		HumWidth:       1.0,
 		AdeclickMethod: "s",
 		NoiseFloor:     -50.0,
 		NoiseReduction: 12.0,
