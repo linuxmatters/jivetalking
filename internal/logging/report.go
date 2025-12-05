@@ -639,27 +639,33 @@ func formatFilter(f *os.File, filterID processor.FilterID, cfg *processor.Filter
 // formatHighpassFilter outputs highpass filter details
 func formatHighpassFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
 	if !cfg.HighpassEnabled {
-		fmt.Fprintf(f, "%shighpass: DISABLED", prefix)
-		// Show why it was disabled if we have measurements
-		if m != nil {
-			if m.SpectralDecrease < -0.08 {
-				// Very warm voice (primary trigger)
-				fmt.Fprintf(f, " (very warm voice, decrease %.3f — preserving bass foundation)", m.SpectralDecrease)
-			} else if m.SpectralSkewness > 1.0 {
-				// LF emphasis detected via skewness (secondary trigger)
-				fmt.Fprintf(f, " (LF emphasis, skewness %.3f — preserving bass character)", m.SpectralSkewness)
-			}
-		}
-		fmt.Fprintln(f, "")
+		fmt.Fprintf(f, "%shighpass: DISABLED\n", prefix)
 		return
 	}
 
 	// Show slope (6dB/oct for gentle, 12dB/oct for standard)
 	slope := "12dB/oct"
 	if cfg.HighpassPoles == 1 {
-		slope = "6dB/oct gentle"
+		slope = "6dB/oct"
 	}
-	fmt.Fprintf(f, "%shighpass: %.0f Hz cutoff (%s)\n", prefix, cfg.HighpassFreq, slope)
+
+	// Build header with all relevant parameters
+	header := fmt.Sprintf("%shighpass: %.0f Hz cutoff (%s", prefix, cfg.HighpassFreq, slope)
+
+	// Show Q if not default Butterworth
+	if cfg.HighpassWidth > 0 && cfg.HighpassWidth != 0.707 {
+		header += fmt.Sprintf(", Q=%.2f", cfg.HighpassWidth)
+	}
+
+	// Show transform if specified
+	if cfg.HighpassTransform == "tdii" {
+		header += ", tdii"
+	} else if cfg.HighpassTransform != "" {
+		header += ", " + cfg.HighpassTransform
+	}
+
+	header += ")"
+	fmt.Fprintln(f, header)
 
 	// Show adaptive rationale
 	if m != nil && m.SpectralCentroid > 0 {
@@ -669,19 +675,33 @@ func formatHighpassFilter(f *os.File, cfg *processor.FilterChainConfig, m *proce
 		} else if m.SpectralCentroid < 4000 {
 			voiceType = "dark/warm"
 		}
-		fmt.Fprintf(f, "        Rationale: %s voice (centroid %.0f Hz)", voiceType, m.SpectralCentroid)
+		fmt.Fprintf(f, "        Rationale: %s voice (centroid %.0f Hz)\n", voiceType, m.SpectralCentroid)
 
-		// Show warm voice protection if applicable
-		if m.SpectralDecrease < -0.05 {
-			fmt.Fprintf(f, ", gentle slope (warm, decrease %.3f)", m.SpectralDecrease)
+		// Show warm voice protection if applicable (using mix)
+		if cfg.HighpassMix > 0 && cfg.HighpassMix < 1.0 {
+			reason := "warm voice"
+			if m.SpectralDecrease < -0.08 {
+				reason = "very warm voice"
+			} else if m.SpectralSkewness > 1.0 {
+				reason = "LF emphasis"
+			}
+			fmt.Fprintf(f, "        Mix: %.0f%% (%s — blending filtered with dry signal)\n", cfg.HighpassMix*100, reason)
+		}
+
+		// Show why low frequency was chosen for warm voices
+		if cfg.HighpassFreq <= 40 {
+			fmt.Fprintf(f, "        Frequency: %.0f Hz (subsonic only — protecting bass foundation)\n", cfg.HighpassFreq)
+		}
+
+		// Show gentle slope explanation
+		if cfg.HighpassPoles == 1 {
+			fmt.Fprintf(f, "        Slope: 6dB/oct (gentle rolloff — preserving warmth)\n")
 		}
 
 		// Show noise character if tonal (explains why no boost)
 		if m.NoiseProfile != nil && m.NoiseProfile.Entropy < 0.5 {
-			fmt.Fprintf(f, ", no boost (tonal noise, entropy %.3f)", m.NoiseProfile.Entropy)
+			fmt.Fprintf(f, "        Note: no LF boost (tonal noise, entropy %.3f — bandreject handles hum)\n", m.NoiseProfile.Entropy)
 		}
-
-		fmt.Fprintln(f, "")
 	}
 }
 

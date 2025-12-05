@@ -125,10 +125,12 @@ func TestTuneHighpassFreq(t *testing.T) {
 		spectralDecrease float64       // spectral decrease (negative = warm voice)
 		spectralSkewness float64       // spectral skewness (positive = LF emphasis)
 		noiseProfile     *NoiseProfile // silence sample characteristics
-		wantFreqMin      float64       // minimum expected frequency (ignored if wantDisabled)
-		wantFreqMax      float64       // maximum expected frequency (ignored if wantDisabled)
+		wantFreqMin      float64       // minimum expected frequency
+		wantFreqMax      float64       // maximum expected frequency
 		wantPoles        int           // expected poles (0 = don't check, 1 = gentle, 2 = standard)
-		wantDisabled     bool          // expect highpass to be disabled entirely
+		wantWidth        float64       // expected Q (0 = don't check, uses Butterworth 0.707 default)
+		wantMix          float64       // expected mix (0 = don't check, uses 1.0 default)
+		wantDisabled     bool          // expect highpass to be disabled entirely (legacy, now rarely used)
 	}{
 		// Voice brightness classification (no noise profile - base frequencies only)
 		{
@@ -207,18 +209,26 @@ func TestTuneHighpassFreq(t *testing.T) {
 			wantPoles:        0, // standard slope (don't check, defaults to 2)
 		},
 		{
-			name:             "very warm voice - highpass disabled",
-			centroid:         5000,                         // normal voice base = 80Hz (unused)
+			name:             "very warm voice - gentle highpass",
+			centroid:         5000,                         // normal voice base = 80Hz
 			spectralDecrease: -0.095,                       // very warm voice (< -0.08)
-			noiseProfile:     makeNoiseProfile(-50.0, 0.8), // (unused - disabled)
-			wantDisabled:     true,                         // highpass disabled entirely for very warm voices
+			noiseProfile:     makeNoiseProfile(-50.0, 0.8), // broadband noise
+			wantFreqMin:      60,                           // highpassVeryWarmFreq
+			wantFreqMax:      60,
+			wantPoles:        1,   // gentle 6dB/oct
+			wantWidth:        0.5, // gentle Q
+			wantMix:          0.8, // 80% wet
 		},
 		{
-			name:             "very warm dark voice - highpass disabled",
-			centroid:         3500,                         // dark voice base = 60Hz (unused)
+			name:             "very warm dark voice - gentle highpass",
+			centroid:         3500,                         // dark voice base = 60Hz
 			spectralDecrease: -0.15,                        // very warm (< -0.08)
-			noiseProfile:     makeNoiseProfile(-45.0, 0.9), // (unused - disabled)
-			wantDisabled:     true,                         // highpass disabled entirely for very warm voices
+			noiseProfile:     makeNoiseProfile(-45.0, 0.9), // broadband noise
+			wantFreqMin:      60,                           // highpassVeryWarmFreq
+			wantFreqMax:      60,
+			wantPoles:        1,   // gentle 6dB/oct
+			wantWidth:        0.5, // gentle Q
+			wantMix:          0.8, // 80% wet
 		},
 
 		// Bright voice with warm spectral decrease (unusual but possible)
@@ -232,24 +242,29 @@ func TestTuneHighpassFreq(t *testing.T) {
 			wantPoles:        0, // standard slope (don't check)
 		},
 		{
-			name:             "bright voice, very warm characteristics - highpass disabled",
+			name:             "bright voice, very warm characteristics - gentle highpass",
 			centroid:         7000,
 			spectralDecrease: -0.10,                        // very warm despite bright centroid (< -0.08)
-			noiseProfile:     makeNoiseProfile(-50.0, 0.8), // (unused - disabled)
-			wantDisabled:     true,                         // highpass disabled entirely for very warm voices
+			noiseProfile:     makeNoiseProfile(-50.0, 0.8), // broadband noise
+			wantFreqMin:      60,                           // highpassVeryWarmFreq
+			wantFreqMax:      60,
+			wantPoles:        1,   // gentle 6dB/oct
+			wantWidth:        0.5, // gentle Q
+			wantMix:          0.8, // 80% wet
 		},
 
 		// Skewness-based protection (moderate decrease but LF emphasis)
 		{
-			name:             "Mark's voice profile - moderate decrease, high skewness - disabled",
+			name:             "Mark's voice profile - moderate decrease, high skewness - warm highpass",
 			centroid:         5785,                           // bright centroid
 			spectralDecrease: -0.026,                         // moderate decrease (between -0.05 and 0)
 			spectralSkewness: 1.132,                          // LF emphasis (> 1.0)
 			noiseProfile:     makeNoiseProfile(-80.0, 0.076), // tonal noise
-			wantFreqMin:      80,                             // base freq for normal voice
-			wantFreqMax:      80,
-			wantPoles:        2,
-			wantDisabled:     true, // skewness > 1.0 disables highpass
+			wantFreqMin:      70,                             // highpassWarmFreq for LF emphasis
+			wantFreqMax:      70,
+			wantPoles:        1,   // gentle 6dB/oct
+			wantWidth:        0.5, // gentle Q
+			wantMix:          0.9, // 90% wet
 		},
 		{
 			name:             "moderate decrease, low skewness - standard slope",
@@ -260,29 +275,31 @@ func TestTuneHighpassFreq(t *testing.T) {
 			wantFreqMin:      80,
 			wantFreqMax:      80,
 			wantPoles:        2,
-			wantDisabled:     false, // skewness < 1.0, highpass enabled
+			wantDisabled:     false, // skewness < 1.0, highpass at normal settings
 		},
 		{
-			name:             "balanced decrease, high skewness - disabled",
+			name:             "balanced decrease, high skewness - warm highpass",
 			centroid:         4500,
 			spectralDecrease: -0.01,                        // balanced (between -0.05 and 0)
 			spectralSkewness: 1.5,                          // strong LF emphasis
 			noiseProfile:     makeNoiseProfile(-75.0, 0.3), // clean, tonal - no boost
-			wantFreqMin:      80,
-			wantFreqMax:      80,
-			wantPoles:        2,
-			wantDisabled:     true, // skewness > 1.0 disables highpass
+			wantFreqMin:      70,                           // highpassWarmFreq for LF emphasis
+			wantFreqMax:      70,
+			wantPoles:        1,   // gentle 6dB/oct
+			wantWidth:        0.5, // gentle Q
+			wantMix:          0.9, // 90% wet
 		},
 		{
-			name:             "thin voice, high skewness - skewness still protects",
+			name:             "thin voice, high skewness - skewness still triggers warm protection",
 			centroid:         6500,                         // > 6000 centroidBright threshold
 			spectralDecrease: 0.02,                         // thin voice (> 0)
-			spectralSkewness: 1.2,                          // > 1.0 triggers protection regardless of decrease
+			spectralSkewness: 1.2,                          // > 1.0 triggers warm protection regardless of decrease
 			noiseProfile:     makeNoiseProfile(-75.0, 0.3), // clean, tonal - no boost
-			wantFreqMin:      100,                          // bright voice base freq (centroid > 6000)
-			wantFreqMax:      100,
-			wantPoles:        2,
-			wantDisabled:     true, // skewness > 1.0 disables highpass
+			wantFreqMin:      70,                           // highpassWarmFreq (skewness overrides centroid)
+			wantFreqMax:      70,
+			wantPoles:        1,   // gentle 6dB/oct
+			wantWidth:        0.5, // gentle Q
+			wantMix:          0.9, // 90% wet
 		},
 
 		// Edge cases
@@ -341,7 +358,6 @@ func TestTuneHighpassFreq(t *testing.T) {
 			// Setup: create default config and measurements
 			config := DefaultFilterConfig()
 			// Start with highpass enabled to test tuning behavior
-			// (default is disabled, but we want to test when it's on)
 			config.HighpassEnabled = true
 			measurements := &AudioMeasurements{
 				SpectralCentroid: tt.centroid,
@@ -353,15 +369,15 @@ func TestTuneHighpassFreq(t *testing.T) {
 			// Execute (lufsGap is no longer used for highpass tuning)
 			tuneHighpassFreq(config, measurements, 0.0)
 
-			// Verify disabled state
+			// Verify disabled state (legacy - now rarely used)
 			if tt.wantDisabled {
 				if config.HighpassEnabled {
-					t.Errorf("HighpassEnabled = true, want false (disabled for very warm voice)")
+					t.Errorf("HighpassEnabled = true, want false")
 				}
 				return // no further checks needed for disabled
 			}
 
-			// Verify enabled (expected to remain enabled for non-warm voices)
+			// Verify enabled (warm voices now use gentle settings instead of disabling)
 			if !config.HighpassEnabled {
 				t.Errorf("HighpassEnabled = false, want true")
 			}
@@ -375,6 +391,16 @@ func TestTuneHighpassFreq(t *testing.T) {
 			// Verify poles (slope) if specified
 			if tt.wantPoles > 0 && config.HighpassPoles != tt.wantPoles {
 				t.Errorf("HighpassPoles = %d, want %d", config.HighpassPoles, tt.wantPoles)
+			}
+
+			// Verify width (Q) if specified
+			if tt.wantWidth > 0 && config.HighpassWidth != tt.wantWidth {
+				t.Errorf("HighpassWidth = %.3f, want %.3f", config.HighpassWidth, tt.wantWidth)
+			}
+
+			// Verify mix if specified
+			if tt.wantMix > 0 && config.HighpassMix != tt.wantMix {
+				t.Errorf("HighpassMix = %.2f, want %.2f", config.HighpassMix, tt.wantMix)
 			}
 		})
 	}

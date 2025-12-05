@@ -14,6 +14,15 @@ const (
 	highpassBoostModerate   = 10.0  // Hz - added when silence sample shows LF noise
 	highpassBoostAggressive = 20.0  // Hz - added for noisy silence sample (> -55 dBFS)
 
+	// Highpass warm voice protection parameters
+	// Instead of disabling highpass for warm voices, we use gentler settings
+	highpassWarmFreq      = 70.0 // Hz - slightly reduced cutoff for warm voices
+	highpassVeryWarmFreq  = 60.0 // Hz - minimum cutoff for very warm voices
+	highpassWarmWidth     = 0.5  // Q - gentler rolloff than Butterworth (0.707)
+	highpassVeryWarmWidth = 0.5  // Q - gentler rolloff for very warm voices
+	highpassWarmMix       = 0.9  // Wet/dry mix for warm voices (90% filtered)
+	highpassVeryWarmMix   = 0.8  // Wet/dry mix for very warm voices (80% filtered)
+
 	// Spectral decrease thresholds for LF voice content protection
 	spectralDecreaseVeryWarm = -0.08 // Below: very warm voice, needs maximum LF protection
 	spectralDecreaseWarm     = -0.05 // Below: warm voice with significant LF body
@@ -281,27 +290,38 @@ func tuneHighpassFreq(config *FilterChainConfig, measurements *AudioMeasurements
 		}
 	}
 
-	// Apply boost if warranted by noise characteristics
+	// Apply boost if warranted by noise characteristics (only for non-warm voices)
 	if shouldBoost {
 		config.HighpassFreq = baseFreq + boostAmount
 	} else {
 		config.HighpassFreq = baseFreq
 	}
 
+	// Set TDII transform for all highpass (best floating-point accuracy)
+	config.HighpassTransform = "tdii"
+
 	// Protect warm voices with significant LF body
-	// Two independent triggers for disabling highpass:
-	// 1. Spectral decrease < -0.08 (very warm voice with strong bass)
-	// 2. Spectral skewness > 1.0 (significant LF emphasis/bass character)
+	// Instead of disabling highpass, we use gentler settings:
+	// - Lower frequency (subsonic only)
+	// - Lower Q (gentler rolloff)
+	// - Reduced mix (blend filtered with dry signal)
+	//
+	// This removes subsonic rumble while preserving bass character.
 	if measurements.SpectralDecrease < spectralDecreaseVeryWarm {
 		// Very warm voice (e.g. Popey -0.095, Martin -0.238)
-		// Strong bass foundation that any HPF will damage
-		config.HighpassEnabled = false
+		// Use minimal settings: 30Hz cutoff, gentle Q, 50% mix
+		config.HighpassFreq = highpassVeryWarmFreq
+		config.HighpassWidth = highpassVeryWarmWidth
+		config.HighpassMix = highpassVeryWarmMix
+		config.HighpassPoles = 1 // Gentle 6dB/oct slope
 		return
 	} else if measurements.SpectralSkewness > spectralSkewnessLFEmphasis {
 		// Significant LF emphasis (e.g. Mark: skewness 1.132)
-		// Voice has bass character that even gentle HPF removes
-		// All three presenters have skewness > 1.0
-		config.HighpassEnabled = false
+		// Use warm settings: 40Hz cutoff, gentle Q, 70% mix
+		config.HighpassFreq = highpassWarmFreq
+		config.HighpassWidth = highpassWarmWidth
+		config.HighpassMix = highpassWarmMix
+		config.HighpassPoles = 1 // Gentle 6dB/oct slope
 		return
 	} else if measurements.SpectralDecrease < spectralDecreaseWarm {
 		// Warm voice - cap at default with gentle slope to preserve body
@@ -852,6 +872,8 @@ func tuneBleedGate(config *FilterChainConfig, measurements *AudioMeasurements, l
 // sanitizeConfig ensures no NaN or Inf values remain after adaptive tuning
 func sanitizeConfig(config *FilterChainConfig) {
 	config.HighpassFreq = sanitizeFloat(config.HighpassFreq, defaultHighpassFreq)
+	config.HighpassWidth = sanitizeFloat(config.HighpassWidth, 0.707) // Butterworth default
+	config.HighpassMix = sanitizeFloat(config.HighpassMix, 1.0)       // Full wet default
 	config.DeessIntensity = sanitizeFloat(config.DeessIntensity, defaultDeessIntensity)
 	config.NoiseReduction = sanitizeFloat(config.NoiseReduction, defaultNoiseReduction)
 	config.CompRatio = sanitizeFloat(config.CompRatio, defaultCompRatio)

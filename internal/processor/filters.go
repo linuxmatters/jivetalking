@@ -165,9 +165,12 @@ type FilterChainConfig struct {
 	ResampleFrameSize  int    // Samples per frame (default: 4096)
 
 	// High-Pass Filter (highpass) - removes subsonic rumble
-	HighpassEnabled bool    // Enable highpass filter
-	HighpassFreq    float64 // Hz, cutoff frequency (removes frequencies below this)
-	HighpassPoles   int     // Filter poles: 1=6dB/oct (gentle), 2=12dB/oct (standard)
+	HighpassEnabled   bool    // Enable highpass filter
+	HighpassFreq      float64 // Hz, cutoff frequency (removes frequencies below this)
+	HighpassPoles     int     // Filter poles: 1=6dB/oct (gentle), 2=12dB/oct (standard)
+	HighpassWidth     float64 // Q factor: 0.707=Butterworth (default), lower=gentler rolloff
+	HighpassMix       float64 // Wet/dry mix (0-1, 1=full filter, 0.7=subtle for warm voices)
+	HighpassTransform string  // Filter transform: "tdii" (best accuracy), "zdf", etc.
 
 	// Mains Hum Filter (bandreject) - removes 50/60Hz hum and harmonics
 	// Enabled conditionally when Pass 1 entropy indicates tonal noise
@@ -314,9 +317,12 @@ func DefaultFilterConfig() *FilterChainConfig {
 		ResampleFrameSize:  4096,
 
 		// High-pass - remove subsonic rumble
-		HighpassEnabled: false,
-		HighpassFreq:    80.0, // 80Hz cutoff
-		HighpassPoles:   2,    // 12dB/oct standard slope (1=gentle 6dB/oct for warm voices)
+		HighpassEnabled:   true,
+		HighpassFreq:      80.0,   // 80Hz cutoff
+		HighpassPoles:     2,      // 12dB/oct standard slope (1=gentle 6dB/oct for warm voices)
+		HighpassWidth:     0.707,  // Butterworth Q (maximally flat passband)
+		HighpassMix:       1.0,    // Full wet signal (reduce for warm voice protection)
+		HighpassTransform: "tdii", // Transposed Direct Form II - best floating-point accuracy
 
 		// Mains Hum Notch Filter - removes 50/60Hz hum and harmonics
 		// Enabled conditionally by tuneHumFilter when Pass 1 entropy indicates tonal noise
@@ -548,19 +554,47 @@ func (cfg *FilterChainConfig) buildResampleReport() string {
 
 // buildHighpassFilter builds the highpass (rumble removal) filter specification.
 // Removes subsonic frequencies below cutoff (HVAC, handling noise, etc.)
-// Uses Butterworth response (Q=0.707) for maximally flat passband.
-// poles=1 gives 6dB/octave rolloff (gentle), poles=2 gives 12dB/octave (standard).
-// normalize=1 prevents level shift.
+//
+// Parameters:
+// - frequency: cutoff frequency in Hz
+// - poles: 1=6dB/oct (gentle), 2=12dB/oct (standard)
+// - width: Q factor (0.707=Butterworth maximally flat, lower=gentler transition)
+// - transform: filter algorithm (tdii=best floating-point accuracy)
+// - mix: wet/dry blend (1.0=full filter, 0.7=subtle for warm voices)
+// - normalize: prevents level shift
+//
+// For warm voices, we use lower frequency + lower Q + reduced mix to preserve bass
+// while still removing subsonic rumble.
 func (cfg *FilterChainConfig) buildHighpassFilter() string {
 	if !cfg.HighpassEnabled {
 		return ""
 	}
+
 	poles := cfg.HighpassPoles
 	if poles < 1 {
 		poles = 2 // Default to standard 12dB/oct
 	}
-	return fmt.Sprintf("highpass=f=%.0f:poles=%d:width_type=q:width=0.707:normalize=1",
-		cfg.HighpassFreq, poles)
+
+	width := cfg.HighpassWidth
+	if width <= 0 {
+		width = 0.707 // Butterworth default
+	}
+
+	// Build base filter spec
+	filterSpec := fmt.Sprintf("highpass=f=%.0f:poles=%d:width_type=q:width=%.3f:normalize=1",
+		cfg.HighpassFreq, poles, width)
+
+	// Add transform type if specified (tdii = best floating-point accuracy)
+	if cfg.HighpassTransform != "" {
+		filterSpec += fmt.Sprintf(":a=%s", cfg.HighpassTransform)
+	}
+
+	// Add mix parameter if not full wet (for warm voice protection)
+	if cfg.HighpassMix > 0 && cfg.HighpassMix < 1.0 {
+		filterSpec += fmt.Sprintf(":m=%.2f", cfg.HighpassMix)
+	}
+
+	return filterSpec
 }
 
 // buildBandrejectFilter builds notch filters for mains hum removal.
