@@ -39,6 +39,7 @@ func newTestConfig() *FilterChainConfig {
 
 		// Sensible defaults for parameters (used when filter is enabled)
 		HighpassFreq:      80.0,
+		HighpassPoles:     2,     // 12dB/oct standard Butterworth
 		HighpassWidth:     0.707, // Butterworth
 		HighpassMix:       1.0,   // Full wet
 		HighpassTransform: "tdii",

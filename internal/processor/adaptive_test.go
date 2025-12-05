@@ -89,7 +89,7 @@ func TestTuneNoiseReduction(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Setup
-			config := DefaultFilterConfig()
+			config := newTestConfig()
 			config.TargetI = tt.targetI
 			measurements := &AudioMeasurements{
 				InputI: tt.inputI,
@@ -355,8 +355,8 @@ func TestTuneHighpassFreq(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Setup: create default config and measurements
-			config := DefaultFilterConfig()
+			// Setup: create test config and measurements
+			config := newTestConfig()
 			// Start with highpass enabled to test tuning behavior
 			config.HighpassEnabled = true
 			measurements := &AudioMeasurements{
@@ -590,7 +590,9 @@ func TestTuneDeesser(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Setup
-			config := DefaultFilterConfig()
+			config := newTestConfig()
+			// Start with deesser disabled - tuneDeesser should set intensity based on spectral data
+			config.DeessIntensity = 0.0
 			measurements := &AudioMeasurements{
 				SpectralCentroid: tt.centroid,
 				SpectralRolloff:  tt.rolloff,
@@ -711,7 +713,7 @@ func TestTuneGateThreshold(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Setup
-			config := DefaultFilterConfig()
+			config := newTestConfig()
 			measurements := &AudioMeasurements{
 				NoiseFloor: tt.noiseFloor,
 			}

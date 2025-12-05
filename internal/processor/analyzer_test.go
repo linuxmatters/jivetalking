@@ -44,10 +44,9 @@ func TestAnalyzeAudio(t *testing.T) {
 		audioFiles = audioFiles[:1]
 	}
 
-	// Use podcast standard targets
-	targetI := -16.0
-	targetTP := -1.5
-	targetLRA := 11.0
+	// Use test config with podcast standard targets
+	config := newTestConfig()
+	config.AnalysisEnabled = true
 
 	// Analyze each audio file
 	for i, filename := range audioFiles {
@@ -65,7 +64,7 @@ func TestAnalyzeAudio(t *testing.T) {
 				}
 			}
 
-			measurements, err := AnalyzeAudio(filename, targetI, targetTP, targetLRA, progressCallback)
+			measurements, err := AnalyzeAudio(filename, config, progressCallback)
 			if err != nil {
 				t.Fatalf("AnalyzeAudio failed: %v", err)
 			}
@@ -107,9 +106,9 @@ func TestAnalyzeAudio(t *testing.T) {
 
 			// The offset should bring us close to target
 			expectedOutput := measurements.InputI + measurements.TargetOffset
-			if expectedOutput < targetI-2 || expectedOutput > targetI+2 {
+			if expectedOutput < config.TargetI-2 || expectedOutput > config.TargetI+2 {
 				t.Logf("Warning: Target offset might not achieve target (expected ~%.1f, got %.2f)",
-					targetI, expectedOutput)
+					config.TargetI, expectedOutput)
 			}
 		})
 	}

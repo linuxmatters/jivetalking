@@ -573,7 +573,7 @@ func finalizeOutputMeasurements(acc *outputMetadataAccumulators) *OutputMeasurem
 //
 // Implementation note: ebur128 and astats write measurements to frame metadata with lavfi.r128.*
 // and lavfi.astats.Overall.* keys respectively. We extract these from the last processed frames.
-func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements)) (*AudioMeasurements, error) {
+func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements)) (*AudioMeasurements, error) {
 	// Open audio file
 	reader, metadata, err := audio.OpenAudioFile(filename)
 	if err != nil {
@@ -593,7 +593,7 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 	// Create filter graph for Pass 1 analysis (astats + aspectralstats + ebur128)
 	filterGraph, bufferSrcCtx, bufferSinkCtx, err := createAnalysisFilterGraph(
 		reader.GetDecoderContext(),
-		targetI, targetTP, targetLRA,
+		config,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create filter graph: %w", err)
@@ -699,7 +699,7 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 		// Threshold is typically around 10 LU below the integrated loudness
 		measurements.InputThresh = acc.ebur128InputI - 10.0
 		// Target offset for normalization (difference between measured and target)
-		measurements.TargetOffset = targetI - acc.ebur128InputI
+		measurements.TargetOffset = config.TargetI - acc.ebur128InputI
 	} else {
 		return nil, fmt.Errorf("ebur128 measurements not found in metadata for file: %s", filename)
 	}
@@ -905,17 +905,13 @@ func calculateAdaptiveGateThreshold(noiseFloor, rmsTrough float64) float64 {
 // Uses astats, aspectralstats, silencedetect, and ebur128 filters to extract measurements
 func createAnalysisFilterGraph(
 	decCtx *ffmpeg.AVCodecContext,
-	targetI, targetTP, targetLRA float64,
+	config *FilterChainConfig,
 ) (*ffmpeg.AVFilterGraph, *ffmpeg.AVFilterContext, *ffmpeg.AVFilterContext, error) {
-	// Build filter config for Pass 1 analysis
+	// Configure for Pass 1 analysis
 	// Uses unified BuildFilterSpec() with Pass1FilterOrder:
 	// Downmix → Analysis → SilenceDetect
-	config := DefaultFilterConfig()
 	config.Pass = 1
 	config.FilterOrder = Pass1FilterOrder
-	config.TargetI = targetI
-	config.TargetTP = targetTP
-	config.TargetLRA = targetLRA
 
 	return setupFilterGraph(decCtx, config.BuildFilterSpec())
 }

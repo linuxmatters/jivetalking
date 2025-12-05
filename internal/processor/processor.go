@@ -23,7 +23,7 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 		progressCallback(1, "Analyzing", 0.0, 0.0, nil)
 	}
 
-	measurements, err := AnalyzeAudio(inputPath, config.TargetI, config.TargetTP, config.TargetLRA, progressCallback)
+	measurements, err := AnalyzeAudio(inputPath, config, progressCallback)
 	if err != nil {
 		return nil, fmt.Errorf("Pass 1 failed: %w", err)
 	}

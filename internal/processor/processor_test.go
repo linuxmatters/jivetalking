@@ -16,8 +16,14 @@ func TestProcessAudio(t *testing.T) {
 		t.Skipf("Test file not found: %s", testFile)
 	}
 
-	// Create default config
-	config := DefaultFilterConfig()
+	// Create isolated test config with minimal filters for integration test
+	// This ensures the test doesn't break when application defaults change
+	config := newTestConfig()
+	config.DownmixEnabled = true
+	config.AnalysisEnabled = true
+	config.ResampleEnabled = true
+	config.HighpassEnabled = true  // Basic processing
+	config.LimiterEnabled = true   // Safety limiter
 
 	// Process the audio with a no-op progress callback
 	result, err := ProcessAudio(testFile, config, func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements) {
@@ -46,7 +52,11 @@ func TestProcessAudio(t *testing.T) {
 
 // TestFilterChainBuilder tests the filter specification generation
 func TestFilterChainBuilder(t *testing.T) {
-	config := DefaultFilterConfig()
+	// Use isolated test config to avoid coupling to application defaults
+	config := newTestConfig()
+	config.DownmixEnabled = true
+	config.AnalysisEnabled = true
+	config.ResampleEnabled = true
 
 	// Test Pass 1 (analysis) filter spec
 	filterSpec := config.BuildFilterSpec()
@@ -68,10 +78,14 @@ func TestFilterChainBuilder(t *testing.T) {
 	}
 	config.NoiseFloor = config.Measurements.NoiseFloor
 
+	// Enable additional filters for Pass 2 test
+	config.HighpassEnabled = true
+	config.LimiterEnabled = true
+
 	filterSpec = config.BuildFilterSpec()
 	t.Logf("Pass 2 filter spec: %s", filterSpec)
 
-	// Should contain all filters: afftdn, agate, acompressor, dynaudnorm
+	// Should contain enabled filters
 	if filterSpec == "" {
 		t.Error("Filter spec is empty")
 	}
