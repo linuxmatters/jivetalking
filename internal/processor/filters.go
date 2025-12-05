@@ -463,14 +463,24 @@ func (cfg *FilterChainConfig) buildAnalysisFilter() string {
 	//   - Zero_crossings_rate: helps classify noise type
 	//   - Max_difference: detects impulsive sounds (clicks/pops)
 	// Note: reset=0 (default) allows astats to accumulate statistics across all frames
-	// aspectralstats: measures spectral centroid and rolloff for adaptive de-esser targeting
+	// aspectralstats: comprehensive spectral analysis for adaptive filter tuning
+	//   - centroid: spectral brightness (Hz) - informs highpass freq and de-esser
+	//   - spread: spectral bandwidth - voice fullness indicator
+	//   - skewness: spectral asymmetry - positive=bright, negative=dark
+	//   - kurtosis: spectral peakiness - tonal vs broadband content
+	//   - entropy: spectral randomness - noise classification
+	//   - flatness: noise vs tonal ratio (0-1) - noise type detection
+	//   - crest: spectral peak-to-RMS - transient indicator for compressor
+	//   - rolloff: high-frequency energy point - de-esser intensity
+	//   - variance: spectral energy variation - dynamic content indicator
+	//   - mean, slope, decrease: additional spectral shape descriptors
 	// ebur128: provides integrated loudness (LUFS), true peak, and LRA via metadata
 	//   Upsamples to 192kHz internally for accurate true peak detection
 	//   metadata=1 writes per-frame loudness data to frame metadata (lavfi.r128.* keys)
 	//   peak=true enables true peak measurement (required for lavfi.r128.true_peak metadata)
 	return fmt.Sprintf(
 		"astats=metadata=1:measure_perchannel=Noise_floor+Dynamic_range+RMS_level+Peak_level+DC_offset+Flat_factor+Zero_crossings_rate+Max_difference,"+
-			"aspectralstats=win_size=2048:win_func=hann:measure=centroid+rolloff,"+
+			"aspectralstats=win_size=2048:win_func=hann:measure=all,"+
 			"ebur128=metadata=1:peak=true:target=%.0f",
 		cfg.TargetI)
 }

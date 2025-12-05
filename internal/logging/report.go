@@ -21,6 +21,241 @@ func linearToDb(linear float64) float64 {
 	return 20.0 * math.Log10(linear)
 }
 
+// ============================================================================
+// Spectral Characteristic Interpretation Functions
+// ============================================================================
+// These functions interpret spectral measurements and return human-readable
+// descriptions of audio characteristics. Based on MATLAB Audio Toolbox
+// documentation and standard audio analysis conventions.
+
+// interpretCentroid describes the spectral "brightness" based on centroid frequency.
+// Centroid is the "centre of gravity" of the spectrum - where spectral energy is concentrated.
+//
+// Reference values for speech:
+// - Male voiced speech: 500-2500 Hz
+// - Female voiced speech: 800-3500 Hz
+// - Unvoiced consonants: 3000-8000+ Hz
+//
+// Higher centroid indicates brighter voice; useful for de-esser tuning.
+func interpretCentroid(hz float64) string {
+	switch {
+	case hz < 500:
+		return "very dark, bass-heavy"
+	case hz < 1500:
+		return "warm, full-bodied"
+	case hz < 2500:
+		return "balanced, natural voice"
+	case hz < 4000:
+		return "present, forward"
+	case hz < 6000:
+		return "bright, crisp"
+	default:
+		return "very bright, potentially harsh"
+	}
+}
+
+// interpretSpread describes the spectral bandwidth around the centroid.
+// Spread is the standard deviation of the spectrum around the centroid.
+// It represents "instantaneous bandwidth" and indicates tonal dominance.
+//
+// Pure vowels show narrow spread; consonants and noise show wide spread.
+// Low spread indicates tone dominance; high spread indicates broadband content.
+func interpretSpread(hz float64) string {
+	switch {
+	case hz < 500:
+		return "narrow, tonal, focused"
+	case hz < 1500:
+		return "moderate bandwidth, typical voiced"
+	case hz < 3000:
+		return "wide bandwidth, mixed content"
+	default:
+		return "very wide, noise-like or broadband"
+	}
+}
+
+// interpretSkewness describes the spectral distribution asymmetry.
+// Positive skewness: energy concentrated below centroid (bass-heavy with HF tail).
+// Negative skewness: energy concentrated above centroid (HF concentrated, sibilant-like).
+//
+// Voiced speech typically shows positive skewness (0.5-2.0); fricatives may show negative.
+func interpretSkewness(skew float64) string {
+	switch {
+	case skew < -0.5:
+		return "HF concentrated, sibilant-like"
+	case skew < 0.5:
+		return "symmetric distribution"
+	case skew < 1.5:
+		return "LF emphasis with HF tail (typical voice)"
+	default:
+		return "strongly bass-concentrated"
+	}
+}
+
+// interpretKurtosis describes the spectral peakiness.
+// Kurtosis measures how peaked vs flat the spectrum is; indicates harmonic clarity vs noise.
+// Higher values: peaked/tonal spectrum with dominant frequencies.
+// Lower values: flatter spectrum, more noise-like.
+//
+// Healthy voiced speech typically 4-8; pathological or noisy voice trends toward 3.
+func interpretKurtosis(kurt float64) string {
+	switch {
+	case kurt < 2.5:
+		return "flat, noise-dominated"
+	case kurt < 3.5:
+		return "Gaussian-like, mixed content"
+	case kurt < 5.0:
+		return "moderately peaked, good harmonics"
+	case kurt < 8.0:
+		return "clearly peaked, strong harmonics"
+	default:
+		return "highly peaked, very tonal"
+	}
+}
+
+// interpretEntropy describes spectral randomness/order.
+// Entropy measures disorder in spectral energy distribution (0 to 1 normalised).
+// Lower entropy: ordered/predictable spectrum (tonal content, harmonic structure).
+// Higher entropy: random/unpredictable spectrum (noise, complex transients).
+//
+// Note: If values appear outside 0-1 range, the metric may be unnormalised (raw bits).
+func interpretEntropy(entropy float64) string {
+	switch {
+	case entropy < 0.3:
+		return "highly ordered, clear pitch"
+	case entropy < 0.5:
+		return "moderately ordered, typical voiced"
+	case entropy < 0.7:
+		return "mixed order, voiced with noise"
+	case entropy < 0.9:
+		return "disordered, noise-like"
+	default:
+		return "highly disordered, approaching white noise"
+	}
+}
+
+// interpretFlatness describes the tonality vs noise character.
+// Flatness is the ratio of geometric mean to arithmetic mean of spectrum (0 to 1).
+// Values near 0: tonal/harmonic content with spectral peaks.
+// Values near 1: flat/white noise spectrum.
+//
+// Clean voiced speech 0.1-0.3; breathy voice 0.3-0.5; fricatives 0.4-0.7.
+func interpretFlatness(flatness float64) string {
+	switch {
+	case flatness < 0.1:
+		return "highly tonal, pure harmonics"
+	case flatness < 0.25:
+		return "tonal with some noise, clean voiced"
+	case flatness < 0.4:
+		return "moderate tonality, typical speech"
+	case flatness < 0.6:
+		return "mixed tonal/noise, breathy content"
+	default:
+		return "noise-dominant, very breathy"
+	}
+}
+
+// interpretCrest describes the peak-to-average ratio of the spectrum.
+// Higher crest: spectrum has prominent peaks (tonal, resonant).
+// Lower crest: spectrum is more uniform (noise-like, broadband).
+//
+// Higher crest indicates clearer harmonics; low crest suggests noise contamination.
+func interpretCrest(crest float64) string {
+	switch {
+	case crest < 10:
+		return "flat spectrum, noise-like"
+	case crest < 25:
+		return "moderate peaks, mixed content"
+	case crest < 40:
+		return "prominent peaks, clear harmonics"
+	case crest < 60:
+		return "strong peaks, very tonal"
+	default:
+		return "extremely peaked, dominant frequency"
+	}
+}
+
+// interpretFlux describes frame-to-frame spectral variation.
+// Flux measures how much the spectrum changes between frames.
+// Low flux: stable/sustained sound (held notes, steady speech).
+// High flux: dynamic/changing sound (transients, varied speech).
+//
+// Vowels show low flux; plosives (p,t,k,b,d,g) show high flux spikes.
+func interpretFlux(flux float64) string {
+	switch {
+	case flux < 0.001:
+		return "very stable, sustained phonation"
+	case flux < 0.01:
+		return "stable, steady speech"
+	case flux < 0.05:
+		return "moderate variation, natural articulation"
+	case flux < 0.2:
+		return "high variation, transients/plosives"
+	default:
+		return "rapid change, onsets/consonant bursts"
+	}
+}
+
+// interpretDecrease describes low-frequency weighted spectral decrease.
+// Similar to slope but emphasises low-frequency behaviour.
+// Used for characterising bass/warmth in the signal.
+//
+// Male voices typically show more negative decrease than female voices.
+func interpretDecrease(decrease float64) string {
+	switch {
+	case decrease < -0.05:
+		return "strong bass concentration, warm foundation"
+	case decrease < -0.02:
+		return "moderate LF emphasis, typical male voice"
+	case decrease < 0:
+		return "balanced low-frequency content"
+	default:
+		return "weak bass, thin, lacking body"
+	}
+}
+
+// interpretRolloff describes the effective bandwidth of the signal.
+// Rolloff is the frequency below which 85-95% of spectral energy exists.
+// Higher rolloff indicates more high-frequency content; useful for sibilance detection.
+func interpretRolloff(hz float64) string {
+	switch {
+	case hz < 3000:
+		return "dark, muffled, heavy filtering"
+	case hz < 5000:
+		return "warm, controlled high frequencies"
+	case hz < 8000:
+		return "balanced brightness, natural speech"
+	case hz < 12000:
+		return "bright, airy, good articulation"
+	default:
+		return "very bright, significant sibilance"
+	}
+}
+
+// interpretSlope describes the overall spectral tilt (linear regression coefficient).
+// Modal speech approximately -6 dB/octave; breathy voice steeper; pressed voice shallower.
+func interpretSlope(slope float64) string {
+	switch {
+	case slope < -5e-05:
+		return "steep negative slope, dark/warm"
+	case slope < -1e-05:
+		return "moderate slope, balanced brightness"
+	case slope < 0:
+		return "shallow slope, bright/energetic"
+	default:
+		return "positive slope, very bright"
+	}
+}
+
+// formatSpectralValue formats small values using scientific notation when appropriate
+func formatSpectralValue(value float64, decimals int) string {
+	// Use scientific notation for very small values
+	if value != 0 && math.Abs(value) < 0.0001 {
+		return fmt.Sprintf("%.2e", value)
+	}
+	format := fmt.Sprintf("%%.%df", decimals)
+	return fmt.Sprintf(format, value)
+}
+
 // formatComparison returns "(unchanged)" if values match within tolerance, otherwise "(was X unit)"
 func formatComparison(output, input float64, unit string, decimals int) string {
 	// Use tolerance based on decimal places shown
@@ -40,6 +275,15 @@ func formatComparisonNoUnit(output, input float64, decimals int) string {
 	}
 	format := fmt.Sprintf("(was %%.%df)", decimals)
 	return fmt.Sprintf(format, input)
+}
+
+// formatComparisonSpectral returns "(unchanged)" if values match, otherwise "(was X)" using scientific notation for small values
+func formatComparisonSpectral(output, input float64, decimals int) string {
+	tolerance := math.Pow(10, -float64(decimals)) * 0.5
+	if math.Abs(output-input) < tolerance {
+		return "(unchanged)"
+	}
+	return fmt.Sprintf("(was %s)", formatSpectralValue(input, decimals))
 }
 
 // ReportData contains all the information needed to generate an analysis report
@@ -89,8 +333,21 @@ func GenerateReport(data ReportData) error {
 		fmt.Fprintf(f, "Dynamic Range:       %.1f dB\n", m.DynamicRange)
 		fmt.Fprintf(f, "RMS Level:           %.1f dBFS\n", m.RMSLevel)
 		fmt.Fprintf(f, "Peak Level:          %.1f dBFS\n", m.PeakLevel)
-		fmt.Fprintf(f, "Spectral Centroid:   %.0f Hz\n", m.SpectralCentroid)
-		fmt.Fprintf(f, "Spectral Rolloff:    %.0f Hz\n", m.SpectralRolloff)
+
+		// Spectral analysis (aspectralstats measurements) with characteristic interpretations
+		fmt.Fprintf(f, "Spectral Mean:       %s (avg magnitude)\n", formatSpectralValue(m.SpectralMean, 6))
+		fmt.Fprintf(f, "Spectral Variance:   %s (magnitude spread)\n", formatSpectralValue(m.SpectralVariance, 6))
+		fmt.Fprintf(f, "Spectral Centroid:   %.0f Hz — %s\n", m.SpectralCentroid, interpretCentroid(m.SpectralCentroid))
+		fmt.Fprintf(f, "Spectral Spread:     %.0f Hz — %s\n", m.SpectralSpread, interpretSpread(m.SpectralSpread))
+		fmt.Fprintf(f, "Spectral Skewness:   %.3f — %s\n", m.SpectralSkewness, interpretSkewness(m.SpectralSkewness))
+		fmt.Fprintf(f, "Spectral Kurtosis:   %.3f — %s\n", m.SpectralKurtosis, interpretKurtosis(m.SpectralKurtosis))
+		fmt.Fprintf(f, "Spectral Entropy:    %s — %s\n", formatSpectralValue(m.SpectralEntropy, 6), interpretEntropy(m.SpectralEntropy))
+		fmt.Fprintf(f, "Spectral Flatness:   %s — %s\n", formatSpectralValue(m.SpectralFlatness, 6), interpretFlatness(m.SpectralFlatness))
+		fmt.Fprintf(f, "Spectral Crest:      %.3f — %s\n", m.SpectralCrest, interpretCrest(m.SpectralCrest))
+		fmt.Fprintf(f, "Spectral Flux:       %s — %s\n", formatSpectralValue(m.SpectralFlux, 6), interpretFlux(m.SpectralFlux))
+		fmt.Fprintf(f, "Spectral Slope:      %s — %s\n", formatSpectralValue(m.SpectralSlope, 9), interpretSlope(m.SpectralSlope))
+		fmt.Fprintf(f, "Spectral Decrease:   %s — %s\n", formatSpectralValue(m.SpectralDecrease, 6), interpretDecrease(m.SpectralDecrease))
+		fmt.Fprintf(f, "Spectral Rolloff:    %.0f Hz — %s\n", m.SpectralRolloff, interpretRolloff(m.SpectralRolloff))
 
 		// Additional signal quality measurements
 		if m.DCOffset != 0 {
@@ -164,8 +421,21 @@ func GenerateReport(data ReportData) error {
 				fmt.Fprintf(f, "Dynamic Range:       %.1f dB %s\n", om.DynamicRange, formatComparison(om.DynamicRange, m.DynamicRange, "dB", 1))
 				fmt.Fprintf(f, "RMS Level:           %.1f dBFS %s\n", om.RMSLevel, formatComparison(om.RMSLevel, m.RMSLevel, "dBFS", 1))
 				fmt.Fprintf(f, "Peak Level:          %.1f dBFS %s\n", om.PeakLevel, formatComparison(om.PeakLevel, m.PeakLevel, "dBFS", 1))
-				fmt.Fprintf(f, "Spectral Centroid:   %.0f Hz %s\n", om.SpectralCentroid, formatComparison(om.SpectralCentroid, m.SpectralCentroid, "Hz", 0))
-				fmt.Fprintf(f, "Spectral Rolloff:    %.0f Hz %s\n", om.SpectralRolloff, formatComparison(om.SpectralRolloff, m.SpectralRolloff, "Hz", 0))
+
+				// Spectral analysis (aspectralstats measurements) with characteristic interpretations
+				fmt.Fprintf(f, "Spectral Mean:       %s %s\n", formatSpectralValue(om.SpectralMean, 6), formatComparisonSpectral(om.SpectralMean, m.SpectralMean, 6))
+				fmt.Fprintf(f, "Spectral Variance:   %s %s\n", formatSpectralValue(om.SpectralVariance, 6), formatComparisonSpectral(om.SpectralVariance, m.SpectralVariance, 6))
+				fmt.Fprintf(f, "Spectral Centroid:   %.0f Hz — %s %s\n", om.SpectralCentroid, interpretCentroid(om.SpectralCentroid), formatComparison(om.SpectralCentroid, m.SpectralCentroid, "Hz", 0))
+				fmt.Fprintf(f, "Spectral Spread:     %.0f Hz — %s %s\n", om.SpectralSpread, interpretSpread(om.SpectralSpread), formatComparison(om.SpectralSpread, m.SpectralSpread, "Hz", 0))
+				fmt.Fprintf(f, "Spectral Skewness:   %.3f — %s %s\n", om.SpectralSkewness, interpretSkewness(om.SpectralSkewness), formatComparisonNoUnit(om.SpectralSkewness, m.SpectralSkewness, 3))
+				fmt.Fprintf(f, "Spectral Kurtosis:   %.3f — %s %s\n", om.SpectralKurtosis, interpretKurtosis(om.SpectralKurtosis), formatComparisonNoUnit(om.SpectralKurtosis, m.SpectralKurtosis, 3))
+				fmt.Fprintf(f, "Spectral Entropy:    %s — %s %s\n", formatSpectralValue(om.SpectralEntropy, 6), interpretEntropy(om.SpectralEntropy), formatComparisonSpectral(om.SpectralEntropy, m.SpectralEntropy, 6))
+				fmt.Fprintf(f, "Spectral Flatness:   %s — %s %s\n", formatSpectralValue(om.SpectralFlatness, 6), interpretFlatness(om.SpectralFlatness), formatComparisonNoUnit(om.SpectralFlatness, m.SpectralFlatness, 6))
+				fmt.Fprintf(f, "Spectral Crest:      %.3f — %s %s\n", om.SpectralCrest, interpretCrest(om.SpectralCrest), formatComparisonNoUnit(om.SpectralCrest, m.SpectralCrest, 3))
+				fmt.Fprintf(f, "Spectral Flux:       %s — %s %s\n", formatSpectralValue(om.SpectralFlux, 6), interpretFlux(om.SpectralFlux), formatComparisonSpectral(om.SpectralFlux, m.SpectralFlux, 6))
+				fmt.Fprintf(f, "Spectral Slope:      %s — %s %s\n", formatSpectralValue(om.SpectralSlope, 9), interpretSlope(om.SpectralSlope), formatComparisonSpectral(om.SpectralSlope, m.SpectralSlope, 9))
+				fmt.Fprintf(f, "Spectral Decrease:   %s — %s %s\n", formatSpectralValue(om.SpectralDecrease, 6), interpretDecrease(om.SpectralDecrease), formatComparisonSpectral(om.SpectralDecrease, m.SpectralDecrease, 6))
+				fmt.Fprintf(f, "Spectral Rolloff:    %.0f Hz — %s %s\n", om.SpectralRolloff, interpretRolloff(om.SpectralRolloff), formatComparison(om.SpectralRolloff, m.SpectralRolloff, "Hz", 0))
 			} else {
 				fmt.Fprintf(f, "Integrated Loudness: %.1f LUFS\n", om.OutputI)
 				fmt.Fprintf(f, "True Peak:           %.1f dBTP\n", om.OutputTP)
@@ -173,8 +443,21 @@ func GenerateReport(data ReportData) error {
 				fmt.Fprintf(f, "Dynamic Range:       %.1f dB\n", om.DynamicRange)
 				fmt.Fprintf(f, "RMS Level:           %.1f dBFS\n", om.RMSLevel)
 				fmt.Fprintf(f, "Peak Level:          %.1f dBFS\n", om.PeakLevel)
-				fmt.Fprintf(f, "Spectral Centroid:   %.0f Hz\n", om.SpectralCentroid)
-				fmt.Fprintf(f, "Spectral Rolloff:    %.0f Hz\n", om.SpectralRolloff)
+
+				// Spectral analysis (aspectralstats measurements) with characteristic interpretations
+				fmt.Fprintf(f, "Spectral Mean:       %s (avg magnitude)\n", formatSpectralValue(om.SpectralMean, 6))
+				fmt.Fprintf(f, "Spectral Variance:   %s (magnitude spread)\n", formatSpectralValue(om.SpectralVariance, 6))
+				fmt.Fprintf(f, "Spectral Centroid:   %.0f Hz — %s\n", om.SpectralCentroid, interpretCentroid(om.SpectralCentroid))
+				fmt.Fprintf(f, "Spectral Spread:     %.0f Hz — %s\n", om.SpectralSpread, interpretSpread(om.SpectralSpread))
+				fmt.Fprintf(f, "Spectral Skewness:   %.3f — %s\n", om.SpectralSkewness, interpretSkewness(om.SpectralSkewness))
+				fmt.Fprintf(f, "Spectral Kurtosis:   %.3f — %s\n", om.SpectralKurtosis, interpretKurtosis(om.SpectralKurtosis))
+				fmt.Fprintf(f, "Spectral Entropy:    %s — %s\n", formatSpectralValue(om.SpectralEntropy, 6), interpretEntropy(om.SpectralEntropy))
+				fmt.Fprintf(f, "Spectral Flatness:   %s — %s\n", formatSpectralValue(om.SpectralFlatness, 6), interpretFlatness(om.SpectralFlatness))
+				fmt.Fprintf(f, "Spectral Crest:      %.3f — %s\n", om.SpectralCrest, interpretCrest(om.SpectralCrest))
+				fmt.Fprintf(f, "Spectral Flux:       %s — %s\n", formatSpectralValue(om.SpectralFlux, 6), interpretFlux(om.SpectralFlux))
+				fmt.Fprintf(f, "Spectral Slope:      %s — %s\n", formatSpectralValue(om.SpectralSlope, 9), interpretSlope(om.SpectralSlope))
+				fmt.Fprintf(f, "Spectral Decrease:   %s — %s\n", formatSpectralValue(om.SpectralDecrease, 6), interpretDecrease(om.SpectralDecrease))
+				fmt.Fprintf(f, "Spectral Rolloff:    %.0f Hz — %s\n", om.SpectralRolloff, interpretRolloff(om.SpectralRolloff))
 			}
 			if om.ZeroCrossingsRate > 0 {
 				if m != nil && m.ZeroCrossingsRate > 0 {

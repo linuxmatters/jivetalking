@@ -35,8 +35,22 @@ type NoiseProfile struct {
 // Cached metadata keys for frame extraction - avoids per-frame C string allocations
 // These use GlobalCStr which maintains an internal cache, so identical strings share the same CStr
 var (
-	metaKeySpectralCentroid  = ffmpeg.GlobalCStr("lavfi.aspectralstats.1.centroid")
-	metaKeySpectralRolloff   = ffmpeg.GlobalCStr("lavfi.aspectralstats.1.rolloff")
+	// aspectralstats metadata keys (all measurements)
+	metaKeySpectralMean     = ffmpeg.GlobalCStr("lavfi.aspectralstats.1.mean")
+	metaKeySpectralVariance = ffmpeg.GlobalCStr("lavfi.aspectralstats.1.variance")
+	metaKeySpectralCentroid = ffmpeg.GlobalCStr("lavfi.aspectralstats.1.centroid")
+	metaKeySpectralSpread   = ffmpeg.GlobalCStr("lavfi.aspectralstats.1.spread")
+	metaKeySpectralSkewness = ffmpeg.GlobalCStr("lavfi.aspectralstats.1.skewness")
+	metaKeySpectralKurtosis = ffmpeg.GlobalCStr("lavfi.aspectralstats.1.kurtosis")
+	metaKeySpectralEntropy  = ffmpeg.GlobalCStr("lavfi.aspectralstats.1.entropy")
+	metaKeySpectralFlatness = ffmpeg.GlobalCStr("lavfi.aspectralstats.1.flatness")
+	metaKeySpectralCrest    = ffmpeg.GlobalCStr("lavfi.aspectralstats.1.crest")
+	metaKeySpectralFlux     = ffmpeg.GlobalCStr("lavfi.aspectralstats.1.flux")
+	metaKeySpectralSlope    = ffmpeg.GlobalCStr("lavfi.aspectralstats.1.slope")
+	metaKeySpectralDecrease = ffmpeg.GlobalCStr("lavfi.aspectralstats.1.decrease")
+	metaKeySpectralRolloff  = ffmpeg.GlobalCStr("lavfi.aspectralstats.1.rolloff")
+
+	// astats metadata keys
 	metaKeyDynamicRange      = ffmpeg.GlobalCStr("lavfi.astats.1.Dynamic_range")
 	metaKeyRMSLevel          = ffmpeg.GlobalCStr("lavfi.astats.1.RMS_level")
 	metaKeyPeakLevel         = ffmpeg.GlobalCStr("lavfi.astats.1.Peak_level")
@@ -64,8 +78,19 @@ var (
 // Spectral stats (centroid, rolloff) are averaged across all frames.
 // astats and ebur128 values are cumulative, so we keep the latest.
 type metadataAccumulators struct {
-	// Spectral statistics (averaged across frames)
+	// Spectral statistics from aspectralstats (averaged across frames)
+	spectralMeanSum     float64
+	spectralVarianceSum float64
 	spectralCentroidSum float64
+	spectralSpreadSum   float64
+	spectralSkewnessSum float64
+	spectralKurtosisSum float64
+	spectralEntropySum  float64
+	spectralFlatnessSum float64
+	spectralCrestSum    float64
+	spectralFluxSum     float64
+	spectralSlopeSum    float64
+	spectralDecreaseSum float64
 	spectralRolloffSum  float64
 	spectralFrameCount  int
 
@@ -112,14 +137,45 @@ func extractFrameMetadata(metadata *ffmpeg.AVDictionary, acc *metadataAccumulato
 		return
 	}
 
-	// Extract spectral centroid (Hz) - where energy is concentrated
+	// Extract all aspectralstats measurements (averaged across frames)
 	// For mono audio, spectral stats are under channel .1
-	if value, ok := getFloatMetadata(metadata, metaKeySpectralCentroid); ok {
-		acc.spectralCentroidSum += value
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralMean); ok {
+		acc.spectralMeanSum += value
 		acc.spectralFrameCount++
 	}
-
-	// Extract spectral rolloff (Hz) - high-frequency energy dropoff point
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralVariance); ok {
+		acc.spectralVarianceSum += value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralCentroid); ok {
+		acc.spectralCentroidSum += value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralSpread); ok {
+		acc.spectralSpreadSum += value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralSkewness); ok {
+		acc.spectralSkewnessSum += value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralKurtosis); ok {
+		acc.spectralKurtosisSum += value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralEntropy); ok {
+		acc.spectralEntropySum += value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralFlatness); ok {
+		acc.spectralFlatnessSum += value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralCrest); ok {
+		acc.spectralCrestSum += value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralFlux); ok {
+		acc.spectralFluxSum += value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralSlope); ok {
+		acc.spectralSlopeSum += value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralDecrease); ok {
+		acc.spectralDecreaseSum += value
+	}
 	if value, ok := getFloatMetadata(metadata, metaKeySpectralRolloff); ok {
 		acc.spectralRolloffSum += value
 	}
@@ -247,9 +303,20 @@ type AudioMeasurements struct {
 	TargetOffset float64 `json:"target_offset"` // Offset for normalization
 	NoiseFloor   float64 `json:"noise_floor"`   // Measured noise floor from astats (dBFS)
 
-	// Spectral analysis for adaptive de-esser frequency targeting
-	SpectralCentroid float64 `json:"spectral_centroid"` // Average spectral centroid (Hz) - where energy is concentrated
-	SpectralRolloff  float64 `json:"spectral_rolloff"`  // Average spectral rolloff (Hz) - high-frequency energy dropoff point
+	// Spectral analysis from aspectralstats (all measurements averaged across frames)
+	SpectralMean     float64 `json:"spectral_mean"`     // Mean spectral magnitude
+	SpectralVariance float64 `json:"spectral_variance"` // Spectral magnitude variance
+	SpectralCentroid float64 `json:"spectral_centroid"` // Spectral centroid (Hz) - where energy is concentrated
+	SpectralSpread   float64 `json:"spectral_spread"`   // Spectral spread (Hz) - bandwidth/fullness indicator
+	SpectralSkewness float64 `json:"spectral_skewness"` // Spectral asymmetry - positive=bright, negative=dark
+	SpectralKurtosis float64 `json:"spectral_kurtosis"` // Spectral peakiness - tonal vs broadband content
+	SpectralEntropy  float64 `json:"spectral_entropy"`  // Spectral randomness (0-1) - noise classification
+	SpectralFlatness float64 `json:"spectral_flatness"` // Noise vs tonal ratio (0-1) - low=tonal, high=noisy
+	SpectralCrest    float64 `json:"spectral_crest"`    // Spectral peak-to-RMS - transient indicator
+	SpectralFlux     float64 `json:"spectral_flux"`     // Frame-to-frame spectral change
+	SpectralSlope    float64 `json:"spectral_slope"`    // Spectral tilt - negative=more bass
+	SpectralDecrease float64 `json:"spectral_decrease"` // Average spectral decrease
+	SpectralRolloff  float64 `json:"spectral_rolloff"`  // Spectral rolloff (Hz) - HF energy dropoff point
 
 	// Time-domain statistics from astats for adaptive processing
 	DynamicRange float64 `json:"dynamic_range"` // Measured dynamic range (dB)
@@ -298,9 +365,20 @@ type OutputMeasurements struct {
 	OutputTP  float64 `json:"output_tp"`  // True peak (dBTP)
 	OutputLRA float64 `json:"output_lra"` // Loudness range (LU)
 
-	// Spectral analysis from aspectralstats
-	SpectralCentroid float64 `json:"spectral_centroid"` // Average spectral centroid (Hz)
-	SpectralRolloff  float64 `json:"spectral_rolloff"`  // Average spectral rolloff (Hz)
+	// Spectral analysis from aspectralstats (all measurements averaged across frames)
+	SpectralMean     float64 `json:"spectral_mean"`     // Mean spectral magnitude
+	SpectralVariance float64 `json:"spectral_variance"` // Spectral magnitude variance
+	SpectralCentroid float64 `json:"spectral_centroid"` // Spectral centroid (Hz) - where energy is concentrated
+	SpectralSpread   float64 `json:"spectral_spread"`   // Spectral spread (Hz) - bandwidth/fullness indicator
+	SpectralSkewness float64 `json:"spectral_skewness"` // Spectral asymmetry - positive=bright, negative=dark
+	SpectralKurtosis float64 `json:"spectral_kurtosis"` // Spectral peakiness - tonal vs broadband content
+	SpectralEntropy  float64 `json:"spectral_entropy"`  // Spectral randomness (0-1) - noise classification
+	SpectralFlatness float64 `json:"spectral_flatness"` // Noise vs tonal ratio (0-1) - low=tonal, high=noisy
+	SpectralCrest    float64 `json:"spectral_crest"`    // Spectral peak-to-RMS - transient indicator
+	SpectralFlux     float64 `json:"spectral_flux"`     // Frame-to-frame spectral change
+	SpectralSlope    float64 `json:"spectral_slope"`    // Spectral tilt - negative=more bass
+	SpectralDecrease float64 `json:"spectral_decrease"` // Average spectral decrease
+	SpectralRolloff  float64 `json:"spectral_rolloff"`  // Spectral rolloff (Hz) - HF energy dropoff point
 
 	// Time-domain statistics from astats
 	DynamicRange float64 `json:"dynamic_range"` // Measured dynamic range (dB)
@@ -321,8 +399,19 @@ type OutputMeasurements struct {
 // outputMetadataAccumulators holds accumulator variables for Pass 2 output measurement extraction.
 // Mirrors metadataAccumulators but without silence detection fields.
 type outputMetadataAccumulators struct {
-	// Spectral statistics (averaged across frames)
+	// Spectral statistics from aspectralstats (averaged across frames)
+	spectralMeanSum     float64
+	spectralVarianceSum float64
 	spectralCentroidSum float64
+	spectralSpreadSum   float64
+	spectralSkewnessSum float64
+	spectralKurtosisSum float64
+	spectralEntropySum  float64
+	spectralFlatnessSum float64
+	spectralCrestSum    float64
+	spectralFluxSum     float64
+	spectralSlopeSum    float64
+	spectralDecreaseSum float64
 	spectralRolloffSum  float64
 	spectralFrameCount  int
 
@@ -352,13 +441,44 @@ func extractOutputFrameMetadata(metadata *ffmpeg.AVDictionary, acc *outputMetada
 		return
 	}
 
-	// Extract spectral centroid (Hz) - where energy is concentrated
-	if value, ok := getFloatMetadata(metadata, metaKeySpectralCentroid); ok {
-		acc.spectralCentroidSum += value
+	// Extract all aspectralstats measurements (averaged across frames)
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralMean); ok {
+		acc.spectralMeanSum += value
 		acc.spectralFrameCount++
 	}
-
-	// Extract spectral rolloff (Hz) - high-frequency energy dropoff point
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralVariance); ok {
+		acc.spectralVarianceSum += value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralCentroid); ok {
+		acc.spectralCentroidSum += value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralSpread); ok {
+		acc.spectralSpreadSum += value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralSkewness); ok {
+		acc.spectralSkewnessSum += value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralKurtosis); ok {
+		acc.spectralKurtosisSum += value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralEntropy); ok {
+		acc.spectralEntropySum += value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralFlatness); ok {
+		acc.spectralFlatnessSum += value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralCrest); ok {
+		acc.spectralCrestSum += value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralFlux); ok {
+		acc.spectralFluxSum += value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralSlope); ok {
+		acc.spectralSlopeSum += value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralDecrease); ok {
+		acc.spectralDecreaseSum += value
+	}
 	if value, ok := getFloatMetadata(metadata, metaKeySpectralRolloff); ok {
 		acc.spectralRolloffSum += value
 	}
@@ -427,10 +547,22 @@ func finalizeOutputMeasurements(acc *outputMetadataAccumulators) *OutputMeasurem
 		MaxDifference:     acc.astatsMaxDifference,
 	}
 
-	// Calculate average spectral statistics
+	// Calculate average spectral statistics from aspectralstats
 	if acc.spectralFrameCount > 0 {
-		m.SpectralCentroid = acc.spectralCentroidSum / float64(acc.spectralFrameCount)
-		m.SpectralRolloff = acc.spectralRolloffSum / float64(acc.spectralFrameCount)
+		frameCount := float64(acc.spectralFrameCount)
+		m.SpectralMean = acc.spectralMeanSum / frameCount
+		m.SpectralVariance = acc.spectralVarianceSum / frameCount
+		m.SpectralCentroid = acc.spectralCentroidSum / frameCount
+		m.SpectralSpread = acc.spectralSpreadSum / frameCount
+		m.SpectralSkewness = acc.spectralSkewnessSum / frameCount
+		m.SpectralKurtosis = acc.spectralKurtosisSum / frameCount
+		m.SpectralEntropy = acc.spectralEntropySum / frameCount
+		m.SpectralFlatness = acc.spectralFlatnessSum / frameCount
+		m.SpectralCrest = acc.spectralCrestSum / frameCount
+		m.SpectralFlux = acc.spectralFluxSum / frameCount
+		m.SpectralSlope = acc.spectralSlopeSum / frameCount
+		m.SpectralDecrease = acc.spectralDecreaseSum / frameCount
+		m.SpectralRolloff = acc.spectralRolloffSum / frameCount
 	}
 
 	return m
@@ -572,10 +704,22 @@ func AnalyzeAudio(filename string, targetI, targetTP, targetLRA float64, progres
 		return nil, fmt.Errorf("ebur128 measurements not found in metadata for file: %s", filename)
 	}
 
-	// Calculate average spectral statistics
+	// Calculate average spectral statistics from aspectralstats
 	if acc.spectralFrameCount > 0 {
-		measurements.SpectralCentroid = acc.spectralCentroidSum / float64(acc.spectralFrameCount)
-		measurements.SpectralRolloff = acc.spectralRolloffSum / float64(acc.spectralFrameCount)
+		frameCount := float64(acc.spectralFrameCount)
+		measurements.SpectralMean = acc.spectralMeanSum / frameCount
+		measurements.SpectralVariance = acc.spectralVarianceSum / frameCount
+		measurements.SpectralCentroid = acc.spectralCentroidSum / frameCount
+		measurements.SpectralSpread = acc.spectralSpreadSum / frameCount
+		measurements.SpectralSkewness = acc.spectralSkewnessSum / frameCount
+		measurements.SpectralKurtosis = acc.spectralKurtosisSum / frameCount
+		measurements.SpectralEntropy = acc.spectralEntropySum / frameCount
+		measurements.SpectralFlatness = acc.spectralFlatnessSum / frameCount
+		measurements.SpectralCrest = acc.spectralCrestSum / frameCount
+		measurements.SpectralFlux = acc.spectralFluxSum / frameCount
+		measurements.SpectralSlope = acc.spectralSlopeSum / frameCount
+		measurements.SpectralDecrease = acc.spectralDecreaseSum / frameCount
+		measurements.SpectralRolloff = acc.spectralRolloffSum / frameCount
 	}
 
 	// Store astats measurements (if captured)

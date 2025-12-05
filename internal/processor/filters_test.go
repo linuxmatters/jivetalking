@@ -793,8 +793,8 @@ func TestBuildAnalysisFilter(t *testing.T) {
 		if !strings.Contains(result, "aspectralstats=win_size=2048") {
 			t.Error("buildAnalysisFilter() missing aspectralstats filter")
 		}
-		if !strings.Contains(result, "measure=centroid+rolloff") {
-			t.Error("buildAnalysisFilter() missing spectral measurements")
+		if !strings.Contains(result, "measure=all") {
+			t.Error("buildAnalysisFilter() should collect all spectral measurements")
 		}
 		if !strings.Contains(result, "ebur128=metadata=1:peak=true") {
 			t.Error("buildAnalysisFilter() missing ebur128 filter")

@@ -70,8 +70,6 @@ Filter parameters adapt based on Pass 1 measurements. See `processor.go` lines 4
 - **De-esser intensity:** 0.0-0.6 based on spectral centroid + rolloff
 - **Gate threshold:** Derived from measured noise floor
 
-**Critical lesson (documented in `docs/NORMALIZATION_STRATEGY.md`):** `loudnorm` was removed because linear gain destroys quiet sources. `dynaudnorm`/`speechnorm` use adaptive frame-by-frame normalisation—amplifies speech intelligently while managing noise.
-
 ## Testing
 
 Tests require audio files in `testdata/` (gitignored). The processor tests skip gracefully if files are missing:
