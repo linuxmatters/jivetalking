@@ -28,19 +28,19 @@ const (
 	FilterResample      FilterID = "resample"      // Output format: 44.1kHz/16-bit/mono (Pass 2 only)
 
 	// Processing filters (Pass 2 only)
-	FilterHighpass     FilterID = "highpass"
-	FilterBandreject   FilterID = "bandreject" // Mains hum notch filter
-	FilterAdeclick     FilterID = "adeclick"
-	FilterAfftdn       FilterID = "afftdn"        // Profile-based FFT denoise (uses noise sample)
-	FilterAfftdnSimple FilterID = "afftdn_simple" // Sample-free FFT denoise (no noise sample needed)
-	FilterArnndn       FilterID = "arnndn"
-	FilterAgate        FilterID = "agate"
-	FilterAcompressor  FilterID = "acompressor"
-	FilterDeesser      FilterID = "deesser"
-	FilterSpeechnorm   FilterID = "speechnorm"
-	FilterDynaudnorm   FilterID = "dynaudnorm"
-	FilterBleedGate    FilterID = "bleedgate" // Catches amplified bleed/crosstalk after normalisation
-	FilterAlimiter     FilterID = "alimiter"
+	FilterHighpass       FilterID = "highpass"
+	FilterBandreject     FilterID = "bandreject" // Mains hum notch filter
+	FilterAdeclick       FilterID = "adeclick"
+	FilterAfftdn         FilterID = "afftdn"        // Profile-based FFT denoise (uses noise sample)
+	FilterAfftdnSimple   FilterID = "afftdn_simple" // Sample-free FFT denoise (no noise sample needed)
+	FilterArnndn         FilterID = "arnndn"
+	FilterAgate          FilterID = "agate"
+	FilterLA2ACompressor FilterID = "la2a_compressor" // Teletronix LA-2A style optical compressor
+	FilterDeesser        FilterID = "deesser"
+	FilterSpeechnorm     FilterID = "speechnorm"
+	FilterDynaudnorm     FilterID = "dynaudnorm"
+	FilterBleedGate      FilterID = "bleedgate" // Catches amplified bleed/crosstalk after normalisation
+	FilterAlimiter       FilterID = "alimiter"
 )
 
 // Pass1FilterOrder defines the filter chain for analysis pass.
@@ -61,7 +61,7 @@ var Pass1FilterOrder = []FilterID{
 // - Afftdn: profile-based spectral noise reduction using silence sample
 // - Arnndn: AI-based denoising for complex/dynamic noise patterns
 // - Agate: soft gate for inter-speech cleanup (after denoising lowers floor)
-// - Acompressor: evens dynamics before normalisation
+// - LA2ACompressor: LA-2A style optical compression evens dynamics before normalisation
 // - Deesser: after compression (which emphasises sibilance)
 // - Speechnorm: cycle-level normalisation for speech
 // - Dynaudnorm: frame-level normalisation for final consistency
@@ -78,7 +78,7 @@ var Pass2FilterOrder = []FilterID{
 	FilterAfftdnSimple,
 	FilterArnndn,
 	FilterAgate,
-	FilterAcompressor,
+	FilterLA2ACompressor,
 	FilterDeesser,
 	FilterSpeechnorm,
 	FilterDynaudnorm,
@@ -218,15 +218,16 @@ type FilterChainConfig struct {
 	GateMakeup    float64 // Makeup gain after gating (1.0-64.0)
 	GateDetection string  // Level detection mode: "rms" (default, smoother) or "peak" (tighter)
 
-	// Compression (acompressor) - evens out dynamic range
-	CompEnabled   bool    // Enable acompressor filter
-	CompThreshold float64 // dB, compression threshold (stored in dB, converted to linear)
-	CompRatio     float64 // Compression ratio (1.0-20.0)
-	CompAttack    float64 // Attack time (ms)
-	CompRelease   float64 // Release time (ms)
-	CompMakeup    float64 // dB, makeup gain (stored in dB, converted to linear)
-	CompKnee      float64 // Knee curve softness (1.0-8.0)
-	CompMix       float64 // Wet/dry mix (0.0-1.0, 1.0 = 100% compressed)
+	// LA-2A Compressor - Teletronix LA-2A style optical compression
+	// The LA-2A is legendary for its gentle, program-dependent character from the T4 optical cell.
+	LA2AEnabled   bool    // Enable LA-2A compressor
+	LA2AThreshold float64 // dB, compression threshold (stored in dB, converted to linear)
+	LA2ARatio     float64 // Compression ratio (1.0-20.0)
+	LA2AAttack    float64 // Attack time (ms) - LA-2A has fixed ~10ms attack
+	LA2ARelease   float64 // Release time (ms) - LA-2A has program-dependent two-stage release
+	LA2AMakeup    float64 // dB, makeup gain (stored in dB, converted to linear)
+	LA2AKnee      float64 // Knee curve softness (1.0-8.0) - T4 cell provides inherent soft knee
+	LA2AMix       float64 // Wet/dry mix (0.0-1.0, 1.0 = 100% compressed)
 
 	// De-esser (deesser) - removes harsh sibilance automatically
 	DeessEnabled   bool    // Enable deesser filter
@@ -372,16 +373,21 @@ func DefaultFilterConfig() *FilterChainConfig {
 		GateMakeup:    1.0,    // No makeup gain (normalization handles it)
 		GateDetection: "rms",  // RMS detection (adaptive: rms for bleed, peak for clean)
 
-		// Compression - even out dynamics naturally
-		// LA-2A-style gentle compression for podcast speech
-		CompEnabled:   false,
-		CompThreshold: -20, // -20dB threshold (gentle, preserves dynamics)
-		CompRatio:     2.5, // 2.5:1 ratio (gentle compression)
-		CompAttack:    15,  // 15ms attack (preserves transients)
-		CompRelease:   80,  // 80ms release (smooth, natural)
-		CompMakeup:    3,   // 3dB makeup gain (compensate for reduction)
-		CompKnee:      2.5, // Soft knee for smooth compression
-		CompMix:       1.0, // 100% compressed signal (no parallel compression)
+		// LA-2A Compressor - Teletronix LA-2A style optical compressor emulation
+		// The Teletronix LA-2A is renowned for its gentle, program-dependent character:
+		// - Fixed 10ms attack preserves transients
+		// - Two-stage release (60ms initial, 1-15s full) - we use ~200ms approximation
+		// - Soft 3:1 ratio from T4 optical cell
+		// - Very soft knee from T4 optical cell
+		// All parameters are tuned adaptively by tuneLA2ACompressor()
+		LA2AEnabled:   true,
+		LA2AThreshold: -18, // -18dB threshold (tuned relative to RMS in adaptive)
+		LA2ARatio:     3.0, // 3:1 ratio (LA-2A Compress mode baseline)
+		LA2AAttack:    10,  // 10ms attack (LA-2A fixed attack, preserves transients)
+		LA2ARelease:   200, // 200ms release (LA-2A two-stage approximation)
+		LA2AMakeup:    2,   // 2dB makeup gain (conservative, normalisation handles rest)
+		LA2AKnee:      4.0, // Soft knee (LA-2A T4 optical cell characteristic)
+		LA2AMix:       1.0, // 100% wet (true LA-2A has no parallel compression)
 
 		// De-esser - automatic sibilance reduction
 		DeessEnabled:   false,
@@ -831,23 +837,24 @@ func (cfg *FilterChainConfig) buildAgateFilter() string {
 	)
 }
 
-// buildAcompressorFilter builds the acompressor (dynamics) filter specification.
-// Evens out dynamic range with soft knee compression.
+// buildLA2ACompressorFilter builds the LA-2A style compressor filter specification.
+// Uses FFmpeg's acompressor with settings tuned to emulate the Teletronix LA-2A
+// optical compressor's gentle, program-dependent character.
 // Converts dB values to linear for FFmpeg's format.
-func (cfg *FilterChainConfig) buildAcompressorFilter() string {
-	if !cfg.CompEnabled {
+func (cfg *FilterChainConfig) buildLA2ACompressorFilter() string {
+	if !cfg.LA2AEnabled {
 		return ""
 	}
 	return fmt.Sprintf(
 		"acompressor=threshold=%.6f:ratio=%.1f:attack=%.0f:release=%.0f:"+
 			"makeup=%.2f:knee=%.1f:detection=rms:mix=%.2f",
-		dbToLinear(cfg.CompThreshold),
-		cfg.CompRatio,
-		cfg.CompAttack,
-		cfg.CompRelease,
-		dbToLinear(cfg.CompMakeup),
-		cfg.CompKnee,
-		cfg.CompMix,
+		dbToLinear(cfg.LA2AThreshold),
+		cfg.LA2ARatio,
+		cfg.LA2AAttack,
+		cfg.LA2ARelease,
+		dbToLinear(cfg.LA2AMakeup),
+		cfg.LA2AKnee,
+		cfg.LA2AMix,
 	)
 }
 
@@ -974,23 +981,23 @@ func (cfg *FilterChainConfig) buildAlimiterFilter() string {
 func (cfg *FilterChainConfig) BuildFilterSpec() string {
 	// Map FilterID to builder method
 	builders := map[FilterID]func() string{
-		FilterDownmix:       cfg.buildDownmixFilter,
-		FilterAnalysis:      cfg.buildAnalysisFilter,
-		FilterSilenceDetect: cfg.buildSilenceDetectFilter,
-		FilterResample:      cfg.buildResampleFilter,
-		FilterHighpass:      cfg.buildHighpassFilter,
-		FilterBandreject:    cfg.buildBandrejectFilter,
-		FilterAdeclick:      cfg.buildAdeclickFilter,
-		FilterAfftdn:        cfg.buildAfftdnFilter,
-		FilterAfftdnSimple:  cfg.buildAfftdnSimpleFilter,
-		FilterAgate:         cfg.buildAgateFilter,
-		FilterAcompressor:   cfg.buildAcompressorFilter,
-		FilterDeesser:       cfg.buildDeesserFilter,
-		FilterSpeechnorm:    cfg.buildSpeechnormFilter,
-		FilterArnndn:        cfg.buildArnnDnFilter,
-		FilterBleedGate:     cfg.buildBleedGateFilter,
-		FilterDynaudnorm:    cfg.buildDynaudnormFilter,
-		FilterAlimiter:      cfg.buildAlimiterFilter,
+		FilterDownmix:        cfg.buildDownmixFilter,
+		FilterAnalysis:       cfg.buildAnalysisFilter,
+		FilterSilenceDetect:  cfg.buildSilenceDetectFilter,
+		FilterResample:       cfg.buildResampleFilter,
+		FilterHighpass:       cfg.buildHighpassFilter,
+		FilterBandreject:     cfg.buildBandrejectFilter,
+		FilterAdeclick:       cfg.buildAdeclickFilter,
+		FilterAfftdn:         cfg.buildAfftdnFilter,
+		FilterAfftdnSimple:   cfg.buildAfftdnSimpleFilter,
+		FilterAgate:          cfg.buildAgateFilter,
+		FilterLA2ACompressor: cfg.buildLA2ACompressorFilter,
+		FilterDeesser:        cfg.buildDeesserFilter,
+		FilterSpeechnorm:     cfg.buildSpeechnormFilter,
+		FilterArnndn:         cfg.buildArnnDnFilter,
+		FilterBleedGate:      cfg.buildBleedGateFilter,
+		FilterDynaudnorm:     cfg.buildDynaudnormFilter,
+		FilterAlimiter:       cfg.buildAlimiterFilter,
 	}
 
 	// Use configured order or default
@@ -1168,14 +1175,14 @@ func buildNoiseProfileFilterSpec(noiseDuration time.Duration, config *FilterChai
 		FilterBandreject: config.buildBandrejectFilter,
 		FilterAdeclick:   config.buildAdeclickFilter,
 		// FilterAfftdn handled separately with noise profile integration
-		FilterArnndn:      config.buildArnnDnFilter,
-		FilterAgate:       config.buildAgateFilter,
-		FilterAcompressor: config.buildAcompressorFilter,
-		FilterDeesser:     config.buildDeesserFilter,
-		FilterSpeechnorm:  config.buildSpeechnormFilter,
-		FilterDynaudnorm:  config.buildDynaudnormFilter,
-		FilterBleedGate:   config.buildBleedGateFilter,
-		FilterAlimiter:    config.buildAlimiterFilter,
+		FilterArnndn:         config.buildArnnDnFilter,
+		FilterAgate:          config.buildAgateFilter,
+		FilterLA2ACompressor: config.buildLA2ACompressorFilter,
+		FilterDeesser:        config.buildDeesserFilter,
+		FilterSpeechnorm:     config.buildSpeechnormFilter,
+		FilterDynaudnorm:     config.buildDynaudnormFilter,
+		FilterBleedGate:      config.buildBleedGateFilter,
+		FilterAlimiter:       config.buildAlimiterFilter,
 	}
 
 	// Use config filter order, collecting filters before and after afftdn position

@@ -139,40 +139,91 @@ const (
 	noiseFloorTypical = -50.0 // dBFS - typical podcast
 	noiseFloorNoisy   = -40.0 // dBFS - noisy recording (for compression mix)
 
-	// Compression parameters
-	compDynamicRangeHigh = 30.0 // dB - very dynamic content
-	compDynamicRangeMod  = 20.0 // dB - moderately dynamic
-	compLRAWide          = 15.0 // LU - wide loudness range
-	compLRAModerate      = 10.0 // LU - moderate loudness range
+	// ==========================================================================
+	// LA-2A-Inspired Compression Parameters
+	// ==========================================================================
+	// The Teletronix LA-2A is an optical tube compressor renowned for its gentle,
+	// program-dependent character. Key characteristics:
+	// - Fixed 10ms attack (preserves transients, "pluck" of consonants)
+	// - Two-stage release: 60ms initial (50%), then 1-15s for full release
+	// - Soft variable ratio (~3:1) that adapts to signal strength
+	// - Very soft knee from the T4 optical cell
+	// - Tube warmth that "fattens" low-mids
+	//
+	// We approximate this behaviour using available spectral measurements.
+	// ==========================================================================
 
-	// Compression ratios
-	compRatioDynamic    = 2.0 // For very dynamic content
-	compRatioModerate   = 3.0 // For typical podcasts
-	compRatioCompressed = 4.0 // For already compressed content
+	// LA-2A Attack: Fixed ~10ms baseline (preserves transients)
+	// Slight variation based on MaxDifference (transient sharpness indicator)
+	la2aAttackBase   = 10.0 // ms - LA-2A fixed attack time
+	la2aAttackFast   = 8.0  // ms - for very sharp transients (catch peaks)
+	la2aAttackSlow   = 12.0 // ms - for soft delivery (even gentler)
+	la2aMaxDiffSharp = 0.25 // MaxDifference > 25% = sharp transients
+	la2aMaxDiffSoft  = 0.10 // MaxDifference < 10% = soft delivery
 
-	// Compression thresholds (dB)
-	compThresholdDynamic    = -16.0
-	compThresholdModerate   = -18.0
-	compThresholdCompressed = -20.0
+	// LA-2A Release: Two-stage program-dependent approximation
+	// Real LA-2A: 60ms to 50% release, then 1-15s for full release
+	// We approximate with longer releases for expressive content
+	la2aReleaseExpressive = 300.0 // ms - wide LRA + high flux (expressive speech)
+	la2aReleaseStandard   = 200.0 // ms - typical podcast delivery
+	la2aReleaseCompact    = 150.0 // ms - narrow LRA + low flux (compressed)
+	la2aReleaseHeavyBoost = 50.0  // ms - added when heavy compression needed
+	la2aFluxDynamic       = 0.025 // SpectralFlux above = dynamic/expressive
+	la2aFluxStatic        = 0.008 // SpectralFlux below = static/monotone
+	la2aLRAExpressive     = 14.0  // LU - above = expressive delivery
+	la2aLRACompact        = 8.0   // LU - below = compressed/monotone
 
-	// Compression makeup gain (dB)
-	compMakeupDynamic    = 1.0
-	compMakeupModerate   = 2.0
-	compMakeupCompressed = 3.0
+	// LA-2A Ratio: Soft ~3:1 baseline (T4 optical cell is program-dependent)
+	// Real LA-2A varies ratio based on signal strength - we use kurtosis
+	// High kurtosis = peaked harmonics (preserve character with lower ratio)
+	// Low kurtosis = flat spectrum (more consistent levelling OK)
+	la2aRatioBase         = 3.0  // Baseline LA-2A ratio (Compress mode)
+	la2aRatioPeaked       = 2.5  // For highly peaked/tonal content
+	la2aRatioFlat         = 3.5  // For flat/noise-like content
+	la2aRatioDynamicBoost = 0.5  // Added for very wide dynamic range
+	la2aKurtosisHighPeak  = 10.0 // Above: peaked harmonics, gentler ratio
+	la2aKurtosisLowPeak   = 5.0  // Below: flat spectrum, firmer ratio
+	la2aDynamicRangeWide  = 35.0 // dB - above: add ratio boost
 
-	// Compression timing (ms)
-	compAttackFast  = 15
-	compAttackMed   = 20
-	compAttackSlow  = 25
-	compReleaseFast = 80
-	compReleaseMed  = 100
-	compReleaseSlow = 150
+	// LA-2A Threshold: Relative to peak level (like Peak Reduction knob)
+	// LA-2A's threshold is effectively signal-relative
+	// Headroom from peak level determines compression depth
+	// More headroom = lower threshold = more compression
+	la2aThresholdHeadroomLight = 10.0  // dB - light levelling (peaks only)
+	la2aThresholdHeadroomStd   = 15.0  // dB - standard LA-2A levelling
+	la2aThresholdHeadroomHeavy = 20.0  // dB - heavy levelling (aggressive control)
+	la2aThresholdMin           = -40.0 // dB - minimum threshold (safety floor for very quiet)
+	la2aThresholdMax           = -12.0 // dB - maximum threshold (gentle ceiling)
+	la2aDynamicRangeHigh       = 30.0  // dB - above: heavy threshold
+	la2aDynamicRangeMod        = 20.0  // dB - above: standard threshold
 
-	// Compression mix factors
-	compMixClean    = 0.95 // Clean recordings - more compression OK
-	compMixModerate = 0.85 // Moderate quality
-	compMixNoisy    = 0.75 // Noisy - gentler to mask pumping
-	compMixAdjust   = 0.10 // Mix adjustment for dynamic range
+	// LA-2A Knee: Very soft (T4 optical cell provides inherent soft knee)
+	// Adapt based on voice character (spectral centroid)
+	la2aKneeDark       = 5.0    // For dark/warm voices (preserve warmth)
+	la2aKneeNormal     = 4.0    // Standard LA-2A approximation
+	la2aKneeBright     = 3.5    // For bright voices (slightly firmer)
+	la2aCentroidDark   = 4000.0 // Hz - below: dark voice
+	la2aCentroidBright = 6000.0 // Hz - above: bright voice
+
+	// LA-2A Skewness adaptation (bass-concentrated voices get extra warmth)
+	// Negative skewness = energy concentrated in bass (warm voice)
+	la2aSkewnessWarm     = 1.5  // Above: warm/bass-heavy voice
+	la2aKneeWarmBoost    = 0.5  // Added to knee for warm voices
+	la2aReleaseWarmBoost = 30.0 // ms added for warm voices (preserve body)
+
+	// LA-2A Mix: Real LA-2A is 100% wet (no parallel compression)
+	// We allow slight dry signal for problematic recordings to mask artefacts
+	la2aMixClean        = 1.0   // Very clean recordings (true LA-2A)
+	la2aMixModerate     = 0.93  // Moderate noise (slight dry masks artefacts)
+	la2aMixNoisy        = 0.85  // Noisy recordings (more dry hides pumping)
+	la2aNoiseFloorClean = -65.0 // dBFS - below: clean enough for full wet
+	la2aNoiseFloorNoisy = -45.0 // dBFS - above: noisy, reduce wet
+
+	// LA-2A Makeup Gain: Compensate for gain reduction
+	// Calculate from expected reduction, but be conservative
+	la2aMakeupMultiplier = 0.65 // Conservative (let normalisation handle rest)
+	la2aMakeupMin        = 1.0  // dB minimum makeup
+	la2aMakeupMax        = 5.0  // dB maximum makeup (avoid over-driving)
 
 	// Dynaudnorm fixed parameters
 	dynaudnormFrameLen   = 500  // ms - balanced frame length
@@ -264,11 +315,14 @@ const (
 	defaultHighpassFreq   = 80.0
 	defaultDeessIntensity = 0.0
 	defaultNoiseReduction = 12.0
-	defaultCompRatio      = 2.5
-	defaultCompThreshold  = -20.0
-	defaultCompMakeup     = 3.0
-	defaultGateThreshold  = 0.01 // -40dBFS
-	defaultHumFrequency   = 50.0 // UK mains
+	defaultLA2ARatio      = 3.0   // LA-2A baseline ratio
+	defaultLA2AThreshold  = -18.0 // Moderate threshold
+	defaultLA2AMakeup     = 2.0   // Conservative makeup
+	defaultLA2AAttack     = 10.0  // LA-2A fixed attack
+	defaultLA2ARelease    = 200.0 // LA-2A two-stage release approximation
+	defaultLA2AKnee       = 4.0   // LA-2A T4 optical cell soft knee
+	defaultGateThreshold  = 0.01  // -40dBFS
+	defaultHumFrequency   = 50.0  // UK mains
 	defaultHumHarmonics   = 4
 	defaultHumWidth       = 1.0 // Hz
 )
@@ -299,7 +353,7 @@ func AdaptConfig(config *FilterChainConfig, measurements *AudioMeasurements) {
 	tuneArnndn(config, measurements, lufsGap)       // RNN denoise (LUFS gap + noise floor based)
 	tuneGateThreshold(config, measurements)         // Gate threshold before denoise in chain
 	tuneDeesser(config, measurements)
-	tuneCompression(config, measurements)
+	tuneLA2ACompressor(config, measurements)
 	tuneDynaudnorm(config)
 	tuneSpeechnorm(config, measurements, lufsGap)
 	tuneBleedGate(config, measurements, lufsGap) // Bleed gate for amplified bleed/crosstalk
@@ -1052,89 +1106,245 @@ func tuneGateThreshold(config *FilterChainConfig, measurements *AudioMeasurement
 	tuneGate(config, measurements)
 }
 
-// tuneCompression adapts dynamics processing based on:
-// - Dynamic range (how much variation in loud/quiet parts)
-// - Loudness range (LRA - transient characteristics)
-// - Noise floor (recording quality affects artifact audibility)
-func tuneCompression(config *FilterChainConfig, measurements *AudioMeasurements) {
-	tuneCompressionRatioAndThreshold(config, measurements)
-	tuneCompressionTiming(config, measurements)
-	tuneCompressionMix(config, measurements)
+// tuneLA2ACompressor applies Teletronix LA-2A style optical compressor tuning.
+//
+// The Teletronix LA-2A is legendary for its gentle, program-dependent character:
+// - Fixed 10ms attack preserves transients and consonant "pluck"
+// - Two-stage release: 60ms initial, then 1-15s for full release
+// - Soft variable ratio (~3:1) that adapts to signal strength
+// - Very soft knee from the T4 optical cell
+// - "Treats your signal lovingly" (Bill Putnam Jr.)
+//
+// This implementation uses spectral measurements to emulate program-dependent
+// behaviour that the optical T4 cell provides naturally.
+func tuneLA2ACompressor(config *FilterChainConfig, measurements *AudioMeasurements) {
+	tuneLA2AAttack(config, measurements)
+	tuneLA2ARelease(config, measurements)
+	tuneLA2ARatio(config, measurements)
+	tuneLA2AThreshold(config, measurements)
+	tuneLA2AKnee(config, measurements)
+	tuneLA2AMix(config, measurements)
+	tuneLA2AMakeup(config, measurements)
 }
 
-// tuneCompressionRatioAndThreshold sets ratio, threshold, and makeup gain
-func tuneCompressionRatioAndThreshold(config *FilterChainConfig, measurements *AudioMeasurements) {
-	if measurements.DynamicRange <= 0 {
-		// No measurement - keep defaults
+// tuneLA2AAttack sets attack time based on transient characteristics.
+// LA-2A has fixed 10ms attack - we allow slight variation for extreme cases.
+// MaxDifference indicates transient sharpness (% of full scale).
+func tuneLA2AAttack(config *FilterChainConfig, measurements *AudioMeasurements) {
+	// Default to LA-2A's fixed 10ms attack
+	attack := la2aAttackBase
+
+	// MaxDifference is stored as raw sample units (0-32768 for 16-bit audio)
+	// Normalize to fraction (0.0-1.0) for comparison with thresholds
+	maxDiffNorm := measurements.MaxDifference / 32768.0
+
+	// Slight variation based on transient sharpness
+	if maxDiffNorm > 0 {
+		switch {
+		case maxDiffNorm > la2aMaxDiffSharp:
+			// Very sharp transients - slightly faster to catch peaks
+			attack = la2aAttackFast
+		case maxDiffNorm < la2aMaxDiffSoft:
+			// Soft delivery - can be even gentler
+			attack = la2aAttackSlow
+		}
+	}
+
+	config.LA2AAttack = attack
+}
+
+// tuneLA2ARelease sets release time to approximate LA-2A's two-stage behaviour.
+// Real LA-2A: 60ms to 50% release, then 1-15s for full release.
+// The release time depends on signal duration and strength above threshold.
+//
+// We use LRA (loudness range) and SpectralFlux to approximate this:
+// - Wide LRA + high flux = expressive speech, needs longer release
+// - Narrow LRA + low flux = compressed/monotone, faster release OK
+// - Warm voices (high skewness) get extra release to preserve body
+func tuneLA2ARelease(config *FilterChainConfig, measurements *AudioMeasurements) {
+	// Start with standard LA-2A-style release
+	release := la2aReleaseStandard
+
+	// Adjust based on LRA (loudness dynamics)
+	switch {
+	case measurements.InputLRA > la2aLRAExpressive:
+		// Expressive delivery - longer release preserves dynamics
+		release = la2aReleaseExpressive
+	case measurements.InputLRA < la2aLRACompact:
+		// Compressed delivery - faster release OK
+		release = la2aReleaseCompact
+	}
+
+	// Adjust based on spectral flux (frame-to-frame variation)
+	if measurements.SpectralFlux > 0 {
+		switch {
+		case measurements.SpectralFlux > la2aFluxDynamic:
+			// Dynamic/expressive content - add release time
+			release = math.Max(release, la2aReleaseExpressive)
+		case measurements.SpectralFlux < la2aFluxStatic:
+			// Static/monotone content - can use shorter release
+			release = math.Min(release, la2aReleaseCompact)
+		}
+	}
+
+	// Warm voices (positive skewness = bass-concentrated) get extra release
+	// This preserves the body and warmth that LA-2A is known for
+	if measurements.SpectralSkewness > la2aSkewnessWarm {
+		release += la2aReleaseWarmBoost
+	}
+
+	// Heavy compression (large LUFS gap) triggers slower release
+	// LA-2A's T4 cell releases slower after sustained heavy compression
+	if measurements.InputI < 0 {
+		lufsGap := -16.0 - measurements.InputI // Distance to -16 LUFS target
+		if lufsGap > 15.0 {
+			release += la2aReleaseHeavyBoost
+		}
+	}
+
+	config.LA2ARelease = release
+}
+
+// tuneLA2ARatio sets compression ratio to emulate T4 optical cell behaviour.
+// LA-2A's ratio is nominally 3:1 but varies with signal strength.
+// We use spectral kurtosis and dynamic range to approximate this:
+// - Peaked/tonal content (high kurtosis) = gentler ratio, preserve character
+// - Flat/noise-like content (low kurtosis) = firmer ratio, more levelling
+func tuneLA2ARatio(config *FilterChainConfig, measurements *AudioMeasurements) {
+	// Start with LA-2A baseline ratio
+	ratio := la2aRatioBase
+
+	// Adjust based on spectral kurtosis (peakedness)
+	if measurements.SpectralKurtosis > 0 {
+		switch {
+		case measurements.SpectralKurtosis > la2aKurtosisHighPeak:
+			// Highly peaked harmonics - gentler ratio preserves character
+			ratio = la2aRatioPeaked
+		case measurements.SpectralKurtosis < la2aKurtosisLowPeak:
+			// Flat spectrum - firmer ratio for consistent levelling
+			ratio = la2aRatioFlat
+		}
+	}
+
+	// Very wide dynamic range needs extra control
+	if measurements.DynamicRange > la2aDynamicRangeWide {
+		ratio += la2aRatioDynamicBoost
+	}
+
+	// Clamp to reasonable range
+	config.LA2ARatio = clamp(ratio, 2.0, 5.0)
+}
+
+// tuneLA2AThreshold sets threshold relative to RMS level.
+// LA-2A's Peak Reduction knob effectively sets threshold relative to signal.
+// We calculate threshold as peak level minus headroom, where headroom determines depth.
+func tuneLA2AThreshold(config *FilterChainConfig, measurements *AudioMeasurements) {
+	// Fallback if no peak measurement
+	if measurements.PeakLevel == 0 {
+		config.LA2AThreshold = defaultLA2AThreshold
 		return
 	}
 
+	// Determine headroom based on dynamic range (compression depth needed)
+	// More headroom = lower threshold = more compression
+	var headroom float64
 	switch {
-	case measurements.DynamicRange > compDynamicRangeHigh:
-		// Very dynamic content (expressive delivery)
-		config.CompRatio = compRatioDynamic
-		config.CompThreshold = compThresholdDynamic
-		config.CompMakeup = compMakeupDynamic
-
-	case measurements.DynamicRange > compDynamicRangeMod:
-		// Moderately dynamic (typical podcast)
-		config.CompRatio = compRatioModerate
-		config.CompThreshold = compThresholdModerate
-		config.CompMakeup = compMakeupModerate
-
+	case measurements.DynamicRange > la2aDynamicRangeHigh:
+		// Very dynamic - heavier compression (more headroom from peak)
+		headroom = la2aThresholdHeadroomHeavy
+	case measurements.DynamicRange > la2aDynamicRangeMod:
+		// Moderately dynamic - standard LA-2A
+		headroom = la2aThresholdHeadroomStd
 	default:
-		// Already compressed/consistent
-		config.CompRatio = compRatioCompressed
-		config.CompThreshold = compThresholdCompressed
-		config.CompMakeup = compMakeupCompressed
+		// Already compressed - light levelling
+		headroom = la2aThresholdHeadroomLight
 	}
+
+	// Calculate threshold relative to peak level
+	// threshold = peak - headroom
+	// e.g., peak -5dB with 15dB headroom → threshold -20dB
+	threshold := measurements.PeakLevel - headroom
+
+	// Clamp to safe range
+	threshold = clamp(threshold, la2aThresholdMin, la2aThresholdMax)
+
+	config.LA2AThreshold = threshold
 }
 
-// tuneCompressionTiming sets attack and release based on loudness range
-func tuneCompressionTiming(config *FilterChainConfig, measurements *AudioMeasurements) {
-	switch {
-	case measurements.InputLRA > compLRAWide:
-		// Wide loudness range - preserve transients
-		config.CompAttack = compAttackSlow
-		config.CompRelease = compReleaseSlow
+// tuneLA2AKnee sets knee softness to emulate T4 optical cell.
+// The T4 provides an inherently soft knee - one of LA-2A's defining characteristics.
+// We adapt based on voice character (spectral centroid and skewness).
+func tuneLA2AKnee(config *FilterChainConfig, measurements *AudioMeasurements) {
+	// Start with standard LA-2A soft knee
+	knee := la2aKneeNormal
 
-	case measurements.InputLRA > compLRAModerate:
-		// Moderate range
-		config.CompAttack = compAttackMed
-		config.CompRelease = compReleaseMed
-
-	default:
-		// Narrow range - tighter control
-		config.CompAttack = compAttackFast
-		config.CompRelease = compReleaseFast
+	// Adjust based on spectral centroid (voice brightness)
+	if measurements.SpectralCentroid > 0 {
+		switch {
+		case measurements.SpectralCentroid < la2aCentroidDark:
+			// Dark/warm voice - extra soft knee preserves warmth
+			knee = la2aKneeDark
+		case measurements.SpectralCentroid > la2aCentroidBright:
+			// Bright voice - slightly firmer knee
+			knee = la2aKneeBright
+		}
 	}
+
+	// Warm/bass-concentrated voices get extra soft knee
+	if measurements.SpectralSkewness > la2aSkewnessWarm {
+		knee += la2aKneeWarmBoost
+	}
+
+	// Clamp to FFmpeg's range
+	config.LA2AKnee = clamp(knee, 1.0, 8.0)
 }
 
-// tuneCompressionMix sets wet/dry mix based on noise floor and dynamic range
-func tuneCompressionMix(config *FilterChainConfig, measurements *AudioMeasurements) {
-	// Noise floor indicates recording quality (artifact audibility)
-	var mixFactor float64
+// tuneLA2AMix sets wet/dry mix.
+// Real LA-2A is 100% wet (no parallel compression).
+// We allow slight dry signal for problematic recordings to mask artefacts.
+func tuneLA2AMix(config *FilterChainConfig, measurements *AudioMeasurements) {
+	// Default to true LA-2A behaviour (100% wet)
+	mix := la2aMixClean
+
+	// Adjust based on noise floor (artefact masking)
 	switch {
-	case measurements.NoiseFloor < noiseFloorTypical:
-		mixFactor = compMixClean // Clean - can use more compression
-	case measurements.NoiseFloor < noiseFloorNoisy:
-		mixFactor = compMixModerate // Moderate quality
-	default:
-		mixFactor = compMixNoisy // Noisy - gentler to mask pumping
+	case measurements.NoiseFloor > la2aNoiseFloorNoisy:
+		// Noisy recording - dry signal masks compression artefacts
+		mix = la2aMixNoisy
+	case measurements.NoiseFloor > la2aNoiseFloorClean:
+		// Moderate noise - slight dry signal
+		mix = la2aMixModerate
 	}
 
-	// Adjust based on dynamic range (content characteristics)
-	switch {
-	case measurements.DynamicRange > compDynamicRangeHigh:
-		// Very dynamic - preserve more dry signal
-		config.CompMix = mixFactor - compMixAdjust
-	case measurements.DynamicRange > compDynamicRangeMod:
-		// Moderate dynamics
-		config.CompMix = mixFactor
-	default:
-		// Already compressed - can use more wet
-		config.CompMix = math.Min(1.0, mixFactor+compMixAdjust)
+	config.LA2AMix = mix
+}
+
+// tuneLA2AMakeup sets makeup gain to compensate for gain reduction.
+// Calculated conservatively - let downstream normalisation handle the rest.
+func tuneLA2AMakeup(config *FilterChainConfig, measurements *AudioMeasurements) {
+	// Calculate expected gain reduction
+	// GR ≈ (peak_level - threshold) * (1 - 1/ratio)
+	if measurements.PeakLevel == 0 || config.LA2AThreshold == 0 {
+		config.LA2AMakeup = la2aMakeupMin
+		return
 	}
+
+	// Amount signal exceeds threshold
+	overshoot := measurements.PeakLevel - config.LA2AThreshold
+	if overshoot <= 0 {
+		// Signal below threshold - minimal makeup
+		config.LA2AMakeup = la2aMakeupMin
+		return
+	}
+
+	// Expected reduction based on ratio
+	reduction := overshoot * (1.0 - 1.0/config.LA2ARatio)
+
+	// Conservative makeup (let normalisation handle the rest)
+	makeup := reduction * la2aMakeupMultiplier
+
+	// Clamp to safe range
+	config.LA2AMakeup = clamp(makeup, la2aMakeupMin, la2aMakeupMax)
 }
 
 // tuneDynaudnorm sets conservative fixed parameters for dynaudnorm.
@@ -1319,9 +1529,9 @@ func sanitizeConfig(config *FilterChainConfig) {
 	config.HighpassMix = sanitizeFloat(config.HighpassMix, 1.0)       // Full wet default
 	config.DeessIntensity = sanitizeFloat(config.DeessIntensity, defaultDeessIntensity)
 	config.NoiseReduction = sanitizeFloat(config.NoiseReduction, defaultNoiseReduction)
-	config.CompRatio = sanitizeFloat(config.CompRatio, defaultCompRatio)
-	config.CompThreshold = sanitizeFloat(config.CompThreshold, defaultCompThreshold)
-	config.CompMakeup = sanitizeFloat(config.CompMakeup, defaultCompMakeup)
+	config.LA2ARatio = sanitizeFloat(config.LA2ARatio, defaultLA2ARatio)
+	config.LA2AThreshold = sanitizeFloat(config.LA2AThreshold, defaultLA2AThreshold)
+	config.LA2AMakeup = sanitizeFloat(config.LA2AMakeup, defaultLA2AMakeup)
 
 	// GateThreshold needs additional check for zero/negative
 	if math.IsNaN(config.GateThreshold) || math.IsInf(config.GateThreshold, 0) || config.GateThreshold <= 0 {

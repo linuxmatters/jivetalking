@@ -29,7 +29,7 @@ func newTestConfig() *FilterChainConfig {
 		AdeclickEnabled:   false,
 		AfftdnEnabled:     false,
 		GateEnabled:       false,
-		CompEnabled:       false,
+		LA2AEnabled:       false,
 		DeessEnabled:      false,
 		DynaudnormEnabled: false,
 		SpeechnormEnabled: false,
@@ -57,13 +57,13 @@ func newTestConfig() *FilterChainConfig {
 		GateRange:         0.0625,
 		GateKnee:          2.828,
 		GateMakeup:        1.0,
-		CompThreshold:     -20,
-		CompRatio:         2.5,
-		CompAttack:        15,
-		CompRelease:       80,
-		CompMakeup:        3,
-		CompKnee:          2.5,
-		CompMix:           1.0,
+		LA2AThreshold:     -20,
+		LA2ARatio:         2.5,
+		LA2AAttack:        15,
+		LA2ARelease:       80,
+		LA2AMakeup:        3,
+		LA2AKnee:          2.5,
+		LA2AMix:           1.0,
 		DeessIntensity:    0.5,
 		DeessAmount:       0.5,
 		DeessFreq:         0.5,
@@ -140,7 +140,7 @@ func TestBuildFilterSpec(t *testing.T) {
 		config.HighpassEnabled = true
 		config.AfftdnEnabled = true
 		config.GateEnabled = true
-		config.CompEnabled = true
+		config.LA2AEnabled = true
 		config.DeessEnabled = true
 		config.SpeechnormEnabled = true
 		config.DynaudnormEnabled = true
@@ -178,7 +178,7 @@ func TestBuildFilterSpec(t *testing.T) {
 		config.HighpassEnabled = true
 		config.AfftdnEnabled = true
 		config.GateEnabled = true
-		config.CompEnabled = true
+		config.LA2AEnabled = true
 		config.DeessEnabled = true
 		config.SpeechnormEnabled = true
 		config.DynaudnormEnabled = true
@@ -197,7 +197,7 @@ func TestBuildFilterSpec(t *testing.T) {
 		config.HighpassEnabled = true
 		config.AfftdnEnabled = true
 		config.GateEnabled = true
-		config.CompEnabled = true
+		config.LA2AEnabled = true
 		config.DeessEnabled = true
 		config.SpeechnormEnabled = true
 		config.DynaudnormEnabled = true
@@ -473,14 +473,14 @@ func TestBuildAgateFilter(t *testing.T) {
 	})
 }
 
-func TestBuildAcompressorFilter(t *testing.T) {
+func TestBuildLA2ACompressorFilter(t *testing.T) {
 	t.Run("typical podcast compression", func(t *testing.T) {
 		config := newTestConfig()
-		config.CompEnabled = true
-		config.CompThreshold = -20.0
-		config.CompRatio = 2.5
+		config.LA2AEnabled = true
+		config.LA2AThreshold = -20.0
+		config.LA2ARatio = 2.5
 
-		spec := config.buildAcompressorFilter()
+		spec := config.buildLA2ACompressorFilter()
 
 		wantIn := []string{
 			"acompressor=threshold=",
@@ -490,24 +490,24 @@ func TestBuildAcompressorFilter(t *testing.T) {
 
 		for _, want := range wantIn {
 			if !strings.Contains(spec, want) {
-				t.Errorf("buildAcompressorFilter() = %q, want to contain %q", spec, want)
+				t.Errorf("buildLA2ACompressorFilter() = %q, want to contain %q", spec, want)
 			}
 		}
 
 		// Threshold should be converted to linear (not raw dB)
 		// -20dB in linear is 0.1, so we should NOT see "threshold=-20"
 		if strings.Contains(spec, "threshold=-") {
-			t.Error("buildAcompressorFilter() should convert threshold to linear, not use raw dB")
+			t.Error("buildLA2ACompressorFilter() should convert threshold to linear, not use raw dB")
 		}
 	})
 
 	t.Run("disabled returns empty", func(t *testing.T) {
 		config := newTestConfig()
-		config.CompEnabled = false
+		config.LA2AEnabled = false
 
-		spec := config.buildAcompressorFilter()
+		spec := config.buildLA2ACompressorFilter()
 		if spec != "" {
-			t.Errorf("buildAcompressorFilter() = %q, want empty when disabled", spec)
+			t.Errorf("buildLA2ACompressorFilter() = %q, want empty when disabled", spec)
 		}
 	})
 }
@@ -983,7 +983,7 @@ func TestPass2FilterOrder(t *testing.T) {
 			FilterAfftdn,
 			FilterArnndn,
 			FilterAgate,
-			FilterAcompressor,
+			FilterLA2ACompressor,
 			FilterDeesser,
 			FilterSpeechnorm,
 			FilterDynaudnorm,

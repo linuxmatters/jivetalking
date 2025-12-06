@@ -998,9 +998,9 @@ func TestSanitizeConfig(t *testing.T) {
 	// defaultHighpassFreq   = 80.0
 	// defaultDeessIntensity = 0.0
 	// defaultNoiseReduction = 12.0
-	// defaultCompRatio      = 2.5
-	// defaultCompThreshold  = -20.0
-	// defaultCompMakeup     = 3.0
+	// defaultLA2ARatio      = 2.5
+	// defaultLA2AThreshold  = -20.0
+	// defaultLA2AMakeup     = 3.0
 	// defaultGateThreshold  = 0.01 (linear, ~-40dBFS)
 
 	tests := []struct {
@@ -1015,18 +1015,18 @@ func TestSanitizeConfig(t *testing.T) {
 				HighpassFreq:   100.0,
 				DeessIntensity: 0.3,
 				NoiseReduction: 18.0,
-				CompRatio:      3.0,
-				CompThreshold:  -24.0,
-				CompMakeup:     4.0,
+				LA2ARatio:      3.0,
+				LA2AThreshold:  -24.0,
+				LA2AMakeup:     4.0,
 				GateThreshold:  0.02,
 			},
 			want: FilterChainConfig{
 				HighpassFreq:   100.0,
 				DeessIntensity: 0.3,
 				NoiseReduction: 18.0,
-				CompRatio:      3.0,
-				CompThreshold:  -24.0,
-				CompMakeup:     4.0,
+				LA2ARatio:      3.0,
+				LA2AThreshold:  -24.0,
+				LA2AMakeup:     4.0,
 				GateThreshold:  0.02,
 			},
 		},
@@ -1038,18 +1038,18 @@ func TestSanitizeConfig(t *testing.T) {
 				HighpassFreq:   math.NaN(),
 				DeessIntensity: 0.3,
 				NoiseReduction: 18.0,
-				CompRatio:      3.0,
-				CompThreshold:  -24.0,
-				CompMakeup:     4.0,
+				LA2ARatio:      3.0,
+				LA2AThreshold:  -24.0,
+				LA2AMakeup:     4.0,
 				GateThreshold:  0.02,
 			},
 			want: FilterChainConfig{
 				HighpassFreq:   80.0, // defaultHighpassFreq
 				DeessIntensity: 0.3,
 				NoiseReduction: 18.0,
-				CompRatio:      3.0,
-				CompThreshold:  -24.0,
-				CompMakeup:     4.0,
+				LA2ARatio:      3.0,
+				LA2AThreshold:  -24.0,
+				LA2AMakeup:     4.0,
 				GateThreshold:  0.02,
 			},
 		},
@@ -1059,18 +1059,18 @@ func TestSanitizeConfig(t *testing.T) {
 				HighpassFreq:   100.0,
 				DeessIntensity: math.NaN(),
 				NoiseReduction: 18.0,
-				CompRatio:      3.0,
-				CompThreshold:  -24.0,
-				CompMakeup:     4.0,
+				LA2ARatio:      3.0,
+				LA2AThreshold:  -24.0,
+				LA2AMakeup:     4.0,
 				GateThreshold:  0.02,
 			},
 			want: FilterChainConfig{
 				HighpassFreq:   100.0,
 				DeessIntensity: 0.0, // defaultDeessIntensity
 				NoiseReduction: 18.0,
-				CompRatio:      3.0,
-				CompThreshold:  -24.0,
-				CompMakeup:     4.0,
+				LA2ARatio:      3.0,
+				LA2AThreshold:  -24.0,
+				LA2AMakeup:     4.0,
 				GateThreshold:  0.02,
 			},
 		},
@@ -1080,81 +1080,81 @@ func TestSanitizeConfig(t *testing.T) {
 				HighpassFreq:   100.0,
 				DeessIntensity: 0.3,
 				NoiseReduction: math.NaN(),
-				CompRatio:      3.0,
-				CompThreshold:  -24.0,
-				CompMakeup:     4.0,
+				LA2ARatio:      3.0,
+				LA2AThreshold:  -24.0,
+				LA2AMakeup:     4.0,
 				GateThreshold:  0.02,
 			},
 			want: FilterChainConfig{
 				HighpassFreq:   100.0,
 				DeessIntensity: 0.3,
 				NoiseReduction: 12.0, // defaultNoiseReduction
-				CompRatio:      3.0,
-				CompThreshold:  -24.0,
-				CompMakeup:     4.0,
+				LA2ARatio:      3.0,
+				LA2AThreshold:  -24.0,
+				LA2AMakeup:     4.0,
 				GateThreshold:  0.02,
 			},
 		},
 		{
-			name: "NaN CompRatio gets default",
+			name: "NaN LA2ARatio gets default",
 			config: FilterChainConfig{
 				HighpassFreq:   100.0,
 				DeessIntensity: 0.3,
 				NoiseReduction: 18.0,
-				CompRatio:      math.NaN(),
-				CompThreshold:  -24.0,
-				CompMakeup:     4.0,
+				LA2ARatio:      math.NaN(),
+				LA2AThreshold:  -24.0,
+				LA2AMakeup:     4.0,
 				GateThreshold:  0.02,
 			},
 			want: FilterChainConfig{
 				HighpassFreq:   100.0,
 				DeessIntensity: 0.3,
 				NoiseReduction: 18.0,
-				CompRatio:      2.5, // defaultCompRatio
-				CompThreshold:  -24.0,
-				CompMakeup:     4.0,
+				LA2ARatio:      3.0, // defaultLA2ARatio (LA-2A inspired)
+				LA2AThreshold:  -24.0,
+				LA2AMakeup:     4.0,
 				GateThreshold:  0.02,
 			},
 		},
 		{
-			name: "NaN CompThreshold gets default",
+			name: "NaN LA2AThreshold gets default",
 			config: FilterChainConfig{
 				HighpassFreq:   100.0,
 				DeessIntensity: 0.3,
 				NoiseReduction: 18.0,
-				CompRatio:      3.0,
-				CompThreshold:  math.NaN(),
-				CompMakeup:     4.0,
+				LA2ARatio:      3.0,
+				LA2AThreshold:  math.NaN(),
+				LA2AMakeup:     4.0,
 				GateThreshold:  0.02,
 			},
 			want: FilterChainConfig{
 				HighpassFreq:   100.0,
 				DeessIntensity: 0.3,
 				NoiseReduction: 18.0,
-				CompRatio:      3.0,
-				CompThreshold:  -20.0, // defaultCompThreshold
-				CompMakeup:     4.0,
+				LA2ARatio:      3.0,
+				LA2AThreshold:  -18.0, // defaultLA2AThreshold (LA-2A inspired)
+				LA2AMakeup:     4.0,
 				GateThreshold:  0.02,
 			},
 		},
 		{
-			name: "NaN CompMakeup gets default",
+			name: "NaN LA2AMakeup gets default",
 			config: FilterChainConfig{
 				HighpassFreq:   100.0,
 				DeessIntensity: 0.3,
 				NoiseReduction: 18.0,
-				CompRatio:      3.0,
-				CompThreshold:  -24.0,
-				CompMakeup:     math.NaN(),
+				LA2ARatio:      3.0,
+				LA2AThreshold:  -24.0,
+				LA2AMakeup:     math.NaN(),
 				GateThreshold:  0.02,
 			},
 			want: FilterChainConfig{
 				HighpassFreq:   100.0,
 				DeessIntensity: 0.3,
 				NoiseReduction: 18.0,
-				CompRatio:      3.0,
-				CompThreshold:  -24.0,
-				CompMakeup:     3.0, // defaultCompMakeup
+				LA2ARatio:      3.0,
+				LA2AThreshold:  -24.0,
+				LA2AMakeup:     2.0, // defaultLA2AMakeup (LA-2A inspired)
 				GateThreshold:  0.02,
 			},
 		},
@@ -1164,18 +1164,18 @@ func TestSanitizeConfig(t *testing.T) {
 				HighpassFreq:   100.0,
 				DeessIntensity: 0.3,
 				NoiseReduction: 18.0,
-				CompRatio:      3.0,
-				CompThreshold:  -24.0,
-				CompMakeup:     4.0,
+				LA2ARatio:      3.0,
+				LA2AThreshold:  -24.0,
+				LA2AMakeup:     4.0,
 				GateThreshold:  math.NaN(),
 			},
 			want: FilterChainConfig{
 				HighpassFreq:   100.0,
 				DeessIntensity: 0.3,
 				NoiseReduction: 18.0,
-				CompRatio:      3.0,
-				CompThreshold:  -24.0,
-				CompMakeup:     4.0,
+				LA2ARatio:      3.0,
+				LA2AThreshold:  -24.0,
+				LA2AMakeup:     4.0,
 				GateThreshold:  0.01, // defaultGateThreshold
 			},
 		},
@@ -1187,18 +1187,18 @@ func TestSanitizeConfig(t *testing.T) {
 				HighpassFreq:   math.Inf(1),
 				DeessIntensity: math.Inf(1),
 				NoiseReduction: math.Inf(1),
-				CompRatio:      math.Inf(1),
-				CompThreshold:  math.Inf(1),
-				CompMakeup:     math.Inf(1),
+				LA2ARatio:      math.Inf(1),
+				LA2AThreshold:  math.Inf(1),
+				LA2AMakeup:     math.Inf(1),
 				GateThreshold:  math.Inf(1),
 			},
 			want: FilterChainConfig{
 				HighpassFreq:   80.0,
 				DeessIntensity: 0.0,
 				NoiseReduction: 12.0,
-				CompRatio:      2.5,
-				CompThreshold:  -20.0,
-				CompMakeup:     3.0,
+				LA2ARatio:      3.0,   // LA-2A inspired
+				LA2AThreshold:  -18.0, // LA-2A inspired
+				LA2AMakeup:     2.0,   // LA-2A inspired
 				GateThreshold:  0.01,
 			},
 		},
@@ -1208,18 +1208,18 @@ func TestSanitizeConfig(t *testing.T) {
 				HighpassFreq:   math.Inf(-1),
 				DeessIntensity: math.Inf(-1),
 				NoiseReduction: math.Inf(-1),
-				CompRatio:      math.Inf(-1),
-				CompThreshold:  math.Inf(-1),
-				CompMakeup:     math.Inf(-1),
+				LA2ARatio:      math.Inf(-1),
+				LA2AThreshold:  math.Inf(-1),
+				LA2AMakeup:     math.Inf(-1),
 				GateThreshold:  math.Inf(-1),
 			},
 			want: FilterChainConfig{
 				HighpassFreq:   80.0,
 				DeessIntensity: 0.0,
 				NoiseReduction: 12.0,
-				CompRatio:      2.5,
-				CompThreshold:  -20.0,
-				CompMakeup:     3.0,
+				LA2ARatio:      3.0,   // LA-2A inspired
+				LA2AThreshold:  -18.0, // LA-2A inspired
+				LA2AMakeup:     2.0,   // LA-2A inspired
 				GateThreshold:  0.01,
 			},
 		},
@@ -1232,18 +1232,18 @@ func TestSanitizeConfig(t *testing.T) {
 				HighpassFreq:   100.0,
 				DeessIntensity: 0.0, // zero is valid for DeessIntensity
 				NoiseReduction: 18.0,
-				CompRatio:      3.0,
-				CompThreshold:  -24.0,
-				CompMakeup:     4.0,
+				LA2ARatio:      3.0,
+				LA2AThreshold:  -24.0,
+				LA2AMakeup:     4.0,
 				GateThreshold:  0.0, // zero is NOT valid for GateThreshold
 			},
 			want: FilterChainConfig{
 				HighpassFreq:   100.0,
 				DeessIntensity: 0.0,
 				NoiseReduction: 18.0,
-				CompRatio:      3.0,
-				CompThreshold:  -24.0,
-				CompMakeup:     4.0,
+				LA2ARatio:      3.0,
+				LA2AThreshold:  -24.0,
+				LA2AMakeup:     4.0,
 				GateThreshold:  0.01, // defaultGateThreshold
 			},
 		},
@@ -1253,18 +1253,18 @@ func TestSanitizeConfig(t *testing.T) {
 				HighpassFreq:   100.0,
 				DeessIntensity: 0.3,
 				NoiseReduction: 18.0,
-				CompRatio:      3.0,
-				CompThreshold:  -24.0,
-				CompMakeup:     4.0,
+				LA2ARatio:      3.0,
+				LA2AThreshold:  -24.0,
+				LA2AMakeup:     4.0,
 				GateThreshold:  -0.5, // negative is NOT valid for GateThreshold
 			},
 			want: FilterChainConfig{
 				HighpassFreq:   100.0,
 				DeessIntensity: 0.3,
 				NoiseReduction: 18.0,
-				CompRatio:      3.0,
-				CompThreshold:  -24.0,
-				CompMakeup:     4.0,
+				LA2ARatio:      3.0,
+				LA2AThreshold:  -24.0,
+				LA2AMakeup:     4.0,
 				GateThreshold:  0.01, // defaultGateThreshold
 			},
 		},
@@ -1277,41 +1277,41 @@ func TestSanitizeConfig(t *testing.T) {
 				HighpassFreq:   0.0, // passes through (edge case: probably invalid, but sanitize doesn't clamp)
 				DeessIntensity: 0.0, // valid: de-essing disabled
 				NoiseReduction: 0.0, // passes through (edge case: no reduction)
-				CompRatio:      0.0, // passes through (edge case: probably invalid)
-				CompThreshold:  0.0, // passes through (0 dB threshold)
-				CompMakeup:     0.0, // passes through (0 dB makeup)
+				LA2ARatio:      0.0, // passes through (edge case: probably invalid)
+				LA2AThreshold:  0.0, // passes through (0 dB threshold)
+				LA2AMakeup:     0.0, // passes through (0 dB makeup)
 				GateThreshold:  0.02,
 			},
 			want: FilterChainConfig{
 				HighpassFreq:   0.0,
 				DeessIntensity: 0.0,
 				NoiseReduction: 0.0,
-				CompRatio:      0.0,
-				CompThreshold:  0.0,
-				CompMakeup:     0.0,
+				LA2ARatio:      0.0,
+				LA2AThreshold:  0.0,
+				LA2AMakeup:     0.0,
 				GateThreshold:  0.02,
 			},
 		},
 
 		// Negative values for fields that legitimately use them
 		{
-			name: "negative CompThreshold passes through (valid dB value)",
+			name: "negative LA2AThreshold passes through (valid dB value)",
 			config: FilterChainConfig{
 				HighpassFreq:   100.0,
 				DeessIntensity: 0.3,
 				NoiseReduction: 18.0,
-				CompRatio:      3.0,
-				CompThreshold:  -40.0, // very aggressive threshold
-				CompMakeup:     4.0,
+				LA2ARatio:      3.0,
+				LA2AThreshold:  -40.0, // very aggressive threshold
+				LA2AMakeup:     4.0,
 				GateThreshold:  0.02,
 			},
 			want: FilterChainConfig{
 				HighpassFreq:   100.0,
 				DeessIntensity: 0.3,
 				NoiseReduction: 18.0,
-				CompRatio:      3.0,
-				CompThreshold:  -40.0,
-				CompMakeup:     4.0,
+				LA2ARatio:      3.0,
+				LA2AThreshold:  -40.0,
+				LA2AMakeup:     4.0,
 				GateThreshold:  0.02,
 			},
 		},
@@ -1323,18 +1323,18 @@ func TestSanitizeConfig(t *testing.T) {
 				HighpassFreq:   math.NaN(),
 				DeessIntensity: math.NaN(),
 				NoiseReduction: math.NaN(),
-				CompRatio:      math.NaN(),
-				CompThreshold:  math.NaN(),
-				CompMakeup:     math.NaN(),
+				LA2ARatio:      math.NaN(),
+				LA2AThreshold:  math.NaN(),
+				LA2AMakeup:     math.NaN(),
 				GateThreshold:  math.NaN(),
 			},
 			want: FilterChainConfig{
 				HighpassFreq:   80.0,
 				DeessIntensity: 0.0,
 				NoiseReduction: 12.0,
-				CompRatio:      2.5,
-				CompThreshold:  -20.0,
-				CompMakeup:     3.0,
+				LA2ARatio:      3.0,   // LA-2A inspired
+				LA2AThreshold:  -18.0, // LA-2A inspired
+				LA2AMakeup:     2.0,   // LA-2A inspired
 				GateThreshold:  0.01,
 			},
 		},
@@ -1346,18 +1346,18 @@ func TestSanitizeConfig(t *testing.T) {
 				HighpassFreq:   100.0,
 				DeessIntensity: 0.3,
 				NoiseReduction: 18.0,
-				CompRatio:      3.0,
-				CompThreshold:  -24.0,
-				CompMakeup:     4.0,
+				LA2ARatio:      3.0,
+				LA2AThreshold:  -24.0,
+				LA2AMakeup:     4.0,
 				GateThreshold:  1e-10, // very small but positive
 			},
 			want: FilterChainConfig{
 				HighpassFreq:   100.0,
 				DeessIntensity: 0.3,
 				NoiseReduction: 18.0,
-				CompRatio:      3.0,
-				CompThreshold:  -24.0,
-				CompMakeup:     4.0,
+				LA2ARatio:      3.0,
+				LA2AThreshold:  -24.0,
+				LA2AMakeup:     4.0,
 				GateThreshold:  1e-10,
 			},
 		},
@@ -1379,14 +1379,14 @@ func TestSanitizeConfig(t *testing.T) {
 			if config.NoiseReduction != tt.want.NoiseReduction {
 				t.Errorf("NoiseReduction = %v, want %v", config.NoiseReduction, tt.want.NoiseReduction)
 			}
-			if config.CompRatio != tt.want.CompRatio {
-				t.Errorf("CompRatio = %v, want %v", config.CompRatio, tt.want.CompRatio)
+			if config.LA2ARatio != tt.want.LA2ARatio {
+				t.Errorf("LA2ARatio = %v, want %v", config.LA2ARatio, tt.want.LA2ARatio)
 			}
-			if config.CompThreshold != tt.want.CompThreshold {
-				t.Errorf("CompThreshold = %v, want %v", config.CompThreshold, tt.want.CompThreshold)
+			if config.LA2AThreshold != tt.want.LA2AThreshold {
+				t.Errorf("LA2AThreshold = %v, want %v", config.LA2AThreshold, tt.want.LA2AThreshold)
 			}
-			if config.CompMakeup != tt.want.CompMakeup {
-				t.Errorf("CompMakeup = %v, want %v", config.CompMakeup, tt.want.CompMakeup)
+			if config.LA2AMakeup != tt.want.LA2AMakeup {
+				t.Errorf("LA2AMakeup = %v, want %v", config.LA2AMakeup, tt.want.LA2AMakeup)
 			}
 			if config.GateThreshold != tt.want.GateThreshold {
 				t.Errorf("GateThreshold = %v, want %v", config.GateThreshold, tt.want.GateThreshold)

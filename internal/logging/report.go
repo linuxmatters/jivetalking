@@ -662,8 +662,8 @@ func formatFilter(f *os.File, filterID processor.FilterID, cfg *processor.Filter
 		formatArnndnFilter(f, cfg, m, prefix)
 	case processor.FilterAgate:
 		formatAgateFilter(f, cfg, m, prefix)
-	case processor.FilterAcompressor:
-		formatAcompressorFilter(f, cfg, m, prefix)
+	case processor.FilterLA2ACompressor:
+		formatLA2ACompressorFilter(f, cfg, m, prefix)
 	case processor.FilterDeesser:
 		formatDeesserFilter(f, cfg, m, prefix)
 	case processor.FilterSpeechnorm:
@@ -1040,16 +1040,16 @@ func formatAgateFilter(f *os.File, cfg *processor.FilterChainConfig, m *processo
 	}
 }
 
-// formatAcompressorFilter outputs acompressor filter details
-func formatAcompressorFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
-	if !cfg.CompEnabled {
-		fmt.Fprintf(f, "%sacompressor: DISABLED\n", prefix)
+// formatLA2ACompressorFilter outputs LA-2A Compressor filter details
+func formatLA2ACompressorFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
+	if !cfg.LA2AEnabled {
+		fmt.Fprintf(f, "%sLA-2A Compressor: DISABLED\n", prefix)
 		return
 	}
 
-	fmt.Fprintf(f, "%sacompressor: threshold %.0f dB, ratio %.1f:1\n", prefix, cfg.CompThreshold, cfg.CompRatio)
-	fmt.Fprintf(f, "        Timing: attack %.0fms, release %.0fms\n", cfg.CompAttack, cfg.CompRelease)
-	fmt.Fprintf(f, "        Makeup: %+.0f dB, mix %.0f%%, knee %.1f\n", cfg.CompMakeup, cfg.CompMix*100, cfg.CompKnee)
+	fmt.Fprintf(f, "%sLA-2A Compressor: threshold %.0f dB, ratio %.1f:1\n", prefix, cfg.LA2AThreshold, cfg.LA2ARatio)
+	fmt.Fprintf(f, "        Timing: attack %.0fms, release %.0fms\n", cfg.LA2AAttack, cfg.LA2ARelease)
+	fmt.Fprintf(f, "        Makeup: %+.0f dB, mix %.0f%%, knee %.1f\n", cfg.LA2AMakeup, cfg.LA2AMix*100, cfg.LA2AKnee)
 
 	// Show rationale
 	if m != nil && m.DynamicRange > 0 {
