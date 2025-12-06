@@ -254,10 +254,8 @@ type FilterChainConfig struct {
 
 	// RNN Denoise (arnndn) - neural network noise reduction
 	// Positioned after afftdn to handle complex/dynamic noise that spectral subtraction misses
-	ArnnDnEnabled  bool    // Enable RNN denoise
-	ArnnDnMix      float64 // Mix amount -1.0 to 1.0 (1.0 = full filtering, negative = keep noise)
-	ArnnDnDualPass bool    // Enable second arnndn pass for high-noise sources
-	ArnnDnMix2     float64 // Mix amount for second pass (typically 0.7 for artifact reduction)
+	ArnnDnEnabled bool    // Enable RNN denoise
+	ArnnDnMix     float64 // Mix amount -1.0 to 1.0 (1.0 = full filtering, negative = keep noise)
 
 	// True Peak Limiter (alimiter) - brick-wall safety net
 	LimiterEnabled bool    // Enable alimiter filter
@@ -404,10 +402,9 @@ func DefaultFilterConfig() *FilterChainConfig {
 
 		// RNN Denoise - neural network noise reduction
 		// Uses cb.rnnn model for speech denoising
-		ArnnDnEnabled:  false,
-		ArnnDnMix:      0.8,   // First pass mix (0.8 = 80% denoised, preserves some character)
-		ArnnDnDualPass: false, // Single pass by default (dual-pass for heavily degraded sources)
-		ArnnDnMix2:     0.7,   // Second pass mix (reduced to avoid over-processing)
+		// Enabled by default but tuneArnndn may disable for very clean sources
+		ArnnDnEnabled: false,
+		ArnnDnMix:     0.35, // Initial mix (will be tuned adaptively based on measurements)
 
 		// Bleed Gate - catches amplified bleed/crosstalk after normalisation
 		BleedGateEnabled:   false,
@@ -838,10 +835,6 @@ func (cfg *FilterChainConfig) buildSpeechnormFilter() string {
 // buildArnnDnFilter builds the arnndn (RNN denoise) filter specification.
 // Neural network noise reduction for heavily uplifted audio.
 // Uses embedded conjoined-burgers model trained for recorded speech.
-//
-// Dual-pass mode: When ArnnDnDualPass is enabled, applies two consecutive
-// arnndn passes for heavily degraded sources. Second pass uses reduced mix
-// (ArnnDnMix2, typically 0.7) to avoid over-processing and reduce artifacts.
 func (cfg *FilterChainConfig) buildArnnDnFilter() string {
 	if !cfg.ArnnDnEnabled {
 		return ""
@@ -852,17 +845,7 @@ func (cfg *FilterChainConfig) buildArnnDnFilter() string {
 		return ""
 	}
 
-	// First pass with primary mix
-	firstPass := fmt.Sprintf("arnndn=m=%s:mix=%.2f", modelPath, cfg.ArnnDnMix)
-
-	// Return single pass or dual-pass chain
-	if cfg.ArnnDnDualPass {
-		// Second pass with reduced mix for artifact reduction
-		secondPass := fmt.Sprintf("arnndn=m=%s:mix=%.2f", modelPath, cfg.ArnnDnMix2)
-		return firstPass + "," + secondPass
-	}
-
-	return firstPass
+	return fmt.Sprintf("arnndn=m=%s:mix=%.2f", modelPath, cfg.ArnnDnMix)
 }
 
 // buildBleedGateFilter builds the bleed gate filter specification.

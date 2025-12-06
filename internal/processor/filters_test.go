@@ -83,8 +83,7 @@ func newTestConfig() *FilterChainConfig {
 		SpeechnormRaise:       0.001,
 		SpeechnormFall:        0.001,
 
-		ArnnDnMix:  0.8,
-		ArnnDnMix2: 0.7,
+		ArnnDnMix: 0.8,
 
 		BleedGateThreshold: 0.01,
 		BleedGateRatio:     4.0,

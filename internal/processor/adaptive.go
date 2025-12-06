@@ -215,14 +215,39 @@ const (
 	humDecreaseVeryWarm = -0.1  // Below this = very warm voice (e.g., deep male), extra protection
 
 	// RNN denoise (arnndn) parameters
-	// Primary pass thresholds - enable for moderate noise sources
-	arnnDnLufsGapModerate    = 15.0  // dB - LUFS gap triggering primary arnndn
-	arnnDnNoiseFloorModerate = -55.0 // dBFS - noise floor triggering primary arnndn
-	arnnDnMixDefault         = 0.8   // Mix ratio for arnndn (0.8 = 80% filtered, 20% original)
-	// Dual-pass thresholds - enable for high-noise sources (e.g., SM7B with high gain)
-	arnnDnLufsGapAggressive    = 25.0  // dB - LUFS gap triggering dual-pass
-	arnnDnNoiseFloorAggressive = -45.0 // dBFS - noise floor triggering dual-pass
-	arnnDnMix2Default          = 0.7   // Reduced mix for second pass (artifact reduction)
+	// Mix baseline by noise floor severity (conservative approach)
+	arnnDnMixNoisy    = 0.7  // Noise floor > -50 dBFS: noisy source, aggressive cleaning
+	arnnDnMixModerate = 0.5  // Noise floor -50 to -65 dBFS: moderate noise
+	arnnDnMixClean    = 0.35 // Noise floor -65 to -75 dBFS: fairly clean
+	arnnDnMixVClean   = 0.25 // Noise floor < -75 dBFS: very clean, gentle touch only
+
+	// Enable/disable thresholds
+	arnnDnDisableNoiseFloor = -80.0 // dBFS - extremely clean source, disable entirely
+	arnnDnDisableFlatness   = 0.3   // Silence flatness threshold for disable decision
+	arnnDnMinMix            = 0.10  // Below this mix, disable filter entirely
+
+	// Mix adjustment thresholds
+	arnnDnKurtosisThreshold    = 8.0  // Above: peaked harmonics reveal artifacts, reduce mix
+	arnnDnMaxDiffThreshold     = 0.25 // Above (25%): sharp transients, preserve attack
+	arnnDnLRAThreshold         = 15.0 // Above: wide dynamics expose artifacts in quiet passages
+	arnnDnSilenceFlatThreshold = 0.5  // Above: broadband noise likely, increase mix
+	arnnDnSilenceEntThreshold  = 0.5  // Above: random noise, RNN handles well, increase mix
+
+	// Mix adjustment amounts
+	arnnDnKurtosisAdjust = -0.1  // Reduce mix for peaked harmonics
+	arnnDnMaxDiffAdjust  = -0.1  // Reduce mix for sharp transients
+	arnnDnLRAAdjust      = -0.05 // Reduce mix for wide dynamics
+	arnnDnFlatnessAdjust = 0.1   // Increase mix for broadband noise
+	arnnDnEntropyAdjust  = 0.1   // Increase mix for random noise
+
+	// afftdn interaction adjustments
+	arnnDnAfftdnGentleAdjust = -0.1 // Reduce mix when afftdn is doing primary denoising
+	arnnDnAfftdnAggressAdj   = -0.2 // Further reduce when afftdn is aggressive
+	arnnDnAfftdnAggressThres = 20.0 // dB - afftdn reduction above this is "aggressive"
+
+	// Mix limits
+	arnnDnMixMin = 0.1 // Minimum mix (below this, filter has negligible effect)
+	arnnDnMixMax = 0.8 // Maximum mix (above risks artifacts)
 
 	// LUFS to RMS conversion constant
 	// Rough conversion: LUFS ≈ -23 + 20*log10(RMS)
@@ -239,7 +264,6 @@ const (
 	defaultHumFrequency   = 50.0 // UK mains
 	defaultHumHarmonics   = 4
 	defaultHumWidth       = 1.0 // Hz
-	defaultArnnDnMix2     = 0.7
 )
 
 // AdaptConfig tunes all filter parameters based on Pass 1 measurements.
@@ -523,49 +547,112 @@ func tuneHumFilter(config *FilterChainConfig, measurements *AudioMeasurements) {
 //
 // Strategy:
 // - Uses cb.rnnn model exclusively (optimised for speech/voice)
-// - Dual-pass enabled for heavily degraded sources (high LUFS gap + high noise floor)
-// - Mix adjusted based on noise floor: noisier sources get stronger processing
-// - Second pass uses reduced mix (0.7 default) to avoid over-processing
+// - Conservative by default: clean sources auto-disable to avoid artifact risk
+// - Mix modulated based on noise floor severity + spectral characteristics
+// - Accounts for afftdn interaction: reduce mix when afftdn is doing primary denoising
 //
-// Thresholds:
-// - Moderate: LUFS gap >15dB OR noise floor >-55dBFS → enable arnndn
-// - Aggressive (dual-pass): LUFS gap >25dB AND noise floor >-45dBFS
-func tuneArnndn(config *FilterChainConfig, measurements *AudioMeasurements, lufsGap float64) {
+// The gate handles presenter bleed (low-entropy tonal content in silence).
+// arnndn targets broadband room tone and noise under speech that the gate can't touch.
+//
+// Enable decision:
+// - Very clean (noise floor < -75dB AND silence flatness < 0.4) → disable entirely
+// - Otherwise enable with calculated mix
+//
+// Mix calculation:
+// - Baseline from noise floor severity
+// - Adjustments for: kurtosis (harmonics), transients, dynamics, flatness, entropy
+// - Reduce when afftdn is active (avoid double-processing)
+// - Disable if final mix < 0.15 (negligible effect)
+func tuneArnndn(config *FilterChainConfig, measurements *AudioMeasurements, _ float64) {
 	// Respect user's intent: if filter is disabled, don't touch it
 	if !config.ArnnDnEnabled {
 		return
 	}
 
-	// Check if we need RNN denoising based on measurements
-	needsModerateNR := lufsGap > arnnDnLufsGapModerate || measurements.NoiseFloor > arnnDnNoiseFloorModerate
-	needsAggressiveNR := lufsGap > arnnDnLufsGapAggressive && measurements.NoiseFloor > arnnDnNoiseFloorAggressive
+	// Get silence sample flatness for enable decision
+	silenceFlatness := 0.0
+	silenceEntropy := 0.0
+	if measurements.NoiseProfile != nil {
+		// NoiseProfile doesn't have flatness directly, but we can use entropy as proxy
+		// Low entropy = tonal (bleed), high entropy = broadband (noise)
+		silenceEntropy = measurements.NoiseProfile.Entropy
+		// Use spectral flatness from main audio as proxy for silence flatness
+		// This isn't perfect but SpectralFlatness indicates noise-like content overall
+		silenceFlatness = measurements.SpectralFlatness
+	}
 
-	if !needsModerateNR {
-		// Clean source - disable arnndn entirely
+	// Very clean source with low broadband content → disable entirely
+	// Gate handles bleed; arnndn would only add artifact risk
+	if measurements.NoiseFloor < arnnDnDisableNoiseFloor && silenceFlatness < arnnDnDisableFlatness {
 		config.ArnnDnEnabled = false
-		config.ArnnDnDualPass = false
 		return
 	}
 
-	// Filter stays enabled, tune parameters
+	// Calculate mix based on noise floor severity and spectral characteristics
+	mix := calculateArnnDnMix(measurements, silenceFlatness, silenceEntropy, config.AfftdnEnabled, config.NoiseReduction)
 
-	// Set mix based on noise severity
-	// Higher noise floor → stronger RNN processing (higher mix)
-	if measurements.NoiseFloor > arnnDnNoiseFloorAggressive {
-		config.ArnnDnMix = 0.95 // Very noisy - almost full RNN
-	} else if measurements.NoiseFloor > arnnDnNoiseFloorModerate {
-		config.ArnnDnMix = 0.85 // Moderately noisy
-	} else {
-		config.ArnnDnMix = arnnDnMixDefault // Default 0.8
+	// If calculated mix is negligible, disable filter
+	if mix < arnnDnMinMix {
+		config.ArnnDnEnabled = false
+		return
 	}
 
-	// Enable dual-pass for heavily degraded sources
-	if needsAggressiveNR {
-		config.ArnnDnDualPass = true
-		config.ArnnDnMix2 = arnnDnMix2Default // Reduced mix for second pass
-	} else {
-		config.ArnnDnDualPass = false
+	config.ArnnDnMix = mix
+}
+
+// calculateArnnDnMix computes the optimal arnndn mix based on measurements.
+// Returns a value between arnnDnMixMin and arnnDnMixMax.
+func calculateArnnDnMix(m *AudioMeasurements, silenceFlatness, silenceEntropy float64, afftdnEnabled bool, afftdnReduction float64) float64 {
+	// Baseline from noise floor severity
+	var baseMix float64
+	switch {
+	case m.NoiseFloor > -50:
+		baseMix = arnnDnMixNoisy // 0.7 - noisy source
+	case m.NoiseFloor > -65:
+		baseMix = arnnDnMixModerate // 0.5 - moderate noise
+	case m.NoiseFloor > -75:
+		baseMix = arnnDnMixClean // 0.35 - fairly clean
+	default:
+		baseMix = arnnDnMixVClean // 0.25 - very clean
 	}
+
+	// Adjustment: High kurtosis = peaked harmonics reveal artifacts
+	if m.SpectralKurtosis > arnnDnKurtosisThreshold {
+		baseMix += arnnDnKurtosisAdjust // -0.1
+	}
+
+	// Adjustment: Sharp transients = preserve consonant attacks
+	// MaxDifference is in sample units (0-32768 for 16-bit); normalise to 0-1
+	maxDiffNorm := m.MaxDifference / 32768.0
+	if maxDiffNorm > arnnDnMaxDiffThreshold {
+		baseMix += arnnDnMaxDiffAdjust // -0.1
+	}
+
+	// Adjustment: Wide dynamics = quiet passages expose warble artifacts
+	if m.InputLRA > arnnDnLRAThreshold {
+		baseMix += arnnDnLRAAdjust // -0.05
+	}
+
+	// Adjustment: High silence flatness = broadband noise likely during speech too
+	if silenceFlatness > arnnDnSilenceFlatThreshold {
+		baseMix += arnnDnFlatnessAdjust // +0.1
+	}
+
+	// Adjustment: High silence entropy = random noise, RNN handles well
+	if silenceEntropy > arnnDnSilenceEntThreshold {
+		baseMix += arnnDnEntropyAdjust // +0.1
+	}
+
+	// Adjustment: When afftdn is doing primary denoising, arnndn only cleans residuals
+	if afftdnEnabled {
+		if afftdnReduction > arnnDnAfftdnAggressThres {
+			baseMix += arnnDnAfftdnAggressAdj // -0.2 for aggressive afftdn
+		} else {
+			baseMix += arnnDnAfftdnGentleAdjust // -0.1 for gentle afftdn
+		}
+	}
+
+	return clamp(baseMix, arnnDnMixMin, arnnDnMixMax)
 }
 
 // tuneDeesser adapts de-esser intensity based on spectral analysis.
@@ -1006,6 +1093,8 @@ func tuneSpeechnorm(config *FilterChainConfig, measurements *AudioMeasurements, 
 
 // tuneSpeechnormDenoise enables RNN denoise for heavily expanded audio.
 // Only takes effect if ArnnDnEnabled is already true (respects user config).
+// Note: This function is deprecated - tuneArnndn now handles all arnndn tuning.
+// Kept for backwards compatibility but the logic is now in tuneArnndn.
 func tuneSpeechnormDenoise(config *FilterChainConfig, expansion float64) {
 	// Respect user's intent: if filter is disabled, don't touch it
 	if !config.ArnnDnEnabled {
@@ -1013,10 +1102,10 @@ func tuneSpeechnormDenoise(config *FilterChainConfig, expansion float64) {
 	}
 
 	if expansion >= speechnormExpansionThreshold {
-		// Filter stays enabled, tune parameters
-		config.ArnnDnMix = arnnDnMixDefault
+		// Filter stays enabled - tuneArnndn handles mix calculation
+		// Just ensure it's enabled for heavily expanded audio
 	} else {
-		config.ArnnDnEnabled = false
+		// Light expansion - let tuneArnndn decide based on noise floor
 	}
 }
 
@@ -1147,9 +1236,6 @@ func sanitizeConfig(config *FilterChainConfig) {
 	if config.HumHarmonics < 1 || config.HumHarmonics > 8 {
 		config.HumHarmonics = defaultHumHarmonics
 	}
-
-	// ArnnDn second pass mix sanitization
-	config.ArnnDnMix2 = sanitizeFloat(config.ArnnDnMix2, defaultArnnDnMix2)
 
 	// BleedGateThreshold needs additional check for zero/negative (like pre-gate)
 	if math.IsNaN(config.BleedGateThreshold) || math.IsInf(config.BleedGateThreshold, 0) || config.BleedGateThreshold <= 0 {

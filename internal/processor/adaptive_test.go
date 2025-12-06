@@ -1564,123 +1564,29 @@ func TestClamp(t *testing.T) {
 }
 
 func TestTuneSpeechnormDenoise(t *testing.T) {
-	// Tests for tuneSpeechnormDenoise which enables RNN denoise for heavily expanded audio
-	// Constants from adaptive.go:
-	// speechnormExpansionThreshold = 8.0 (triggers denoise activation)
-	// arnnDnMixDefault             = 0.8 (full filtering when enabled)
+	// Tests for tuneSpeechnormDenoise which is now DEPRECATED
+	// arnndn tuning is now handled by tuneArnndn based on noise floor + spectral characteristics
+	// tuneSpeechnormDenoise is kept for backwards compatibility but is essentially a no-op
+	//
+	// The only behaviour we test is that it respects the enabled state passed in
 
-	tests := []struct {
-		name            string
-		expansion       float64
-		wantArnnDn      bool
-		wantArnnDnMix   float64 // only checked if wantArnnDn is true
-		wantDescription string
-	}{
-		// Below threshold - denoise disabled
-		{
-			name:            "minimal expansion - denoise disabled",
-			expansion:       1.0,
-			wantArnnDn:      false,
-			wantDescription: "1x expansion (0dB gain) should not enable denoise",
-		},
-		{
-			name:            "moderate expansion - denoise disabled",
-			expansion:       3.0,
-			wantArnnDn:      false,
-			wantDescription: "3x expansion (~10dB gain) still below threshold",
-		},
-		{
-			name:            "typical podcast expansion - denoise disabled",
-			expansion:       5.0,
-			wantArnnDn:      false,
-			wantDescription: "5x expansion (~14dB gain) still below threshold",
-		},
-		{
-			name:            "just below threshold - denoise disabled",
-			expansion:       7.9,
-			wantArnnDn:      false,
-			wantDescription: "7.9x is below 8.0 threshold",
-		},
-
-		// At and above threshold - denoise enabled
-		{
-			name:            "at threshold - denoise enabled",
-			expansion:       8.0,
-			wantArnnDn:      true,
-			wantArnnDnMix:   0.8,
-			wantDescription: "exactly 8.0 threshold should enable denoise",
-		},
-		{
-			name:            "slightly above threshold",
-			expansion:       8.1,
-			wantArnnDn:      true,
-			wantArnnDnMix:   0.8,
-			wantDescription: "8.1 expansion enables denoise",
-		},
-		{
-			name:            "high expansion",
-			expansion:       9.0,
-			wantArnnDn:      true,
-			wantArnnDnMix:   0.8,
-			wantDescription: "9x expansion (~19dB gain)",
-		},
-		{
-			name:            "maximum capped expansion",
-			expansion:       10.0,
-			wantArnnDn:      true,
-			wantArnnDnMix:   0.8,
-			wantDescription: "10x expansion (speechnormMaxExpansion)",
-		},
-
-		// Extreme values (beyond normal operating range)
-		{
-			name:            "extreme expansion",
-			expansion:       50.0,
-			wantArnnDn:      true,
-			wantArnnDnMix:   0.8,
-			wantDescription: "50x expansion enables denoise",
-		},
-		{
-			name:            "zero expansion - denoise disabled",
-			expansion:       0.0,
-			wantArnnDn:      false,
-			wantDescription: "zero expansion (edge case) below threshold",
-		},
-		{
-			name:            "negative expansion - denoise disabled",
-			expansion:       -1.0,
-			wantArnnDn:      false,
-			wantDescription: "negative expansion (edge case) below threshold",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Start with ArnnDn enabled - tuning only affects enabled filters
-			config := &FilterChainConfig{ArnnDnEnabled: true}
-			tuneSpeechnormDenoise(config, tt.expansion)
-
-			// Check ArnnDn enabled state
-			if config.ArnnDnEnabled != tt.wantArnnDn {
-				t.Errorf("ArnnDnEnabled = %v, want %v - %s",
-					config.ArnnDnEnabled, tt.wantArnnDn, tt.wantDescription)
-			}
-
-			// Check ArnnDn mix value when enabled
-			if tt.wantArnnDn && config.ArnnDnMix != tt.wantArnnDnMix {
-				t.Errorf("ArnnDnMix = %v, want %v - %s",
-					config.ArnnDnMix, tt.wantArnnDnMix, tt.wantDescription)
-			}
-		})
-	}
-
-	// Test that disabled filters stay disabled
 	t.Run("respects user disabled state", func(t *testing.T) {
 		config := &FilterChainConfig{ArnnDnEnabled: false}
-		tuneSpeechnormDenoise(config, 50.0) // High expansion would normally enable
+		tuneSpeechnormDenoise(config, 50.0) // High expansion would normally enable (in old code)
 
 		if config.ArnnDnEnabled {
 			t.Error("ArnnDnEnabled should stay false when user disabled it")
+		}
+	})
+
+	t.Run("respects user enabled state", func(t *testing.T) {
+		config := &FilterChainConfig{ArnnDnEnabled: true}
+		tuneSpeechnormDenoise(config, 1.0) // Low expansion
+
+		// With new architecture, tuneSpeechnormDenoise is a no-op
+		// The enabled state should remain unchanged
+		if !config.ArnnDnEnabled {
+			t.Error("ArnnDnEnabled should stay true - tuneSpeechnormDenoise is now a no-op")
 		}
 	})
 }
@@ -1695,141 +1601,131 @@ func TestTuneSpeechnorm(t *testing.T) {
 	//
 	// Expansion formula: 10^(lufsGap/20)
 	// RMS formula: clamp(10^((targetI+23)/20), 0, 1)
+	//
+	// Note: tuneSpeechnorm no longer controls ArnnDnEnabled - that's handled by tuneArnndn
 
 	tests := []struct {
-		name               string
-		inputI             float64 // measured input LUFS
-		targetI            float64 // target LUFS
-		wantExpansionMin   float64
-		wantExpansionMax   float64
-		wantDenoiseEnabled bool
-		wantRMSApprox      float64 // expected RMS after clamping to [0, 1]
-		wantDescription    string
+		name             string
+		inputI           float64 // measured input LUFS
+		targetI          float64 // target LUFS
+		wantExpansionMin float64
+		wantExpansionMax float64
+		wantRMSApprox    float64 // expected RMS after clamping to [0, 1]
+		wantDescription  string
 	}{
 		// Zero input LUFS - early return
 		{
-			name:               "zero input LUFS - early return",
-			inputI:             0.0,
-			targetI:            -16.0,
-			wantExpansionMin:   0.0, // unchanged from default
-			wantExpansionMax:   0.0,
-			wantDenoiseEnabled: true, // unchanged - early return preserves initial state
-			wantRMSApprox:      0.0,  // unchanged (early return)
-			wantDescription:    "zero input LUFS triggers early return, no changes",
+			name:             "zero input LUFS - early return",
+			inputI:           0.0,
+			targetI:          -16.0,
+			wantExpansionMin: 0.0, // unchanged from default
+			wantExpansionMax: 0.0,
+			wantRMSApprox:    0.0, // unchanged (early return)
+			wantDescription:  "zero input LUFS triggers early return, no changes",
 		},
 
-		// Normal expansion cases (below denoise threshold)
+		// Normal expansion cases
 		// Note: For targetI=-16, RMS = 10^((-16+23)/20) = 10^0.35 ≈ 2.238 → clamped to 1.0
 		{
-			name:               "near target - minimal expansion",
-			inputI:             -18.0,
-			targetI:            -16.0,
-			wantExpansionMin:   1.2, // 10^(2/20) ≈ 1.26
-			wantExpansionMax:   1.3,
-			wantDenoiseEnabled: false,
-			wantRMSApprox:      1.0, // 10^(7/20) ≈ 2.238 clamped to 1.0
-			wantDescription:    "2dB gap = ~1.26x expansion",
+			name:             "near target - minimal expansion",
+			inputI:           -18.0,
+			targetI:          -16.0,
+			wantExpansionMin: 1.2, // 10^(2/20) ≈ 1.26
+			wantExpansionMax: 1.3,
+			wantRMSApprox:    1.0, // 10^(7/20) ≈ 2.238 clamped to 1.0
+			wantDescription:  "2dB gap = ~1.26x expansion",
 		},
 		{
-			name:               "typical podcast source",
-			inputI:             -26.0,
-			targetI:            -16.0,
-			wantExpansionMin:   3.1, // 10^(10/20) ≈ 3.16
-			wantExpansionMax:   3.2,
-			wantDenoiseEnabled: false,
-			wantRMSApprox:      1.0, // clamped
-			wantDescription:    "10dB gap = ~3.16x expansion",
+			name:             "typical podcast source",
+			inputI:           -26.0,
+			targetI:          -16.0,
+			wantExpansionMin: 3.1, // 10^(10/20) ≈ 3.16
+			wantExpansionMax: 3.2,
+			wantRMSApprox:    1.0, // clamped
+			wantDescription:  "10dB gap = ~3.16x expansion",
 		},
 		{
-			name:               "quiet source - moderate expansion",
-			inputI:             -30.0,
-			targetI:            -16.0,
-			wantExpansionMin:   5.0, // 10^(14/20) ≈ 5.01
-			wantExpansionMax:   5.1,
-			wantDenoiseEnabled: false,
-			wantRMSApprox:      1.0, // clamped
-			wantDescription:    "14dB gap = ~5.01x expansion",
+			name:             "quiet source - moderate expansion",
+			inputI:           -30.0,
+			targetI:          -16.0,
+			wantExpansionMin: 5.0, // 10^(14/20) ≈ 5.01
+			wantExpansionMax: 5.1,
+			wantRMSApprox:    1.0, // clamped
+			wantDescription:  "14dB gap = ~5.01x expansion",
 		},
 
 		// Near threshold
 		{
-			name:               "approaching threshold - just below",
-			inputI:             -33.0,
-			targetI:            -16.0,
-			wantExpansionMin:   7.0, // 10^(17/20) ≈ 7.08
-			wantExpansionMax:   7.1,
-			wantDenoiseEnabled: false,
-			wantRMSApprox:      1.0, // clamped
-			wantDescription:    "17dB gap = ~7.08x expansion, below 8x threshold",
+			name:             "approaching threshold - just below",
+			inputI:           -33.0,
+			targetI:          -16.0,
+			wantExpansionMin: 7.0, // 10^(17/20) ≈ 7.08
+			wantExpansionMax: 7.1,
+			wantRMSApprox:    1.0, // clamped
+			wantDescription:  "17dB gap = ~7.08x expansion",
 		},
 
-		// At and above threshold - denoise enabled
+		// At and above old threshold (now just expansion tests)
 		{
-			name:               "at threshold - denoise activated",
-			inputI:             -34.0,
-			targetI:            -16.0,
-			wantExpansionMin:   7.9, // 10^(18/20) ≈ 7.94
-			wantExpansionMax:   8.0,
-			wantDenoiseEnabled: false, // 7.94 still below 8.0
-			wantRMSApprox:      1.0,   // clamped
-			wantDescription:    "18dB gap = ~7.94x, just at/below threshold",
+			name:             "at old threshold",
+			inputI:           -34.0,
+			targetI:          -16.0,
+			wantExpansionMin: 7.9, // 10^(18/20) ≈ 7.94
+			wantExpansionMax: 8.0,
+			wantRMSApprox:    1.0, // clamped
+			wantDescription:  "18dB gap = ~7.94x",
 		},
 		{
-			name:               "just above threshold",
-			inputI:             -34.1,
-			targetI:            -16.0,
-			wantExpansionMin:   8.0, // 10^(18.1/20) ≈ 8.03
-			wantExpansionMax:   8.1,
-			wantDenoiseEnabled: true,
-			wantRMSApprox:      1.0, // clamped
-			wantDescription:    "18.1dB gap = ~8.03x, triggers denoise",
+			name:             "just above old threshold",
+			inputI:           -34.1,
+			targetI:          -16.0,
+			wantExpansionMin: 8.0, // 10^(18.1/20) ≈ 8.03
+			wantExpansionMax: 8.1,
+			wantRMSApprox:    1.0, // clamped
+			wantDescription:  "18.1dB gap = ~8.03x",
 		},
 
 		// Very quiet source - capped expansion
 		{
-			name:               "very quiet source - expansion capped",
-			inputI:             -46.0,
-			targetI:            -16.0,
-			wantExpansionMin:   10.0, // capped to speechnormMaxExpansion
-			wantExpansionMax:   10.0,
-			wantDenoiseEnabled: true,
-			wantRMSApprox:      1.0, // clamped
-			wantDescription:    "30dB gap = 31.6x but capped to 10x",
+			name:             "very quiet source - expansion capped",
+			inputI:           -46.0,
+			targetI:          -16.0,
+			wantExpansionMin: 10.0, // capped to speechnormMaxExpansion
+			wantExpansionMax: 10.0,
+			wantRMSApprox:    1.0, // clamped
+			wantDescription:  "30dB gap = 31.6x but capped to 10x",
 		},
 		{
-			name:               "extremely quiet source - expansion capped",
-			inputI:             -60.0,
-			targetI:            -16.0,
-			wantExpansionMin:   10.0, // capped
-			wantExpansionMax:   10.0,
-			wantDenoiseEnabled: true,
-			wantRMSApprox:      1.0, // clamped
-			wantDescription:    "44dB gap = 158x but capped to 10x",
+			name:             "extremely quiet source - expansion capped",
+			inputI:           -60.0,
+			targetI:          -16.0,
+			wantExpansionMin: 10.0, // capped
+			wantExpansionMax: 10.0,
+			wantRMSApprox:    1.0, // clamped
+			wantDescription:  "44dB gap = 158x but capped to 10x",
 		},
 
 		// Different target LUFS values
 		// For targetI=-24, RMS = 10^((-24+23)/20) = 10^-0.05 ≈ 0.891 (not clamped)
 		{
-			name:               "broadcast target (-24 LUFS)",
-			inputI:             -30.0,
-			targetI:            -24.0,
-			wantExpansionMin:   1.9, // 10^(6/20) ≈ 2.0
-			wantExpansionMax:   2.1,
-			wantDenoiseEnabled: false,
-			wantRMSApprox:      0.891, // 10^((-24+23)/20) = 10^-0.05 ≈ 0.891
-			wantDescription:    "6dB gap to -24 LUFS target",
+			name:             "broadcast target (-24 LUFS)",
+			inputI:           -30.0,
+			targetI:          -24.0,
+			wantExpansionMin: 1.9, // 10^(6/20) ≈ 2.0
+			wantExpansionMax: 2.1,
+			wantRMSApprox:    0.891, // 10^((-24+23)/20) = 10^-0.05 ≈ 0.891
+			wantDescription:  "6dB gap to -24 LUFS target",
 		},
 
 		// Negative LUFS gap (loud source)
 		{
-			name:               "loud source - minimal expansion",
-			inputI:             -12.0,
-			targetI:            -16.0,
-			wantExpansionMin:   1.0, // clamped to minimum 1.0
-			wantExpansionMax:   1.0,
-			wantDenoiseEnabled: false,
-			wantRMSApprox:      1.0, // clamped
-			wantDescription:    "-4dB gap = 0.63x but clamped to 1.0",
+			name:             "loud source - minimal expansion",
+			inputI:           -12.0,
+			targetI:          -16.0,
+			wantExpansionMin: 1.0, // clamped to minimum 1.0
+			wantExpansionMax: 1.0,
+			wantRMSApprox:    1.0, // clamped
+			wantDescription:  "-4dB gap = 0.63x but clamped to 1.0",
 		},
 	}
 
@@ -1837,7 +1733,7 @@ func TestTuneSpeechnorm(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			config := &FilterChainConfig{
 				TargetI:       tt.targetI,
-				ArnnDnEnabled: true, // Start enabled - tuning only affects enabled filters
+				ArnnDnEnabled: true, // Start enabled - tuneSpeechnorm no longer changes this
 			}
 			measurements := &AudioMeasurements{
 				InputI: tt.inputI,
@@ -1853,12 +1749,7 @@ func TestTuneSpeechnorm(t *testing.T) {
 					tt.wantDescription)
 			}
 
-			// Check denoise activation
-			if config.ArnnDnEnabled != tt.wantDenoiseEnabled {
-				t.Errorf("ArnnDnEnabled = %v, want %v - %s",
-					config.ArnnDnEnabled, tt.wantDenoiseEnabled,
-					tt.wantDescription)
-			}
+			// Note: ArnnDnEnabled is no longer checked here - tuneArnndn handles that
 
 			// Check RMS targeting (for non-zero input)
 			if tt.inputI != 0.0 && tt.wantRMSApprox > 0 {

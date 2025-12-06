@@ -470,7 +470,7 @@ func GenerateReport(data ReportData) error {
 				maxDiffPercent := (om.MaxDifference / 32768.0) * 100.0
 				if m != nil && m.MaxDifference > 0 {
 					inputMaxDiffPercent := (m.MaxDifference / 32768.0) * 100.0
-					fmt.Fprintf(f, "Max Difference:      %.1f%% FS %s\n", maxDiffPercent, formatComparison(maxDiffPercent, inputMaxDiffPercent, "% FS", 1))
+					fmt.Fprintf(f, "Max Difference:      %.1f%% FS %s\n", maxDiffPercent, formatComparison(maxDiffPercent, inputMaxDiffPercent, "%% FS", 1))
 				} else {
 					fmt.Fprintf(f, "Max Difference:      %.1f%% FS (transient indicator)\n", maxDiffPercent)
 				}
@@ -825,22 +825,74 @@ func formatAfftdnFilter(f *os.File, cfg *processor.FilterChainConfig, m *process
 func formatArnndnFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
 	if !cfg.ArnnDnEnabled {
 		fmt.Fprintf(f, "%sarnndn: DISABLED\n", prefix)
+		// Show why disabled if we have measurements
+		if m != nil {
+			if m.NoiseFloor < -80 {
+				fmt.Fprintf(f, "        Rationale: very clean source (noise floor %.1f dBFS)\n", m.NoiseFloor)
+			}
+		}
 		return
 	}
 
-	if cfg.ArnnDnDualPass {
-		fmt.Fprintf(f, "%sarnndn: DUAL PASS (mix %.0f%% + %.0f%%)\n",
-			prefix, cfg.ArnnDnMix*100, cfg.ArnnDnMix2*100)
-		fmt.Fprintln(f, "        Mode: aggressive (high-noise source)")
-	} else {
-		fmt.Fprintf(f, "%sarnndn: mix %.0f%%\n", prefix, cfg.ArnnDnMix*100)
-	}
+	fmt.Fprintf(f, "%sarnndn: mix %.0f%%\n", prefix, cfg.ArnnDnMix*100)
 
-	// Show rationale
-	if m != nil && m.InputI != 0 {
-		lufsGap := cfg.TargetI - m.InputI
-		fmt.Fprintf(f, "        Rationale: LUFS gap %.1f dB, noise floor %.1f dB\n", lufsGap, m.NoiseFloor)
+	// Show rationale with adjustments
+	if m != nil {
+		var adjustments []string
+
+		// Base mix explanation (matches thresholds in adaptive.go calculateArnnDnMix)
+		var baseMixDesc string
+		switch {
+		case m.NoiseFloor > -50:
+			baseMixDesc = "noisy"
+		case m.NoiseFloor > -65:
+			baseMixDesc = "moderate"
+		case m.NoiseFloor > -75:
+			baseMixDesc = "fairly clean"
+		default:
+			baseMixDesc = "very clean"
+		}
+
+		fmt.Fprintf(f, "        Base: %s (noise floor %.1f dBFS)\n", baseMixDesc, m.NoiseFloor)
+
+		// Adjustments applied
+		if m.SpectralKurtosis > 8 {
+			adjustments = append(adjustments, fmt.Sprintf("-10%% kurtosis %.1f", m.SpectralKurtosis))
+		}
+		// MaxDifference is in sample units (0-32768 for 16-bit); normalise to 0-1
+		maxDiffNorm := m.MaxDifference / 32768.0
+		if maxDiffNorm > 0.25 {
+			adjustments = append(adjustments, fmt.Sprintf("-10%% transients %.0f%%", maxDiffNorm*100))
+		}
+		if m.InputLRA > 15 {
+			adjustments = append(adjustments, fmt.Sprintf("-5%% LRA %.1f LU", m.InputLRA))
+		}
+		if m.SpectralFlatness > 0.5 {
+			adjustments = append(adjustments, fmt.Sprintf("+10%% flatness %.2f", m.SpectralFlatness))
+		}
+		if m.NoiseProfile != nil && m.NoiseProfile.Entropy > 0.5 {
+			adjustments = append(adjustments, fmt.Sprintf("+10%% entropy %.2f", m.NoiseProfile.Entropy))
+		}
+		if cfg.AfftdnEnabled {
+			adjustments = append(adjustments, "-10% afftdn active")
+		}
+
+		if len(adjustments) > 0 {
+			fmt.Fprintf(f, "        Adjustments: %s\n", joinWithComma(adjustments))
+		}
 	}
+}
+
+// joinWithComma joins string slice with comma separator
+func joinWithComma(items []string) string {
+	result := ""
+	for i, item := range items {
+		if i > 0 {
+			result += ", "
+		}
+		result += item
+	}
+	return result
 }
 
 // formatAgateFilter outputs agate filter details
