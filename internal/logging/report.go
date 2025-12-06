@@ -286,6 +286,47 @@ func formatComparisonSpectral(output, input float64, decimals int) string {
 	return fmt.Sprintf("(was %s)", formatSpectralValue(input, decimals))
 }
 
+// maxRealisticDynamicRange is the theoretical maximum for 24-bit audio (~144 dB).
+// Values above this indicate measurement artifacts (e.g., near-digital-silence after denoising).
+const maxRealisticDynamicRange = 144.0
+
+// formatDynamicRange clamps dynamic range to a realistic maximum.
+// FFmpeg's astats calculates dynamic range as Peak_level - Noise_floor.
+// After aggressive denoising, the noise floor can drop to near digital silence,
+// producing unrealistic values (300+ dB). We clamp to 144 dB (24-bit theoretical max)
+// and add a note indicating the measurement is limited by digital precision.
+func formatDynamicRange(value float64) string {
+	if value > maxRealisticDynamicRange {
+		return fmt.Sprintf("%.1f dB (clamped — digital silence floor)", maxRealisticDynamicRange)
+	}
+	return fmt.Sprintf("%.1f dB", value)
+}
+
+// formatDynamicRangeComparison formats dynamic range with comparison to input value
+func formatDynamicRangeComparison(output, input float64) string {
+	outputClamped := output
+	if outputClamped > maxRealisticDynamicRange {
+		outputClamped = maxRealisticDynamicRange
+	}
+
+	result := fmt.Sprintf("%.1f dB", outputClamped)
+
+	// Add clamping note
+	if output > maxRealisticDynamicRange {
+		result += " (clamped)"
+	}
+
+	// Add comparison
+	tolerance := 0.5
+	if math.Abs(outputClamped-input) < tolerance {
+		result += " (unchanged)"
+	} else {
+		result += fmt.Sprintf(" (was %.1f dB)", input)
+	}
+
+	return result
+}
+
 // ReportData contains all the information needed to generate an analysis report
 type ReportData struct {
 	InputPath    string
@@ -330,7 +371,7 @@ func GenerateReport(data ReportData) error {
 		fmt.Fprintf(f, "True Peak:           %.1f dBTP\n", m.InputTP)
 		fmt.Fprintf(f, "Loudness Range:      %.1f LU\n", m.InputLRA)
 		fmt.Fprintf(f, "Noise Floor:         %.1f dB (measured)\n", m.NoiseFloor)
-		fmt.Fprintf(f, "Dynamic Range:       %.1f dB\n", m.DynamicRange)
+		fmt.Fprintf(f, "Dynamic Range:       %s\n", formatDynamicRange(m.DynamicRange))
 		fmt.Fprintf(f, "RMS Level:           %.1f dBFS\n", m.RMSLevel)
 		fmt.Fprintf(f, "Peak Level:          %.1f dBFS\n", m.PeakLevel)
 
@@ -418,7 +459,7 @@ func GenerateReport(data ReportData) error {
 				fmt.Fprintf(f, "Integrated Loudness: %.1f LUFS %s\n", om.OutputI, formatComparison(om.OutputI, m.InputI, "LUFS", 1))
 				fmt.Fprintf(f, "True Peak:           %.1f dBTP %s\n", om.OutputTP, formatComparison(om.OutputTP, m.InputTP, "dBTP", 1))
 				fmt.Fprintf(f, "Loudness Range:      %.1f LU %s\n", om.OutputLRA, formatComparison(om.OutputLRA, m.InputLRA, "LU", 1))
-				fmt.Fprintf(f, "Dynamic Range:       %.1f dB %s\n", om.DynamicRange, formatComparison(om.DynamicRange, m.DynamicRange, "dB", 1))
+				fmt.Fprintf(f, "Dynamic Range:       %s\n", formatDynamicRangeComparison(om.DynamicRange, m.DynamicRange))
 				fmt.Fprintf(f, "RMS Level:           %.1f dBFS %s\n", om.RMSLevel, formatComparison(om.RMSLevel, m.RMSLevel, "dBFS", 1))
 				fmt.Fprintf(f, "Peak Level:          %.1f dBFS %s\n", om.PeakLevel, formatComparison(om.PeakLevel, m.PeakLevel, "dBFS", 1))
 
@@ -440,7 +481,7 @@ func GenerateReport(data ReportData) error {
 				fmt.Fprintf(f, "Integrated Loudness: %.1f LUFS\n", om.OutputI)
 				fmt.Fprintf(f, "True Peak:           %.1f dBTP\n", om.OutputTP)
 				fmt.Fprintf(f, "Loudness Range:      %.1f LU\n", om.OutputLRA)
-				fmt.Fprintf(f, "Dynamic Range:       %.1f dB\n", om.DynamicRange)
+				fmt.Fprintf(f, "Dynamic Range:       %s\n", formatDynamicRange(om.DynamicRange))
 				fmt.Fprintf(f, "RMS Level:           %.1f dBFS\n", om.RMSLevel)
 				fmt.Fprintf(f, "Peak Level:          %.1f dBFS\n", om.PeakLevel)
 
@@ -615,6 +656,8 @@ func formatFilter(f *os.File, filterID processor.FilterID, cfg *processor.Filter
 		formatAdeclickFilter(f, cfg, prefix)
 	case processor.FilterAfftdn:
 		formatAfftdnFilter(f, cfg, m, prefix)
+	case processor.FilterAfftdnSimple:
+		formatAfftdnSimpleFilter(f, cfg, m, prefix)
 	case processor.FilterArnndn:
 		formatArnndnFilter(f, cfg, m, prefix)
 	case processor.FilterAgate:
@@ -818,6 +861,54 @@ func formatAfftdnFilter(f *os.File, cfg *processor.FilterChainConfig, m *process
 			fmt.Fprintf(f, ", headroom %.1f dB (%s)", m.NoiseReductionHeadroom, quality)
 		}
 		fmt.Fprintln(f, "")
+	}
+}
+
+// formatAfftdnSimpleFilter outputs afftdn_simple (sample-free) filter details
+func formatAfftdnSimpleFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
+	if !cfg.AfftdnSimpleEnabled {
+		fmt.Fprintf(f, "%safftdn_simple: DISABLED\n", prefix)
+		// Show why disabled if we have measurements
+		if m != nil && m.NoiseFloor < -75 {
+			fmt.Fprintf(f, "        Rationale: clean source (noise floor %.1f dBFS < -75 dBFS threshold)\n", m.NoiseFloor)
+		}
+		return
+	}
+
+	// Show noise type with explanation
+	noiseType := cfg.AfftdnSimpleNoiseType
+	if noiseType == "" {
+		noiseType = "w"
+	}
+	noiseTypeDesc := map[string]string{
+		"w": "white (broadband)",
+		"v": "vinyl (LF-weighted)",
+		"s": "shellac (HF-weighted)",
+	}[noiseType]
+	if noiseTypeDesc == "" {
+		noiseTypeDesc = noiseType
+	}
+
+	fmt.Fprintf(f, "%safftdn_simple: %.1f dB reduction, type %s\n",
+		prefix, cfg.AfftdnSimpleNoiseReduction, noiseTypeDesc)
+	fmt.Fprintf(f, "        Floor: %.1f dBFS (from Pass 1 measurements)\n", cfg.AfftdnSimpleNoiseFloor)
+
+	// Show noise type selection rationale
+	if m != nil {
+		switch noiseType {
+		case "v":
+			fmt.Fprintf(f, "        Rationale: vinyl mode — LF emphasis (decrease %.3f, slope %.2e)\n",
+				m.SpectralDecrease, m.SpectralSlope)
+		case "s":
+			fmt.Fprintf(f, "        Rationale: shellac mode — HF emphasis (centroid %.0f Hz, rolloff %.0f Hz)\n",
+				m.SpectralCentroid, m.SpectralRolloff)
+		case "w":
+			if m.SpectralFlatness > 0.6 {
+				fmt.Fprintf(f, "        Rationale: white mode — high flatness (%.3f)\n", m.SpectralFlatness)
+			} else {
+				fmt.Fprintf(f, "        Rationale: white mode — default (no strong spectral bias)\n")
+			}
+		}
 	}
 }
 

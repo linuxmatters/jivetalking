@@ -28,18 +28,19 @@ const (
 	FilterResample      FilterID = "resample"      // Output format: 44.1kHz/16-bit/mono (Pass 2 only)
 
 	// Processing filters (Pass 2 only)
-	FilterHighpass    FilterID = "highpass"
-	FilterBandreject  FilterID = "bandreject" // Mains hum notch filter
-	FilterAdeclick    FilterID = "adeclick"
-	FilterAfftdn      FilterID = "afftdn"
-	FilterArnndn      FilterID = "arnndn"
-	FilterAgate       FilterID = "agate"
-	FilterAcompressor FilterID = "acompressor"
-	FilterDeesser     FilterID = "deesser"
-	FilterSpeechnorm  FilterID = "speechnorm"
-	FilterDynaudnorm  FilterID = "dynaudnorm"
-	FilterBleedGate   FilterID = "bleedgate" // Catches amplified bleed/crosstalk after normalisation
-	FilterAlimiter    FilterID = "alimiter"
+	FilterHighpass     FilterID = "highpass"
+	FilterBandreject   FilterID = "bandreject" // Mains hum notch filter
+	FilterAdeclick     FilterID = "adeclick"
+	FilterAfftdn       FilterID = "afftdn"        // Profile-based FFT denoise (uses noise sample)
+	FilterAfftdnSimple FilterID = "afftdn_simple" // Sample-free FFT denoise (no noise sample needed)
+	FilterArnndn       FilterID = "arnndn"
+	FilterAgate        FilterID = "agate"
+	FilterAcompressor  FilterID = "acompressor"
+	FilterDeesser      FilterID = "deesser"
+	FilterSpeechnorm   FilterID = "speechnorm"
+	FilterDynaudnorm   FilterID = "dynaudnorm"
+	FilterBleedGate    FilterID = "bleedgate" // Catches amplified bleed/crosstalk after normalisation
+	FilterAlimiter     FilterID = "alimiter"
 )
 
 // Pass1FilterOrder defines the filter chain for analysis pass.
@@ -74,6 +75,7 @@ var Pass2FilterOrder = []FilterID{
 	FilterBandreject,
 	FilterAdeclick,
 	FilterAfftdn,
+	FilterAfftdnSimple,
 	FilterArnndn,
 	FilterAgate,
 	FilterAcompressor,
@@ -195,6 +197,15 @@ type FilterChainConfig struct {
 	NoiseTrack           bool          // Enable automatic noise tracking (tn=1) - used when no profile
 	NoiseProfilePath     string        // Path to extracted noise profile WAV file (empty = use tracking mode)
 	NoiseProfileDuration time.Duration // Duration of noise profile sample (for atrim calculation)
+
+	// Simple Noise Reduction (afftdn_simple) - sample-free spectral denoising
+	// Does not require a noise sample - uses adaptive noise model with conservative settings.
+	// Intended as a standalone filter for testing, and eventually as fallback when
+	// profile-based afftdn fails to find a suitable noise sample.
+	AfftdnSimpleEnabled        bool    // Enable sample-free afftdn filter
+	AfftdnSimpleNoiseFloor     float64 // dB, estimated noise floor from Pass 1
+	AfftdnSimpleNoiseReduction float64 // dB, reduction amount (conservative: 6-10dB)
+	AfftdnSimpleNoiseType      string  // Noise type: "w" (white), "v" (vinyl), "s" (shellac)
 
 	// Gate (agate) - removes silence and low-level noise
 	GateEnabled   bool    // Enable agate filter
@@ -336,11 +347,18 @@ func DefaultFilterConfig() *FilterChainConfig {
 		AdeclickEnabled: false,
 		AdeclickMethod:  "s", // overlap-save (default for better quality)
 
-		// Noise Reduction - will use Pass 1 noise floor estimate
+		// Noise Reduction (profile-based) - disabled while testing AfftdnSimple
 		AfftdnEnabled:  false,
 		NoiseFloor:     -25.0, // Placeholder, will be updated from measurements
 		NoiseReduction: 12.0,  // 12 dB reduction (FFT denoise default, good for speech)
 		NoiseTrack:     true,  // Enable adaptive tracking
+
+		// Simple Noise Reduction (sample-free) - enabled for testing
+		// Uses adaptive noise type with conservative settings (6-10dB cap)
+		AfftdnSimpleEnabled:        true,
+		AfftdnSimpleNoiseFloor:     -50.0, // Placeholder, will be updated from measurements
+		AfftdnSimpleNoiseReduction: 10.0,  // Conservative default, tuned adaptively (capped at 6-10dB)
+		AfftdnSimpleNoiseType:      "w",   // White noise default, tuned adaptively based on spectral profile
 
 		// Gate - remove silence and low-level noise between speech
 		// All parameters set adaptively based on Pass 1 measurements
@@ -730,6 +748,64 @@ func (cfg *FilterChainConfig) buildAfftdnFilter() string {
 	)
 }
 
+// buildAfftdnSimpleFilter builds the sample-free afftdn filter specification.
+// This filter does not require a noise sample - it uses a white noise model (nt=w)
+// with conservative settings to provide gentle denoising without risking voice degradation.
+//
+// Key differences from profile-based afftdn:
+// - No noise sample required (no sn start/stop commands)
+// - Uses white noise type (nt=w) - safe default for unknown noise characteristics
+// - Conservative noise reduction (6-15dB cap) to avoid voice artifacts
+// - Higher residual floor (-45dB) to avoid "musical noise" artifacts
+// - Slower adaptivity (0.7) for stability without profile guidance
+// - Tracking mode enabled (tn=1) to adapt to changing noise conditions
+//
+// Intended for testing and as fallback when profile-based afftdn can't find a valid sample.
+func (cfg *FilterChainConfig) buildAfftdnSimpleFilter() string {
+	if !cfg.AfftdnSimpleEnabled {
+		return ""
+	}
+
+	// Clamp noise floor to afftdn's valid range: -80 to -20 dB
+	noiseFloorClamped := cfg.AfftdnSimpleNoiseFloor
+	if noiseFloorClamped < -80.0 {
+		noiseFloorClamped = -80.0
+	} else if noiseFloorClamped > -20.0 {
+		noiseFloorClamped = -20.0
+	}
+
+	// Conservative parameters for sample-free mode
+	// Higher residual floor (-45dB) leaves more residual to avoid "musical noise" artifacts
+	// when the noise profile is imprecise (which it always is without a sample)
+	residualFloor := -45.0
+
+	// Higher adaptivity (0.7) means slower adaptation for stability
+	// (afftdn: 0 = instant, 1 = slowest; default 0.5)
+	adaptivity := 0.7
+
+	// Gain smoothing to reduce artifacts
+	gainSmooth := 5
+
+	// Select noise type (default to white if not set)
+	noiseType := cfg.AfftdnSimpleNoiseType
+	if noiseType == "" {
+		noiseType = "w"
+	}
+
+	return fmt.Sprintf(
+		"afftdn=nf=%.1f:nr=%.1f:tn=%d:rf=%.1f:ad=%.2f:fo=%.1f:gs=%d:om=%s:nt=%s",
+		noiseFloorClamped,
+		cfg.AfftdnSimpleNoiseReduction,
+		1, // Tracking mode enabled - adapt to changing noise
+		residualFloor,
+		adaptivity,
+		1.0, // Floor offset factor
+		gainSmooth,
+		"o",       // Output mode: filtered audio
+		noiseType, // Noise type: adaptive based on spectral profile
+	)
+}
+
 // buildAgateFilter builds the agate (noise gate) filter specification.
 // Removes low-level noise between speech while preserving natural pauses.
 // Detection mode is adaptive: RMS for tonal bleed, peak for clean recordings.
@@ -906,6 +982,7 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 		FilterBandreject:    cfg.buildBandrejectFilter,
 		FilterAdeclick:      cfg.buildAdeclickFilter,
 		FilterAfftdn:        cfg.buildAfftdnFilter,
+		FilterAfftdnSimple:  cfg.buildAfftdnSimpleFilter,
 		FilterAgate:         cfg.buildAgateFilter,
 		FilterAcompressor:   cfg.buildAcompressorFilter,
 		FilterDeesser:       cfg.buildDeesserFilter,

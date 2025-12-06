@@ -60,6 +60,13 @@ const (
 	noiseReductionMin  = 6.0  // dB - minimum (always some reduction)
 	noiseReductionMax  = 40.0 // dB - maximum (afftdn stability limit)
 
+	// Sample-free noise reduction (afftdn_simple) parameters
+	// Conservative limits to avoid voice degradation without noise profile guidance
+	afftdnSimpleBase             = 8.0   // dB - conservative baseline
+	afftdnSimpleMin              = 6.0   // dB - minimum useful reduction
+	afftdnSimpleMax              = 10.0  // dB - conservative ceiling to avoid metallic artifacts
+	afftdnSimpleCleanFloorThresh = -75.0 // dBFS - below this, source is clean enough to skip
+
 	// De-esser intensity levels
 	deessIntensityBright = 0.6 // Bright voice base intensity
 	deessIntensityNormal = 0.5 // Normal voice base intensity
@@ -288,8 +295,9 @@ func AdaptConfig(config *FilterChainConfig, measurements *AudioMeasurements) {
 	tuneHighpassFreq(config, measurements, lufsGap)
 	tuneHumFilter(config, measurements) // Notch filter for mains hum (entropy-based)
 	tuneNoiseReduction(config, measurements, lufsGap)
-	tuneArnndn(config, measurements, lufsGap) // RNN denoise (LUFS gap + noise floor based)
-	tuneGateThreshold(config, measurements)   // Gate threshold before denoise in chain
+	tuneAfftdnSimple(config, measurements, lufsGap) // Sample-free FFT denoise
+	tuneArnndn(config, measurements, lufsGap)       // RNN denoise (LUFS gap + noise floor based)
+	tuneGateThreshold(config, measurements)         // Gate threshold before denoise in chain
 	tuneDeesser(config, measurements)
 	tuneCompression(config, measurements)
 	tuneDynaudnorm(config)
@@ -465,6 +473,96 @@ func tuneNoiseReduction(config *FilterChainConfig, measurements *AudioMeasuremen
 
 	// Clamp to reasonable limits (afftdn stability)
 	config.NoiseReduction = clamp(adaptiveReduction, noiseReductionMin, noiseReductionMax)
+}
+
+// tuneAfftdnSimple adapts the sample-free FFT noise reduction filter.
+//
+// This filter operates without a noise sample, using a white noise model (nt=w).
+// Because it can't precisely match the actual noise profile, it uses conservative
+// settings to avoid voice degradation.
+//
+// Strategy:
+// - Base reduction from LUFS gap (how much gain will be applied later)
+// - Conservative cap at 15dB (vs 40dB for profile-based afftdn)
+// - If we're applying 20dB of gain later, noise needs reduction NOW
+// - But without precise profile, we cap at 15dB to protect voice quality
+//
+// Parameters set by this function:
+// - AfftdnSimpleNoiseFloor: from Pass 1 measurements
+// - AfftdnSimpleNoiseReduction: conservative calculation (6-10dB)
+// - AfftdnSimpleNoiseType: selected based on spectral characteristics
+func tuneAfftdnSimple(config *FilterChainConfig, measurements *AudioMeasurements, lufsGap float64) {
+	if !config.AfftdnSimpleEnabled {
+		return
+	}
+
+	// Disable for clean sources — they don't need sample-free denoising
+	// and the imprecise noise model risks introducing artifacts
+	if measurements.NoiseFloor < afftdnSimpleCleanFloorThresh {
+		config.AfftdnSimpleEnabled = false
+		return
+	}
+
+	// Set noise floor from measurements
+	config.AfftdnSimpleNoiseFloor = measurements.NoiseFloor
+
+	// Select noise type based on spectral characteristics
+	config.AfftdnSimpleNoiseType = selectAfftdnNoiseType(measurements)
+
+	// Calculate noise reduction based on LUFS gap
+	// Logic: if we're going to apply X dB of gain, we should reduce noise by
+	// approximately that amount so it doesn't get amplified. But without a
+	// precise noise profile, we cap conservatively.
+	adaptiveReduction := afftdnSimpleBase
+
+	// Add reduction proportional to LUFS gap (the gain we'll apply later)
+	// Scale very conservatively (0.3x) to avoid metallic artifacts
+	if lufsGap > 0 {
+		adaptiveReduction += lufsGap * 0.3
+	}
+
+	// Clamp to conservative limits (max 10dB without a proper noise profile)
+	config.AfftdnSimpleNoiseReduction = clamp(adaptiveReduction, afftdnSimpleMin, afftdnSimpleMax)
+}
+
+// selectAfftdnNoiseType chooses the optimal noise model based on spectral measurements.
+//
+// The afftdn filter's noise type (nt) parameter affects how it models the noise profile:
+//   - "w" (white): Flat spectrum - best for broadband hiss, HVAC, fan noise
+//   - "v" (vinyl): LF-weighted spectrum - best for rumble, hum, tonal LF noise
+//   - "s" (shellac): HF-weighted spectrum - best for tape hiss, preamp noise
+//
+// Selection criteria:
+//   - High spectral flatness + high entropy → broadband noise → white
+//   - Strong LF emphasis (low decrease, steep negative slope) → rumble/hum → vinyl
+//   - High centroid + rolloff → HF-dominant noise → shellac
+//   - Otherwise → white (safe default)
+func selectAfftdnNoiseType(m *AudioMeasurements) string {
+	// High flatness + high entropy = broadband hiss → white
+	// Flatness > 0.6 indicates relatively uniform spectral energy
+	// Entropy > 0.5 indicates random/noisy rather than tonal content
+	if m.SpectralFlatness > 0.6 && m.NoiseProfile != nil && m.NoiseProfile.Entropy > 0.5 {
+		return "w"
+	}
+
+	// Strong LF emphasis + steep negative slope = rumble + hum → vinyl
+	// SpectralDecrease < -0.1 indicates energy concentrated in lower frequencies
+	// SpectralSlope < -0.00003 indicates steep high-to-low frequency rolloff
+	// This pattern is typical of mains hum, HVAC rumble, and room resonance
+	if m.SpectralDecrease < -0.1 && m.SpectralSlope < -0.00003 {
+		return "v"
+	}
+
+	// High-frequency emphasis = tape hiss / preamp noise → shellac
+	// Centroid > 6000 Hz indicates brightness/HF energy
+	// Rolloff > 10000 Hz indicates significant content above 10kHz
+	// This pattern is typical of analog tape hiss or preamp self-noise
+	if m.SpectralCentroid > 6000 && m.SpectralRolloff > 10000 {
+		return "s"
+	}
+
+	// Safe default: white noise model
+	return "w"
 }
 
 // tuneHumFilter adapts bandreject (notch) filter for mains hum removal.
