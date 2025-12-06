@@ -110,7 +110,7 @@ func TestTuneNoiseReduction(t *testing.T) {
 	}
 }
 
-func TestTuneHighpassFreq(t *testing.T) {
+func TestTuneDS201HighPass(t *testing.T) {
 	// Helper to create noise profile with given characteristics
 	makeNoiseProfile := func(noiseFloor, entropy float64) *NoiseProfile {
 		return &NoiseProfile{
@@ -308,7 +308,7 @@ func TestTuneHighpassFreq(t *testing.T) {
 			centroid:         0, // triggers early return
 			spectralDecrease: 0.0,
 			noiseProfile:     makeNoiseProfile(-50.0, 0.8),
-			wantFreqMin:      80, // DefaultFilterConfig().HighpassFreq
+			wantFreqMin:      80, // DefaultFilterConfig().DS201HPFreq
 			wantFreqMax:      80,
 		},
 		{
@@ -358,7 +358,7 @@ func TestTuneHighpassFreq(t *testing.T) {
 			// Setup: create test config and measurements
 			config := newTestConfig()
 			// Start with highpass enabled to test tuning behavior
-			config.HighpassEnabled = true
+			config.DS201HPEnabled = true
 			measurements := &AudioMeasurements{
 				SpectralCentroid: tt.centroid,
 				SpectralDecrease: tt.spectralDecrease,
@@ -367,40 +367,139 @@ func TestTuneHighpassFreq(t *testing.T) {
 			}
 
 			// Execute (lufsGap is no longer used for highpass tuning)
-			tuneHighpassFreq(config, measurements, 0.0)
+			tuneDS201HighPass(config, measurements, 0.0)
 
 			// Verify disabled state (legacy - now rarely used)
 			if tt.wantDisabled {
-				if config.HighpassEnabled {
-					t.Errorf("HighpassEnabled = true, want false")
+				if config.DS201HPEnabled {
+					t.Errorf("DS201HPEnabled = true, want false")
 				}
 				return // no further checks needed for disabled
 			}
 
 			// Verify enabled (warm voices now use gentle settings instead of disabling)
-			if !config.HighpassEnabled {
-				t.Errorf("HighpassEnabled = false, want true")
+			if !config.DS201HPEnabled {
+				t.Errorf("DS201HPEnabled = false, want true")
 			}
 
 			// Verify frequency
-			if config.HighpassFreq < tt.wantFreqMin || config.HighpassFreq > tt.wantFreqMax {
-				t.Errorf("HighpassFreq = %.1f Hz, want [%.1f, %.1f] Hz",
-					config.HighpassFreq, tt.wantFreqMin, tt.wantFreqMax)
+			if config.DS201HPFreq < tt.wantFreqMin || config.DS201HPFreq > tt.wantFreqMax {
+				t.Errorf("DS201HPFreq = %.1f Hz, want [%.1f, %.1f] Hz",
+					config.DS201HPFreq, tt.wantFreqMin, tt.wantFreqMax)
 			}
 
 			// Verify poles (slope) if specified
-			if tt.wantPoles > 0 && config.HighpassPoles != tt.wantPoles {
-				t.Errorf("HighpassPoles = %d, want %d", config.HighpassPoles, tt.wantPoles)
+			if tt.wantPoles > 0 && config.DS201HPPoles != tt.wantPoles {
+				t.Errorf("DS201HPPoles = %d, want %d", config.DS201HPPoles, tt.wantPoles)
 			}
 
 			// Verify width (Q) if specified
-			if tt.wantWidth > 0 && config.HighpassWidth != tt.wantWidth {
-				t.Errorf("HighpassWidth = %.3f, want %.3f", config.HighpassWidth, tt.wantWidth)
+			if tt.wantWidth > 0 && config.DS201HPWidth != tt.wantWidth {
+				t.Errorf("DS201HPWidth = %.3f, want %.3f", config.DS201HPWidth, tt.wantWidth)
 			}
 
 			// Verify mix if specified
-			if tt.wantMix > 0 && config.HighpassMix != tt.wantMix {
-				t.Errorf("HighpassMix = %.2f, want %.2f", config.HighpassMix, tt.wantMix)
+			if tt.wantMix > 0 && config.DS201HPMix != tt.wantMix {
+				t.Errorf("DS201HPMix = %.2f, want %.2f", config.DS201HPMix, tt.wantMix)
+			}
+		})
+	}
+}
+
+func TestTuneDS201LowPass(t *testing.T) {
+	// Constants from adaptive.go for reference:
+	// ds201LPDefaultFreq = 16000.0 Hz
+	// ds201LPMinFreq     = 8000.0 Hz
+	// ds201LPHeadroom    = 2000.0 Hz
+	// HF noise detection: ZCR > 0.15 AND centroid < 3000 Hz
+
+	tests := []struct {
+		name        string
+		rolloff     float64 // spectral rolloff (Hz)
+		zcr         float64 // zero crossings rate
+		centroid    float64 // spectral centroid (Hz)
+		wantEnabled bool
+		wantFreqMin float64 // minimum expected frequency (0 = don't check)
+		wantFreqMax float64 // maximum expected frequency (0 = don't check)
+		desc        string
+	}{
+		{
+			name:        "dark voice - LP disabled",
+			rolloff:     6000,
+			zcr:         0.05,
+			centroid:    2500,
+			wantEnabled: false,
+			desc:        "rolloff < 8000 Hz means voice is already dark, no LP needed",
+		},
+		{
+			name:        "normal voice - LP disabled",
+			rolloff:     10000,
+			zcr:         0.08,
+			centroid:    5000,
+			wantEnabled: false,
+			desc:        "rolloff between 8000-14000 Hz with normal ZCR, no clear benefit",
+		},
+		{
+			name:        "high rolloff - ultrasonics filtered",
+			rolloff:     15000,
+			zcr:         0.05,
+			centroid:    5000,
+			wantEnabled: true,
+			wantFreqMin: 16000, // rolloff + headroom = 17000, capped at 16000
+			wantFreqMax: 16000,
+			desc:        "rolloff > 14000 Hz enables LP to filter ultrasonics",
+		},
+		{
+			name:        "very high rolloff",
+			rolloff:     14500,
+			zcr:         0.05,
+			centroid:    5000,
+			wantEnabled: true,
+			wantFreqMin: 16000, // 14500 + 2000 = 16500, capped at 16000
+			wantFreqMax: 16000,
+			desc:        "rolloff > 14000 sets cutoff at rolloff + headroom (capped at 16000)",
+		},
+		{
+			name:        "HF noise detected",
+			rolloff:     10000,
+			zcr:         0.20, // > 0.15
+			centroid:    2500, // < 3000
+			wantEnabled: true,
+			wantFreqMin: 12000,
+			wantFreqMax: 12000,
+			desc:        "high ZCR + low centroid pattern indicates HF noise",
+		},
+		{
+			name:        "high ZCR but bright voice",
+			rolloff:     10000,
+			zcr:         0.20,
+			centroid:    5000, // > 3000
+			wantEnabled: false,
+			desc:        "high ZCR with normal centroid is speech, not noise",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := newTestConfig()
+			measurements := &AudioMeasurements{
+				SpectralRolloff:   tt.rolloff,
+				ZeroCrossingsRate: tt.zcr,
+				SpectralCentroid:  tt.centroid,
+			}
+
+			tuneDS201LowPass(config, measurements)
+
+			if config.DS201LPEnabled != tt.wantEnabled {
+				t.Errorf("DS201LPEnabled = %v, want %v [%s]",
+					config.DS201LPEnabled, tt.wantEnabled, tt.desc)
+			}
+
+			if tt.wantEnabled && tt.wantFreqMin > 0 {
+				if config.DS201LPFreq < tt.wantFreqMin || config.DS201LPFreq > tt.wantFreqMax {
+					t.Errorf("DS201LPFreq = %.0f Hz, want %.0f-%.0f Hz [%s]",
+						config.DS201LPFreq, tt.wantFreqMin, tt.wantFreqMax, tt.desc)
+				}
 			}
 		})
 	}
@@ -614,7 +713,7 @@ func TestTuneDeesser(t *testing.T) {
 	}
 }
 
-func TestTuneGate(t *testing.T) {
+func TestTuneDS201Gate(t *testing.T) {
 	// Tests the comprehensive gate tuning which calculates all gate parameters
 	// based on measurements including NoiseProfile (silence sample analysis).
 	//
@@ -694,15 +793,15 @@ func TestTuneGate(t *testing.T) {
 					},
 				}
 
-				tuneGate(config, measurements)
+				tuneDS201Gate(config, measurements)
 
-				actualDB := linearToDB(config.GateThreshold)
+				actualDB := linearToDB(config.DS201GateThreshold)
 				diff := actualDB - tt.wantThresholdDB
 				if diff < 0 {
 					diff = -diff
 				}
 				if diff > tt.tolerance {
-					t.Errorf("GateThreshold = %.1f dB, want %.1f dB ±%.1f [%s]",
+					t.Errorf("DS201GateThreshold = %.1f dB, want %.1f dB ±%.1f [%s]",
 						actualDB, tt.wantThresholdDB, tt.tolerance, tt.desc)
 				}
 			})
@@ -731,10 +830,10 @@ func TestTuneGate(t *testing.T) {
 					InputLRA:   tt.lra,
 				}
 
-				tuneGate(config, measurements)
+				tuneDS201Gate(config, measurements)
 
-				if config.GateRatio != tt.wantRatio {
-					t.Errorf("GateRatio = %.1f, want %.1f [%s]", config.GateRatio, tt.wantRatio, tt.desc)
+				if config.DS201GateRatio != tt.wantRatio {
+					t.Errorf("DS201GateRatio = %.1f, want %.1f [%s]", config.DS201GateRatio, tt.wantRatio, tt.desc)
 				}
 			})
 		}
@@ -766,15 +865,15 @@ func TestTuneGate(t *testing.T) {
 					SpectralFlux:  tt.spectralFlux,
 				}
 
-				tuneGate(config, measurements)
+				tuneDS201Gate(config, measurements)
 
-				diff := config.GateAttack - tt.wantAttackMS
+				diff := config.DS201GateAttack - tt.wantAttackMS
 				if diff < 0 {
 					diff = -diff
 				}
 				if diff > tt.tolerance {
-					t.Errorf("GateAttack = %.1f ms, want %.1f ms ±%.1f [%s]",
-						config.GateAttack, tt.wantAttackMS, tt.tolerance, tt.desc)
+					t.Errorf("DS201GateAttack = %.1f ms, want %.1f ms ±%.1f [%s]",
+						config.DS201GateAttack, tt.wantAttackMS, tt.tolerance, tt.desc)
 				}
 			})
 		}
@@ -809,11 +908,11 @@ func TestTuneGate(t *testing.T) {
 					},
 				}
 
-				tuneGate(config, measurements)
+				tuneDS201Gate(config, measurements)
 
-				if config.GateDetection != tt.wantDetection {
-					t.Errorf("GateDetection = %q, want %q [%s]",
-						config.GateDetection, tt.wantDetection, tt.desc)
+				if config.DS201GateDetection != tt.wantDetection {
+					t.Errorf("DS201GateDetection = %q, want %q [%s]",
+						config.DS201GateDetection, tt.wantDetection, tt.desc)
 				}
 			})
 		}
@@ -847,15 +946,15 @@ func TestTuneGate(t *testing.T) {
 					},
 				}
 
-				tuneGate(config, measurements)
+				tuneDS201Gate(config, measurements)
 
-				actualDB := linearToDB(config.GateRange)
+				actualDB := linearToDB(config.DS201GateRange)
 				diff := actualDB - tt.wantRangeDB
 				if diff < 0 {
 					diff = -diff
 				}
 				if diff > tt.tolerance {
-					t.Errorf("GateRange = %.1f dB, want %.1f dB ±%.1f [%s]",
+					t.Errorf("DS201GateRange = %.1f dB, want %.1f dB ±%.1f [%s]",
 						actualDB, tt.wantRangeDB, tt.tolerance, tt.desc)
 				}
 			})
@@ -871,17 +970,17 @@ func TestTuneGate(t *testing.T) {
 		}
 
 		// Should not panic
-		tuneGate(config, measurements)
+		tuneDS201Gate(config, measurements)
 
 		// Should still calculate threshold from noise floor
-		thresholdDB := linearToDB(config.GateThreshold)
+		thresholdDB := linearToDB(config.DS201GateThreshold)
 		if thresholdDB < -70 || thresholdDB > -25 {
-			t.Errorf("GateThreshold = %.1f dB, want within bounds [-70, -25]", thresholdDB)
+			t.Errorf("DS201GateThreshold = %.1f dB, want within bounds [-70, -25]", thresholdDB)
 		}
 
 		// Detection should default to RMS when no profile
-		if config.GateDetection != "rms" {
-			t.Errorf("GateDetection = %q, want 'rms' (default for missing profile)", config.GateDetection)
+		if config.DS201GateDetection != "rms" {
+			t.Errorf("DS201GateDetection = %q, want 'rms' (default for missing profile)", config.DS201GateDetection)
 		}
 	})
 }
@@ -1012,22 +1111,22 @@ func TestSanitizeConfig(t *testing.T) {
 		{
 			name: "valid config passes through unchanged",
 			config: FilterChainConfig{
-				HighpassFreq:   100.0,
-				DeessIntensity: 0.3,
-				NoiseReduction: 18.0,
-				LA2ARatio:      3.0,
-				LA2AThreshold:  -24.0,
-				LA2AMakeup:     4.0,
-				GateThreshold:  0.02,
+				DS201HPFreq:        100.0,
+				DeessIntensity:     0.3,
+				NoiseReduction:     18.0,
+				LA2ARatio:          3.0,
+				LA2AThreshold:      -24.0,
+				LA2AMakeup:         4.0,
+				DS201GateThreshold: 0.02,
 			},
 			want: FilterChainConfig{
-				HighpassFreq:   100.0,
-				DeessIntensity: 0.3,
-				NoiseReduction: 18.0,
-				LA2ARatio:      3.0,
-				LA2AThreshold:  -24.0,
-				LA2AMakeup:     4.0,
-				GateThreshold:  0.02,
+				DS201HPFreq:        100.0,
+				DeessIntensity:     0.3,
+				NoiseReduction:     18.0,
+				LA2ARatio:          3.0,
+				LA2AThreshold:      -24.0,
+				LA2AMakeup:         4.0,
+				DS201GateThreshold: 0.02,
 			},
 		},
 
@@ -1035,148 +1134,148 @@ func TestSanitizeConfig(t *testing.T) {
 		{
 			name: "NaN HighpassFreq gets default",
 			config: FilterChainConfig{
-				HighpassFreq:   math.NaN(),
-				DeessIntensity: 0.3,
-				NoiseReduction: 18.0,
-				LA2ARatio:      3.0,
-				LA2AThreshold:  -24.0,
-				LA2AMakeup:     4.0,
-				GateThreshold:  0.02,
+				DS201HPFreq:        math.NaN(),
+				DeessIntensity:     0.3,
+				NoiseReduction:     18.0,
+				LA2ARatio:          3.0,
+				LA2AThreshold:      -24.0,
+				LA2AMakeup:         4.0,
+				DS201GateThreshold: 0.02,
 			},
 			want: FilterChainConfig{
-				HighpassFreq:   80.0, // defaultHighpassFreq
-				DeessIntensity: 0.3,
-				NoiseReduction: 18.0,
-				LA2ARatio:      3.0,
-				LA2AThreshold:  -24.0,
-				LA2AMakeup:     4.0,
-				GateThreshold:  0.02,
+				DS201HPFreq:        80.0, // defaultHighpassFreq
+				DeessIntensity:     0.3,
+				NoiseReduction:     18.0,
+				LA2ARatio:          3.0,
+				LA2AThreshold:      -24.0,
+				LA2AMakeup:         4.0,
+				DS201GateThreshold: 0.02,
 			},
 		},
 		{
 			name: "NaN DeessIntensity gets default",
 			config: FilterChainConfig{
-				HighpassFreq:   100.0,
-				DeessIntensity: math.NaN(),
-				NoiseReduction: 18.0,
-				LA2ARatio:      3.0,
-				LA2AThreshold:  -24.0,
-				LA2AMakeup:     4.0,
-				GateThreshold:  0.02,
+				DS201HPFreq:        100.0,
+				DeessIntensity:     math.NaN(),
+				NoiseReduction:     18.0,
+				LA2ARatio:          3.0,
+				LA2AThreshold:      -24.0,
+				LA2AMakeup:         4.0,
+				DS201GateThreshold: 0.02,
 			},
 			want: FilterChainConfig{
-				HighpassFreq:   100.0,
-				DeessIntensity: 0.0, // defaultDeessIntensity
-				NoiseReduction: 18.0,
-				LA2ARatio:      3.0,
-				LA2AThreshold:  -24.0,
-				LA2AMakeup:     4.0,
-				GateThreshold:  0.02,
+				DS201HPFreq:        100.0,
+				DeessIntensity:     0.0, // defaultDeessIntensity
+				NoiseReduction:     18.0,
+				LA2ARatio:          3.0,
+				LA2AThreshold:      -24.0,
+				LA2AMakeup:         4.0,
+				DS201GateThreshold: 0.02,
 			},
 		},
 		{
 			name: "NaN NoiseReduction gets default",
 			config: FilterChainConfig{
-				HighpassFreq:   100.0,
-				DeessIntensity: 0.3,
-				NoiseReduction: math.NaN(),
-				LA2ARatio:      3.0,
-				LA2AThreshold:  -24.0,
-				LA2AMakeup:     4.0,
-				GateThreshold:  0.02,
+				DS201HPFreq:        100.0,
+				DeessIntensity:     0.3,
+				NoiseReduction:     math.NaN(),
+				LA2ARatio:          3.0,
+				LA2AThreshold:      -24.0,
+				LA2AMakeup:         4.0,
+				DS201GateThreshold: 0.02,
 			},
 			want: FilterChainConfig{
-				HighpassFreq:   100.0,
-				DeessIntensity: 0.3,
-				NoiseReduction: 12.0, // defaultNoiseReduction
-				LA2ARatio:      3.0,
-				LA2AThreshold:  -24.0,
-				LA2AMakeup:     4.0,
-				GateThreshold:  0.02,
+				DS201HPFreq:        100.0,
+				DeessIntensity:     0.3,
+				NoiseReduction:     12.0, // defaultNoiseReduction
+				LA2ARatio:          3.0,
+				LA2AThreshold:      -24.0,
+				LA2AMakeup:         4.0,
+				DS201GateThreshold: 0.02,
 			},
 		},
 		{
 			name: "NaN LA2ARatio gets default",
 			config: FilterChainConfig{
-				HighpassFreq:   100.0,
-				DeessIntensity: 0.3,
-				NoiseReduction: 18.0,
-				LA2ARatio:      math.NaN(),
-				LA2AThreshold:  -24.0,
-				LA2AMakeup:     4.0,
-				GateThreshold:  0.02,
+				DS201HPFreq:        100.0,
+				DeessIntensity:     0.3,
+				NoiseReduction:     18.0,
+				LA2ARatio:          math.NaN(),
+				LA2AThreshold:      -24.0,
+				LA2AMakeup:         4.0,
+				DS201GateThreshold: 0.02,
 			},
 			want: FilterChainConfig{
-				HighpassFreq:   100.0,
-				DeessIntensity: 0.3,
-				NoiseReduction: 18.0,
-				LA2ARatio:      3.0, // defaultLA2ARatio (LA-2A inspired)
-				LA2AThreshold:  -24.0,
-				LA2AMakeup:     4.0,
-				GateThreshold:  0.02,
+				DS201HPFreq:        100.0,
+				DeessIntensity:     0.3,
+				NoiseReduction:     18.0,
+				LA2ARatio:          3.0, // defaultLA2ARatio (LA-2A inspired)
+				LA2AThreshold:      -24.0,
+				LA2AMakeup:         4.0,
+				DS201GateThreshold: 0.02,
 			},
 		},
 		{
 			name: "NaN LA2AThreshold gets default",
 			config: FilterChainConfig{
-				HighpassFreq:   100.0,
-				DeessIntensity: 0.3,
-				NoiseReduction: 18.0,
-				LA2ARatio:      3.0,
-				LA2AThreshold:  math.NaN(),
-				LA2AMakeup:     4.0,
-				GateThreshold:  0.02,
+				DS201HPFreq:        100.0,
+				DeessIntensity:     0.3,
+				NoiseReduction:     18.0,
+				LA2ARatio:          3.0,
+				LA2AThreshold:      math.NaN(),
+				LA2AMakeup:         4.0,
+				DS201GateThreshold: 0.02,
 			},
 			want: FilterChainConfig{
-				HighpassFreq:   100.0,
-				DeessIntensity: 0.3,
-				NoiseReduction: 18.0,
-				LA2ARatio:      3.0,
-				LA2AThreshold:  -18.0, // defaultLA2AThreshold (LA-2A inspired)
-				LA2AMakeup:     4.0,
-				GateThreshold:  0.02,
+				DS201HPFreq:        100.0,
+				DeessIntensity:     0.3,
+				NoiseReduction:     18.0,
+				LA2ARatio:          3.0,
+				LA2AThreshold:      -18.0, // defaultLA2AThreshold (LA-2A inspired)
+				LA2AMakeup:         4.0,
+				DS201GateThreshold: 0.02,
 			},
 		},
 		{
 			name: "NaN LA2AMakeup gets default",
 			config: FilterChainConfig{
-				HighpassFreq:   100.0,
-				DeessIntensity: 0.3,
-				NoiseReduction: 18.0,
-				LA2ARatio:      3.0,
-				LA2AThreshold:  -24.0,
-				LA2AMakeup:     math.NaN(),
-				GateThreshold:  0.02,
+				DS201HPFreq:        100.0,
+				DeessIntensity:     0.3,
+				NoiseReduction:     18.0,
+				LA2ARatio:          3.0,
+				LA2AThreshold:      -24.0,
+				LA2AMakeup:         math.NaN(),
+				DS201GateThreshold: 0.02,
 			},
 			want: FilterChainConfig{
-				HighpassFreq:   100.0,
-				DeessIntensity: 0.3,
-				NoiseReduction: 18.0,
-				LA2ARatio:      3.0,
-				LA2AThreshold:  -24.0,
-				LA2AMakeup:     2.0, // defaultLA2AMakeup (LA-2A inspired)
-				GateThreshold:  0.02,
+				DS201HPFreq:        100.0,
+				DeessIntensity:     0.3,
+				NoiseReduction:     18.0,
+				LA2ARatio:          3.0,
+				LA2AThreshold:      -24.0,
+				LA2AMakeup:         2.0, // defaultLA2AMakeup (LA-2A inspired)
+				DS201GateThreshold: 0.02,
 			},
 		},
 		{
 			name: "NaN GateThreshold gets default",
 			config: FilterChainConfig{
-				HighpassFreq:   100.0,
-				DeessIntensity: 0.3,
-				NoiseReduction: 18.0,
-				LA2ARatio:      3.0,
-				LA2AThreshold:  -24.0,
-				LA2AMakeup:     4.0,
-				GateThreshold:  math.NaN(),
+				DS201HPFreq:        100.0,
+				DeessIntensity:     0.3,
+				NoiseReduction:     18.0,
+				LA2ARatio:          3.0,
+				LA2AThreshold:      -24.0,
+				LA2AMakeup:         4.0,
+				DS201GateThreshold: math.NaN(),
 			},
 			want: FilterChainConfig{
-				HighpassFreq:   100.0,
-				DeessIntensity: 0.3,
-				NoiseReduction: 18.0,
-				LA2ARatio:      3.0,
-				LA2AThreshold:  -24.0,
-				LA2AMakeup:     4.0,
-				GateThreshold:  0.01, // defaultGateThreshold
+				DS201HPFreq:        100.0,
+				DeessIntensity:     0.3,
+				NoiseReduction:     18.0,
+				LA2ARatio:          3.0,
+				LA2AThreshold:      -24.0,
+				LA2AMakeup:         4.0,
+				DS201GateThreshold: 0.01, // defaultGateThreshold
 			},
 		},
 
@@ -1184,43 +1283,43 @@ func TestSanitizeConfig(t *testing.T) {
 		{
 			name: "positive Inf values get defaults",
 			config: FilterChainConfig{
-				HighpassFreq:   math.Inf(1),
-				DeessIntensity: math.Inf(1),
-				NoiseReduction: math.Inf(1),
-				LA2ARatio:      math.Inf(1),
-				LA2AThreshold:  math.Inf(1),
-				LA2AMakeup:     math.Inf(1),
-				GateThreshold:  math.Inf(1),
+				DS201HPFreq:        math.Inf(1),
+				DeessIntensity:     math.Inf(1),
+				NoiseReduction:     math.Inf(1),
+				LA2ARatio:          math.Inf(1),
+				LA2AThreshold:      math.Inf(1),
+				LA2AMakeup:         math.Inf(1),
+				DS201GateThreshold: math.Inf(1),
 			},
 			want: FilterChainConfig{
-				HighpassFreq:   80.0,
-				DeessIntensity: 0.0,
-				NoiseReduction: 12.0,
-				LA2ARatio:      3.0,   // LA-2A inspired
-				LA2AThreshold:  -18.0, // LA-2A inspired
-				LA2AMakeup:     2.0,   // LA-2A inspired
-				GateThreshold:  0.01,
+				DS201HPFreq:        80.0,
+				DeessIntensity:     0.0,
+				NoiseReduction:     12.0,
+				LA2ARatio:          3.0,   // LA-2A inspired
+				LA2AThreshold:      -18.0, // LA-2A inspired
+				LA2AMakeup:         2.0,   // LA-2A inspired
+				DS201GateThreshold: 0.01,
 			},
 		},
 		{
 			name: "negative Inf values get defaults",
 			config: FilterChainConfig{
-				HighpassFreq:   math.Inf(-1),
-				DeessIntensity: math.Inf(-1),
-				NoiseReduction: math.Inf(-1),
-				LA2ARatio:      math.Inf(-1),
-				LA2AThreshold:  math.Inf(-1),
-				LA2AMakeup:     math.Inf(-1),
-				GateThreshold:  math.Inf(-1),
+				DS201HPFreq:        math.Inf(-1),
+				DeessIntensity:     math.Inf(-1),
+				NoiseReduction:     math.Inf(-1),
+				LA2ARatio:          math.Inf(-1),
+				LA2AThreshold:      math.Inf(-1),
+				LA2AMakeup:         math.Inf(-1),
+				DS201GateThreshold: math.Inf(-1),
 			},
 			want: FilterChainConfig{
-				HighpassFreq:   80.0,
-				DeessIntensity: 0.0,
-				NoiseReduction: 12.0,
-				LA2ARatio:      3.0,   // LA-2A inspired
-				LA2AThreshold:  -18.0, // LA-2A inspired
-				LA2AMakeup:     2.0,   // LA-2A inspired
-				GateThreshold:  0.01,
+				DS201HPFreq:        80.0,
+				DeessIntensity:     0.0,
+				NoiseReduction:     12.0,
+				LA2ARatio:          3.0,   // LA-2A inspired
+				LA2AThreshold:      -18.0, // LA-2A inspired
+				LA2AMakeup:         2.0,   // LA-2A inspired
+				DS201GateThreshold: 0.01,
 			},
 		},
 
@@ -1229,43 +1328,43 @@ func TestSanitizeConfig(t *testing.T) {
 		{
 			name: "zero GateThreshold gets default",
 			config: FilterChainConfig{
-				HighpassFreq:   100.0,
-				DeessIntensity: 0.0, // zero is valid for DeessIntensity
-				NoiseReduction: 18.0,
-				LA2ARatio:      3.0,
-				LA2AThreshold:  -24.0,
-				LA2AMakeup:     4.0,
-				GateThreshold:  0.0, // zero is NOT valid for GateThreshold
+				DS201HPFreq:        100.0,
+				DeessIntensity:     0.0, // zero is valid for DeessIntensity
+				NoiseReduction:     18.0,
+				LA2ARatio:          3.0,
+				LA2AThreshold:      -24.0,
+				LA2AMakeup:         4.0,
+				DS201GateThreshold: 0.0, // zero is NOT valid for GateThreshold
 			},
 			want: FilterChainConfig{
-				HighpassFreq:   100.0,
-				DeessIntensity: 0.0,
-				NoiseReduction: 18.0,
-				LA2ARatio:      3.0,
-				LA2AThreshold:  -24.0,
-				LA2AMakeup:     4.0,
-				GateThreshold:  0.01, // defaultGateThreshold
+				DS201HPFreq:        100.0,
+				DeessIntensity:     0.0,
+				NoiseReduction:     18.0,
+				LA2ARatio:          3.0,
+				LA2AThreshold:      -24.0,
+				LA2AMakeup:         4.0,
+				DS201GateThreshold: 0.01, // defaultGateThreshold
 			},
 		},
 		{
 			name: "negative GateThreshold gets default",
 			config: FilterChainConfig{
-				HighpassFreq:   100.0,
-				DeessIntensity: 0.3,
-				NoiseReduction: 18.0,
-				LA2ARatio:      3.0,
-				LA2AThreshold:  -24.0,
-				LA2AMakeup:     4.0,
-				GateThreshold:  -0.5, // negative is NOT valid for GateThreshold
+				DS201HPFreq:        100.0,
+				DeessIntensity:     0.3,
+				NoiseReduction:     18.0,
+				LA2ARatio:          3.0,
+				LA2AThreshold:      -24.0,
+				LA2AMakeup:         4.0,
+				DS201GateThreshold: -0.5, // negative is NOT valid for GateThreshold
 			},
 			want: FilterChainConfig{
-				HighpassFreq:   100.0,
-				DeessIntensity: 0.3,
-				NoiseReduction: 18.0,
-				LA2ARatio:      3.0,
-				LA2AThreshold:  -24.0,
-				LA2AMakeup:     4.0,
-				GateThreshold:  0.01, // defaultGateThreshold
+				DS201HPFreq:        100.0,
+				DeessIntensity:     0.3,
+				NoiseReduction:     18.0,
+				LA2ARatio:          3.0,
+				LA2AThreshold:      -24.0,
+				LA2AMakeup:         4.0,
+				DS201GateThreshold: 0.01, // defaultGateThreshold
 			},
 		},
 
@@ -1274,22 +1373,22 @@ func TestSanitizeConfig(t *testing.T) {
 		{
 			name: "zero values for non-GateThreshold fields pass through",
 			config: FilterChainConfig{
-				HighpassFreq:   0.0, // passes through (edge case: probably invalid, but sanitize doesn't clamp)
-				DeessIntensity: 0.0, // valid: de-essing disabled
-				NoiseReduction: 0.0, // passes through (edge case: no reduction)
-				LA2ARatio:      0.0, // passes through (edge case: probably invalid)
-				LA2AThreshold:  0.0, // passes through (0 dB threshold)
-				LA2AMakeup:     0.0, // passes through (0 dB makeup)
-				GateThreshold:  0.02,
+				DS201HPFreq:        0.0, // passes through (edge case: probably invalid, but sanitize doesn't clamp)
+				DeessIntensity:     0.0, // valid: de-essing disabled
+				NoiseReduction:     0.0, // passes through (edge case: no reduction)
+				LA2ARatio:          0.0, // passes through (edge case: probably invalid)
+				LA2AThreshold:      0.0, // passes through (0 dB threshold)
+				LA2AMakeup:         0.0, // passes through (0 dB makeup)
+				DS201GateThreshold: 0.02,
 			},
 			want: FilterChainConfig{
-				HighpassFreq:   0.0,
-				DeessIntensity: 0.0,
-				NoiseReduction: 0.0,
-				LA2ARatio:      0.0,
-				LA2AThreshold:  0.0,
-				LA2AMakeup:     0.0,
-				GateThreshold:  0.02,
+				DS201HPFreq:        0.0,
+				DeessIntensity:     0.0,
+				NoiseReduction:     0.0,
+				LA2ARatio:          0.0,
+				LA2AThreshold:      0.0,
+				LA2AMakeup:         0.0,
+				DS201GateThreshold: 0.02,
 			},
 		},
 
@@ -1297,22 +1396,22 @@ func TestSanitizeConfig(t *testing.T) {
 		{
 			name: "negative LA2AThreshold passes through (valid dB value)",
 			config: FilterChainConfig{
-				HighpassFreq:   100.0,
-				DeessIntensity: 0.3,
-				NoiseReduction: 18.0,
-				LA2ARatio:      3.0,
-				LA2AThreshold:  -40.0, // very aggressive threshold
-				LA2AMakeup:     4.0,
-				GateThreshold:  0.02,
+				DS201HPFreq:        100.0,
+				DeessIntensity:     0.3,
+				NoiseReduction:     18.0,
+				LA2ARatio:          3.0,
+				LA2AThreshold:      -40.0, // very aggressive threshold
+				LA2AMakeup:         4.0,
+				DS201GateThreshold: 0.02,
 			},
 			want: FilterChainConfig{
-				HighpassFreq:   100.0,
-				DeessIntensity: 0.3,
-				NoiseReduction: 18.0,
-				LA2ARatio:      3.0,
-				LA2AThreshold:  -40.0,
-				LA2AMakeup:     4.0,
-				GateThreshold:  0.02,
+				DS201HPFreq:        100.0,
+				DeessIntensity:     0.3,
+				NoiseReduction:     18.0,
+				LA2ARatio:          3.0,
+				LA2AThreshold:      -40.0,
+				LA2AMakeup:         4.0,
+				DS201GateThreshold: 0.02,
 			},
 		},
 
@@ -1320,22 +1419,22 @@ func TestSanitizeConfig(t *testing.T) {
 		{
 			name: "all NaN values get all defaults",
 			config: FilterChainConfig{
-				HighpassFreq:   math.NaN(),
-				DeessIntensity: math.NaN(),
-				NoiseReduction: math.NaN(),
-				LA2ARatio:      math.NaN(),
-				LA2AThreshold:  math.NaN(),
-				LA2AMakeup:     math.NaN(),
-				GateThreshold:  math.NaN(),
+				DS201HPFreq:        math.NaN(),
+				DeessIntensity:     math.NaN(),
+				NoiseReduction:     math.NaN(),
+				LA2ARatio:          math.NaN(),
+				LA2AThreshold:      math.NaN(),
+				LA2AMakeup:         math.NaN(),
+				DS201GateThreshold: math.NaN(),
 			},
 			want: FilterChainConfig{
-				HighpassFreq:   80.0,
-				DeessIntensity: 0.0,
-				NoiseReduction: 12.0,
-				LA2ARatio:      3.0,   // LA-2A inspired
-				LA2AThreshold:  -18.0, // LA-2A inspired
-				LA2AMakeup:     2.0,   // LA-2A inspired
-				GateThreshold:  0.01,
+				DS201HPFreq:        80.0,
+				DeessIntensity:     0.0,
+				NoiseReduction:     12.0,
+				LA2ARatio:          3.0,   // LA-2A inspired
+				LA2AThreshold:      -18.0, // LA-2A inspired
+				LA2AMakeup:         2.0,   // LA-2A inspired
+				DS201GateThreshold: 0.01,
 			},
 		},
 
@@ -1343,22 +1442,22 @@ func TestSanitizeConfig(t *testing.T) {
 		{
 			name: "very small positive GateThreshold passes through",
 			config: FilterChainConfig{
-				HighpassFreq:   100.0,
-				DeessIntensity: 0.3,
-				NoiseReduction: 18.0,
-				LA2ARatio:      3.0,
-				LA2AThreshold:  -24.0,
-				LA2AMakeup:     4.0,
-				GateThreshold:  1e-10, // very small but positive
+				DS201HPFreq:        100.0,
+				DeessIntensity:     0.3,
+				NoiseReduction:     18.0,
+				LA2ARatio:          3.0,
+				LA2AThreshold:      -24.0,
+				LA2AMakeup:         4.0,
+				DS201GateThreshold: 1e-10, // very small but positive
 			},
 			want: FilterChainConfig{
-				HighpassFreq:   100.0,
-				DeessIntensity: 0.3,
-				NoiseReduction: 18.0,
-				LA2ARatio:      3.0,
-				LA2AThreshold:  -24.0,
-				LA2AMakeup:     4.0,
-				GateThreshold:  1e-10,
+				DS201HPFreq:        100.0,
+				DeessIntensity:     0.3,
+				NoiseReduction:     18.0,
+				LA2ARatio:          3.0,
+				LA2AThreshold:      -24.0,
+				LA2AMakeup:         4.0,
+				DS201GateThreshold: 1e-10,
 			},
 		},
 	}
@@ -1370,8 +1469,8 @@ func TestSanitizeConfig(t *testing.T) {
 			sanitizeConfig(&config)
 
 			// Check each field
-			if config.HighpassFreq != tt.want.HighpassFreq {
-				t.Errorf("HighpassFreq = %v, want %v", config.HighpassFreq, tt.want.HighpassFreq)
+			if config.DS201HPFreq != tt.want.DS201HPFreq {
+				t.Errorf("DS201HPFreq = %v, want %v", config.DS201HPFreq, tt.want.DS201HPFreq)
 			}
 			if config.DeessIntensity != tt.want.DeessIntensity {
 				t.Errorf("DeessIntensity = %v, want %v", config.DeessIntensity, tt.want.DeessIntensity)
@@ -1388,8 +1487,8 @@ func TestSanitizeConfig(t *testing.T) {
 			if config.LA2AMakeup != tt.want.LA2AMakeup {
 				t.Errorf("LA2AMakeup = %v, want %v", config.LA2AMakeup, tt.want.LA2AMakeup)
 			}
-			if config.GateThreshold != tt.want.GateThreshold {
-				t.Errorf("GateThreshold = %v, want %v", config.GateThreshold, tt.want.GateThreshold)
+			if config.DS201GateThreshold != tt.want.DS201GateThreshold {
+				t.Errorf("DS201GateThreshold = %v, want %v", config.DS201GateThreshold, tt.want.DS201GateThreshold)
 			}
 		})
 	}

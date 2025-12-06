@@ -648,10 +648,10 @@ func formatFilter(f *os.File, filterID processor.FilterID, cfg *processor.Filter
 		formatSilenceDetectFilter(f, cfg, prefix)
 	case processor.FilterResample:
 		formatResampleFilter(f, cfg, prefix)
-	case processor.FilterHighpass:
-		formatHighpassFilter(f, cfg, m, prefix)
-	case processor.FilterBandreject:
-		formatBandrejectFilter(f, cfg, m, prefix)
+	case processor.FilterDS201HighPass:
+		formatDS201HighpassFilter(f, cfg, m, prefix)
+	case processor.FilterDS201LowPass:
+		formatDS201LowPassFilter(f, cfg, m, prefix)
 	case processor.FilterAdeclick:
 		formatAdeclickFilter(f, cfg, prefix)
 	case processor.FilterAfftdn:
@@ -660,8 +660,8 @@ func formatFilter(f *os.File, filterID processor.FilterID, cfg *processor.Filter
 		formatAfftdnSimpleFilter(f, cfg, m, prefix)
 	case processor.FilterArnndn:
 		formatArnndnFilter(f, cfg, m, prefix)
-	case processor.FilterAgate:
-		formatAgateFilter(f, cfg, m, prefix)
+	case processor.FilterDS201Gate:
+		formatDS201GateFilter(f, cfg, m, prefix)
 	case processor.FilterLA2ACompressor:
 		formatLA2ACompressorFilter(f, cfg, m, prefix)
 	case processor.FilterDeesser:
@@ -679,32 +679,32 @@ func formatFilter(f *os.File, filterID processor.FilterID, cfg *processor.Filter
 	}
 }
 
-// formatHighpassFilter outputs highpass filter details
-func formatHighpassFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
-	if !cfg.HighpassEnabled {
-		fmt.Fprintf(f, "%shighpass: DISABLED\n", prefix)
+// formatDS201HighpassFilter outputs DS201-inspired highpass filter details
+func formatDS201HighpassFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
+	if !cfg.DS201HPEnabled {
+		fmt.Fprintf(f, "%sDS201 highpass: DISABLED\n", prefix)
 		return
 	}
 
 	// Show slope (6dB/oct for gentle, 12dB/oct for standard)
 	slope := "12dB/oct"
-	if cfg.HighpassPoles == 1 {
+	if cfg.DS201HPPoles == 1 {
 		slope = "6dB/oct"
 	}
 
 	// Build header with all relevant parameters
-	header := fmt.Sprintf("%shighpass: %.0f Hz cutoff (%s", prefix, cfg.HighpassFreq, slope)
+	header := fmt.Sprintf("%sDS201 highpass: %.0f Hz cutoff (%s", prefix, cfg.DS201HPFreq, slope)
 
 	// Show Q if not default Butterworth
-	if cfg.HighpassWidth > 0 && cfg.HighpassWidth != 0.707 {
-		header += fmt.Sprintf(", Q=%.2f", cfg.HighpassWidth)
+	if cfg.DS201HPWidth > 0 && cfg.DS201HPWidth != 0.707 {
+		header += fmt.Sprintf(", Q=%.2f", cfg.DS201HPWidth)
 	}
 
 	// Show transform if specified
-	if cfg.HighpassTransform == "tdii" {
+	if cfg.DS201HPTransform == "tdii" {
 		header += ", tdii"
-	} else if cfg.HighpassTransform != "" {
-		header += ", " + cfg.HighpassTransform
+	} else if cfg.DS201HPTransform != "" {
+		header += ", " + cfg.DS201HPTransform
 	}
 
 	header += ")"
@@ -721,55 +721,57 @@ func formatHighpassFilter(f *os.File, cfg *processor.FilterChainConfig, m *proce
 		fmt.Fprintf(f, "        Rationale: %s voice (centroid %.0f Hz)\n", voiceType, m.SpectralCentroid)
 
 		// Show warm voice protection if applicable (using mix)
-		if cfg.HighpassMix > 0 && cfg.HighpassMix < 1.0 {
+		if cfg.DS201HPMix > 0 && cfg.DS201HPMix < 1.0 {
 			reason := "warm voice"
 			if m.SpectralDecrease < -0.08 {
 				reason = "very warm voice"
 			} else if m.SpectralSkewness > 1.0 {
 				reason = "LF emphasis"
 			}
-			fmt.Fprintf(f, "        Mix: %.0f%% (%s — blending filtered with dry signal)\n", cfg.HighpassMix*100, reason)
+			fmt.Fprintf(f, "        Mix: %.0f%% (%s — blending filtered with dry signal)\n", cfg.DS201HPMix*100, reason)
 		}
 
 		// Show why low frequency was chosen for warm voices
-		if cfg.HighpassFreq <= 40 {
-			fmt.Fprintf(f, "        Frequency: %.0f Hz (subsonic only — protecting bass foundation)\n", cfg.HighpassFreq)
+		if cfg.DS201HPFreq <= 40 {
+			fmt.Fprintf(f, "        Frequency: %.0f Hz (subsonic only — protecting bass foundation)\n", cfg.DS201HPFreq)
 		}
 
 		// Show gentle slope explanation
-		if cfg.HighpassPoles == 1 {
+		if cfg.DS201HPPoles == 1 {
 			fmt.Fprintf(f, "        Slope: 6dB/oct (gentle rolloff — preserving warmth)\n")
 		}
 
 		// Show noise character if tonal (explains why no boost)
 		if m.NoiseProfile != nil && m.NoiseProfile.Entropy < 0.5 {
-			fmt.Fprintf(f, "        Note: no LF boost (tonal noise, entropy %.3f — bandreject handles hum)\n", m.NoiseProfile.Entropy)
+			fmt.Fprintf(f, "        Note: no LF boost (tonal noise, entropy %.3f — DS201 hum filter handles it)\n", m.NoiseProfile.Entropy)
 		}
+	}
+
+	// DS201HighPass is composite: also show hum notch filter details if harmonics > 0
+	if cfg.DS201HumHarmonics > 0 {
+		formatDS201HumFilterInternal(f, cfg, m, prefix)
 	}
 }
 
-// formatBandrejectFilter outputs bandreject (hum notch) filter details
-func formatBandrejectFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
-	if !cfg.HumFilterEnabled {
-		fmt.Fprintf(f, "%sbandreject: DISABLED\n", prefix)
-		return
-	}
+// formatDS201HumFilterInternal outputs DS201-inspired hum notch filter details (called from DS201HighPass composite)
+func formatDS201HumFilterInternal(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
+	// Note: enabled check is done by caller (formatDS201HighpassFilter)
 
 	// Build the header with width and transform info
 	transformInfo := ""
-	if cfg.HumTransform == "tdii" {
+	if cfg.DS201HumTransform == "tdii" {
 		transformInfo = ", tdii"
-	} else if cfg.HumTransform != "" {
-		transformInfo = ", " + cfg.HumTransform
+	} else if cfg.DS201HumTransform != "" {
+		transformInfo = ", " + cfg.DS201HumTransform
 	}
-	fmt.Fprintf(f, "%sbandreject: %.0f Hz + %d harmonics (%.1f Hz wide%s)\n",
-		prefix, cfg.HumFrequency, cfg.HumHarmonics, cfg.HumWidth, transformInfo)
+	fmt.Fprintf(f, "%sDS201 hum filter: %.0f Hz + %d harmonics (%.1f Hz wide%s)\n",
+		prefix, cfg.DS201HumFrequency, cfg.DS201HumHarmonics, cfg.DS201HumWidth, transformInfo)
 
 	if m != nil && m.NoiseProfile != nil {
 		fmt.Fprintf(f, "        Rationale: tonal noise detected (entropy %.3f < 0.7)\n", m.NoiseProfile.Entropy)
 
 		// Explain reduced harmonics for warm voices
-		if cfg.HumHarmonics <= 2 {
+		if cfg.DS201HumHarmonics <= 2 {
 			isWarmSkewness := m.SpectralSkewness > 1.0
 			isWarmDecrease := m.SpectralDecrease < -0.02
 			if isWarmSkewness || isWarmDecrease {
@@ -782,35 +784,75 @@ func formatBandrejectFilter(f *os.File, cfg *processor.FilterChainConfig, m *pro
 					reason = fmt.Sprintf("decrease %.3f", m.SpectralDecrease)
 				}
 				fmt.Fprintf(f, "        Harmonics: reduced to %d (warm voice: %s — protecting vocal fundamentals)\n",
-					cfg.HumHarmonics, reason)
+					cfg.DS201HumHarmonics, reason)
 			}
 		}
 
-		// Explain notch width choice
-		if cfg.HumWidth != 1.0 { // Not the default
-			if cfg.HumWidth <= 0.3 {
-				fmt.Fprintf(f, "        Width: %.1f Hz (very narrow — warm voice protection)\n", cfg.HumWidth)
-			} else if cfg.HumWidth < 1.0 {
-				fmt.Fprintf(f, "        Width: %.1f Hz (narrow surgical notch — very tonal hum)\n", cfg.HumWidth)
-			} else {
-				fmt.Fprintf(f, "        Width: %.1f Hz (wider notch — mixed tonal noise)\n", cfg.HumWidth)
-			}
+		// Explain notch width choice (always show for completeness)
+		if cfg.DS201HumWidth <= 0.3 {
+			fmt.Fprintf(f, "        Width: %.1f Hz (very narrow — warm voice protection)\n", cfg.DS201HumWidth)
+		} else if cfg.DS201HumWidth < 1.0 {
+			fmt.Fprintf(f, "        Width: %.1f Hz (narrow surgical notch — very tonal hum)\n", cfg.DS201HumWidth)
+		} else {
+			fmt.Fprintf(f, "        Width: %.1f Hz (standard surgical notch)\n", cfg.DS201HumWidth)
 		}
 
 		// Explain transform type
-		if cfg.HumTransform == "tdii" {
+		if cfg.DS201HumTransform == "tdii" {
 			fmt.Fprintf(f, "        Transform: TDII (transposed direct form II — best floating-point accuracy)\n")
-		} else if cfg.HumTransform != "" && cfg.HumTransform != "di" {
-			fmt.Fprintf(f, "        Transform: %s\n", cfg.HumTransform)
+		} else if cfg.DS201HumTransform != "" && cfg.DS201HumTransform != "di" {
+			fmt.Fprintf(f, "        Transform: %s\n", cfg.DS201HumTransform)
 		}
 
 		// Explain mix if not full wet
-		if cfg.HumMix > 0 && cfg.HumMix < 1.0 {
+		if cfg.DS201HumMix > 0 && cfg.DS201HumMix < 1.0 {
 			mixReason := "warm voice"
-			if cfg.HumMix <= 0.7 {
+			if cfg.DS201HumMix <= 0.7 {
 				mixReason = "very warm voice"
 			}
-			fmt.Fprintf(f, "        Mix: %.0f%% (%s — blending filtered with dry signal)\n", cfg.HumMix*100, mixReason)
+			fmt.Fprintf(f, "        Mix: %.0f%% (%s — blending filtered with dry signal)\n", cfg.DS201HumMix*100, mixReason)
+		}
+	}
+}
+
+// formatDS201LowPassFilter outputs DS201-inspired low-pass filter details
+func formatDS201LowPassFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
+	if !cfg.DS201LPEnabled {
+		fmt.Fprintf(f, "%sDS201 lowpass: DISABLED\n", prefix)
+		return
+	}
+
+	// Show slope (6dB/oct for gentle, 12dB/oct for standard)
+	slope := "12dB/oct"
+	if cfg.DS201LPPoles == 1 {
+		slope = "6dB/oct"
+	}
+
+	// Build header with all relevant parameters
+	header := fmt.Sprintf("%sDS201 lowpass: %.0f Hz cutoff (%s", prefix, cfg.DS201LPFreq, slope)
+
+	// Show Q if not default Butterworth
+	if cfg.DS201LPWidth > 0 && cfg.DS201LPWidth != 0.707 {
+		header += fmt.Sprintf(", Q=%.2f", cfg.DS201LPWidth)
+	}
+
+	// Show transform if specified
+	if cfg.DS201LPTransform == "tdii" {
+		header += ", tdii"
+	} else if cfg.DS201LPTransform != "" {
+		header += ", " + cfg.DS201LPTransform
+	}
+
+	header += ")"
+	fmt.Fprintln(f, header)
+
+	// Show adaptive rationale
+	if m != nil {
+		if m.SpectralRolloff > 14000 {
+			fmt.Fprintf(f, "        Rationale: high spectral rolloff (%.0f Hz) — filtering ultrasonics\n", m.SpectralRolloff)
+		} else if m.ZeroCrossingsRate > 0.15 && m.SpectralCentroid < 3000 {
+			fmt.Fprintf(f, "        Rationale: HF noise detected (ZCR %.2f, centroid %.0f Hz)\n",
+				m.ZeroCrossingsRate, m.SpectralCentroid)
 		}
 	}
 }
@@ -986,24 +1028,24 @@ func joinWithComma(items []string) string {
 	return result
 }
 
-// formatAgateFilter outputs agate filter details
-func formatAgateFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
-	if !cfg.GateEnabled {
-		fmt.Fprintf(f, "%sagate: DISABLED\n", prefix)
+// formatDS201GateFilter outputs DS201-inspired gate filter details
+func formatDS201GateFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
+	if !cfg.DS201GateEnabled {
+		fmt.Fprintf(f, "%sDS201 gate: DISABLED\n", prefix)
 		return
 	}
 
-	thresholdDB := linearToDb(cfg.GateThreshold)
-	rangeDB := linearToDb(cfg.GateRange)
+	thresholdDB := linearToDb(cfg.DS201GateThreshold)
+	rangeDB := linearToDb(cfg.DS201GateRange)
 
-	detection := cfg.GateDetection
+	detection := cfg.DS201GateDetection
 	if detection == "" {
 		detection = "rms"
 	}
 
-	fmt.Fprintf(f, "%sagate: threshold %.1f dB, ratio %.1f:1, detection %s\n", prefix, thresholdDB, cfg.GateRatio, detection)
-	fmt.Fprintf(f, "        Timing: attack %.0fms, release %.0fms\n", cfg.GateAttack, cfg.GateRelease)
-	fmt.Fprintf(f, "        Range: %.1f dB reduction, knee %.1f\n", rangeDB, cfg.GateKnee)
+	fmt.Fprintf(f, "%sDS201 gate: threshold %.1f dB, ratio %.1f:1, detection %s\n", prefix, thresholdDB, cfg.DS201GateRatio, detection)
+	fmt.Fprintf(f, "        Timing: attack %.2fms, release %.0fms (soft expander)\n", cfg.DS201GateAttack, cfg.DS201GateRelease)
+	fmt.Fprintf(f, "        Range: %.1f dB reduction, knee %.1f\n", rangeDB, cfg.DS201GateKnee)
 
 	// Show rationale based on measurements
 	if m != nil {

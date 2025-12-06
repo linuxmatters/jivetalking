@@ -22,7 +22,7 @@ func TestProcessAudio(t *testing.T) {
 	config.DownmixEnabled = true
 	config.AnalysisEnabled = true
 	config.ResampleEnabled = true
-	config.HighpassEnabled = true // Basic processing
+	config.DS201HPEnabled = true // Basic processing
 	config.LimiterEnabled = true  // Safety limiter
 
 	// Process the audio with a no-op progress callback
@@ -79,7 +79,7 @@ func TestFilterChainBuilder(t *testing.T) {
 	config.NoiseFloor = config.Measurements.NoiseFloor
 
 	// Enable additional filters for Pass 2 test
-	config.HighpassEnabled = true
+	config.DS201HPEnabled = true
 	config.LimiterEnabled = true
 
 	filterSpec = config.BuildFilterSpec()

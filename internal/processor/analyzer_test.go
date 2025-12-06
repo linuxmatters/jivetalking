@@ -192,10 +192,10 @@ func TestCalculateAdaptiveGateThreshold(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := calculateAdaptiveGateThreshold(tt.noiseFloor, tt.rmsTrough)
+			result := calculateAdaptiveDS201GateThreshold(tt.noiseFloor, tt.rmsTrough)
 
 			if result < tt.wantMin || result > tt.wantMax {
-				t.Errorf("calculateAdaptiveGateThreshold(%.1f, %.1f) = %.1f dB, want %.1f to %.1f dB [%s]",
+				t.Errorf("calculateAdaptiveDS201GateThreshold(%.1f, %.1f) = %.1f dB, want %.1f to %.1f dB [%s]",
 					tt.noiseFloor, tt.rmsTrough, result, tt.wantMin, tt.wantMax, tt.desc)
 			}
 		})

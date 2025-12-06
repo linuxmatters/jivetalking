@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,14 +28,18 @@ const (
 	FilterSilenceDetect FilterID = "silencedetect" // Silence region detection (Pass 1 only)
 	FilterResample      FilterID = "resample"      // Output format: 44.1kHz/16-bit/mono (Pass 2 only)
 
+	// DS201-inspired frequency-conscious filtering (Pass 2 only)
+	// Drawmer DS201 pioneered HP/LP side-chain filtering for frequency-conscious gating.
+	// We apply these filters to the audio path before the gate for equivalent effect.
+	FilterDS201HighPass FilterID = "ds201_highpass" // HP + hum notch composite (part of DS201 side-chain)
+	FilterDS201LowPass  FilterID = "ds201_lowpass"  // LP for ultrasonic rejection (adaptive)
+	FilterDS201Gate     FilterID = "ds201_gate"     // Soft expander inspired by DS201
+
 	// Processing filters (Pass 2 only)
-	FilterHighpass       FilterID = "highpass"
-	FilterBandreject     FilterID = "bandreject" // Mains hum notch filter
 	FilterAdeclick       FilterID = "adeclick"
 	FilterAfftdn         FilterID = "afftdn"        // Profile-based FFT denoise (uses noise sample)
 	FilterAfftdnSimple   FilterID = "afftdn_simple" // Sample-free FFT denoise (no noise sample needed)
 	FilterArnndn         FilterID = "arnndn"
-	FilterAgate          FilterID = "agate"
 	FilterLA2ACompressor FilterID = "la2a_compressor" // Teletronix LA-2A style optical compressor
 	FilterDeesser        FilterID = "deesser"
 	FilterSpeechnorm     FilterID = "speechnorm"
@@ -55,12 +60,13 @@ var Pass1FilterOrder = []FilterID{
 // Pass2FilterOrder defines the filter chain for processing pass.
 // Order rationale:
 // - Downmix first: ensures all downstream filters work with mono
-// - Highpass: removes rumble before it affects other filters
-// - Bandreject: surgical notch filtering for mains hum (conditional)
+// - DS201HighPass: removes subsonic rumble before other filters (DS201-inspired side-chain)
+// - DS201Hum: removes mains hum (50/60Hz + harmonics) before other filters
+// - DS201LowPass: removes ultrasonic content that could trigger false gates (adaptive)
 // - Adeclick: removes impulse noise before spectral processing (currently disabled)
 // - Afftdn: profile-based spectral noise reduction using silence sample
 // - Arnndn: AI-based denoising for complex/dynamic noise patterns
-// - Agate: soft gate for inter-speech cleanup (after denoising lowers floor)
+// - DS201Gate: soft expander for inter-speech cleanup (after denoising lowers floor)
 // - LA2ACompressor: LA-2A style optical compression evens dynamics before normalisation
 // - Deesser: after compression (which emphasises sibilance)
 // - Speechnorm: cycle-level normalisation for speech
@@ -71,13 +77,13 @@ var Pass1FilterOrder = []FilterID{
 // - Resample: standardises output format (44.1kHz/16-bit/mono)
 var Pass2FilterOrder = []FilterID{
 	FilterDownmix,
-	FilterHighpass,
-	FilterBandreject,
+	FilterDS201HighPass,
+	FilterDS201LowPass,
 	FilterAdeclick,
 	FilterAfftdn,
 	FilterAfftdnSimple,
 	FilterArnndn,
-	FilterAgate,
+	FilterDS201Gate,
 	FilterLA2ACompressor,
 	FilterDeesser,
 	FilterSpeechnorm,
@@ -166,22 +172,33 @@ type FilterChainConfig struct {
 	ResampleFormat     string // Output sample format (default: s16)
 	ResampleFrameSize  int    // Samples per frame (default: 4096)
 
-	// High-Pass Filter (highpass) - removes subsonic rumble
-	HighpassEnabled   bool    // Enable highpass filter
-	HighpassFreq      float64 // Hz, cutoff frequency (removes frequencies below this)
-	HighpassPoles     int     // Filter poles: 1=6dB/oct (gentle), 2=12dB/oct (standard)
-	HighpassWidth     float64 // Q factor: 0.707=Butterworth (default), lower=gentler rolloff
-	HighpassMix       float64 // Wet/dry mix (0-1, 1=full filter, 0.7=subtle for warm voices)
-	HighpassTransform string  // Filter transform: "tdii" (best accuracy), "zdf", etc.
+	// DS201-Inspired High-Pass Filter (highpass) - removes subsonic rumble
+	// Part of the DS201 side-chain composite: removes rumble before gate detection
+	DS201HPEnabled   bool    // Enable DS201 high-pass filter
+	DS201HPFreq      float64 // Hz, cutoff frequency (removes frequencies below this)
+	DS201HPPoles     int     // Filter poles: 1=6dB/oct (gentle), 2=12dB/oct (standard)
+	DS201HPWidth     float64 // Q factor: 0.707=Butterworth (default), lower=gentler rolloff
+	DS201HPMix       float64 // Wet/dry mix (0-1, 1=full filter, 0.7=subtle for warm voices)
+	DS201HPTransform string  // Filter transform: "tdii" (best accuracy), "zdf", etc.
 
-	// Mains Hum Filter (bandreject) - removes 50/60Hz hum and harmonics
-	// Enabled conditionally when Pass 1 entropy indicates tonal noise
-	HumFilterEnabled bool    // Enable mains hum notch filtering
-	HumFrequency     float64 // Fundamental frequency (50Hz UK/EU, 60Hz US)
-	HumHarmonics     int     // Number of harmonics to filter (1-4, default 4)
-	HumWidth         float64 // Notch width in Hz (e.g., 0.5 = 0.5Hz wide notch at each harmonic)
-	HumTransform     string  // Filter transform type: "tdii" (transposed direct form II, best floating-point accuracy)
-	HumMix           float64 // Wet/dry mix (0-1, 1=full filter, 0.9=subtle)
+	// DS201-Inspired Hum Filter (bandreject) - removes 50/60Hz hum and harmonics
+	// Part of the DS201HighPass composite: removes tonal interference before gate detection
+	// Tuned conditionally when Pass 1 entropy indicates tonal noise (set DS201HumHarmonics=0 to disable)
+	DS201HumFrequency float64 // Fundamental frequency (50Hz UK/EU, 60Hz US)
+	DS201HumHarmonics int     // Number of harmonics to filter (1-4, default 4)
+	DS201HumWidth     float64 // Notch width in Hz (e.g., 0.5 = 0.5Hz wide notch at each harmonic)
+	DS201HumTransform string  // Filter transform type: "tdii" (transposed direct form II, best floating-point accuracy)
+	DS201HumMix       float64 // Wet/dry mix (0-1, 1=full filter, 0.9=subtle)
+
+	// DS201-Inspired Low-Pass Filter (lowpass) - removes ultrasonic noise
+	// Part of the DS201 side-chain composite: prevents HF noise from triggering gate
+	// Enabled adaptively based on SpectralRolloff and ZCR measurements
+	DS201LPEnabled   bool    // Enable DS201 low-pass filter
+	DS201LPFreq      float64 // Hz, cutoff frequency (removes frequencies above this)
+	DS201LPPoles     int     // Filter poles: 1=6dB/oct (gentle), 2=12dB/oct (standard)
+	DS201LPWidth     float64 // Q factor: 0.707=Butterworth (default)
+	DS201LPMix       float64 // Wet/dry mix (0-1, 1=full filter)
+	DS201LPTransform string  // Filter transform: "tdii" (best accuracy), "zdf", etc.
 
 	// Click/Pop Removal (adeclick) - removes clicks and pops
 	AdeclickEnabled bool   // Enable adeclick filter
@@ -207,16 +224,19 @@ type FilterChainConfig struct {
 	AfftdnSimpleNoiseReduction float64 // dB, reduction amount (conservative: 6-10dB)
 	AfftdnSimpleNoiseType      string  // Noise type: "w" (white), "v" (vinyl), "s" (shellac)
 
-	// Gate (agate) - removes silence and low-level noise
-	GateEnabled   bool    // Enable agate filter
-	GateThreshold float64 // Activation threshold (0.0-1.0, linear)
-	GateRatio     float64 // Reduction ratio (1.0-9000.0)
-	GateAttack    float64 // Attack time (ms)
-	GateRelease   float64 // Release time (ms)
-	GateRange     float64 // Level of gain reduction below threshold (0.0-1.0)
-	GateKnee      float64 // Knee curve softness (1.0-8.0)
-	GateMakeup    float64 // Makeup gain after gating (1.0-64.0)
-	GateDetection string  // Level detection mode: "rms" (default, smoother) or "peak" (tighter)
+	// DS201-Inspired Gate (agate) - Drawmer DS201 style soft expander
+	// Uses gentle ratio (2:1-4:1) rather than DS201's hard gate for natural speech transitions.
+	// Sub-millisecond attack capability for transient preservation.
+	// See docs/DS201-INSPIRED-GATE.md for design rationale.
+	DS201GateEnabled   bool    // Enable DS201-style gate
+	DS201GateThreshold float64 // Activation threshold (0.0-1.0, linear)
+	DS201GateRatio     float64 // Reduction ratio - soft expander (2:1-4:1), not hard gate
+	DS201GateAttack    float64 // Attack time (ms) - supports 0.5ms+ for transient preservation
+	DS201GateRelease   float64 // Release time (ms) - includes +50ms to compensate for no Hold param
+	DS201GateRange     float64 // Level of gain reduction below threshold (0.0-1.0)
+	DS201GateKnee      float64 // Knee curve softness (1.0-8.0) - soft knee for natural transitions
+	DS201GateMakeup    float64 // Makeup gain after gating (1.0-64.0)
+	DS201GateDetection string  // Level detection mode: "rms" (default, smoother) or "peak" (tighter)
 
 	// LA-2A Compressor - Teletronix LA-2A style optical compression
 	// The LA-2A is legendary for its gentle, program-dependent character from the T4 optical cell.
@@ -327,22 +347,30 @@ func DefaultFilterConfig() *FilterChainConfig {
 		ResampleFormat:     "s16",
 		ResampleFrameSize:  4096,
 
-		// High-pass - remove subsonic rumble
-		HighpassEnabled:   true,
-		HighpassFreq:      80.0,   // 80Hz cutoff
-		HighpassPoles:     2,      // 12dB/oct standard slope (1=gentle 6dB/oct for warm voices)
-		HighpassWidth:     0.707,  // Butterworth Q (maximally flat passband)
-		HighpassMix:       1.0,    // Full wet signal (reduce for warm voice protection)
-		HighpassTransform: "tdii", // Transposed Direct Form II - best floating-point accuracy
+		// DS201-Inspired High-pass - remove subsonic rumble (part of DS201 side-chain)
+		DS201HPEnabled:   true,
+		DS201HPFreq:      80.0,   // 80Hz cutoff
+		DS201HPPoles:     2,      // 12dB/oct standard slope (1=gentle 6dB/oct for warm voices)
+		DS201HPWidth:     0.707,  // Butterworth Q (maximally flat passband)
+		DS201HPMix:       1.0,    // Full wet signal (reduce for warm voice protection)
+		DS201HPTransform: "tdii", // Transposed Direct Form II - best floating-point accuracy
 
-		// Mains Hum Notch Filter - removes 50/60Hz hum and harmonics
-		// Enabled conditionally by tuneHumFilter when Pass 1 entropy indicates tonal noise
-		HumFilterEnabled: true,
-		HumFrequency:     50.0,   // 50Hz (UK/EU mains), can be set to 60Hz for US
-		HumHarmonics:     4,      // Filter 4 harmonics (50, 100, 150, 200Hz)
-		HumWidth:         1.0,    // 1Hz wide notch at each harmonic
-		HumTransform:     "tdii", // Transposed Direct Form II - best floating-point numerical accuracy
-		HumMix:           1.0,    // Full wet signal (can reduce for subtle application)
+		// DS201-Inspired Hum Notch Filter - removes 50/60Hz hum and harmonics (part of DS201HighPass composite)
+		// Tuned by tuneDS201HumFilter; set DS201HumHarmonics=0 to disable hum notches
+		DS201HumFrequency: 50.0,   // 50Hz (UK/EU mains), can be set to 60Hz for US
+		DS201HumHarmonics: 4,      // Filter 4 harmonics (50, 100, 150, 200Hz)
+		DS201HumWidth:     1.0,    // 1Hz wide notch at each harmonic
+		DS201HumTransform: "tdii", // Transposed Direct Form II - best floating-point numerical accuracy
+		DS201HumMix:       1.0,    // Full wet signal (can reduce for subtle application)
+
+		// DS201-Inspired Low-pass Filter - removes ultrasonic noise (part of DS201 side-chain)
+		// Disabled by default; enabled adaptively by tuneDS201LowPass when SpectralRolloff indicates benefit
+		DS201LPEnabled:   false,
+		DS201LPFreq:      16000.0, // 16kHz cutoff (conservative default, preserves all audible content)
+		DS201LPPoles:     2,       // 12dB/oct standard slope
+		DS201LPWidth:     0.707,   // Butterworth Q (maximally flat passband)
+		DS201LPMix:       1.0,     // Full wet signal
+		DS201LPTransform: "tdii",  // Transposed Direct Form II - best floating-point accuracy
 
 		// Click/Pop Removal - use overlap-save method with defaults
 		AdeclickEnabled: false,
@@ -361,17 +389,18 @@ func DefaultFilterConfig() *FilterChainConfig {
 		AfftdnSimpleNoiseReduction: 10.0,  // Conservative default, tuned adaptively (capped at 6-10dB)
 		AfftdnSimpleNoiseType:      "w",   // White noise default, tuned adaptively based on spectral profile
 
-		// Gate - remove silence and low-level noise between speech
+		// DS201-Inspired Gate - soft expander for natural speech transitions
 		// All parameters set adaptively based on Pass 1 measurements
-		GateEnabled:   true,
-		GateThreshold: 0.01,   // -40dBFS default (adaptive: based on silence peak + headroom)
-		GateRatio:     2.0,    // 2:1 ratio (adaptive: based on LRA)
-		GateAttack:    12,     // 12ms attack (adaptive: based on MaxDifference)
-		GateRelease:   350,    // 350ms release (adaptive: based on flux/ZCR, +50ms hold compensation)
-		GateRange:     0.0625, // -24dB reduction (adaptive: based on silence entropy)
-		GateKnee:      3.0,    // Soft knee (adaptive: based on spectral crest)
-		GateMakeup:    1.0,    // No makeup gain (normalization handles it)
-		GateDetection: "rms",  // RMS detection (adaptive: rms for bleed, peak for clean)
+		// See docs/DS201-INSPIRED-GATE.md for design rationale
+		DS201GateEnabled:   true,
+		DS201GateThreshold: 0.01,   // -40dBFS default (adaptive: based on silence peak + headroom)
+		DS201GateRatio:     2.0,    // 2:1 ratio - soft expander (adaptive: based on LRA)
+		DS201GateAttack:    12,     // 12ms attack (adaptive: 0.5-25ms based on MaxDifference/Crest)
+		DS201GateRelease:   350,    // 350ms release (adaptive: based on flux/ZCR, +50ms hold compensation)
+		DS201GateRange:     0.0625, // -24dB reduction (adaptive: based on silence entropy)
+		DS201GateKnee:      3.0,    // Soft knee (adaptive: based on spectral crest)
+		DS201GateMakeup:    1.0,    // No makeup gain (normalization handles it)
+		DS201GateDetection: "rms",  // RMS detection (adaptive: rms for bleed, peak for clean)
 
 		// LA-2A Compressor - Teletronix LA-2A style optical compressor emulation
 		// The Teletronix LA-2A is renowned for its gentle, program-dependent character:
@@ -575,101 +604,137 @@ func (cfg *FilterChainConfig) buildResampleReport() string {
 		cfg.ResampleSampleRate, cfg.ResampleFormat, cfg.ResampleFrameSize)
 }
 
-// buildHighpassFilter builds the highpass (rumble removal) filter specification.
-// Removes subsonic frequencies below cutoff (HVAC, handling noise, etc.)
+// buildDS201HighpassFilter builds the DS201-inspired composite high-pass filter.
+// This is a frequency-conscious filter chain that combines:
+// 1. High-pass filter - removes subsonic rumble (HVAC, handling noise, etc.)
+// 2. Mains hum notches - surgical removal of 50/60Hz hum and harmonics (when enabled)
 //
-// Parameters:
-// - frequency: cutoff frequency in Hz
+// The DS201's frequency-conscious gating uses side-chain HP/LP filters to prevent
+// false triggers. Since FFmpeg doesn't support side-chain filtering, we apply
+// frequency filtering to the audio path before gating to achieve the same effect.
+//
+// High-pass parameters:
+// - frequency: cutoff frequency in Hz (adaptive: 60-120Hz based on voice)
 // - poles: 1=6dB/oct (gentle), 2=12dB/oct (standard)
-// - width: Q factor (0.707=Butterworth maximally flat, lower=gentler transition)
+// - width: Q factor (0.707=Butterworth, lower=gentler for warm voices)
 // - transform: filter algorithm (tdii=best floating-point accuracy)
 // - mix: wet/dry blend (1.0=full filter, 0.7=subtle for warm voices)
-// - normalize: prevents level shift
 //
-// For warm voices, we use lower frequency + lower Q + reduced mix to preserve bass
-// while still removing subsonic rumble.
-func (cfg *FilterChainConfig) buildHighpassFilter() string {
-	if !cfg.HighpassEnabled {
+// Hum notch parameters (when DS201HumHarmonics > 0):
+// - frequency: fundamental (50Hz UK/EU, 60Hz US)
+// - harmonics: number of harmonics to filter (1-4, 0=disabled)
+// - width: notch width in Hz
+// - transform: zdf for minimal ringing
+//
+// Returns combined filter chain: highpass=...,bandreject=...,bandreject=...
+func (cfg *FilterChainConfig) buildDS201HighpassFilter() string {
+	if !cfg.DS201HPEnabled {
 		return ""
 	}
 
-	poles := cfg.HighpassPoles
+	var filters []string
+
+	// 1. Build high-pass filter for rumble removal
+	poles := cfg.DS201HPPoles
 	if poles < 1 {
 		poles = 2 // Default to standard 12dB/oct
 	}
 
-	width := cfg.HighpassWidth
+	width := cfg.DS201HPWidth
 	if width <= 0 {
 		width = 0.707 // Butterworth default
 	}
 
-	// Build base filter spec
-	filterSpec := fmt.Sprintf("highpass=f=%.0f:poles=%d:width_type=q:width=%.3f:normalize=1",
-		cfg.HighpassFreq, poles, width)
+	hpSpec := fmt.Sprintf("highpass=f=%.0f:poles=%d:width_type=q:width=%.3f:normalize=1",
+		cfg.DS201HPFreq, poles, width)
 
 	// Add transform type if specified (tdii = best floating-point accuracy)
-	if cfg.HighpassTransform != "" {
-		filterSpec += fmt.Sprintf(":a=%s", cfg.HighpassTransform)
+	if cfg.DS201HPTransform != "" {
+		hpSpec += fmt.Sprintf(":a=%s", cfg.DS201HPTransform)
 	}
 
 	// Add mix parameter if not full wet (for warm voice protection)
-	if cfg.HighpassMix > 0 && cfg.HighpassMix < 1.0 {
-		filterSpec += fmt.Sprintf(":m=%.2f", cfg.HighpassMix)
+	if cfg.DS201HPMix > 0 && cfg.DS201HPMix < 1.0 {
+		hpSpec += fmt.Sprintf(":m=%.2f", cfg.DS201HPMix)
 	}
 
-	return filterSpec
+	filters = append(filters, hpSpec)
+
+	// 2. Add hum notch filters if harmonics > 0
+	if cfg.DS201HumHarmonics > 0 && cfg.DS201HumFrequency > 0 {
+		for harmonic := 1; harmonic <= cfg.DS201HumHarmonics; harmonic++ {
+			freq := cfg.DS201HumFrequency * float64(harmonic)
+			// Skip frequencies above Nyquist for 44.1kHz output (22050Hz)
+			if freq >= 22000 {
+				break
+			}
+
+			// Build filter with Hz-based width for consistent notch size across harmonics
+			// width_type=h specifies width in Hz (more predictable than Q)
+			notchSpec := fmt.Sprintf("bandreject=f=%.0f:width_type=h:w=%.2f", freq, cfg.DS201HumWidth)
+
+			// Add transform type if specified (zdf = zero delay feedback, less ringing)
+			if cfg.DS201HumTransform != "" {
+				notchSpec += fmt.Sprintf(":a=%s", cfg.DS201HumTransform)
+			}
+
+			// Add mix parameter if not full wet (1.0)
+			if cfg.DS201HumMix > 0 && cfg.DS201HumMix < 1.0 {
+				notchSpec += fmt.Sprintf(":m=%.2f", cfg.DS201HumMix)
+			}
+
+			filters = append(filters, notchSpec)
+		}
+	}
+
+	// Join all filters with commas
+	return strings.Join(filters, ",")
 }
 
-// buildBandrejectFilter builds notch filters for mains hum removal.
-// Creates a chain of bandreject filters at the fundamental frequency and harmonics.
-// Only enabled when Pass 1 entropy analysis indicates tonal noise (low entropy).
+// buildDS201LowPassFilter builds the DS201-inspired low-pass filter specification.
+// Part of the DS201 frequency-conscious filtering chain, placed after highpass.
 //
-// Uses ZDF (Zero Delay Feedback) transform to minimise phase distortion and ringing.
-// Optional mix parameter allows subtle application (mix=0.9 blends 90% filtered + 10% dry).
+// Purpose: Remove ultrasonic content that could trigger false gate openings.
+// The Drawmer DS201 includes LP filtering in its side-chain to focus gate detection
+// on voice frequencies rather than high-frequency noise artifacts.
 //
-// Filter chain example for 50Hz with 2 harmonics (zdf transform):
-// bandreject=f=50:width_type=q:w=50:a=zdf,bandreject=f=100:width_type=q:w=50:a=zdf
-func (cfg *FilterChainConfig) buildBandrejectFilter() string {
-	if !cfg.HumFilterEnabled || cfg.HumFrequency <= 0 {
+// Parameters:
+// - f: cutoff frequency (removes frequencies above this)
+// - poles: 1=6dB/oct (gentle), 2=12dB/oct (standard)
+// - width: Q factor (0.707=Butterworth for maximally flat passband)
+// - transform: filter algorithm (tdii=best floating-point accuracy)
+// - mix: wet/dry blend (1.0=full filter)
+//
+// Returns empty string if DS201LPEnabled is false.
+func (cfg *FilterChainConfig) buildDS201LowPassFilter() string {
+	if !cfg.DS201LPEnabled {
 		return ""
 	}
 
-	// Build chain of notch filters: fundamental + harmonics
-	var filters []string
-	for harmonic := 1; harmonic <= cfg.HumHarmonics; harmonic++ {
-		freq := cfg.HumFrequency * float64(harmonic)
-		// Skip frequencies above Nyquist for 44.1kHz output (22050Hz)
-		if freq >= 22000 {
-			break
-		}
-
-		// Build filter with Hz-based width for consistent notch size across harmonics
-		// width_type=h specifies width in Hz (more predictable than Q)
-		filterSpec := fmt.Sprintf("bandreject=f=%.0f:width_type=h:w=%.2f", freq, cfg.HumWidth)
-
-		// Add transform type if specified (zdf = zero delay feedback, less ringing)
-		if cfg.HumTransform != "" {
-			filterSpec += fmt.Sprintf(":a=%s", cfg.HumTransform)
-		}
-
-		// Add mix parameter if not full wet (1.0)
-		if cfg.HumMix > 0 && cfg.HumMix < 1.0 {
-			filterSpec += fmt.Sprintf(":m=%.2f", cfg.HumMix)
-		}
-
-		filters = append(filters, filterSpec)
+	poles := cfg.DS201LPPoles
+	if poles < 1 {
+		poles = 2 // Default to standard 12dB/oct
 	}
 
-	if len(filters) == 0 {
-		return ""
+	width := cfg.DS201LPWidth
+	if width <= 0 {
+		width = 0.707 // Butterworth default
 	}
 
-	// Join multiple notch filters with commas
-	result := filters[0]
-	for i := 1; i < len(filters); i++ {
-		result += "," + filters[i]
+	lpSpec := fmt.Sprintf("lowpass=f=%.0f:poles=%d:width_type=q:width=%.3f:normalize=1",
+		cfg.DS201LPFreq, poles, width)
+
+	// Add transform type if specified (tdii = best floating-point accuracy)
+	if cfg.DS201LPTransform != "" {
+		lpSpec += fmt.Sprintf(":a=%s", cfg.DS201LPTransform)
 	}
-	return result
+
+	// Add mix parameter if not full wet (for subtle application)
+	if cfg.DS201LPMix > 0 && cfg.DS201LPMix < 1.0 {
+		lpSpec += fmt.Sprintf(":m=%.2f", cfg.DS201LPMix)
+	}
+
+	return lpSpec
 }
 
 // buildAdeclickFilter builds the adeclick (click/pop removal) filter specification.
@@ -812,28 +877,31 @@ func (cfg *FilterChainConfig) buildAfftdnSimpleFilter() string {
 	)
 }
 
-// buildAgateFilter builds the agate (noise gate) filter specification.
-// Removes low-level noise between speech while preserving natural pauses.
+// buildDS201GateFilter builds the DS201-inspired gate filter specification.
+// Uses soft expander approach (2:1-4:1 ratio) rather than hard gate for natural speech.
+// Supports sub-millisecond attack (0.5ms+) for transient preservation.
 // Detection mode is adaptive: RMS for tonal bleed, peak for clean recordings.
-func (cfg *FilterChainConfig) buildAgateFilter() string {
-	if !cfg.GateEnabled {
+// See docs/DS201-INSPIRED-GATE.md for design rationale.
+func (cfg *FilterChainConfig) buildDS201GateFilter() string {
+	if !cfg.DS201GateEnabled {
 		return ""
 	}
-	detection := cfg.GateDetection
+	detection := cfg.DS201GateDetection
 	if detection == "" {
 		detection = "rms" // Safe default for speech
 	}
+	// Note: attack/release use %.2f to support sub-millisecond values (0.5ms minimum)
 	return fmt.Sprintf(
-		"agate=threshold=%.6f:ratio=%.1f:attack=%.0f:release=%.0f:"+
+		"agate=threshold=%.6f:ratio=%.1f:attack=%.2f:release=%.0f:"+
 			"range=%.4f:knee=%.1f:detection=%s:makeup=%.1f",
-		cfg.GateThreshold,
-		cfg.GateRatio,
-		cfg.GateAttack,
-		cfg.GateRelease,
-		cfg.GateRange,
-		cfg.GateKnee,
+		cfg.DS201GateThreshold,
+		cfg.DS201GateRatio,
+		cfg.DS201GateAttack,
+		cfg.DS201GateRelease,
+		cfg.DS201GateRange,
+		cfg.DS201GateKnee,
 		detection,
-		cfg.GateMakeup,
+		cfg.DS201GateMakeup,
 	)
 }
 
@@ -985,12 +1053,12 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 		FilterAnalysis:       cfg.buildAnalysisFilter,
 		FilterSilenceDetect:  cfg.buildSilenceDetectFilter,
 		FilterResample:       cfg.buildResampleFilter,
-		FilterHighpass:       cfg.buildHighpassFilter,
-		FilterBandreject:     cfg.buildBandrejectFilter,
+		FilterDS201HighPass:  cfg.buildDS201HighpassFilter,
+		FilterDS201LowPass:   cfg.buildDS201LowPassFilter,
 		FilterAdeclick:       cfg.buildAdeclickFilter,
 		FilterAfftdn:         cfg.buildAfftdnFilter,
 		FilterAfftdnSimple:   cfg.buildAfftdnSimpleFilter,
-		FilterAgate:          cfg.buildAgateFilter,
+		FilterDS201Gate:      cfg.buildDS201GateFilter,
 		FilterLA2ACompressor: cfg.buildLA2ACompressorFilter,
 		FilterDeesser:        cfg.buildDeesserFilter,
 		FilterSpeechnorm:     cfg.buildSpeechnormFilter,
@@ -1171,12 +1239,12 @@ func buildNoiseProfileFilterSpec(noiseDuration time.Duration, config *FilterChai
 	// Note: FilterDownmix is handled by initial format conversion
 	// FilterResample and FilterAnalysis are handled at the end
 	filterBuilders := map[FilterID]func() string{
-		FilterHighpass:   config.buildHighpassFilter,
-		FilterBandreject: config.buildBandrejectFilter,
-		FilterAdeclick:   config.buildAdeclickFilter,
+		FilterDS201HighPass: config.buildDS201HighpassFilter,
+		FilterDS201LowPass:  config.buildDS201LowPassFilter,
+		FilterAdeclick:      config.buildAdeclickFilter,
 		// FilterAfftdn handled separately with noise profile integration
 		FilterArnndn:         config.buildArnnDnFilter,
-		FilterAgate:          config.buildAgateFilter,
+		FilterDS201Gate:      config.buildDS201GateFilter,
 		FilterLA2ACompressor: config.buildLA2ACompressorFilter,
 		FilterDeesser:        config.buildDeesserFilter,
 		FilterSpeechnorm:     config.buildSpeechnormFilter,

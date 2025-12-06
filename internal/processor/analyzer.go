@@ -806,7 +806,7 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 	// - Calculate adaptive offset based on gap between noise floor and quiet speech
 	// - Smaller gap = smaller offset (preserve speech in noisy recordings)
 	// - Larger gap = larger offset (more aggressive gating for clean recordings)
-	gateThresholdDB := calculateAdaptiveGateThreshold(measurements.NoiseFloor, measurements.RMSTrough)
+	gateThresholdDB := calculateAdaptiveDS201GateThreshold(measurements.NoiseFloor, measurements.RMSTrough)
 	measurements.SuggestedGateThreshold = math.Pow(10, gateThresholdDB/20.0)
 
 	// NoiseReductionHeadroom: dB gap between noise floor and quiet speech
@@ -839,7 +839,7 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 	return measurements, nil
 }
 
-// calculateAdaptiveGateThreshold computes a data-driven gate threshold based on
+// calculateAdaptiveDS201GateThreshold computes a data-driven gate threshold based on
 // the measured noise floor and RMS trough (quiet speech indicator).
 //
 // Strategy:
@@ -856,7 +856,7 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 // Safety bounds:
 //   - Never below noise floor (would gate during silence)
 //   - Never above -35dBFS (would cut quiet speech)
-func calculateAdaptiveGateThreshold(noiseFloor, rmsTrough float64) float64 {
+func calculateAdaptiveDS201GateThreshold(noiseFloor, rmsTrough float64) float64 {
 	// If RMSTrough is unavailable or invalid, use a sensible fallback
 	if rmsTrough == 0 || rmsTrough <= noiseFloor {
 		// Fallback: 6dB above noise floor (conservative default)

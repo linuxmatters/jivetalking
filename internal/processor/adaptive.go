@@ -6,22 +6,22 @@ import "math"
 // Adaptive tuning constants for audio processing.
 // These thresholds and limits control how filters adapt to input measurements.
 const (
-	// Highpass frequency tuning
-	highpassMinFreq         = 60.0  // Hz - dark/warm voice cutoff
-	highpassDefaultFreq     = 80.0  // Hz - normal voice cutoff
-	highpassBrightFreq      = 100.0 // Hz - bright voice cutoff
-	highpassMaxFreq         = 120.0 // Hz - maximum to preserve voice fundamentals
-	highpassBoostModerate   = 10.0  // Hz - added when silence sample shows LF noise
-	highpassBoostAggressive = 20.0  // Hz - added for noisy silence sample (> -55 dBFS)
+	// DS201 High-Pass frequency tuning
+	ds201HPMinFreq         = 60.0  // Hz - dark/warm voice cutoff
+	ds201HPDefaultFreq     = 80.0  // Hz - normal voice cutoff
+	ds201HPBrightFreq      = 100.0 // Hz - bright voice cutoff
+	ds201HPMaxFreq         = 120.0 // Hz - maximum to preserve voice fundamentals
+	ds201HPBoostModerate   = 10.0  // Hz - added when silence sample shows LF noise
+	ds201HPBoostAggressive = 20.0  // Hz - added for noisy silence sample (> -55 dBFS)
 
-	// Highpass warm voice protection parameters
+	// DS201 High-Pass warm voice protection parameters
 	// Instead of disabling highpass for warm voices, we use gentler settings
-	highpassWarmFreq      = 70.0 // Hz - slightly reduced cutoff for warm voices
-	highpassVeryWarmFreq  = 60.0 // Hz - minimum cutoff for very warm voices
-	highpassWarmWidth     = 0.5  // Q - gentler rolloff than Butterworth (0.707)
-	highpassVeryWarmWidth = 0.5  // Q - gentler rolloff for very warm voices
-	highpassWarmMix       = 0.9  // Wet/dry mix for warm voices (90% filtered)
-	highpassVeryWarmMix   = 0.8  // Wet/dry mix for very warm voices (80% filtered)
+	ds201HPWarmFreq      = 70.0 // Hz - slightly reduced cutoff for warm voices
+	ds201HPVeryWarmFreq  = 60.0 // Hz - minimum cutoff for very warm voices
+	ds201HPWarmWidth     = 0.5  // Q - gentler rolloff than Butterworth (0.707)
+	ds201HPVeryWarmWidth = 0.5  // Q - gentler rolloff for very warm voices
+	ds201HPWarmMix       = 0.9  // Wet/dry mix for warm voices (90% filtered)
+	ds201HPVeryWarmMix   = 0.8  // Wet/dry mix for very warm voices (80% filtered)
 
 	// Spectral decrease thresholds for LF voice content protection
 	spectralDecreaseVeryWarm = -0.08 // Below: very warm voice, needs maximum LF protection
@@ -74,65 +74,73 @@ const (
 	deessIntensityMax    = 0.8 // Maximum intensity limit
 	deessIntensityMin    = 0.3 // Minimum before disabling
 
-	// Gate tuning constants
+	// DS201 Gate tuning constants
 	// Threshold calculation: sits above noise/bleed peaks, below quiet speech
-	gateThresholdMinDB       = -70.0 // dB - professional studio floor
-	gateThresholdMaxDB       = -25.0 // dB - never gate above this (would cut speech)
-	gateCrestFactorThreshold = 20.0  // dB - above this, use peak reference instead of RMS
-	gateHeadroomClean        = 3.0   // dB - headroom above reference for clean recordings
-	gateHeadroomModerate     = 6.0   // dB - headroom for moderate noise
-	gateHeadroomNoisy        = 10.0  // dB - headroom for noisy recordings
+	ds201GateThresholdMinDB       = -70.0 // dB - professional studio floor
+	ds201GateThresholdMaxDB       = -25.0 // dB - never gate above this (would cut speech)
+	ds201GateCrestFactorThreshold = 20.0  // dB - above this, use peak reference instead of RMS
+	ds201GateHeadroomClean        = 3.0   // dB - headroom above reference for clean recordings
+	ds201GateHeadroomModerate     = 6.0   // dB - headroom for moderate noise
+	ds201GateHeadroomNoisy        = 10.0  // dB - headroom for noisy recordings
 
 	// Ratio: based on LRA (loudness range)
-	gateLRAWide     = 15.0 // LU - above: wide dynamics, gentle ratio
-	gateLRAModerate = 10.0 // LU - above: moderate dynamics
-	gateRatioGentle = 1.5  // For wide LRA (preserve expression)
-	gateRatioMod    = 2.0  // For moderate LRA
-	gateRatioTight  = 2.5  // For narrow LRA (tighter control OK)
+	ds201GateLRAWide     = 15.0 // LU - above: wide dynamics, gentle ratio
+	ds201GateLRAModerate = 10.0 // LU - above: moderate dynamics
+	ds201GateRatioGentle = 1.5  // For wide LRA (preserve expression)
+	ds201GateRatioMod    = 2.0  // For moderate LRA
+	ds201GateRatioTight  = 2.5  // For narrow LRA (tighter control OK)
 
 	// Attack: based on MaxDifference (transient indicator)
 	// Fast transients need fast attack to avoid clipping word onsets
-	gateMaxDiffHigh      = 25.0 // % - sharp transients
-	gateMaxDiffMod       = 10.0 // % - moderate transients
-	gateAttackFast       = 7.0  // ms - for sharp transients
-	gateAttackMod        = 12.0 // ms - standard speech
-	gateAttackSlow       = 17.0 // ms - soft onsets
-	gateFluxDynamicThres = 0.05 // SpectralFlux threshold for dynamic content
+	ds201GateMaxDiffHigh      = 25.0 // % - sharp transients
+	ds201GateMaxDiffMod       = 10.0 // % - moderate transients
+	ds201GateMaxDiffExtreme   = 40.0 // % - threshold for ultra-fast attack
+	ds201GateCrestExtreme     = 40.0 // dB - threshold for ultra-fast attack
+	ds201GateAttackUltraFast  = 0.5  // ms - 500µs for extreme transients
+	ds201GateAttackFast       = 7.0  // ms - for sharp transients
+	ds201GateAttackMod        = 12.0 // ms - standard speech
+	ds201GateAttackSlow       = 17.0 // ms - soft onsets
+	ds201GateFluxDynamicThres = 0.05 // SpectralFlux threshold for dynamic content
 
 	// Release: based on flux, ZCR, and noise character
 	// No hold parameter exists - release must compensate
-	gateFluxLow          = 0.01 // Low flux threshold
-	gateZCRLow           = 0.08 // Low zero crossings rate
-	gateFluxHigh         = 0.05 // High flux threshold
-	gateReleaseSustained = 400  // ms - for sustained speech
-	gateReleaseMod       = 300  // ms - standard
-	gateReleaseDynamic   = 200  // ms - for dynamic content
-	gateReleaseHoldComp  = 50   // ms - compensation for lack of hold parameter
-	gateReleaseTonalComp = 75   // ms - extra for tonal bleed (hide pump)
-	gateReleaseMin       = 150  // ms - minimum release
-	gateReleaseMax       = 500  // ms - maximum release
+	ds201GateFluxLow          = 0.01 // Low flux threshold
+	ds201GateZCRLow           = 0.08 // Low zero crossings rate
+	ds201GateFluxHigh         = 0.05 // High flux threshold
+	ds201GateReleaseSustained = 400  // ms - for sustained speech
+	ds201GateReleaseMod       = 300  // ms - standard
+	ds201GateReleaseDynamic   = 200  // ms - for dynamic content
+	ds201GateReleaseHoldComp  = 50   // ms - compensation for lack of hold parameter
+	ds201GateReleaseTonalComp = 75   // ms - extra for tonal bleed (hide pump)
+	ds201GateReleaseMin       = 150  // ms - minimum release
+	ds201GateReleaseMax       = 500  // ms - maximum release
 
 	// Range: based on silence entropy and noise floor
 	// Tonal noise sounds worse when hard-gated - gentler range hides pumping
-	gateEntropyTonal     = 0.3 // Below: tonal noise (bleed/hum)
-	gateEntropyMixed     = 0.6 // Below: mixed noise
-	gateRangeTonalDB     = -16 // dB - gentle for tonal noise
-	gateRangeMixedDB     = -21 // dB - moderate for mixed
-	gateRangeBroadbandDB = -27 // dB - aggressive for broadband
-	gateRangeCleanBoost  = -6  // dB - extra depth for very clean
-	gateRangeMinDB       = -36 // dB - minimum (deepest)
-	gateRangeMaxDB       = -12 // dB - maximum (gentlest)
+	ds201GateEntropyTonal     = 0.3 // Below: tonal noise (bleed/hum)
+	ds201GateEntropyMixed     = 0.6 // Below: mixed noise
+	ds201GateRangeTonalDB     = -16 // dB - gentle for tonal noise
+	ds201GateRangeMixedDB     = -21 // dB - moderate for mixed
+	ds201GateRangeBroadbandDB = -27 // dB - aggressive for broadband
+	ds201GateRangeCleanBoost  = -6  // dB - extra depth for very clean
+	ds201GateRangeMinDB       = -36 // dB - minimum (deepest)
+	ds201GateRangeMaxDB       = -12 // dB - maximum (gentlest)
 
 	// Knee: based on spectral crest
-	gateSpectralCrestHigh = 35.0 // High crest threshold
-	gateSpectralCrestMod  = 20.0 // Moderate crest threshold
-	gateKneeSoft          = 5.0  // For dynamic content with prominent peaks
-	gateKneeMod           = 3.0  // Standard
-	gateKneeSharp         = 2.0  // For less dynamic content
+	ds201GateSpectralCrestHigh = 35.0 // High crest threshold
+	ds201GateSpectralCrestMod  = 20.0 // Moderate crest threshold
+	ds201GateKneeSoft          = 5.0  // For dynamic content with prominent peaks
+	ds201GateKneeMod           = 3.0  // Standard
+	ds201GateKneeSharp         = 2.0  // For less dynamic content
 
 	// Detection: based on silence entropy and crest factor
-	gateSilenceCrestThreshold = 25.0 // dB - above: use RMS (noise has spikes)
-	gateEntropyClean          = 0.7  // Above: can use peak detection
+	ds201GateSilenceCrestThreshold = 25.0 // dB - above: use RMS (noise has spikes)
+	ds201GateEntropyClean          = 0.7  // Above: can use peak detection
+
+	// DS201 Low-Pass filter tuning
+	ds201LPDefaultFreq = 16000.0 // Hz - default cutoff (preserves all audible content)
+	ds201LPMinFreq     = 8000.0  // Hz - minimum cutoff (never filter below this)
+	ds201LPHeadroom    = 2000.0  // Hz - headroom above rolloff when setting cutoff
 
 	// Noise floor quality thresholds
 	noiseFloorClean   = -60.0 // dBFS - very clean recording
@@ -312,19 +320,19 @@ const (
 	lufsRmsOffset = 23.0
 
 	// Default fallback values for sanitization
-	defaultHighpassFreq   = 80.0
-	defaultDeessIntensity = 0.0
-	defaultNoiseReduction = 12.0
-	defaultLA2ARatio      = 3.0   // LA-2A baseline ratio
-	defaultLA2AThreshold  = -18.0 // Moderate threshold
-	defaultLA2AMakeup     = 2.0   // Conservative makeup
-	defaultLA2AAttack     = 10.0  // LA-2A fixed attack
-	defaultLA2ARelease    = 200.0 // LA-2A two-stage release approximation
-	defaultLA2AKnee       = 4.0   // LA-2A T4 optical cell soft knee
-	defaultGateThreshold  = 0.01  // -40dBFS
-	defaultHumFrequency   = 50.0  // UK mains
-	defaultHumHarmonics   = 4
-	defaultHumWidth       = 1.0 // Hz
+	ds201DefaultHPFreq        = 80.0
+	defaultDeessIntensity     = 0.0
+	defaultNoiseReduction     = 12.0
+	defaultLA2ARatio          = 3.0   // LA-2A baseline ratio
+	defaultLA2AThreshold      = -18.0 // Moderate threshold
+	defaultLA2AMakeup         = 2.0   // Conservative makeup
+	defaultLA2AAttack         = 10.0  // LA-2A fixed attack
+	defaultLA2ARelease        = 200.0 // LA-2A two-stage release approximation
+	defaultLA2AKnee           = 4.0   // LA-2A T4 optical cell soft knee
+	ds201DefaultGateThreshold = 0.01  // -40dBFS
+	defaultHumFrequency       = 50.0  // UK mains
+	defaultHumHarmonics       = 4
+	defaultHumWidth           = 1.0 // Hz
 )
 
 // AdaptConfig tunes all filter parameters based on Pass 1 measurements.
@@ -346,12 +354,12 @@ func AdaptConfig(config *FilterChainConfig, measurements *AudioMeasurements) {
 
 	// Tune each filter adaptively based on measurements
 	// Order matters: gate threshold calculated BEFORE denoise filters
-	tuneHighpassFreq(config, measurements, lufsGap)
-	tuneHumFilter(config, measurements) // Notch filter for mains hum (entropy-based)
+	tuneDS201HighPass(config, measurements, lufsGap) // Composite: highpass + hum notch
+	tuneDS201LowPass(config, measurements)           // Ultrasonic rejection (adaptive)
 	tuneNoiseReduction(config, measurements, lufsGap)
 	tuneAfftdnSimple(config, measurements, lufsGap) // Sample-free FFT denoise
 	tuneArnndn(config, measurements, lufsGap)       // RNN denoise (LUFS gap + noise floor based)
-	tuneGateThreshold(config, measurements)         // Gate threshold before denoise in chain
+	tuneDS201Gate(config, measurements)             // DS201-style soft expander gate
 	tuneDeesser(config, measurements)
 	tuneLA2ACompressor(config, measurements)
 	tuneDynaudnorm(config)
@@ -371,19 +379,28 @@ func calculateLUFSGap(targetI, inputI float64) float64 {
 	return 0.0
 }
 
-// tuneHighpassFreq adapts highpass filter cutoff frequency based on:
+// tuneDS201HighPass adapts DS201-inspired highpass composite filter based on:
 // - Spectral centroid (voice brightness/warmth)
 // - Spectral decrease (LF voice content - protects warm voices)
 // - Silence sample noise floor (actual LF noise level)
 // - Silence sample entropy (noise character - tonal vs broadband)
 //
-// Strategy:
+// This is a composite tuner that configures both:
+// 1. Highpass frequency and slope settings
+// 2. Hum notch filter settings (when tonal noise detected)
+//
+// Highpass strategy:
 // - Lower centroid (darker voice) → lower cutoff to preserve warmth
 // - Higher centroid (brighter voice) → higher cutoff, safe for rumble removal
 // - Negative spectral decrease (warm voice) → cap cutoff to protect LF body
 // - Tonal noise (low entropy) → don't boost, let bandreject handle hum
 // - Only boost cutoff if silence sample shows actual broadband LF noise
-func tuneHighpassFreq(config *FilterChainConfig, measurements *AudioMeasurements, lufsGap float64) {
+//
+// Hum notch strategy:
+// - Low entropy (< 0.7) indicates periodic/tonal noise → enable hum removal
+// - High entropy indicates broadband noise → skip notch filter
+// - Voice-aware: reduces harmonics for warm voices to protect vocal fundamentals
+func tuneDS201HighPass(config *FilterChainConfig, measurements *AudioMeasurements, lufsGap float64) {
 	if measurements.SpectralCentroid <= 0 {
 		// No spectral analysis available - keep default
 		return
@@ -395,15 +412,15 @@ func tuneHighpassFreq(config *FilterChainConfig, measurements *AudioMeasurements
 	case measurements.SpectralCentroid > centroidBright:
 		// Bright voice with high-frequency energy concentration
 		// Safe to use higher cutoff - voice energy is well above 100Hz
-		baseFreq = highpassBrightFreq
+		baseFreq = ds201HPBrightFreq
 	case measurements.SpectralCentroid > centroidNormal:
 		// Normal voice with balanced frequency distribution
 		// Use standard cutoff for podcast speech
-		baseFreq = highpassDefaultFreq
+		baseFreq = ds201HPDefaultFreq
 	default:
 		// Dark/warm voice with low-frequency energy concentration
 		// Use lower cutoff to preserve voice warmth and body
-		baseFreq = highpassMinFreq
+		baseFreq = ds201HPMinFreq
 	}
 
 	// Check if we should boost cutoff based on actual noise characteristics
@@ -423,24 +440,24 @@ func tuneHighpassFreq(config *FilterChainConfig, measurements *AudioMeasurements
 			case silenceNoiseFloor > silenceNoiseFloorNoisy:
 				// Noisy silence sample - aggressive boost warranted
 				shouldBoost = true
-				boostAmount = highpassBoostAggressive
+				boostAmount = ds201HPBoostAggressive
 			case silenceNoiseFloor > silenceNoiseFloorClean:
 				// Moderate noise - gentle boost
 				shouldBoost = true
-				boostAmount = highpassBoostModerate
+				boostAmount = ds201HPBoostModerate
 			}
 		}
 	}
 
 	// Apply boost if warranted by noise characteristics (only for non-warm voices)
 	if shouldBoost {
-		config.HighpassFreq = baseFreq + boostAmount
+		config.DS201HPFreq = baseFreq + boostAmount
 	} else {
-		config.HighpassFreq = baseFreq
+		config.DS201HPFreq = baseFreq
 	}
 
 	// Set TDII transform for all highpass (best floating-point accuracy)
-	config.HighpassTransform = "tdii"
+	config.DS201HPTransform = "tdii"
 
 	// Protect warm voices with significant LF body
 	// Instead of disabling highpass, we use gentler settings:
@@ -452,30 +469,135 @@ func tuneHighpassFreq(config *FilterChainConfig, measurements *AudioMeasurements
 	if measurements.SpectralDecrease < spectralDecreaseVeryWarm {
 		// Very warm voice (e.g. Popey -0.095, Martin -0.238)
 		// Use minimal settings: 30Hz cutoff, gentle Q, 50% mix
-		config.HighpassFreq = highpassVeryWarmFreq
-		config.HighpassWidth = highpassVeryWarmWidth
-		config.HighpassMix = highpassVeryWarmMix
-		config.HighpassPoles = 1 // Gentle 6dB/oct slope
-		return
+		config.DS201HPFreq = ds201HPVeryWarmFreq
+		config.DS201HPWidth = ds201HPVeryWarmWidth
+		config.DS201HPMix = ds201HPVeryWarmMix
+		config.DS201HPPoles = 1 // Gentle 6dB/oct slope
 	} else if measurements.SpectralSkewness > spectralSkewnessLFEmphasis {
 		// Significant LF emphasis (e.g. Mark: skewness 1.132)
 		// Use warm settings: 40Hz cutoff, gentle Q, 70% mix
-		config.HighpassFreq = highpassWarmFreq
-		config.HighpassWidth = highpassWarmWidth
-		config.HighpassMix = highpassWarmMix
-		config.HighpassPoles = 1 // Gentle 6dB/oct slope
-		return
+		config.DS201HPFreq = ds201HPWarmFreq
+		config.DS201HPWidth = ds201HPWarmWidth
+		config.DS201HPMix = ds201HPWarmMix
+		config.DS201HPPoles = 1 // Gentle 6dB/oct slope
 	} else if measurements.SpectralDecrease < spectralDecreaseWarm {
 		// Warm voice - cap at default with gentle slope to preserve body
-		if config.HighpassFreq > highpassDefaultFreq {
-			config.HighpassFreq = highpassDefaultFreq
+		if config.DS201HPFreq > ds201HPDefaultFreq {
+			config.DS201HPFreq = ds201HPDefaultFreq
 		}
-		config.HighpassPoles = 1 // Gentle 6dB/oct slope
+		config.DS201HPPoles = 1 // Gentle 6dB/oct slope
 	}
 
 	// Final cap at maximum to avoid affecting voice fundamentals
-	if config.HighpassFreq > highpassMaxFreq {
-		config.HighpassFreq = highpassMaxFreq
+	if config.DS201HPFreq > ds201HPMaxFreq {
+		config.DS201HPFreq = ds201HPMaxFreq
+	}
+
+	// --- Hum notch tuning (part of DS201HighPass composite) ---
+	// Uses entropy to detect tonal noise (hum) vs broadband noise
+	tuneDS201HumNotch(config, measurements)
+}
+
+// tuneDS201HumNotch configures the hum notch filter portion of DS201HighPass.
+// Called internally by tuneDS201HighPass - not intended for direct use.
+//
+// The entropy is calculated from the extracted silence sample during analysis.
+// Pure tones have low entropy; random noise has high entropy.
+func tuneDS201HumNotch(config *FilterChainConfig, measurements *AudioMeasurements) {
+	// Check if we have noise profile with entropy measurement
+	if measurements.NoiseProfile == nil {
+		config.DS201HumHarmonics = 0 // Disable hum notches
+		return
+	}
+
+	// Low entropy indicates tonal/periodic noise (likely mains hum)
+	if measurements.NoiseProfile.Entropy >= humEntropyThreshold {
+		// High entropy = broadband noise, notch filter won't help
+		config.DS201HumHarmonics = 0 // Disable hum notches
+		return
+	}
+
+	// Filter enabled - tune parameters based on voice characteristics
+	config.DS201HumFrequency = humFreq50Hz // Default to 50Hz (UK/EU mains)
+
+	// Determine harmonic count based on voice characteristics
+	// Warm/bassy voices need fewer harmonics to avoid cutting into vocal fundamentals
+	isWarmVoice := measurements.SpectralSkewness > humSkewnessWarm ||
+		measurements.SpectralDecrease < humDecreaseWarm
+
+	if isWarmVoice {
+		// Warm voice: only filter fundamental + 1 harmonic (50Hz, 100Hz)
+		// Avoids 150Hz and 200Hz which overlap male vocal fundamentals
+		config.DS201HumHarmonics = humWarmVoiceHarmonics
+
+		// Adjust width and mix based on how warm the voice is
+		// Very warm voices (decrease < -0.1) get narrower notch and more dry signal
+		if measurements.SpectralDecrease < humDecreaseVeryWarm {
+			config.DS201HumWidth = humVeryWarmVoiceWidth // 0.3Hz - very surgical
+			config.DS201HumMix = humMixVeryWarmVoice     // 70% wet
+		} else {
+			config.DS201HumWidth = humWarmVoiceWidth // 0.5Hz
+			config.DS201HumMix = humMixWarmVoice     // 80% wet
+		}
+	} else {
+		// Brighter voice: safe to filter more harmonics, full wet
+		config.DS201HumHarmonics = humDefaultHarmonics
+		config.DS201HumMix = humMixDefault
+
+		// Adaptive width based on noise severity (only for non-warm voices)
+		// Lower entropy = more tonal/pure hum = can use narrower notch
+		// Higher entropy (but still below threshold) = mixed noise = use wider notch
+		if measurements.NoiseProfile.Entropy < 0.3 {
+			// Very tonal hum - use narrow surgical notch
+			config.DS201HumWidth = humNarrowWidth
+		} else if measurements.NoiseProfile.Entropy > 0.5 {
+			// Borderline tonal - use wider notch to catch it
+			config.DS201HumWidth = humWideWidth
+		} else {
+			// Standard case
+			config.DS201HumWidth = humDefaultWidth
+		}
+	}
+}
+
+// tuneDS201LowPass adapts the DS201-inspired low-pass filter based on spectral measurements.
+//
+// DS201-inspired approach: frequency-conscious filtering that only enables when clear benefit.
+// The low-pass filter removes ultrasonic content and HF noise without affecting audible speech.
+//
+// Logic:
+//   - If SpectralRolloff < 8000 Hz → disable LP (voice already dark, no HF to filter)
+//   - If SpectralRolloff > 14000 Hz → enable LP at rolloff + headroom (reject ultrasonics)
+//   - If ZeroCrossingsRate > 0.15 AND SpectralCentroid < 3000 → possible HF noise, enable at 12kHz
+//   - Never filter below 8kHz (preserve all audible speech content)
+func tuneDS201LowPass(config *FilterChainConfig, measurements *AudioMeasurements) {
+	// Start disabled - only enable when we detect clear benefit
+	config.DS201LPEnabled = false
+	config.DS201LPFreq = ds201LPDefaultFreq
+
+	// If spectral rolloff is very low, voice is already dark - no need for LP
+	if measurements.SpectralRolloff < ds201LPMinFreq {
+		return
+	}
+
+	// If rolloff is high (>14kHz), there's significant HF content - filter ultrasonics
+	if measurements.SpectralRolloff > 14000.0 {
+		config.DS201LPEnabled = true
+		// Set cutoff above rolloff to preserve audible content, reject ultrasonics
+		config.DS201LPFreq = math.Min(measurements.SpectralRolloff+ds201LPHeadroom, ds201LPDefaultFreq)
+		return
+	}
+
+	// Detect HF noise: high zero crossings with low spectral centroid
+	// This pattern suggests noise is dominating the upper frequencies
+	const hfNoiseZeroCrossings = 0.15
+	const darkVoiceCentroid = 3000.0
+	const hfNoiseFilterFreq = 12000.0
+
+	if measurements.ZeroCrossingsRate > hfNoiseZeroCrossings && measurements.SpectralCentroid < darkVoiceCentroid {
+		config.DS201LPEnabled = true
+		config.DS201LPFreq = hfNoiseFilterFreq
+		return
 	}
 }
 
@@ -617,82 +739,6 @@ func selectAfftdnNoiseType(m *AudioMeasurements) string {
 
 	// Safe default: white noise model
 	return "w"
-}
-
-// tuneHumFilter adapts bandreject (notch) filter for mains hum removal.
-//
-// Strategy:
-//   - Uses NoiseProfile.Entropy from Pass 1 to detect tonal noise (hum)
-//   - Low entropy (< 0.7) indicates periodic/tonal noise → enable hum removal
-//   - High entropy indicates broadband noise → skip notch filter (use afftdn instead)
-//   - Applies notch at fundamental (50Hz default) plus harmonics
-//   - Voice-aware: reduces harmonics for warm/bassy voices to protect vocal fundamentals
-//     The 3rd harmonic (150Hz) and 4th harmonic (200Hz) overlap male vocal fundamentals,
-//     causing a "hollow" or "metal bath" sound if filtered on warm voices.
-//
-// The entropy is calculated from the extracted silence sample during analysis.
-// Pure tones have low entropy; random noise has high entropy.
-func tuneHumFilter(config *FilterChainConfig, measurements *AudioMeasurements) {
-	// Respect user's intent: if filter is disabled, don't touch it
-	if !config.HumFilterEnabled {
-		return
-	}
-
-	// Check if we have noise profile with entropy measurement
-	if measurements.NoiseProfile == nil {
-		config.HumFilterEnabled = false
-		return
-	}
-
-	// Low entropy indicates tonal/periodic noise (likely mains hum)
-	if measurements.NoiseProfile.Entropy >= humEntropyThreshold {
-		// High entropy = broadband noise, notch filter won't help
-		config.HumFilterEnabled = false
-		return
-	}
-
-	// Filter enabled - tune parameters based on voice characteristics
-	config.HumFrequency = humFreq50Hz // Default to 50Hz (UK/EU mains)
-
-	// Determine harmonic count based on voice characteristics
-	// Warm/bassy voices need fewer harmonics to avoid cutting into vocal fundamentals
-	isWarmVoice := measurements.SpectralSkewness > humSkewnessWarm ||
-		measurements.SpectralDecrease < humDecreaseWarm
-
-	if isWarmVoice {
-		// Warm voice: only filter fundamental + 1 harmonic (50Hz, 100Hz)
-		// Avoids 150Hz and 200Hz which overlap male vocal fundamentals
-		config.HumHarmonics = humWarmVoiceHarmonics
-
-		// Adjust width and mix based on how warm the voice is
-		// Very warm voices (decrease < -0.1) get narrower notch and more dry signal
-		if measurements.SpectralDecrease < humDecreaseVeryWarm {
-			config.HumWidth = humVeryWarmVoiceWidth // 0.3Hz - very surgical
-			config.HumMix = humMixVeryWarmVoice     // 70% wet
-		} else {
-			config.HumWidth = humWarmVoiceWidth // 0.5Hz
-			config.HumMix = humMixWarmVoice     // 80% wet
-		}
-	} else {
-		// Brighter voice: safe to filter more harmonics, full wet
-		config.HumHarmonics = humDefaultHarmonics
-		config.HumMix = humMixDefault
-
-		// Adaptive width based on noise severity (only for non-warm voices)
-		// Warm voices always use humWarmVoiceWidth for maximum protection
-		// Lower entropy = more tonal/pure hum = can use narrower notch
-		// Higher entropy (but still below threshold) = mixed noise = use wider notch
-		if measurements.NoiseProfile.Entropy < 0.3 {
-			// Very tonal hum - use narrow surgical notch
-			config.HumWidth = humNarrowWidth
-		} else if measurements.NoiseProfile.Entropy > 0.5 {
-			// Borderline tonal - use wider notch to catch it
-			config.HumWidth = humWideWidth
-		} else {
-			// Standard case
-			config.HumWidth = humDefaultWidth
-		}
-	}
 }
 
 // tuneArnndn adapts RNN-based noise reduction based on measurements.
@@ -890,7 +936,7 @@ func tuneDeesserCentroidOnly(config *FilterChainConfig, measurements *AudioMeasu
 //   - Knee: based on spectral crest (dynamic content = soft knee)
 //   - Detection: RMS for tonal bleed/noisy silence, peak for clean recordings
 //   - Makeup: 1.0 (loudness normalisation handles level compensation)
-func tuneGate(config *FilterChainConfig, measurements *AudioMeasurements) {
+func tuneDS201Gate(config *FilterChainConfig, measurements *AudioMeasurements) {
 	// Determine if we have tonal noise (likely bleed/hum)
 	var tonalNoise bool
 	var silenceEntropy, silenceCrest, silencePeak float64
@@ -899,56 +945,59 @@ func tuneGate(config *FilterChainConfig, measurements *AudioMeasurements) {
 		silenceEntropy = measurements.NoiseProfile.Entropy
 		silenceCrest = measurements.NoiseProfile.CrestFactor
 		silencePeak = measurements.NoiseProfile.PeakLevel
-		tonalNoise = silenceEntropy < gateEntropyTonal
+		tonalNoise = silenceEntropy < ds201GateEntropyTonal
 	}
 
 	// 1. Threshold: sits above noise/bleed peaks, below quiet speech
-	config.GateThreshold = calculateGateThreshold(
+	config.DS201GateThreshold = calculateDS201GateThreshold(
 		measurements.NoiseFloor,
 		silencePeak,
 		silenceCrest,
 	)
 
-	// 2. Ratio: based on LRA (loudness range)
-	config.GateRatio = calculateGateRatio(measurements.InputLRA)
+	// 2. Ratio: based on LRA (loudness range) - soft expander approach
+	config.DS201GateRatio = calculateDS201GateRatio(measurements.InputLRA)
 
-	// 3. Attack: based on MaxDifference (transient indicator)
-	config.GateAttack = calculateGateAttack(
+	// 3. Attack: based on MaxDifference, SpectralFlux, and SpectralCrest
+	// DS201-inspired: supports sub-millisecond attack for transient preservation
+	config.DS201GateAttack = calculateDS201GateAttack(
 		measurements.MaxDifference,
 		measurements.SpectralFlux,
+		measurements.SpectralCrest,
 	)
 
 	// 4. Release: based on flux, ZCR, and noise character
-	config.GateRelease = calculateGateRelease(
+	// Includes +50ms compensation for lack of Hold parameter
+	config.DS201GateRelease = calculateDS201GateRelease(
 		measurements.SpectralFlux,
 		measurements.ZeroCrossingsRate,
 		tonalNoise,
 	)
 
 	// 5. Range: based on silence entropy and noise floor
-	config.GateRange = calculateGateRange(
+	config.DS201GateRange = calculateDS201GateRange(
 		silenceEntropy,
 		measurements.NoiseFloor,
 	)
 
-	// 6. Knee: based on spectral crest
-	config.GateKnee = calculateGateKnee(measurements.SpectralCrest)
+	// 6. Knee: based on spectral crest - soft knee for natural transitions
+	config.DS201GateKnee = calculateDS201GateKnee(measurements.SpectralCrest)
 
 	// 7. Detection: RMS for bleed, peak for clean
-	config.GateDetection = calculateGateDetection(silenceEntropy, silenceCrest)
+	config.DS201GateDetection = calculateDS201GateDetection(silenceEntropy, silenceCrest)
 
 	// 8. Makeup: 1.0 (loudness normalisation handles it)
-	config.GateMakeup = 1.0
+	config.DS201GateMakeup = 1.0
 }
 
-// calculateGateThreshold determines the gate threshold based on noise characteristics.
+// calculateDS201GateThreshold determines the gate threshold based on noise characteristics.
 // When silence has high crest factor (transient spikes), use peak as reference.
 // Otherwise use noise floor. Add headroom based on noise severity.
-func calculateGateThreshold(noiseFloorDB, silencePeakDB, silenceCrestDB float64) float64 {
+func calculateDS201GateThreshold(noiseFloorDB, silencePeakDB, silenceCrestDB float64) float64 {
 	var referenceDB float64
 
 	// Determine reference level based on crest factor
-	if silenceCrestDB > gateCrestFactorThreshold && silencePeakDB != 0 {
+	if silenceCrestDB > ds201GateCrestFactorThreshold && silencePeakDB != 0 {
 		// Noise has transients (e.g., bleed) - use peak as reference
 		referenceDB = silencePeakDB
 	} else {
@@ -961,149 +1010,152 @@ func calculateGateThreshold(noiseFloorDB, silencePeakDB, silenceCrestDB float64)
 	switch {
 	case referenceDB < -70:
 		// Very clean - tight threshold safe
-		headroomDB = gateHeadroomClean
+		headroomDB = ds201GateHeadroomClean
 	case referenceDB < -50:
 		// Moderate - standard headroom
-		headroomDB = gateHeadroomModerate
+		headroomDB = ds201GateHeadroomModerate
 	default:
 		// Noisy - generous headroom to avoid cutting quiet speech
-		headroomDB = gateHeadroomNoisy
+		headroomDB = ds201GateHeadroomNoisy
 	}
 
 	thresholdDB := referenceDB + headroomDB
 
 	// Safety limits
-	thresholdDB = clamp(thresholdDB, gateThresholdMinDB, gateThresholdMaxDB)
+	thresholdDB = clamp(thresholdDB, ds201GateThresholdMinDB, ds201GateThresholdMaxDB)
 
 	return dbToLinear(thresholdDB)
 }
 
-// calculateGateRatio determines ratio based on LRA (loudness range).
-// Wide dynamics = gentle ratio to preserve expression.
-func calculateGateRatio(lra float64) float64 {
+// calculateDS201GateRatio determines ratio based on LRA (loudness range).
+// Wide dynamics = gentle ratio to preserve expression - soft expander approach.
+func calculateDS201GateRatio(lra float64) float64 {
 	switch {
-	case lra > gateLRAWide:
-		return gateRatioGentle // Wide dynamics - preserve expression
-	case lra > gateLRAModerate:
-		return gateRatioMod // Moderate dynamics
+	case lra > ds201GateLRAWide:
+		return ds201GateRatioGentle // Wide dynamics - preserve expression
+	case lra > ds201GateLRAModerate:
+		return ds201GateRatioMod // Moderate dynamics
 	default:
-		return gateRatioTight // Narrow dynamics - tighter control OK
+		return ds201GateRatioTight // Narrow dynamics - tighter control OK
 	}
 }
 
-// calculateGateAttack determines attack time based on transient characteristics.
+// calculateDS201GateAttack determines attack time based on transient characteristics.
 // Fast transients need fast attack to avoid clipping word onsets.
+// DS201-inspired: supports sub-millisecond attack (0.5ms+) for transient preservation.
 // MaxDifference is expressed as a fraction (0.0-1.0), convert to percentage.
-func calculateGateAttack(maxDiff, spectralFlux float64) float64 {
+func calculateDS201GateAttack(maxDiff, spectralFlux, spectralCrest float64) float64 {
 	// MaxDifference is 0.0-1.0 fraction, convert to percentage for comparison
 	maxDiffPercent := maxDiff * 100.0
 
+	// DS201-inspired attack tiers with ultra-fast capability
+	// Sub-millisecond attack preserves hard transients without click artifacts
 	var baseAttack float64
 	switch {
-	case maxDiffPercent > gateMaxDiffHigh:
-		baseAttack = gateAttackFast // Sharp transients - fast opening
-	case maxDiffPercent > gateMaxDiffMod:
-		baseAttack = gateAttackMod // Standard speech
+	case maxDiffPercent > ds201GateMaxDiffExtreme || spectralCrest > ds201GateCrestExtreme:
+		// Extreme transients - 500µs for pristine attack preservation
+		baseAttack = ds201GateAttackUltraFast
+	case maxDiffPercent > ds201GateMaxDiffHigh || spectralCrest > 30.0:
+		// Sharp transients - fast opening
+		baseAttack = ds201GateAttackFast
+	case maxDiffPercent > ds201GateMaxDiffMod:
+		// Standard speech
+		baseAttack = ds201GateAttackMod
 	default:
-		baseAttack = gateAttackSlow // Soft onsets - gentler OK
+		// Soft onsets - gentler OK
+		baseAttack = ds201GateAttackSlow
 	}
 
 	// Bias faster for dynamic content
-	if spectralFlux > gateFluxDynamicThres {
+	if spectralFlux > ds201GateFluxDynamicThres {
 		baseAttack *= 0.8
 	}
 
-	return clamp(baseAttack, 5.0, 25.0)
+	return clamp(baseAttack, ds201GateAttackUltraFast, 25.0)
 }
 
-// calculateGateRelease determines release time based on content and noise character.
-// Compensates for lack of hold parameter by extending release.
+// calculateDS201GateRelease determines release time based on content and noise character.
+// Compensates for lack of hold parameter by extending release (+50ms).
 // Tonal bleed needs slower release to hide the pumping artifact.
-func calculateGateRelease(spectralFlux, zcr float64, tonalNoise bool) float64 {
+func calculateDS201GateRelease(spectralFlux, zcr float64, tonalNoise bool) float64 {
 	var baseRelease float64
 
 	switch {
-	case spectralFlux < gateFluxLow && zcr < gateZCRLow:
+	case spectralFlux < ds201GateFluxLow && zcr < ds201GateZCRLow:
 		// Sustained speech with low activity
-		baseRelease = gateReleaseSustained
-	case spectralFlux > gateFluxHigh:
+		baseRelease = ds201GateReleaseSustained
+	case spectralFlux > ds201GateFluxHigh:
 		// Dynamic content - more responsive
-		baseRelease = gateReleaseDynamic
+		baseRelease = ds201GateReleaseDynamic
 	default:
-		baseRelease = gateReleaseMod
+		baseRelease = ds201GateReleaseMod
 	}
 
 	// Compensate for lack of hold parameter
-	baseRelease += gateReleaseHoldComp
+	baseRelease += ds201GateReleaseHoldComp
 
 	// Tonal bleed needs slower release to hide pumping
 	if tonalNoise {
-		baseRelease += gateReleaseTonalComp
+		baseRelease += ds201GateReleaseTonalComp
 	}
 
-	return clamp(baseRelease, float64(gateReleaseMin), float64(gateReleaseMax))
+	return clamp(baseRelease, float64(ds201GateReleaseMin), float64(ds201GateReleaseMax))
 }
 
-// calculateGateRange determines maximum attenuation depth based on noise character.
+// calculateDS201GateRange determines maximum attenuation depth based on noise character.
 // Tonal noise (bleed, hum) sounds worse when hard-gated - use gentler range.
 // Broadband noise can be gated more aggressively.
-func calculateGateRange(silenceEntropy, noiseFloorDB float64) float64 {
+func calculateDS201GateRange(silenceEntropy, noiseFloorDB float64) float64 {
 	var rangeDB float64
 
 	switch {
-	case silenceEntropy < gateEntropyTonal:
-		rangeDB = gateRangeTonalDB // Tonal - gentle
-	case silenceEntropy < gateEntropyMixed:
-		rangeDB = gateRangeMixedDB // Mixed - moderate
+	case silenceEntropy < ds201GateEntropyTonal:
+		rangeDB = ds201GateRangeTonalDB // Tonal - gentle
+	case silenceEntropy < ds201GateEntropyMixed:
+		rangeDB = ds201GateRangeMixedDB // Mixed - moderate
 	default:
-		rangeDB = gateRangeBroadbandDB // Broadband - aggressive
+		rangeDB = ds201GateRangeBroadbandDB // Broadband - aggressive
 	}
 
 	// Can go deeper if very clean recording
 	if noiseFloorDB < -70 {
-		rangeDB += gateRangeCleanBoost // More negative = deeper
+		rangeDB += ds201GateRangeCleanBoost // More negative = deeper
 	}
 
-	rangeDB = clamp(rangeDB, float64(gateRangeMinDB), float64(gateRangeMaxDB))
+	rangeDB = clamp(rangeDB, float64(ds201GateRangeMinDB), float64(ds201GateRangeMaxDB))
 
 	return dbToLinear(rangeDB)
 }
 
-// calculateGateKnee determines knee softness based on spectral crest.
+// calculateDS201GateKnee determines knee softness based on spectral crest.
 // Dynamic content with prominent peaks benefits from softer knee.
-func calculateGateKnee(spectralCrest float64) float64 {
+func calculateDS201GateKnee(spectralCrest float64) float64 {
 	switch {
-	case spectralCrest > gateSpectralCrestHigh:
-		return gateKneeSoft // Dynamic - soft engagement
-	case spectralCrest > gateSpectralCrestMod:
-		return gateKneeMod // Standard
+	case spectralCrest > ds201GateSpectralCrestHigh:
+		return ds201GateKneeSoft // Dynamic - soft engagement
+	case spectralCrest > ds201GateSpectralCrestMod:
+		return ds201GateKneeMod // Standard
 	default:
-		return gateKneeSharp // Less dynamic - sharper OK
+		return ds201GateKneeSharp // Less dynamic - sharper OK
 	}
 }
 
-// calculateGateDetection determines whether to use RMS or peak detection.
+// calculateDS201GateDetection determines whether to use RMS or peak detection.
 // RMS is safer for speech and handles tonal bleed better.
 // Peak provides tighter tracking for very clean recordings.
-func calculateGateDetection(silenceEntropy, silenceCrestDB float64) string {
+func calculateDS201GateDetection(silenceEntropy, silenceCrestDB float64) string {
 	// Tonal noise or high crest in silence - use RMS
-	if silenceEntropy < gateEntropyTonal || silenceCrestDB > gateSilenceCrestThreshold {
+	if silenceEntropy < ds201GateEntropyTonal || silenceCrestDB > ds201GateSilenceCrestThreshold {
 		return "rms"
 	}
 
 	// Very clean with low crest - can use peak for tighter tracking
-	if silenceEntropy > gateEntropyClean && silenceCrestDB < 15 {
+	if silenceEntropy > ds201GateEntropyClean && silenceCrestDB < 15 {
 		return "peak"
 	}
 
 	// Default: RMS is safer for speech
 	return "rms"
-}
-
-// tuneGateThreshold is deprecated - use tuneGate instead.
-// Kept for backwards compatibility during transition.
-func tuneGateThreshold(config *FilterChainConfig, measurements *AudioMeasurements) {
-	tuneGate(config, measurements)
 }
 
 // tuneLA2ACompressor applies Teletronix LA-2A style optical compressor tuning.
@@ -1524,30 +1576,40 @@ func tuneBleedGate(config *FilterChainConfig, measurements *AudioMeasurements, l
 
 // sanitizeConfig ensures no NaN or Inf values remain after adaptive tuning
 func sanitizeConfig(config *FilterChainConfig) {
-	config.HighpassFreq = sanitizeFloat(config.HighpassFreq, defaultHighpassFreq)
-	config.HighpassWidth = sanitizeFloat(config.HighpassWidth, 0.707) // Butterworth default
-	config.HighpassMix = sanitizeFloat(config.HighpassMix, 1.0)       // Full wet default
+	// DS201-inspired highpass filter
+	config.DS201HPFreq = sanitizeFloat(config.DS201HPFreq, ds201DefaultHPFreq)
+	config.DS201HPWidth = sanitizeFloat(config.DS201HPWidth, 0.707) // Butterworth default
+	config.DS201HPMix = sanitizeFloat(config.DS201HPMix, 1.0)       // Full wet default
+
+	// DS201-inspired lowpass filter
+	config.DS201LPFreq = sanitizeFloat(config.DS201LPFreq, ds201LPDefaultFreq)
+	config.DS201LPWidth = sanitizeFloat(config.DS201LPWidth, 0.707) // Butterworth default
+	config.DS201LPMix = sanitizeFloat(config.DS201LPMix, 1.0)       // Full wet default
+
+	// De-esser and noise reduction
 	config.DeessIntensity = sanitizeFloat(config.DeessIntensity, defaultDeessIntensity)
 	config.NoiseReduction = sanitizeFloat(config.NoiseReduction, defaultNoiseReduction)
+
+	// LA-2A compressor
 	config.LA2ARatio = sanitizeFloat(config.LA2ARatio, defaultLA2ARatio)
 	config.LA2AThreshold = sanitizeFloat(config.LA2AThreshold, defaultLA2AThreshold)
 	config.LA2AMakeup = sanitizeFloat(config.LA2AMakeup, defaultLA2AMakeup)
 
-	// GateThreshold needs additional check for zero/negative
-	if math.IsNaN(config.GateThreshold) || math.IsInf(config.GateThreshold, 0) || config.GateThreshold <= 0 {
-		config.GateThreshold = defaultGateThreshold
+	// DS201-inspired gate threshold needs additional check for zero/negative
+	if math.IsNaN(config.DS201GateThreshold) || math.IsInf(config.DS201GateThreshold, 0) || config.DS201GateThreshold <= 0 {
+		config.DS201GateThreshold = ds201DefaultGateThreshold
 	}
 
-	// Hum filter sanitization
-	config.HumFrequency = sanitizeFloat(config.HumFrequency, defaultHumFrequency)
-	config.HumWidth = sanitizeFloat(config.HumWidth, defaultHumWidth)
-	if config.HumHarmonics < 1 || config.HumHarmonics > 8 {
-		config.HumHarmonics = defaultHumHarmonics
+	// DS201-inspired hum filter sanitization
+	config.DS201HumFrequency = sanitizeFloat(config.DS201HumFrequency, defaultHumFrequency)
+	config.DS201HumWidth = sanitizeFloat(config.DS201HumWidth, defaultHumWidth)
+	if config.DS201HumHarmonics < 1 || config.DS201HumHarmonics > 8 {
+		config.DS201HumHarmonics = defaultHumHarmonics
 	}
 
 	// BleedGateThreshold needs additional check for zero/negative (like pre-gate)
 	if math.IsNaN(config.BleedGateThreshold) || math.IsInf(config.BleedGateThreshold, 0) || config.BleedGateThreshold <= 0 {
-		config.BleedGateThreshold = defaultGateThreshold // Use same default as pre-gate
+		config.BleedGateThreshold = ds201DefaultGateThreshold // Use same default as pre-gate
 	}
 }
 

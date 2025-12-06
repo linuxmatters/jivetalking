@@ -24,11 +24,10 @@ func newTestConfig() *FilterChainConfig {
 		ResampleFrameSize:     4096,
 
 		// Processing filters (all disabled by default)
-		HighpassEnabled:   false,
-		HumFilterEnabled:  false,
+		DS201HPEnabled:    false,
 		AdeclickEnabled:   false,
 		AfftdnEnabled:     false,
-		GateEnabled:       false,
+		DS201GateEnabled:  false,
 		LA2AEnabled:       false,
 		DeessEnabled:      false,
 		DynaudnormEnabled: false,
@@ -38,38 +37,38 @@ func newTestConfig() *FilterChainConfig {
 		LimiterEnabled:    false,
 
 		// Sensible defaults for parameters (used when filter is enabled)
-		HighpassFreq:      80.0,
-		HighpassPoles:     2,     // 12dB/oct standard Butterworth
-		HighpassWidth:     0.707, // Butterworth
-		HighpassMix:       1.0,   // Full wet
-		HighpassTransform: "tdii",
-		HumFrequency:      50.0,
-		HumHarmonics:      4,
-		HumWidth:          1.0,
-		AdeclickMethod:    "s",
-		NoiseFloor:        -50.0,
-		NoiseReduction:    12.0,
-		NoiseTrack:        true,
-		GateThreshold:     0.01,
-		GateRatio:         2.0,
-		GateAttack:        20,
-		GateRelease:       250,
-		GateRange:         0.0625,
-		GateKnee:          2.828,
-		GateMakeup:        1.0,
-		LA2AThreshold:     -20,
-		LA2ARatio:         2.5,
-		LA2AAttack:        15,
-		LA2ARelease:       80,
-		LA2AMakeup:        3,
-		LA2AKnee:          2.5,
-		LA2AMix:           1.0,
-		DeessIntensity:    0.5,
-		DeessAmount:       0.5,
-		DeessFreq:         0.5,
-		TargetI:           -16.0,
-		TargetTP:          -0.3,
-		TargetLRA:         7.0,
+		DS201HPFreq:        80.0,
+		DS201HPPoles:       2,     // 12dB/oct standard Butterworth
+		DS201HPWidth:       0.707, // Butterworth
+		DS201HPMix:         1.0,   // Full wet
+		DS201HPTransform:   "tdii",
+		DS201HumFrequency:  50.0,
+		DS201HumHarmonics:  4,
+		DS201HumWidth:      1.0,
+		AdeclickMethod:     "s",
+		NoiseFloor:         -50.0,
+		NoiseReduction:     12.0,
+		NoiseTrack:         true,
+		DS201GateThreshold: 0.01,
+		DS201GateRatio:     2.0,
+		DS201GateAttack:    20,
+		DS201GateRelease:   250,
+		DS201GateRange:     0.0625,
+		DS201GateKnee:      2.828,
+		DS201GateMakeup:    1.0,
+		LA2AThreshold:      -20,
+		LA2ARatio:          2.5,
+		LA2AAttack:         15,
+		LA2ARelease:        80,
+		LA2AMakeup:         3,
+		LA2AKnee:           2.5,
+		LA2AMix:            1.0,
+		DeessIntensity:     0.5,
+		DeessAmount:        0.5,
+		DeessFreq:          0.5,
+		TargetI:            -16.0,
+		TargetTP:           -0.3,
+		TargetLRA:          7.0,
 
 		DynaudnormFrameLen:   500,
 		DynaudnormFilterSize: 31,
@@ -137,9 +136,9 @@ func TestBuildFilterSpec(t *testing.T) {
 	t.Run("enabled filters appear in spec", func(t *testing.T) {
 		config := newTestConfig()
 		// Enable specific filters for this test
-		config.HighpassEnabled = true
+		config.DS201HPEnabled = true
 		config.AfftdnEnabled = true
-		config.GateEnabled = true
+		config.DS201GateEnabled = true
 		config.LA2AEnabled = true
 		config.DeessEnabled = true
 		config.SpeechnormEnabled = true
@@ -175,9 +174,9 @@ func TestBuildFilterSpec(t *testing.T) {
 	t.Run("no NaN values in filter spec", func(t *testing.T) {
 		config := newTestConfig()
 		// Enable all filters to maximize coverage
-		config.HighpassEnabled = true
+		config.DS201HPEnabled = true
 		config.AfftdnEnabled = true
-		config.GateEnabled = true
+		config.DS201GateEnabled = true
 		config.LA2AEnabled = true
 		config.DeessEnabled = true
 		config.SpeechnormEnabled = true
@@ -194,9 +193,9 @@ func TestBuildFilterSpec(t *testing.T) {
 	t.Run("no Inf values in filter spec", func(t *testing.T) {
 		config := newTestConfig()
 		// Enable all filters to maximize coverage
-		config.HighpassEnabled = true
+		config.DS201HPEnabled = true
 		config.AfftdnEnabled = true
-		config.GateEnabled = true
+		config.DS201GateEnabled = true
 		config.LA2AEnabled = true
 		config.DeessEnabled = true
 		config.SpeechnormEnabled = true
@@ -281,7 +280,7 @@ func TestBuildFilterSpec(t *testing.T) {
 	})
 }
 
-func TestBuildHighpassFilter(t *testing.T) {
+func TestBuildDS201HighpassFilter(t *testing.T) {
 	tests := []struct {
 		name    string
 		enabled bool
@@ -317,10 +316,10 @@ func TestBuildHighpassFilter(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			config := newTestConfig()
-			config.HighpassEnabled = tt.enabled
-			config.HighpassFreq = tt.freq
+			config.DS201HPEnabled = tt.enabled
+			config.DS201HPFreq = tt.freq
 
-			spec := config.buildHighpassFilter()
+			spec := config.buildDS201HighpassFilter()
 
 			if !tt.enabled {
 				if spec != "" {
@@ -416,7 +415,7 @@ func TestBuildAfftdnFilter(t *testing.T) {
 	})
 }
 
-func TestBuildAgateFilter(t *testing.T) {
+func TestBuildDS201GateFilter(t *testing.T) {
 	tests := []struct {
 		name      string
 		enabled   bool
@@ -446,31 +445,86 @@ func TestBuildAgateFilter(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			config := newTestConfig()
-			config.GateEnabled = tt.enabled
-			config.GateThreshold = tt.threshold
+			config.DS201GateEnabled = tt.enabled
+			config.DS201GateThreshold = tt.threshold
 
-			spec := config.buildAgateFilter()
+			spec := config.buildDS201GateFilter()
 
 			if !strings.Contains(spec, tt.wantIn) {
-				t.Errorf("buildAgateFilter() = %q, want to contain %q", spec, tt.wantIn)
+				t.Errorf("buildDS201GateFilter() = %q, want to contain %q", spec, tt.wantIn)
 			}
 
 			// Verify detection mode is RMS (important for speech)
 			if !strings.Contains(spec, "detection=rms") {
-				t.Error("buildAgateFilter() should use RMS detection for speech")
+				t.Error("buildDS201GateFilter() should use RMS detection for speech")
 			}
 		})
 	}
 
 	t.Run("disabled returns empty", func(t *testing.T) {
 		config := newTestConfig()
-		config.GateEnabled = false
+		config.DS201GateEnabled = false
 
-		spec := config.buildAgateFilter()
+		spec := config.buildDS201GateFilter()
 		if spec != "" {
-			t.Errorf("buildAgateFilter() = %q, want empty when disabled", spec)
+			t.Errorf("buildDS201GateFilter() = %q, want empty when disabled", spec)
 		}
 	})
+}
+
+func TestBuildDS201LowPassFilter(t *testing.T) {
+	tests := []struct {
+		name    string
+		enabled bool
+		freq    float64
+		wantIn  string
+	}{
+		{
+			name:    "ultrasonic rejection",
+			enabled: true,
+			freq:    16000.0,
+			wantIn:  "lowpass=f=16000:",
+		},
+		{
+			name:    "HF noise filter",
+			enabled: true,
+			freq:    12000.0,
+			wantIn:  "lowpass=f=12000:",
+		},
+		{
+			name:    "high rolloff adjustment",
+			enabled: true,
+			freq:    14500.0,
+			wantIn:  "lowpass=f=14500:",
+		},
+		{
+			name:    "disabled returns empty",
+			enabled: false,
+			freq:    16000.0,
+			wantIn:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := newTestConfig()
+			config.DS201LPEnabled = tt.enabled
+			config.DS201LPFreq = tt.freq
+
+			spec := config.buildDS201LowPassFilter()
+
+			if !tt.enabled {
+				if spec != "" {
+					t.Errorf("buildDS201LowPassFilter() = %q, want empty when disabled", spec)
+				}
+				return
+			}
+
+			if !strings.Contains(spec, tt.wantIn) {
+				t.Errorf("buildDS201LowPassFilter() = %q, want to contain %q", spec, tt.wantIn)
+			}
+		})
+	}
 }
 
 func TestBuildLA2ACompressorFilter(t *testing.T) {
@@ -679,7 +733,7 @@ func TestBuildDynaudnormFilter(t *testing.T) {
 func TestFilterOrderRespected(t *testing.T) {
 	config := newTestConfig()
 	// Enable filters that appear at start and end
-	config.HighpassEnabled = true
+	config.DS201HPEnabled = true
 	config.AfftdnEnabled = true
 	config.LimiterEnabled = true
 	config.DeessEnabled = true
@@ -977,12 +1031,11 @@ func TestPass2FilterOrder(t *testing.T) {
 	t.Run("includes all processing filters", func(t *testing.T) {
 		requiredFilters := []FilterID{
 			FilterDownmix,
-			FilterHighpass,
-			FilterBandreject,
+			FilterDS201HighPass, // Composite: includes hum notch filters
 			FilterAdeclick,
 			FilterAfftdn,
 			FilterArnndn,
-			FilterAgate,
+			FilterDS201Gate,
 			FilterLA2ACompressor,
 			FilterDeesser,
 			FilterSpeechnorm,
