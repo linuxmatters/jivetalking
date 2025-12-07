@@ -371,6 +371,11 @@ func GenerateReport(data ReportData) error {
 		fmt.Fprintf(f, "True Peak:           %.1f dBTP\n", m.InputTP)
 		fmt.Fprintf(f, "Loudness Range:      %.1f LU\n", m.InputLRA)
 		fmt.Fprintf(f, "Noise Floor:         %.1f dB (measured)\n", m.NoiseFloor)
+		// Show adaptive silence detection threshold if different from default
+		if m.SilenceDetectLevel != 0 && m.SilenceDetectLevel != -50.0 {
+			fmt.Fprintf(f, "Silence Threshold:   %.1f dB (adaptive from %.1f dB pre-scan)\n",
+				m.SilenceDetectLevel, m.PreScanNoiseFloor)
+		}
 		fmt.Fprintf(f, "Dynamic Range:       %s\n", formatDynamicRange(m.DynamicRange))
 		fmt.Fprintf(f, "RMS Level:           %.1f dBFS\n", m.RMSLevel)
 		fmt.Fprintf(f, "Peak Level:          %.1f dBFS\n", m.PeakLevel)
@@ -407,27 +412,42 @@ func GenerateReport(data ReportData) error {
 			fmt.Fprintf(f, "Max Difference:      %.1f%% FS (transient indicator)\n", maxDiffPercent)
 		}
 
-		// Silence sample details (used for noise profile extraction)
-		if m.NoiseProfile != nil {
+		// Silence candidates (all evaluated candidates with scores)
+		if len(m.SilenceCandidates) > 0 {
+			fmt.Fprintf(f, "Silence Candidates:  %d evaluated\n", len(m.SilenceCandidates))
+			for i, c := range m.SilenceCandidates {
+				// Mark the selected candidate or rejection reason
+				status := ""
+				if m.NoiseProfile != nil && c.Region.Start == m.NoiseProfile.Start {
+					status = " [SELECTED]"
+				} else if c.Score == 0.0 {
+					status = " [REJECTED: too loud]"
+				}
+				fmt.Fprintf(f, "  Candidate %d:       %.1fs at %.1fs (score: %.3f)%s\n",
+					i+1, c.Region.Duration.Seconds(), c.Region.Start.Seconds(), c.Score, status)
+				fmt.Fprintf(f, "    RMS Level:       %.1f dBFS\n", c.RMSLevel)
+				fmt.Fprintf(f, "    Peak Level:      %.1f dBFS\n", c.PeakLevel)
+				fmt.Fprintf(f, "    Crest Factor:    %.1f dB\n", c.CrestFactor)
+				fmt.Fprintf(f, "    Centroid:        %.0f Hz\n", c.SpectralCentroid)
+				fmt.Fprintf(f, "    Flatness:        %.3f\n", c.SpectralFlatness)
+				fmt.Fprintf(f, "    Kurtosis:        %.1f\n", c.SpectralKurtosis)
+				// Classify noise type based on entropy
+				noiseType := "broadband"
+				if c.Entropy < 0.7 {
+					noiseType = "tonal"
+				} else if c.Entropy < 0.9 {
+					noiseType = "mixed"
+				}
+				fmt.Fprintf(f, "    Entropy:         %.3f (%s)\n", c.Entropy, noiseType)
+			}
+		} else if m.NoiseProfile != nil {
+			// Fallback: show selected profile if no candidates stored (shouldn't happen)
 			fmt.Fprintf(f, "Silence Sample:      %.1fs at %.1fs\n",
 				m.NoiseProfile.Duration.Seconds(),
 				m.NoiseProfile.Start.Seconds())
 			fmt.Fprintf(f, "  Noise Floor:       %.1f dBFS (RMS)\n", m.NoiseProfile.MeasuredNoiseFloor)
 			fmt.Fprintf(f, "  Peak Level:        %.1f dBFS\n", m.NoiseProfile.PeakLevel)
 			fmt.Fprintf(f, "  Crest Factor:      %.1f dB\n", m.NoiseProfile.CrestFactor)
-			if m.NoiseProfile.Entropy > 0 {
-				// Classify noise type based on entropy
-				noiseType := "broadband (hiss)"
-				if m.NoiseProfile.Entropy < 0.7 {
-					noiseType = "tonal (hum/buzz)"
-				} else if m.NoiseProfile.Entropy < 0.9 {
-					noiseType = "mixed"
-				}
-				fmt.Fprintf(f, "  Noise Character:   %s (entropy %.3f)\n", noiseType, m.NoiseProfile.Entropy)
-			}
-			if m.NoiseProfile.ExtractionWarning != "" {
-				fmt.Fprintf(f, "  Warning:           %s\n", m.NoiseProfile.ExtractionWarning)
-			}
 		} else if len(m.SilenceRegions) > 0 {
 			// Show first silence region even if profile extraction failed
 			r := m.SilenceRegions[0]

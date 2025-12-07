@@ -67,6 +67,7 @@ var Pass1FilterOrder = []FilterID{
 // - DS201LowPass: removes ultrasonic content that could trigger false gates (adaptive)
 // - Adeclick: removes impulse noise before spectral processing (currently disabled)
 // - Afftdn: profile-based spectral noise reduction using silence sample
+// - DolbySRSingle: single-stage denoising inspired by Dolby SR "Least Treatment" philosophy
 // - Arnndn: AI-based denoising for complex/dynamic noise patterns
 // - DS201Gate: soft expander for inter-speech cleanup (after denoising lowers floor)
 // - LA2ACompressor: LA-2A style optical compression evens dynamics before normalisation
@@ -367,8 +368,8 @@ func DefaultFilterConfig() *FilterChainConfig {
 		AdeclickEnabled: false,
 		AdeclickMethod:  "s", // overlap-save (default for better quality)
 
-		// Noise Reduction (profile-based) - disabled, Dolby SR Single handles denoising
-		AfftdnEnabled:  false,
+		// Noise Reduction (profile-based)
+		AfftdnEnabled:  true,
 		NoiseFloor:     -25.0, // Placeholder, will be updated from measurements
 		NoiseReduction: 12.0,  // 12 dB reduction (FFT denoise default, good for speech)
 		NoiseTrack:     true,  // Enable adaptive tracking
@@ -376,7 +377,7 @@ func DefaultFilterConfig() *FilterChainConfig {
 		// Dolby SR-Inspired Single-Stage Denoise
 		// Implements SR philosophy: Least Treatment, artifact masking
 		// afftdn handles spectral processing (like SR's fixed bands)
-		DolbySRSingleEnabled:        true,
+		DolbySRSingleEnabled:        false,
 		DolbySRSingleNoiseFloor:     -50.0, // Placeholder, will be updated from measurements
 		DolbySRSingleNoiseReduction: 8.0,   // Conservative default (adaptive: 4-12dB)
 		DolbySRSingleGainSmooth:     8,     // Balanced default (adaptive: 3-14)

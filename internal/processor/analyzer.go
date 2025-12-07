@@ -30,6 +30,31 @@ type NoiseProfile struct {
 	CrestFactor        float64       `json:"crest_factor"`                 // Peak - RMS in dB (high = impulsive noise, low = steady noise)
 	Entropy            float64       `json:"entropy"`                      // Signal randomness (1.0 = white noise, lower = tonal noise like hum)
 	ExtractionWarning  string        `json:"extraction_warning,omitempty"` // Warning message if extraction had issues
+
+	// Spectral characteristics for contamination detection (added during candidate evaluation)
+	SpectralCentroid float64 `json:"spectral_centroid,omitempty"` // Hz, where energy is concentrated (voice range: 300-4000 Hz)
+	SpectralFlatness float64 `json:"spectral_flatness,omitempty"` // 0-1, noise-like vs tonal (higher = more noise-like)
+	SpectralKurtosis float64 `json:"spectral_kurtosis,omitempty"` // Peakiness (high = peaked harmonics like speech)
+}
+
+// SilenceCandidateMetrics contains measurements for evaluating silence region candidates.
+// These metrics are collected before final selection to enable multi-metric scoring.
+type SilenceCandidateMetrics struct {
+	Region SilenceRegion // The silence region being evaluated
+
+	// Amplitude metrics (from astats)
+	RMSLevel    float64 // dBFS, average level (lower = quieter)
+	PeakLevel   float64 // dBFS, peak level (transient indicator)
+	CrestFactor float64 // Peak - RMS in dB (high = impulsive)
+	Entropy     float64 // 0-1, signal randomness (1.0 = broadband noise)
+
+	// Spectral metrics (from aspectralstats) - key for crosstalk detection
+	SpectralCentroid float64 // Hz, where energy is concentrated
+	SpectralFlatness float64 // 0-1, noise-like (high) vs tonal (low)
+	SpectralKurtosis float64 // Peakiness - high values indicate speech harmonics
+
+	// Scoring (computed after measurement)
+	Score float64 // Composite score for candidate ranking
 }
 
 // Cached metadata keys for frame extraction - avoids per-frame C string allocations
@@ -303,6 +328,10 @@ type AudioMeasurements struct {
 	TargetOffset float64 `json:"target_offset"` // Offset for normalization
 	NoiseFloor   float64 `json:"noise_floor"`   // Measured noise floor from astats (dBFS)
 
+	// Pre-scan adaptive silence detection thresholds
+	PreScanNoiseFloor  float64 `json:"prescan_noise_floor"`  // Noise floor estimated from first 15% of audio (dBFS)
+	SilenceDetectLevel float64 `json:"silence_detect_level"` // Adaptive silencedetect threshold used (dBFS)
+
 	// Spectral analysis from aspectralstats (all measurements averaged across frames)
 	SpectralMean     float64 `json:"spectral_mean"`     // Mean spectral magnitude
 	SpectralVariance float64 `json:"spectral_variance"` // Spectral magnitude variance
@@ -333,7 +362,10 @@ type AudioMeasurements struct {
 	// Silence detection results from silencedetect filter
 	SilenceRegions []SilenceRegion `json:"silence_regions,omitempty"` // Detected silence regions
 
-	// Noise profile extracted from longest silence region
+	// Scored silence candidates (for debugging/reporting)
+	SilenceCandidates []SilenceCandidateMetrics `json:"silence_candidates,omitempty"` // All evaluated candidates with scores
+
+	// Noise profile extracted from best silence candidate
 	NoiseProfile *NoiseProfile `json:"noise_profile,omitempty"` // nil if extraction failed
 
 	// Derived suggestions for Pass 2 adaptive processing
@@ -568,12 +600,186 @@ func finalizeOutputMeasurements(acc *outputMetadataAccumulators) *OutputMeasurem
 	return m
 }
 
+// Pre-scan constants
+const (
+	// preScanPercent is the fraction of audio to scan for adaptive threshold detection.
+	// We scan the first 15% of the recording to estimate the noise floor before running
+	// the full Pass 1 analysis. This allows silencedetect to use an adaptive threshold.
+	preScanPercent = 0.15
+
+	// preScanSilenceHeadroom is added to the pre-scan noise floor to get the silencedetect threshold.
+	// A region is considered "silence" if it's within this headroom of the noise floor.
+	// Higher values detect more silence (including quieter room tone) but may include crosstalk.
+	preScanSilenceHeadroom = 6.0 // dB
+
+	// preScanMinThreshold prevents silencedetect from being too sensitive in very quiet recordings.
+	// Even professional recordings rarely have silence below -70 dBFS.
+	preScanMinThreshold = -70.0
+
+	// preScanMaxThreshold prevents silencedetect from detecting loud sections as silence.
+	// If the estimated threshold is above this, something is wrong with the recording.
+	preScanMaxThreshold = -35.0
+)
+
+// preScanNoiseFloor performs a quick scan of the first 15% of the audio to estimate
+// the noise floor. This is used to set an adaptive silencedetect threshold for Pass 1.
+//
+// The function runs astats on the initial portion of audio and returns the RMSTrough
+// measurement, which represents the level of the quietest segments (likely ambient noise).
+//
+// Returns the estimated noise floor in dBFS, or an error if the scan fails.
+// If RMSTrough is not available, falls back to RMSLevel - 15dB.
+func preScanNoiseFloor(filename string) (float64, error) {
+	// Open audio file
+	reader, metadata, err := audio.OpenAudioFile(filename)
+	if err != nil {
+		return 0, fmt.Errorf("pre-scan: failed to open audio file: %w", err)
+	}
+	defer reader.Close()
+
+	// Calculate how many frames to process (15% of audio)
+	totalDuration := metadata.Duration
+	scanDuration := totalDuration * preScanPercent
+	sampleRate := float64(metadata.SampleRate)
+	samplesPerFrame := 4096.0
+	maxFrames := int((scanDuration * sampleRate) / samplesPerFrame)
+
+	// Create a simple filter graph with just downmix and astats
+	// We need mono for consistent measurements, and astats for noise floor detection
+	filterSpec := "pan=mono|c0=0.5*c0+0.5*c1,astats=metadata=1:measure_overall=Noise_floor+RMS_level+RMS_trough+Peak_level:measure_perchannel=0"
+
+	filterGraph, bufferSrcCtx, bufferSinkCtx, err := setupFilterGraph(
+		reader.GetDecoderContext(),
+		filterSpec,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("pre-scan: failed to create filter graph: %w", err)
+	}
+	defer ffmpeg.AVFilterGraphFree(&filterGraph)
+
+	filteredFrame := ffmpeg.AVFrameAlloc()
+	defer ffmpeg.AVFrameFree(&filteredFrame)
+
+	// Track measurements
+	var rmsTrough, rmsLevel float64
+	frameCount := 0
+
+	// Process frames until we've scanned 15% of the audio
+	for frameCount < maxFrames {
+		frame, err := reader.ReadFrame()
+		if err != nil {
+			return 0, fmt.Errorf("pre-scan: failed to read frame: %w", err)
+		}
+		if frame == nil {
+			break // EOF
+		}
+
+		// Push frame into filter graph
+		if _, err := ffmpeg.AVBuffersrcAddFrameFlags(bufferSrcCtx, frame, 0); err != nil {
+			return 0, fmt.Errorf("pre-scan: failed to add frame to filter: %w", err)
+		}
+		frameCount++
+
+		// Pull filtered frames and extract astats metadata
+		for {
+			if _, err := ffmpeg.AVBuffersinkGetFrame(bufferSinkCtx, filteredFrame); err != nil {
+				if errors.Is(err, ffmpeg.EAgain) || errors.Is(err, ffmpeg.AVErrorEOF) {
+					break
+				}
+				return 0, fmt.Errorf("pre-scan: failed to get filtered frame: %w", err)
+			}
+
+			// Extract astats measurements from metadata
+			if metadata := filteredFrame.Metadata(); metadata != nil {
+				if value, ok := getFloatMetadata(metadata, metaKeyRMSTrough); ok {
+					rmsTrough = value
+				}
+				if value, ok := getFloatMetadata(metadata, metaKeyRMSLevel); ok {
+					rmsLevel = value
+				}
+			}
+
+			ffmpeg.AVFrameUnref(filteredFrame)
+		}
+	}
+
+	// Flush the filter graph
+	if _, err := ffmpeg.AVBuffersrcAddFrameFlags(bufferSrcCtx, nil, 0); err != nil {
+		return 0, fmt.Errorf("pre-scan: failed to flush filter: %w", err)
+	}
+
+	// Pull remaining frames
+	for {
+		if _, err := ffmpeg.AVBuffersinkGetFrame(bufferSinkCtx, filteredFrame); err != nil {
+			if errors.Is(err, ffmpeg.EAgain) || errors.Is(err, ffmpeg.AVErrorEOF) {
+				break
+			}
+			return 0, fmt.Errorf("pre-scan: failed to get remaining frame: %w", err)
+		}
+
+		if metadata := filteredFrame.Metadata(); metadata != nil {
+			if value, ok := getFloatMetadata(metadata, metaKeyRMSTrough); ok {
+				rmsTrough = value
+			}
+			if value, ok := getFloatMetadata(metadata, metaKeyRMSLevel); ok {
+				rmsLevel = value
+			}
+		}
+
+		ffmpeg.AVFrameUnref(filteredFrame)
+	}
+
+	// Determine noise floor from measurements
+	var noiseFloor float64
+	if rmsTrough != 0 && !math.IsInf(rmsTrough, -1) {
+		// Primary: use RMSTrough (quietest segments)
+		noiseFloor = rmsTrough
+	} else if rmsLevel != 0 && !math.IsInf(rmsLevel, -1) {
+		// Fallback: estimate from overall RMS level
+		// Quiet segments are typically 12-18dB below average RMS
+		noiseFloor = rmsLevel - 15.0
+	} else {
+		// No measurements available, use conservative default
+		return -50.0, nil // Default silencedetect threshold
+	}
+
+	return noiseFloor, nil
+}
+
+// calculateAdaptiveSilenceThreshold computes the silencedetect threshold from the pre-scan noise floor.
+// Returns a threshold that's slightly above the noise floor to detect quiet room tone as silence.
+func calculateAdaptiveSilenceThreshold(noiseFloor float64) float64 {
+	// Silence threshold = noise floor + headroom
+	// This allows silencedetect to find regions that are at or slightly above the ambient noise
+	threshold := noiseFloor + preScanSilenceHeadroom
+
+	// Apply bounds to prevent extreme values
+	if threshold < preScanMinThreshold {
+		threshold = preScanMinThreshold
+	}
+	if threshold > preScanMaxThreshold {
+		threshold = preScanMaxThreshold
+	}
+
+	return threshold
+}
+
 // AnalyzeAudio performs Pass 1: ebur128 + astats + aspectralstats analysis to get measurements
 // This is required for adaptive processing in Pass 2.
 //
 // Implementation note: ebur128 and astats write measurements to frame metadata with lavfi.r128.*
 // and lavfi.astats.Overall.* keys respectively. We extract these from the last processed frames.
 func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements)) (*AudioMeasurements, error) {
+	// Pre-scan: Estimate noise floor from first 15% of audio to set adaptive silencedetect threshold
+	// This allows detection of intentional room tone that may be quieter than the default -50 dBFS
+	preScanNF, err := preScanNoiseFloor(filename)
+	if err != nil {
+		// Non-fatal: fall back to default threshold if pre-scan fails
+		preScanNF = -50.0
+	}
+	adaptiveThreshold := calculateAdaptiveSilenceThreshold(preScanNF)
+	config.SilenceDetectLevel = adaptiveThreshold
+
 	// Open audio file
 	reader, metadata, err := audio.OpenAudioFile(filename)
 	if err != nil {
@@ -688,7 +894,11 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 	filterFreed = true
 
 	// Create measurements struct and populate from accumulators
-	measurements := &AudioMeasurements{}
+	measurements := &AudioMeasurements{
+		// Store pre-scan adaptive silence detection thresholds
+		PreScanNoiseFloor:  preScanNF,
+		SilenceDetectLevel: adaptiveThreshold,
+	}
 
 	// Populate ebur128 loudness measurements
 	if acc.ebur128Found {
@@ -782,9 +992,14 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 
 	// Extract noise profile from best silence region (if available)
 	// This provides precise noise floor measurement from actual silence in the recording
-	if bestRegion := findBestSilenceRegion(acc.silenceRegions); bestRegion != nil {
+	silenceResult := findBestSilenceRegion(filename, acc.silenceRegions, totalDuration, measurements.NoiseFloor)
+
+	// Store all evaluated candidates for reporting/debugging
+	measurements.SilenceCandidates = silenceResult.Candidates
+
+	if silenceResult.BestRegion != nil {
 		tempDir := filepath.Dir(filename) // Use same directory as input file
-		if profile, err := extractNoiseProfile(filename, bestRegion, tempDir); err == nil && profile != nil {
+		if profile, err := extractNoiseProfile(filename, silenceResult.BestRegion, tempDir); err == nil && profile != nil {
 			measurements.NoiseProfile = profile
 			// If we got a noise profile measurement, use it as the primary noise floor
 			// This is more accurate than the overall RMS_trough because it's from pure silence
@@ -916,66 +1131,468 @@ func createAnalysisFilterGraph(
 	return setupFilterGraph(decCtx, config.BuildFilterSpec())
 }
 
-// Minimum silence durations for noise profile extraction
+// Silence region scoring constants for noise profile extraction
 const (
-	idealSilenceDuration   = 10 * time.Second // Prefer silence regions >= 10s
-	minimumSilenceDuration = 2 * time.Second  // Accept >= 2s with warning
-	minimumSilenceStart    = 30 * time.Second // Only consider silence regions starting after 30s
+	// Duration thresholds (Task 5: adjusted constraints)
+	minimumSilenceDuration = 8 * time.Second  // Minimum 8s (up from 2s) to avoid inter-word gaps
+	idealDurationMin       = 8 * time.Second  // Ideal range lower bound
+	idealDurationMax       = 18 * time.Second // Ideal range upper bound
+	maxSilenceDuration     = 30 * time.Second // Penalise regions longer than this
+
+	// Long region segmentation: break up long silence regions to find cleanest subsection
+	// Intentional room tone may be embedded within a longer quiet period (e.g., quiet lead-up + room tone)
+	segmentationThreshold = 20 * time.Second // Regions longer than this get segmented
+	segmentDuration       = 12 * time.Second // Each segment is this long (ideal duration)
+	segmentOverlap        = 4 * time.Second  // Segments overlap by this amount
+
+	// Voice range detection (Hz) - for crosstalk rejection
+	voiceCentroidMin = 250.0  // Lower bound of voice frequency range
+	voiceCentroidMax = 4500.0 // Upper bound of voice frequency range
+
+	// Scoring thresholds
+	crosstalkKurtosisThreshold    = 10.0 // Above this + voice centroid = likely crosstalk
+	crosstalkCrestFactorThreshold = 15.0 // Above this + voice centroid = likely crosstalk
+
+	// Scoring weights (must sum to 1.0)
+	amplitudeScoreWeight = 0.4
+	spectralScoreWeight  = 0.5
+	durationScoreWeight  = 0.1
+
+	// Temporal bias (applied as multiplicative factor)
+	temporalBiasMax    = 0.3  // Up to 30% penalty for late regions (strongly prefer early)
+	temporalWindowSecs = 90.0 // Regions after 90s get maximum penalty
+
+	// Candidate selection cutoff
+	candidateCutoffPercent = 0.15 // Only consider silence in first 15% of recording
+
+	// Adaptive RMS threshold: reject candidates louder than noise floor + this headroom
+	candidateRMSHeadroom = 10.0 // dB above noise floor - candidates louder than this are likely crosstalk
 )
 
-// findBestSilenceRegion finds the best silence region for noise profile extraction.
-// Returns the FIRST region meeting the length criteria (>= 2s), since room noise
-// is typically recorded at the start of podcast recordings.
-// Prefers regions >= 10s, accepts >= 2s with a warning.
-// Returns nil if no suitable region is found.
-func findBestSilenceRegion(regions []SilenceRegion) *SilenceRegion {
-	if len(regions) == 0 {
-		return nil
+// segmentLongSilenceRegion breaks a long silence region into overlapping segments.
+// This allows finding the cleanest subsection within a long quiet period, as intentional
+// room tone may be preceded or followed by other quiet content (breathing, quiet lead-up).
+//
+// Returns the original region in a slice if it's shorter than the segmentation threshold,
+// otherwise returns a slice of overlapping segments covering the original region.
+func segmentLongSilenceRegion(region SilenceRegion) []SilenceRegion {
+	// Don't segment short regions
+	if region.Duration <= segmentationThreshold {
+		return []SilenceRegion{region}
 	}
 
-	// Find the first region meeting our criteria
-	// Regions are already in chronological order from silencedetect
-	// Only consider regions starting after minimumSilenceStart (30s) to skip intro music/jingles
-	var firstIdeal *SilenceRegion
-	var firstAcceptable *SilenceRegion
-	var longest *SilenceRegion
+	var segments []SilenceRegion
+	stride := segmentDuration - segmentOverlap // How far to advance each segment
+	endTime := region.Start + region.Duration
 
-	for i := range regions {
-		r := &regions[i]
+	for segStart := region.Start; segStart+segmentDuration <= endTime; segStart += stride {
+		segments = append(segments, SilenceRegion{
+			Start:    segStart,
+			End:      segStart + segmentDuration,
+			Duration: segmentDuration,
+		})
+	}
 
-		// Track longest for warning message (regardless of start time)
-		if longest == nil || r.Duration > longest.Duration {
-			longest = r
+	// If no segments were created (shouldn't happen), return the original
+	if len(segments) == 0 {
+		return []SilenceRegion{region}
+	}
+
+	return segments
+}
+
+// findBestSilenceRegion finds the best silence region for noise profile extraction.
+// Uses multi-metric scoring to select the best candidate, considering:
+// - Amplitude (quieter = better)
+// - Spectral characteristics (noise-like = better, voice-like = worse)
+// - Temporal position (earlier = slightly better)
+// - Duration (closer to 15s = better)
+//
+// The filename parameter is required to measure spectral characteristics of candidates.
+// Returns nil if no suitable region is found.
+// findBestSilenceRegionResult contains the selected region and all evaluated candidates
+type findBestSilenceRegionResult struct {
+	BestRegion *SilenceRegion
+	Candidates []SilenceCandidateMetrics
+}
+
+func findBestSilenceRegion(filename string, regions []SilenceRegion, totalDuration float64, noiseFloor float64) *findBestSilenceRegionResult {
+	result := &findBestSilenceRegionResult{}
+
+	if len(regions) == 0 {
+		return result
+	}
+
+	// Calculate cutoff time: only consider silence in first 15% of recording
+	// Intentional room tone is always recorded near the start, not deep into the episode
+	cutoffTime := time.Duration(totalDuration * candidateCutoffPercent * float64(time.Second))
+
+	// Calculate adaptive RMS threshold: candidates louder than this are likely crosstalk
+	// Use noise floor + headroom as the maximum acceptable RMS for a silence candidate
+	rmsThreshold := noiseFloor + candidateRMSHeadroom
+
+	// Filter to candidates meeting duration and temporal criteria, then segment long regions.
+	// Long silence regions are broken into overlapping segments to find the cleanest subsection.
+	// This helps when intentional room tone is embedded within a longer quiet period.
+	var candidates []SilenceRegion
+	for _, r := range regions {
+		// Must meet minimum duration
+		if r.Duration < minimumSilenceDuration {
+			continue
 		}
+		// Must start within first 15% of recording
+		if r.Start > cutoffTime {
+			continue
+		}
+		// Segment long regions to find cleanest subsection
+		segments := segmentLongSilenceRegion(r)
+		candidates = append(candidates, segments...)
+	}
 
-		// Skip regions that start too early (before 30s)
-		if r.Start < minimumSilenceStart {
+	if len(candidates) == 0 {
+		return result
+	}
+
+	// Measure and score each candidate (including segments from long regions)
+	var bestCandidate *SilenceRegion
+	var bestScore float64 = -1
+
+	for i := range candidates {
+		candidate := &candidates[i]
+
+		// Measure spectral characteristics
+		metrics := measureSilenceCandidateSpectral(filename, *candidate)
+		if metrics == nil {
+			// Measurement failed - skip this candidate
 			continue
 		}
 
-		// Prefer first ideal region (>= 10s)
-		if firstIdeal == nil && r.Duration >= idealSilenceDuration {
-			firstIdeal = r
-			break // Found ideal, no need to continue
+		// Adaptive RMS filter: reject candidates significantly louder than noise floor
+		// These are likely crosstalk or other non-silence audio
+		if metrics.RMSLevel > rmsThreshold {
+			metrics.Score = 0.0 // Mark as rejected but still store for reporting
+			result.Candidates = append(result.Candidates, *metrics)
+			continue
 		}
 
-		// Track first acceptable region (>= 2s)
-		if firstAcceptable == nil && r.Duration >= minimumSilenceDuration {
-			firstAcceptable = r
+		// Score the candidate
+		score := scoreSilenceCandidate(metrics)
+		metrics.Score = score
+
+		// Store candidate metrics for reporting
+		result.Candidates = append(result.Candidates, *metrics)
+
+		// Track best scoring candidate
+		if score > bestScore {
+			bestScore = score
+			bestCandidate = candidate
 		}
 	}
 
-	if firstIdeal != nil {
-		return firstIdeal
+	result.BestRegion = bestCandidate
+	return result
+}
+
+// scoreSilenceCandidate computes a composite score for a silence region candidate.
+// Higher scores indicate better candidates for noise profiling.
+// Returns 0.0 for candidates that should be rejected (e.g., crosstalk detected).
+func scoreSilenceCandidate(m *SilenceCandidateMetrics) float64 {
+	if m == nil {
+		return 0.0
 	}
 
-	if firstAcceptable != nil {
-		// Short but acceptable - warning will be noted in profile
-		return firstAcceptable
+	// Check for crosstalk rejection: voice-range centroid + peaked/impulsive characteristics
+	if isLikelyCrosstalk(m) {
+		return 0.0 // Reject this candidate
 	}
 
-	// No suitable silence region found
-	return nil
+	// Calculate individual component scores (all normalised to 0-1 range)
+	ampScore := calculateAmplitudeScore(m.RMSLevel)
+	specScore := calculateSpectralScore(m.SpectralCentroid, m.SpectralFlatness, m.SpectralKurtosis)
+	durScore := calculateDurationScore(m.Region.Duration)
+
+	// Weighted combination (base score)
+	baseScore := ampScore*amplitudeScoreWeight +
+		specScore*spectralScoreWeight +
+		durScore*durationScoreWeight
+
+	// Apply temporal bias as multiplicative tiebreaker (Task 4)
+	// Early regions get up to 10% boost: score *= 1.0 - (startTime / 90s) * 0.1
+	// At t=0: multiplier = 1.0, at t=90s+: multiplier = 0.9
+	temporalMultiplier := applyTemporalBias(m.Region.Start)
+
+	return baseScore * temporalMultiplier
+}
+
+// isLikelyCrosstalk detects if a silence candidate is likely crosstalk (leaked voice).
+// Returns true if centroid is in voice range AND has peaked/impulsive characteristics.
+func isLikelyCrosstalk(m *SilenceCandidateMetrics) bool {
+	// Check if centroid is in voice frequency range
+	inVoiceRange := m.SpectralCentroid >= voiceCentroidMin && m.SpectralCentroid <= voiceCentroidMax
+
+	if !inVoiceRange {
+		return false // Not in voice range, unlikely to be crosstalk
+	}
+
+	// Voice range + peaked harmonics (high kurtosis) = likely speech
+	if m.SpectralKurtosis > crosstalkKurtosisThreshold {
+		return true
+	}
+
+	// Voice range + impulsive transients (high crest factor) = likely speech
+	if m.CrestFactor > crosstalkCrestFactorThreshold {
+		return true
+	}
+
+	return false
+}
+
+// calculateAmplitudeScore normalises RMS level to a 0-1 score.
+// Lower RMS (quieter) = higher score.
+// Range: -80 dBFS (best) to -40 dBFS (worst)
+func calculateAmplitudeScore(rmsLevel float64) float64 {
+	// Clamp to expected range
+	if rmsLevel < -80.0 {
+		rmsLevel = -80.0
+	}
+	if rmsLevel > -40.0 {
+		rmsLevel = -40.0
+	}
+
+	// Normalise: -80 → 1.0, -40 → 0.0
+	return (rmsLevel - (-40.0)) / (-80.0 - (-40.0))
+}
+
+// calculateSpectralScore combines spectral metrics into a 0-1 score.
+// Rewards: high flatness (noise-like), low kurtosis, centroid outside voice range
+func calculateSpectralScore(centroid, flatness, kurtosis float64) float64 {
+	// Centroid score: 0 if in voice range (250-4500 Hz), 1 otherwise
+	var centroidScore float64
+	if centroid < voiceCentroidMin || centroid > voiceCentroidMax {
+		centroidScore = 1.0
+	} else {
+		// Partial penalty based on how central to voice range
+		voiceMid := (voiceCentroidMin + voiceCentroidMax) / 2
+		voiceHalfWidth := (voiceCentroidMax - voiceCentroidMin) / 2
+		distFromMid := math.Abs(centroid - voiceMid)
+		centroidScore = distFromMid / voiceHalfWidth * 0.5 // Max 0.5 if in voice range
+	}
+
+	// Flatness score: higher = more noise-like = better (already 0-1)
+	flatnessScore := flatness
+	if flatnessScore > 1.0 {
+		flatnessScore = 1.0
+	}
+	if flatnessScore < 0.0 {
+		flatnessScore = 0.0
+	}
+
+	// Kurtosis score: lower = less peaked = better
+	// Normalise: 0 → 1.0, 20+ → 0.0
+	kurtosisScore := 1.0 - clampFloat(kurtosis/20.0, 0.0, 1.0)
+
+	// Combine with weights from the spec
+	return centroidScore*0.5 + flatnessScore*0.3 + kurtosisScore*0.2
+}
+
+// applyTemporalBias returns a multiplicative factor that gives early regions a boost.
+// Formula from Task 4: score *= 1.0 - (startTime / 90s) * 0.1
+// At t=0: returns 1.0 (no penalty), at t=90s+: returns 0.9 (10% reduction)
+// This acts as a tiebreaker for candidates with similar base scores.
+func applyTemporalBias(start time.Duration) float64 {
+	startSecs := start.Seconds()
+	if startSecs < 0 {
+		startSecs = 0
+	}
+
+	// Linear bias: 0s → 1.0, 90s+ → 0.9
+	bias := clampFloat(startSecs/temporalWindowSecs, 0.0, 1.0) * temporalBiasMax
+	return 1.0 - bias
+}
+
+// calculateDurationScore uses a plateau-with-dropoff curve.
+// Full score (1.0) for durations in ideal range (8-18s).
+// Gaussian dropoff outside the ideal range.
+func calculateDurationScore(duration time.Duration) float64 {
+	durSecs := duration.Seconds()
+	idealMinSecs := idealDurationMin.Seconds()
+	idealMaxSecs := idealDurationMax.Seconds()
+	sigmaSecs := 5.0 // Standard deviation for dropoff
+
+	// Full score within ideal range
+	if durSecs >= idealMinSecs && durSecs <= idealMaxSecs {
+		return 1.0
+	}
+
+	// Gaussian dropoff below ideal range
+	if durSecs < idealMinSecs {
+		diff := durSecs - idealMinSecs
+		return math.Exp(-0.5 * (diff / sigmaSecs) * (diff / sigmaSecs))
+	}
+
+	// Gaussian dropoff above ideal range
+	diff := durSecs - idealMaxSecs
+	return math.Exp(-0.5 * (diff / sigmaSecs) * (diff / sigmaSecs))
+}
+
+// clampFloat clamps a value to the range [min, max].
+func clampFloat(value, min, max float64) float64 {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
+// measureSilenceCandidateSpectral measures spectral and amplitude characteristics of a silence region.
+// This is used during candidate evaluation to detect crosstalk-contaminated regions.
+// Runs aspectralstats + astats on the trimmed region and returns aggregated metrics.
+// Returns nil if measurement fails (non-fatal - candidate will be skipped).
+func measureSilenceCandidateSpectral(filename string, region SilenceRegion) *SilenceCandidateMetrics {
+	// Open the audio file
+	reader, _, err := audio.OpenAudioFile(filename)
+	if err != nil {
+		return nil // Non-fatal - skip this candidate
+	}
+	defer reader.Close()
+
+	decCtx := reader.GetDecoderContext()
+
+	// Create filter graph for spectral measurement
+	// Filter chain:
+	// 1. atrim: extract only the silence region
+	// 2. aformat: convert to mono for consistent measurement
+	// 3. aspectralstats: measure spectral characteristics (centroid, flatness, kurtosis)
+	// 4. astats: measure amplitude characteristics (RMS, peak, entropy)
+	filterSpec := fmt.Sprintf(
+		"atrim=start=%f:duration=%f,aformat=channel_layouts=mono,aspectralstats=measure=centroid+flatness+kurtosis,astats=metadata=1:measure_perchannel=RMS_level+Peak_level+Entropy",
+		region.Start.Seconds(), region.Duration.Seconds())
+
+	filterGraph, bufferSrcCtx, bufferSinkCtx, err := setupFilterGraph(decCtx, filterSpec)
+	if err != nil {
+		return nil // Non-fatal - skip this candidate
+	}
+	defer ffmpeg.AVFilterGraphFree(&filterGraph)
+
+	// Process frames through filter to collect measurements
+	filteredFrame := ffmpeg.AVFrameAlloc()
+	defer ffmpeg.AVFrameFree(&filteredFrame)
+
+	// Accumulators for spectral stats (need to average across frames)
+	var centroidSum, flatnessSum, kurtosisSum float64
+	var spectralFrameCount int
+
+	// Latest values for astats (cumulative, keep last)
+	var rmsLevel, peakLevel, entropy float64
+	var astatsFound bool
+
+	for {
+		frame, err := reader.ReadFrame()
+		if err != nil {
+			break
+		}
+		if frame == nil {
+			break // EOF
+		}
+
+		// Push frame into filter graph
+		if _, err := ffmpeg.AVBuffersrcAddFrameFlags(bufferSrcCtx, frame, 0); err != nil {
+			continue // Skip problematic frames
+		}
+
+		// Pull filtered frames and extract measurements
+		for {
+			if _, err := ffmpeg.AVBuffersinkGetFrame(bufferSinkCtx, filteredFrame); err != nil {
+				if errors.Is(err, ffmpeg.EAgain) || errors.Is(err, ffmpeg.AVErrorEOF) {
+					break
+				}
+				continue
+			}
+
+			if metadata := filteredFrame.Metadata(); metadata != nil {
+				// Spectral stats (accumulated for averaging)
+				if value, ok := getFloatMetadata(metadata, metaKeySpectralCentroid); ok {
+					centroidSum += value
+					spectralFrameCount++
+				}
+				if value, ok := getFloatMetadata(metadata, metaKeySpectralFlatness); ok {
+					flatnessSum += value
+				}
+				if value, ok := getFloatMetadata(metadata, metaKeySpectralKurtosis); ok {
+					kurtosisSum += value
+				}
+
+				// Amplitude stats (keep latest cumulative values)
+				if value, ok := getFloatMetadata(metadata, metaKeyRMSLevel); ok {
+					rmsLevel = value
+					astatsFound = true
+				}
+				if value, ok := getFloatMetadata(metadata, metaKeyPeakLevel); ok {
+					peakLevel = value
+				}
+				if value, ok := getFloatMetadata(metadata, metaKeyEntropy); ok {
+					entropy = value
+				}
+			}
+
+			ffmpeg.AVFrameUnref(filteredFrame)
+		}
+	}
+
+	// Flush filter graph
+	if _, err := ffmpeg.AVBuffersrcAddFrameFlags(bufferSrcCtx, nil, 0); err == nil {
+		for {
+			if _, err := ffmpeg.AVBuffersinkGetFrame(bufferSinkCtx, filteredFrame); err != nil {
+				break
+			}
+
+			if metadata := filteredFrame.Metadata(); metadata != nil {
+				if value, ok := getFloatMetadata(metadata, metaKeySpectralCentroid); ok {
+					centroidSum += value
+					spectralFrameCount++
+				}
+				if value, ok := getFloatMetadata(metadata, metaKeySpectralFlatness); ok {
+					flatnessSum += value
+				}
+				if value, ok := getFloatMetadata(metadata, metaKeySpectralKurtosis); ok {
+					kurtosisSum += value
+				}
+				if value, ok := getFloatMetadata(metadata, metaKeyRMSLevel); ok {
+					rmsLevel = value
+					astatsFound = true
+				}
+				if value, ok := getFloatMetadata(metadata, metaKeyPeakLevel); ok {
+					peakLevel = value
+				}
+				if value, ok := getFloatMetadata(metadata, metaKeyEntropy); ok {
+					entropy = value
+				}
+			}
+
+			ffmpeg.AVFrameUnref(filteredFrame)
+		}
+	}
+
+	// Need at least some measurements to be useful
+	if spectralFrameCount == 0 || !astatsFound {
+		return nil
+	}
+
+	// Calculate averages for spectral stats
+	metrics := &SilenceCandidateMetrics{
+		Region:           region,
+		RMSLevel:         rmsLevel,
+		PeakLevel:        peakLevel,
+		CrestFactor:      peakLevel - rmsLevel, // Both in dB
+		Entropy:          entropy,
+		SpectralCentroid: centroidSum / float64(spectralFrameCount),
+		SpectralFlatness: flatnessSum / float64(spectralFrameCount),
+		SpectralKurtosis: kurtosisSum / float64(spectralFrameCount),
+	}
+
+	return metrics
 }
 
 // extractNoiseProfile extracts a noise sample from the silence region and measures its characteristics.
@@ -1158,9 +1775,11 @@ func extractNoiseProfile(filename string, region *SilenceRegion, tempDir string)
 		profile.FilePath = outputPath
 	}
 
-	// Record warning if using short silence region
-	if region.Duration < idealSilenceDuration {
-		profile.ExtractionWarning = fmt.Sprintf("using short silence region (%.1fs) - ideally need >=10s", region.Duration.Seconds())
+	// Record warning if using silence region outside ideal range (8-18s)
+	if region.Duration < idealDurationMin {
+		profile.ExtractionWarning = fmt.Sprintf("using short silence region (%.1fs) - ideally need >=%ds", region.Duration.Seconds(), int(idealDurationMin.Seconds()))
+	} else if region.Duration > idealDurationMax {
+		profile.ExtractionWarning = fmt.Sprintf("using long silence region (%.1fs) - ideally <=%ds", region.Duration.Seconds(), int(idealDurationMax.Seconds()))
 	}
 
 	if noiseFloorFound {
