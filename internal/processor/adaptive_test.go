@@ -2074,3 +2074,327 @@ func TestTuneSpeechnorm(t *testing.T) {
 		})
 	}
 }
+
+// =============================================================================
+// Dolby SR-Inspired Single-Stage Hybrid Denoise Tests
+// =============================================================================
+
+func TestTuneDolbySRSingle_NoiseFloorSeverity(t *testing.T) {
+	// Constants from adaptive.go for reference:
+	// dolbySRFloorClean    = -80.0 dBFS (below: minimal processing - studio quality)
+	// dolbySRFloorModerate = -65.0 dBFS (standard processing - home office)
+	// dolbySRFloorNoisy    = -55.0 dBFS (above: aggressive processing)
+	// dolbySRSingleNRMin   = 2.0 dB (barely perceptible)
+	// dolbySRSingleNRMax   = 6.0 dB (moderate ceiling for noisy sources)
+
+	tests := []struct {
+		name              string
+		noiseFloor        float64
+		lufsGap           float64
+		wantNRMin         float64 // minimum expected NR
+		wantNRMax         float64 // maximum expected NR
+		wantSigmaMin      float64 // minimum expected sigma (0-1 linear)
+		wantSigmaMax      float64 // maximum expected sigma (0-1 linear)
+		wantPercentMin    float64 // minimum expected percent
+		wantPercentMax    float64 // maximum expected percent
+		wantNRDescription string
+	}{
+		// Very clean source (floor < -80dB) → barely perceptible processing
+		{
+			name:              "very clean source - minimal processing",
+			noiseFloor:        -85.0,
+			lufsGap:           10.0,
+			wantNRMin:         2.0,
+			wantNRMax:         4.0,   // Minimal NR
+			wantSigmaMin:      0.003, // Near clean sigma (0.005)
+			wantSigmaMax:      0.008,
+			wantPercentMin:    13.0,
+			wantPercentMax:    18.0, // Extremely light
+			wantNRDescription: "barely perceptible for very clean source",
+		},
+		// Moderate noise (-65 to -72dB) → moderate processing (Martin's range)
+		{
+			name:              "moderate noise - moderate processing",
+			noiseFloor:        -72.0, // Martin's actual noise floor
+			lufsGap:           10.0,
+			wantNRMin:         2.5,
+			wantNRMax:         4.5,   // Some NR (severity ~0.32)
+			wantSigmaMin:      0.006, // Between clean and noisy
+			wantSigmaMax:      0.015,
+			wantPercentMin:    18.0,
+			wantPercentMax:    28.0,
+			wantNRDescription: "moderate for typical home recording",
+		},
+		// Noisy source (> -55dB) → approaching max (gate handles rest)
+		{
+			name:              "noisy source - near max processing",
+			noiseFloor:        -50.0,
+			lufsGap:           10.0,
+			wantNRMin:         5.0,
+			wantNRMax:         6.0,   // Near max NR
+			wantSigmaMin:      0.025, // Near noisy sigma (0.03)
+			wantSigmaMax:      0.035,
+			wantPercentMin:    35.0,
+			wantPercentMax:    42.0, // Moderate touch
+			wantNRDescription: "approaching max - DS201 gate handles rest",
+		},
+		// High LUFS gap with moderate noise (severity ~0.80 with new thresholds)
+		{
+			name:              "moderate noise with high LUFS gap",
+			noiseFloor:        -60.0, // severity = 20/25 = 0.80
+			lufsGap:           20.0,  // High gap adds some NR
+			wantNRMin:         5.0,   // NR = 2 + 0.8*4 = 5.2, then +2.0 LUFS boost, clamped to 6.0
+			wantNRMax:         6.0,   // Clamped to max
+			wantSigmaMin:      0.023, // sigma = 0.005 + 0.80*0.025 ≈ 0.025
+			wantSigmaMax:      0.028, // Allow some margin
+			wantPercentMin:    33.0,  // percent = 15 + 0.80*25 = 35
+			wantPercentMax:    38.0,  // Allow some margin
+			wantNRDescription: "elevated due to high severity + LUFS gap",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := newTestConfig()
+			config.DolbySRSingleEnabled = true
+			measurements := &AudioMeasurements{
+				NoiseFloor:       tt.noiseFloor,
+				SpectralFlatness: 0.5, // Neutral flatness
+			}
+
+			tuneDolbySRSingle(config, measurements, tt.lufsGap)
+
+			// Verify NR is within expected range
+			if config.DolbySRSingleNoiseReduction < tt.wantNRMin ||
+				config.DolbySRSingleNoiseReduction > tt.wantNRMax {
+				t.Errorf("DolbySRSingleNoiseReduction = %.1f, want %.1f-%.1f (%s)",
+					config.DolbySRSingleNoiseReduction, tt.wantNRMin, tt.wantNRMax, tt.wantNRDescription)
+			}
+
+			// Verify noise floor is set from measurements
+			if config.DolbySRSingleNoiseFloor != tt.noiseFloor {
+				t.Errorf("DolbySRSingleNoiseFloor = %.1f, want %.1f",
+					config.DolbySRSingleNoiseFloor, tt.noiseFloor)
+			}
+		})
+	}
+}
+
+func TestTuneDolbySRSingle_NoiseCharacter(t *testing.T) {
+	// Tests for tonal vs broadband noise character tuning
+	// Since DolbySR Single is now VERY subtle (gate does heavy lifting):
+	// - All cases use maximum softness (10)
+	// - All cases use slow adaptivity (0.3-0.5)
+	// - All cases use high gain smoothing (14-20)
+	// This ensures the subtle NR is completely transparent.
+
+	tests := []struct {
+		name             string
+		silenceEntropy   float64
+		spectralFlatness float64
+		wantSoftness     int
+		wantAdaptivity   float64
+		wantGainSmooth   int
+		wantDescription  string
+	}{
+		// Tonal noise (low entropy < 0.4)
+		{
+			name:             "tonal noise - hum/bleed",
+			silenceEntropy:   0.3,
+			spectralFlatness: 0.3,
+			wantSoftness:     10,   // Always max softness
+			wantAdaptivity:   0.30, // Very slow for tonal (transparency)
+			wantGainSmooth:   20,   // Max smoothing for tonal
+			wantDescription:  "very gentle for tonal noise",
+		},
+		// Broadband noise (high flatness > 0.6)
+		{
+			name:             "broadband noise - hiss/HVAC",
+			silenceEntropy:   0.7,
+			spectralFlatness: 0.7,
+			wantSoftness:     10,   // Always max softness (was 8)
+			wantAdaptivity:   0.50, // Slow for broadband (transparency)
+			wantGainSmooth:   14,   // High smoothing for broadband
+			wantDescription:  "gentle for broadband",
+		},
+		// Mixed/neutral noise
+		{
+			name:             "mixed noise - balanced",
+			silenceEntropy:   0.5,
+			spectralFlatness: 0.5,
+			wantSoftness:     10,   // Always max softness (was 8)
+			wantAdaptivity:   0.40, // Slow adaptivity
+			wantGainSmooth:   15,   // High smoothing
+			wantDescription:  "gentle for mixed noise",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := newTestConfig()
+			config.DolbySRSingleEnabled = true
+			measurements := &AudioMeasurements{
+				NoiseFloor:       -55.0, // Moderate noise (won't affect character tuning)
+				SpectralFlatness: tt.spectralFlatness,
+				NoiseProfile: &NoiseProfile{
+					Entropy: tt.silenceEntropy,
+				},
+			}
+
+			tuneDolbySRSingle(config, measurements, 10.0) // Standard LUFS gap
+
+			// Verify adaptivity
+			if math.Abs(config.DolbySRSingleAdaptivity-tt.wantAdaptivity) > 0.01 {
+				t.Errorf("DolbySRSingleAdaptivity = %.2f, want %.2f (%s)",
+					config.DolbySRSingleAdaptivity, tt.wantAdaptivity, tt.wantDescription)
+			}
+
+			// Verify gain smoothing
+			if config.DolbySRSingleGainSmooth != tt.wantGainSmooth {
+				t.Errorf("DolbySRSingleGainSmooth = %d, want %d (%s)",
+					config.DolbySRSingleGainSmooth, tt.wantGainSmooth, tt.wantDescription)
+			}
+		})
+	}
+}
+
+func TestTuneDolbySRSingle_Disabled(t *testing.T) {
+	// Verify tuner doesn't modify config when filter is disabled
+	config := newTestConfig()
+	config.DolbySRSingleEnabled = false
+	config.DolbySRSingleNoiseReduction = 99.0 // Sentinel value
+
+	measurements := &AudioMeasurements{
+		NoiseFloor:       -50.0,
+		SpectralFlatness: 0.5,
+	}
+
+	tuneDolbySRSingle(config, measurements, 15.0)
+
+	// Config should be unchanged
+	if config.DolbySRSingleNoiseReduction != 99.0 {
+		t.Errorf("DolbySRSingleNoiseReduction modified when disabled: got %.1f, want 99.0",
+			config.DolbySRSingleNoiseReduction)
+	}
+}
+
+func TestBuildDolbySRSingleFilter(t *testing.T) {
+	// Verify the filter builder produces valid afftdn chain
+
+	config := newTestConfig()
+	config.DolbySRSingleEnabled = true
+	config.DolbySRSingleNoiseFloor = -55.0
+	config.DolbySRSingleNoiseReduction = 3.0  // Subtle (max 4dB)
+	config.DolbySRSingleGainSmooth = 15       // High smoothing
+	config.DolbySRSingleResidualFloor = -30.0 // High floor (leave room noise)
+	config.DolbySRSingleAdaptivity = 0.40     // Slow
+	config.DolbySRSingleNoiseType = "w"
+
+	filter := config.buildDolbySRSingleFilter()
+
+	// Verify filter is not empty
+	if filter == "" {
+		t.Error("buildDolbySRSingleFilter returned empty string when enabled")
+	}
+
+	// Verify afftdn parameters are present
+	expectedAfftdn := []string{
+		"afftdn=",
+		"nf=-55.0",
+		"nr=3.0",
+		"tn=enabled",
+		"gs=15",
+		"rf=-30.0",
+		"ad=0.40",
+		"nt=w",
+	}
+	for _, param := range expectedAfftdn {
+		if !containsString(filter, param) {
+			t.Errorf("Filter missing expected afftdn parameter: %s\nGot: %s", param, filter)
+		}
+	}
+}
+
+func TestBuildDolbySRSingleFilter_Disabled(t *testing.T) {
+	config := newTestConfig()
+	config.DolbySRSingleEnabled = false
+
+	filter := config.buildDolbySRSingleFilter()
+
+	if filter != "" {
+		t.Errorf("buildDolbySRSingleFilter should return empty when disabled, got: %s", filter)
+	}
+}
+
+func TestCalculateNoiseFloorSeverity(t *testing.T) {
+	// Tests for the severity calculation helper function
+	// New thresholds: clean = -80.0 dBFS, noisy = -55.0 dBFS
+	// Range = 25 dB (was 15 dB)
+	tests := []struct {
+		name       string
+		noiseFloor float64
+		wantMin    float64
+		wantMax    float64
+	}{
+		{
+			name:       "very clean - below threshold",
+			noiseFloor: -85.0, // Below -80.0
+			wantMin:    0.0,
+			wantMax:    0.0,
+		},
+		{
+			name:       "at clean threshold",
+			noiseFloor: -80.0, // At clean threshold
+			wantMin:    0.0,
+			wantMax:    0.01,
+		},
+		{
+			name:       "martin noise floor",
+			noiseFloor: -72.0, // Martin's actual floor: severity = 8/25 = 0.32
+			wantMin:    0.30,
+			wantMax:    0.35,
+		},
+		{
+			name:       "midpoint between clean and noisy",
+			noiseFloor: -67.5, // (-80 + -55) / 2 = -67.5, severity = 0.5
+			wantMin:    0.48,
+			wantMax:    0.52,
+		},
+		{
+			name:       "at noisy threshold",
+			noiseFloor: -55.0, // At noisy threshold
+			wantMin:    0.99,
+			wantMax:    1.0,
+		},
+		{
+			name:       "very noisy - above threshold",
+			noiseFloor: -45.0, // Above -55.0
+			wantMin:    1.0,
+			wantMax:    1.0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := calculateNoiseFloorSeverity(tt.noiseFloor)
+			if got < tt.wantMin || got > tt.wantMax {
+				t.Errorf("calculateNoiseFloorSeverity(%.1f) = %.2f, want %.2f-%.2f",
+					tt.noiseFloor, got, tt.wantMin, tt.wantMax)
+			}
+		})
+	}
+}
+
+// containsString checks if substr exists in s
+func containsString(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstring(s, substr))
+}
+
+func containsSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}

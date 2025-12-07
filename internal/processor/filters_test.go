@@ -24,16 +24,17 @@ func newTestConfig() *FilterChainConfig {
 		ResampleFrameSize:     4096,
 
 		// Processing filters (all disabled by default)
-		DS201HPEnabled:    false,
-		AdeclickEnabled:   false,
-		AfftdnEnabled:     false,
-		DS201GateEnabled:  false,
-		LA2AEnabled:       false,
-		DeessEnabled:      false,
-		DynaudnormEnabled: false,
-		SpeechnormEnabled: false,
-		ArnnDnEnabled:     false,
-		LimiterEnabled:    false,
+		DS201HPEnabled:       false,
+		AdeclickEnabled:      false,
+		AfftdnEnabled:        false,
+		DolbySRSingleEnabled: false,
+		DS201GateEnabled:     false,
+		LA2AEnabled:          false,
+		DeessEnabled:         false,
+		DynaudnormEnabled:    false,
+		SpeechnormEnabled:    false,
+		ArnnDnEnabled:        false,
+		LimiterEnabled:       false,
 
 		// Sensible defaults for parameters (used when filter is enabled)
 		DS201HPFreq:        80.0,

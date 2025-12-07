@@ -351,6 +351,28 @@ const (
 	lpZCRHigh              = 0.10   // Above: high zero crossings (HF noise indicator)
 	lpZCRCentroidThreshold = 4000   // Hz - ZCR trigger only valid if centroid below this
 	lpZCRCutoff            = 10000  // Hz - cutoff when ZCR trigger fires
+
+	// ==========================================================================
+	// Dolby SR-Inspired Single-Stage Denoise (afftdn)
+	// ==========================================================================
+	// Key SR principles honoured:
+	// - Least Treatment: never remove 100% of noise
+	// - Transparency over depth: conservative parameters on each stage
+	// ==========================================================================
+
+	// Noise floor severity thresholds for processing intensity
+	// Expanded range for better differentiation between clean/noisy sources
+	// Mark (-80 dBFS) should get minimal, Martin (-72 dBFS) should get moderate
+	dolbySRFloorClean    = -80.0 // dBFS - below: minimal processing (studio quality)
+	dolbySRFloorModerate = -65.0 // dBFS - standard processing (home office)
+	dolbySRFloorNoisy    = -55.0 // dBFS - above: aggressive processing (noisy environment)
+
+	// afftdn limits (subtle but effective: DS201 gate handles silence, this polishes under speech)
+	// Slightly higher ceiling for noisy sources, but still conservative
+	dolbySRSingleNRMin = 2.0 // dB - barely perceptible (for clean sources)
+	dolbySRSingleNRMax = 6.0 // dB - moderate ceiling for noisy sources
+	dolbySRSingleGSMin = 10  // Higher minimum smoothing (hide gain changes)
+	dolbySRSingleGSMax = 20  // Much higher smoothing (very slow, transparent)
 )
 
 // ContentType classifies audio content for adaptive filter tuning.
@@ -462,9 +484,10 @@ func AdaptConfig(config *FilterChainConfig, measurements *AudioMeasurements) {
 	tuneDS201HighPass(config, measurements, lufsGap) // Composite: highpass + hum notch
 	tuneDS201LowPass(config, measurements)           // Ultrasonic rejection (adaptive)
 	tuneNoiseReduction(config, measurements, lufsGap)
-	tuneAfftdnSimple(config, measurements, lufsGap) // Sample-free FFT denoise
-	tuneArnndn(config, measurements, lufsGap)       // RNN denoise (LUFS gap + noise floor based)
-	tuneDS201Gate(config, measurements)             // DS201-style soft expander gate
+	tuneAfftdnSimple(config, measurements, lufsGap)  // Sample-free FFT denoise
+	tuneDolbySRSingle(config, measurements, lufsGap) // Dolby SR-inspired denoise (afftdn)
+	tuneArnndn(config, measurements, lufsGap)        // RNN denoise (LUFS gap + noise floor based)
+	tuneDS201Gate(config, measurements)              // DS201-style soft expander gate
 	tuneDeesser(config, measurements)
 	tuneLA2ACompressor(config, measurements)
 	tuneDynaudnorm(config)
@@ -920,6 +943,96 @@ func selectAfftdnNoiseType(m *AudioMeasurements) string {
 
 	// Safe default: white noise model
 	return "w"
+}
+
+// tuneDolbySRSingle adapts the Dolby SR-inspired denoise filter based on measurements.
+//
+// Strategy:
+//   - Conservative parameters (transparency over depth)
+//   - Adapts to noise floor severity, spectral character, and LUFS gap
+//
+// afftdn tuning:
+//   - Noise floor severity → NR amount (conservative: 4-12dB)
+//   - LUFS gap → NR boost (upcoming gain amplifies noise)
+//   - Spectral flatness/entropy → noise type selection (w/v/s)
+//   - Noise character → gain smoothing (tonal needs more smoothing)
+//   - Tonal vs broadband → adaptivity speed
+
+func tuneDolbySRSingle(config *FilterChainConfig, measurements *AudioMeasurements, lufsGap float64) {
+	if !config.DolbySRSingleEnabled {
+		return
+	}
+
+	// Set noise floor from measurements
+	config.DolbySRSingleNoiseFloor = measurements.NoiseFloor
+
+	// Select noise type using existing logic (shared with afftdn_simple)
+	config.DolbySRSingleNoiseType = selectAfftdnNoiseType(measurements)
+
+	// Determine noise floor severity for scaling parameters
+	noiseFloorSeverity := calculateNoiseFloorSeverity(measurements.NoiseFloor)
+
+	// Get noise character indicators
+	silenceEntropy := 0.5 // Default: mixed noise
+	if measurements.NoiseProfile != nil {
+		silenceEntropy = measurements.NoiseProfile.Entropy
+	}
+	isTonalNoise := silenceEntropy < 0.4 // Low entropy = tonal (hum, bleed)
+
+	// ==========================================================================
+	// afftdn tuning (spectral processing)
+	// ==========================================================================
+
+	// Base NR from noise floor severity (2-6dB range)
+	// Clean sources get minimal NR, noisy sources get more
+	baseNR := lerp(dolbySRSingleNRMin, dolbySRSingleNRMax, noiseFloorSeverity)
+
+	// Add small NR boost for high LUFS gap (noise gets amplified by normalisation)
+	// Scale very conservatively (0.1x) to avoid over-processing
+	if lufsGap > 0 {
+		baseNR += lufsGap * 0.1
+	}
+
+	// Clamp to hybrid-appropriate limits
+	config.DolbySRSingleNoiseReduction = clamp(baseNR, dolbySRSingleNRMin, dolbySRSingleNRMax)
+
+	// Gain smoothing: always use high values to hide any gain changes completely
+	// Since we're only doing subtle NR, we can afford very slow response
+	if isTonalNoise {
+		config.DolbySRSingleGainSmooth = dolbySRSingleGSMax // 20: very smooth for tonal
+	} else if measurements.SpectralFlatness > 0.6 {
+		config.DolbySRSingleGainSmooth = dolbySRSingleGSMin + 4 // 14: still smooth for broadband
+	} else {
+		config.DolbySRSingleGainSmooth = (dolbySRSingleGSMin + dolbySRSingleGSMax) / 2 // 15: balanced
+	}
+
+	// Adaptivity: always slow to prevent any audible gain changes
+	// Transparency is more important than tracking dynamics
+	if isTonalNoise {
+		config.DolbySRSingleAdaptivity = 0.3 // Very slow for tonal
+	} else if measurements.SpectralFlatness > 0.6 {
+		config.DolbySRSingleAdaptivity = 0.5 // Still slow for broadband
+	} else {
+		config.DolbySRSingleAdaptivity = 0.4 // Default: slow
+	}
+
+	// Residual floor: Least Treatment — always leave plenty of room noise
+	// Higher floor = more residual noise = no audible artefacts
+	// DS201 gate handles silence; this just needs to not make speech sound processed
+	config.DolbySRSingleResidualFloor = lerp(-32.0, -26.0, noiseFloorSeverity)
+}
+
+// calculateNoiseFloorSeverity returns a 0-1 value indicating noise severity.
+// 0 = very clean (below dolbySRFloorClean), 1 = very noisy (above dolbySRFloorNoisy)
+func calculateNoiseFloorSeverity(noiseFloor float64) float64 {
+	if noiseFloor <= dolbySRFloorClean {
+		return 0.0
+	}
+	if noiseFloor >= dolbySRFloorNoisy {
+		return 1.0
+	}
+	// Linear interpolation between clean and noisy thresholds
+	return (noiseFloor - dolbySRFloorClean) / (dolbySRFloorNoisy - dolbySRFloorClean)
 }
 
 // tuneArnndn adapts RNN-based noise reduction based on measurements.
@@ -1701,4 +1814,10 @@ func clamp(val, min, max float64) float64 {
 		return max
 	}
 	return val
+}
+
+// lerp performs linear interpolation between a and b based on t (0-1).
+// When t=0, returns a. When t=1, returns b.
+func lerp(a, b, t float64) float64 {
+	return a + (b-a)*t
 }

@@ -35,6 +35,10 @@ const (
 	FilterDS201LowPass  FilterID = "ds201_lowpass"  // LP for ultrasonic rejection (adaptive)
 	FilterDS201Gate     FilterID = "ds201_gate"     // Soft expander inspired by DS201
 
+	// Dolby SR-inspired noise reduction (Pass 2 only)
+	// Implements Dolby SR philosophy: Least Treatment, transparency over depth
+	FilterDolbySRSingle FilterID = "dolbysr_single"
+
 	// Processing filters (Pass 2 only)
 	FilterAdeclick       FilterID = "adeclick"
 	FilterAfftdn         FilterID = "afftdn"        // Profile-based FFT denoise (uses noise sample)
@@ -78,6 +82,7 @@ var Pass2FilterOrder = []FilterID{
 	FilterDS201HighPass,
 	FilterDS201LowPass,
 	FilterAdeclick,
+	FilterDolbySRSingle,
 	FilterAfftdn,
 	FilterAfftdnSimple,
 	FilterArnndn,
@@ -224,10 +229,20 @@ type FilterChainConfig struct {
 	AfftdnSimpleNoiseReduction float64 // dB, reduction amount (conservative: 6-10dB)
 	AfftdnSimpleNoiseType      string  // Noise type: "w" (white), "v" (vinyl), "s" (shellac)
 
+	// Dolby SR Single-Stage Denoise inspired by "Least Treatment" philosophy
+	// - afftdn: spectral noise floor reduction with gain smoothing
+
+	DolbySRSingleEnabled        bool    // Enable Dolby SR single-stage filter
+	DolbySRSingleNoiseFloor     float64 // dB, from measurements (-80 to -20)
+	DolbySRSingleNoiseReduction float64 // dB, afftdn reduction amount (conservative: 6-10)
+	DolbySRSingleGainSmooth     int     // afftdn artifact prevention (3-14)
+	DolbySRSingleResidualFloor  float64 // dB, afftdn Least Treatment floor (-45 to -32)
+	DolbySRSingleAdaptivity     float64 // afftdn adaptivity (0-1, how fast gains adjust)
+	DolbySRSingleNoiseType      string  // afftdn noise type: "w" (white), "v" (vinyl), "s" (shellac)
+
 	// DS201-Inspired Gate (agate) - Drawmer DS201 style soft expander
 	// Uses gentle ratio (2:1-4:1) rather than DS201's hard gate for natural speech transitions.
 	// Sub-millisecond attack capability for transient preservation.
-	// See docs/DS201-INSPIRED-GATE.md for design rationale.
 	DS201GateEnabled   bool    // Enable DS201-style gate
 	DS201GateThreshold float64 // Activation threshold (0.0-1.0, linear)
 	DS201GateRatio     float64 // Reduction ratio - soft expander (2:1-4:1), not hard gate
@@ -352,7 +367,6 @@ func DefaultFilterConfig() *FilterChainConfig {
 		DS201HumMix:       1.0,    // Full wet signal (can reduce for subtle application)
 
 		// DS201-Inspired Low-pass Filter - removes ultrasonic noise (part of DS201 side-chain)
-		// Disabled by default; enabled adaptively by tuneDS201LowPass when SpectralRolloff indicates benefit
 		DS201LPEnabled:   true,
 		DS201LPFreq:      16000.0, // 16kHz cutoff (conservative default, preserves all audible content)
 		DS201LPPoles:     2,       // 12dB/oct standard slope
@@ -372,10 +386,21 @@ func DefaultFilterConfig() *FilterChainConfig {
 
 		// Simple Noise Reduction (sample-free) - enabled for testing
 		// Uses adaptive noise type with conservative settings (6-10dB cap)
-		AfftdnSimpleEnabled:        true,
+		AfftdnSimpleEnabled:        false,
 		AfftdnSimpleNoiseFloor:     -50.0, // Placeholder, will be updated from measurements
 		AfftdnSimpleNoiseReduction: 10.0,  // Conservative default, tuned adaptively (capped at 6-10dB)
 		AfftdnSimpleNoiseType:      "w",   // White noise default, tuned adaptively based on spectral profile
+
+		// Dolby SR-Inspired Single-Stage Denoise
+		// Implements SR philosophy: Least Treatment, artifact masking
+		// afftdn handles spectral processing (like SR's fixed bands)
+		DolbySRSingleEnabled:        true,
+		DolbySRSingleNoiseFloor:     -50.0, // Placeholder, will be updated from measurements
+		DolbySRSingleNoiseReduction: 8.0,   // Conservative default (adaptive: 4-12dB)
+		DolbySRSingleGainSmooth:     8,     // Balanced default (adaptive: 3-14)
+		DolbySRSingleResidualFloor:  -38.0, // Least Treatment floor (adaptive: -42 to -34)
+		DolbySRSingleAdaptivity:     0.70,  // Default adaptivity (adaptive: 0.5-0.85)
+		DolbySRSingleNoiseType:      "w",   // White noise default, tuned adaptively
 
 		// DS201-Inspired Gate - soft expander for natural speech transitions
 		// All parameters set adaptively based on Pass 1 measurements
@@ -856,6 +881,47 @@ func (cfg *FilterChainConfig) buildAfftdnSimpleFilter() string {
 	)
 }
 
+// buildDolbySRSingleFilter builds the Dolby SR-inspired single-stage filter.
+// Implements the Dolby SR noise reduction philosophy:
+// - Least Treatment: we never remove 100% of noise
+// - Artifact masking: different processing approaches mask each other's artifacts
+// - Transparency over depth: conservative parameters on each stage
+func (cfg *FilterChainConfig) buildDolbySRSingleFilter() string {
+	if !cfg.DolbySRSingleEnabled {
+		return ""
+	}
+
+	// Clamp noise floor to afftdn's valid range: -80 to -20 dB
+	noiseFloorClamped := cfg.DolbySRSingleNoiseFloor
+	if noiseFloorClamped < -80.0 {
+		noiseFloorClamped = -80.0
+	} else if noiseFloorClamped > -20.0 {
+		noiseFloorClamped = -20.0
+	}
+
+	// Select noise type (default to white if not set)
+	noiseType := cfg.DolbySRSingleNoiseType
+	if noiseType == "" {
+		noiseType = "w"
+	}
+
+	// Build afftdn component: spectral noise floor reduction
+	// tn=enabled for noise tracking (no sample required)
+	afftdnSpec := fmt.Sprintf(
+		"afftdn=nf=%.1f:nr=%.1f:tn=enabled:gs=%d:rf=%.1f:ad=%.2f:nt=%s",
+		noiseFloorClamped,
+		cfg.DolbySRSingleNoiseReduction,
+		cfg.DolbySRSingleGainSmooth,
+		cfg.DolbySRSingleResidualFloor,
+		cfg.DolbySRSingleAdaptivity,
+		noiseType,
+	)
+
+	// The DS201 gate handles silence NR; DolbySRSingle just needs to polish
+	// noise under speech without introducing new artefacts.
+	return afftdnSpec
+}
+
 // buildDS201GateFilter builds the DS201-inspired gate filter specification.
 // Uses soft expander approach (2:1-4:1 ratio) rather than hard gate for natural speech.
 // Supports sub-millisecond attack (0.5ms+) for transient preservation.
@@ -1012,6 +1078,7 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 		FilterDS201HighPass:  cfg.buildDS201HighpassFilter,
 		FilterDS201LowPass:   cfg.buildDS201LowPassFilter,
 		FilterAdeclick:       cfg.buildAdeclickFilter,
+		FilterDolbySRSingle:  cfg.buildDolbySRSingleFilter,
 		FilterAfftdn:         cfg.buildAfftdnFilter,
 		FilterAfftdnSimple:   cfg.buildAfftdnSimpleFilter,
 		FilterDS201Gate:      cfg.buildDS201GateFilter,

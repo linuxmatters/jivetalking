@@ -658,6 +658,8 @@ func formatFilter(f *os.File, filterID processor.FilterID, cfg *processor.Filter
 		formatAfftdnFilter(f, cfg, m, prefix)
 	case processor.FilterAfftdnSimple:
 		formatAfftdnSimpleFilter(f, cfg, m, prefix)
+	case processor.FilterDolbySRSingle:
+		formatDolbySRSingleFilter(f, cfg, m, prefix)
 	case processor.FilterArnndn:
 		formatArnndnFilter(f, cfg, m, prefix)
 	case processor.FilterDS201Gate:
@@ -817,21 +819,6 @@ func formatDS201HumFilterInternal(f *os.File, cfg *processor.FilterChainConfig, 
 func formatDS201LowPassFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
 	if !cfg.DS201LPEnabled {
 		fmt.Fprintf(f, "%sDS201 lowpass: DISABLED\n", prefix)
-		// Show reason why disabled
-		if cfg.DS201LPReason != "" {
-			fmt.Fprintf(f, "        Rationale: %s\n", cfg.DS201LPReason)
-		}
-		// Show content type detection metrics
-		if m != nil {
-			fmt.Fprintf(f, "        Content type: %s (kurtosis %.1f, flatness %.3f, flux %.4f)\n",
-				cfg.DS201LPContentType.String(), m.SpectralKurtosis, m.SpectralFlatness, m.SpectralFlux)
-			// For speech content, show why no HF noise was detected
-			if cfg.DS201LPContentType == processor.ContentSpeech {
-				fmt.Fprintf(f, "        Rolloff/centroid ratio: %.2f (threshold 2.5)\n", cfg.DS201LPRolloffRatio)
-				fmt.Fprintf(f, "        Spectral slope: %.2e (threshold -1e-05)\n", m.SpectralSlope)
-				fmt.Fprintf(f, "        ZCR: %.4f (threshold 0.10, centroid %.0f Hz)\n", m.ZeroCrossingsRate, m.SpectralCentroid)
-			}
-		}
 		return
 	}
 
@@ -941,10 +928,6 @@ func formatAfftdnFilter(f *os.File, cfg *processor.FilterChainConfig, m *process
 func formatAfftdnSimpleFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
 	if !cfg.AfftdnSimpleEnabled {
 		fmt.Fprintf(f, "%safftdn_simple: DISABLED\n", prefix)
-		// Show why disabled if we have measurements
-		if m != nil && m.NoiseFloor < -75 {
-			fmt.Fprintf(f, "        Rationale: clean source (noise floor %.1f dBFS < -75 dBFS threshold)\n", m.NoiseFloor)
-		}
 		return
 	}
 
@@ -985,16 +968,90 @@ func formatAfftdnSimpleFilter(f *os.File, cfg *processor.FilterChainConfig, m *p
 	}
 }
 
+// formatDolbySRSingleFilter outputs Dolby SR-inspired denoise filter details
+// Uses afftdn with adaptive severity scaling;
+func formatDolbySRSingleFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
+	if !cfg.DolbySRSingleEnabled {
+		fmt.Fprintf(f, "%sDolby SR single: DISABLED\n", prefix)
+		return
+	}
+
+	// Show noise type with explanation
+	noiseType := cfg.DolbySRSingleNoiseType
+	if noiseType == "" {
+		noiseType = "w"
+	}
+	noiseTypeDesc := map[string]string{
+		"w": "white (broadband)",
+		"v": "vinyl (LF-weighted)",
+		"s": "shellac (HF-weighted)",
+	}[noiseType]
+	if noiseTypeDesc == "" {
+		noiseTypeDesc = noiseType
+	}
+
+	// Header: filter name and key parameters
+	fmt.Fprintf(f, "%sDolby SR single: afftdn %.1f dB (type %s)\n",
+		prefix, cfg.DolbySRSingleNoiseReduction, noiseTypeDesc)
+
+	// afftdn parameters
+	fmt.Fprintf(f, "        afftdn: nr=%.1f dB, gs=%d, rf=%.1f dB, ad=%.2f\n",
+		cfg.DolbySRSingleNoiseReduction, cfg.DolbySRSingleGainSmooth,
+		cfg.DolbySRSingleResidualFloor, cfg.DolbySRSingleAdaptivity)
+
+	// Noise floor from measurements
+	fmt.Fprintf(f, "        Floor: %.1f dBFS (from Pass 1 measurements)\n", cfg.DolbySRSingleNoiseFloor)
+
+	// Show adaptive rationale
+	if m != nil {
+		// Noise floor severity classification
+		var severityDesc string
+		switch {
+		case m.NoiseFloor <= -65:
+			severityDesc = "clean"
+		case m.NoiseFloor <= -55:
+			severityDesc = "moderate"
+		default:
+			severityDesc = "noisy"
+		}
+		fmt.Fprintf(f, "        Rationale: %s source (floor %.1f dBFS)\n", severityDesc, m.NoiseFloor)
+
+		// Noise character (tonal vs broadband)
+		if m.NoiseProfile != nil && m.NoiseProfile.Entropy > 0 {
+			if m.NoiseProfile.Entropy < 0.4 {
+				fmt.Fprintf(f, "        Character: tonal noise (entropy %.2f) → gentle processing\n", m.NoiseProfile.Entropy)
+			} else if m.SpectralFlatness > 0.6 {
+				fmt.Fprintf(f, "        Character: broadband noise (flatness %.2f) → responsive processing\n", m.SpectralFlatness)
+			} else {
+				fmt.Fprintf(f, "        Character: mixed noise → balanced processing\n")
+			}
+		}
+
+		// Noise type selection rationale
+		switch noiseType {
+		case "v":
+			fmt.Fprintf(f, "        Type rationale: vinyl mode — LF emphasis (decrease %.3f, slope %.2e)\n",
+				m.SpectralDecrease, m.SpectralSlope)
+		case "s":
+			fmt.Fprintf(f, "        Type rationale: shellac mode — HF emphasis (centroid %.0f Hz, rolloff %.0f Hz)\n",
+				m.SpectralCentroid, m.SpectralRolloff)
+		case "w":
+			if m.SpectralFlatness > 0.6 {
+				fmt.Fprintf(f, "        Type rationale: white mode — high flatness (%.3f)\n", m.SpectralFlatness)
+			} else {
+				fmt.Fprintf(f, "        Type rationale: white mode — default (no strong spectral bias)\n")
+			}
+		}
+
+		// SR philosophy note
+		fmt.Fprintf(f, "        SR philosophy: afftdn-only, Least Treatment (gate handles silence)\n")
+	}
+}
+
 // formatArnndnFilter outputs arnndn filter details
 func formatArnndnFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
 	if !cfg.ArnnDnEnabled {
 		fmt.Fprintf(f, "%sarnndn: DISABLED\n", prefix)
-		// Show why disabled if we have measurements
-		if m != nil {
-			if m.NoiseFloor < -80 {
-				fmt.Fprintf(f, "        Rationale: very clean source (noise floor %.1f dBFS)\n", m.NoiseFloor)
-			}
-		}
 		return
 	}
 
