@@ -670,8 +670,6 @@ func formatFilter(f *os.File, filterID processor.FilterID, cfg *processor.Filter
 		formatSpeechnormFilter(f, cfg, m, prefix)
 	case processor.FilterDynaudnorm:
 		formatDynaudnormFilter(f, cfg, prefix)
-	case processor.FilterBleedGate:
-		formatBleedGateFilter(f, cfg, m, prefix)
 	case processor.FilterAlimiter:
 		formatAlimiterFilter(f, cfg, prefix)
 	default:
@@ -1203,33 +1201,6 @@ func formatDynaudnormFilter(f *os.File, cfg *processor.FilterChainConfig, prefix
 		prefix, cfg.DynaudnormFrameLen, cfg.DynaudnormFilterSize)
 	fmt.Fprintf(f, "        Peak: %.2f, max gain %.1fx\n", cfg.DynaudnormPeakValue, cfg.DynaudnormMaxGain)
 	fmt.Fprintln(f, "        Mode: conservative fixed parameters (prevents artifacts)")
-}
-
-// formatBleedGateFilter outputs bleed gate filter details
-func formatBleedGateFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
-	if !cfg.BleedGateEnabled {
-		fmt.Fprintf(f, "%sbleedgate: DISABLED\n", prefix)
-		return
-	}
-
-	thresholdDB := linearToDb(cfg.BleedGateThreshold)
-	rangeDB := linearToDb(cfg.BleedGateRange)
-
-	fmt.Fprintf(f, "%sbleedgate: threshold %.1f dB, ratio %.1f:1\n", prefix, thresholdDB, cfg.BleedGateRatio)
-	fmt.Fprintf(f, "        Timing: attack %.0fms, release %.0fms\n", cfg.BleedGateAttack, cfg.BleedGateRelease)
-	fmt.Fprintf(f, "        Range: %.1f dB reduction, knee %.1f\n", rangeDB, cfg.BleedGateKnee)
-
-	// Show rationale
-	if m != nil && m.NoiseProfile != nil {
-		np := m.NoiseProfile
-		hasBleed := np.CrestFactor > 15.0 || (np.PeakLevel-np.MeasuredNoiseFloor) > 20.0
-		if hasBleed {
-			fmt.Fprintf(f, "        Rationale: bleed detected (crest %.1f dB, peak-floor %.1f dB)\n",
-				np.CrestFactor, np.PeakLevel-np.MeasuredNoiseFloor)
-		} else {
-			fmt.Fprintf(f, "        Rationale: noise amplification (predicted output above -40 dB)\n")
-		}
-	}
 }
 
 // formatAlimiterFilter outputs alimiter filter details

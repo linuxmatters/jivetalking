@@ -33,7 +33,6 @@ func newTestConfig() *FilterChainConfig {
 		DynaudnormEnabled: false,
 		SpeechnormEnabled: false,
 		ArnnDnEnabled:     false,
-		BleedGateEnabled:  false,
 		LimiterEnabled:    false,
 
 		// Sensible defaults for parameters (used when filter is enabled)
@@ -83,13 +82,6 @@ func newTestConfig() *FilterChainConfig {
 		SpeechnormFall:        0.001,
 
 		ArnnDnMix: 0.8,
-
-		BleedGateThreshold: 0.01,
-		BleedGateRatio:     4.0,
-		BleedGateAttack:    15,
-		BleedGateRelease:   200,
-		BleedGateRange:     0.125,
-		BleedGateKnee:      3.0,
 
 		LimiterCeiling: 0.84,
 		LimiterAttack:  5.0,
@@ -1040,7 +1032,6 @@ func TestPass2FilterOrder(t *testing.T) {
 			FilterDeesser,
 			FilterSpeechnorm,
 			FilterDynaudnorm,
-			FilterBleedGate,
 			FilterAlimiter,
 			FilterAnalysis,
 			FilterResample,

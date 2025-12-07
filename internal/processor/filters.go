@@ -44,7 +44,6 @@ const (
 	FilterDeesser        FilterID = "deesser"
 	FilterSpeechnorm     FilterID = "speechnorm"
 	FilterDynaudnorm     FilterID = "dynaudnorm"
-	FilterBleedGate      FilterID = "bleedgate" // Catches amplified bleed/crosstalk after normalisation
 	FilterAlimiter       FilterID = "alimiter"
 )
 
@@ -71,7 +70,6 @@ var Pass1FilterOrder = []FilterID{
 // - Deesser: after compression (which emphasises sibilance)
 // - Speechnorm: cycle-level normalisation for speech
 // - Dynaudnorm: frame-level normalisation for final consistency
-// - BleedGate: catches amplified bleed/crosstalk after normalisation
 // - Alimiter: brick-wall safety net
 // - Analysis: measures output for comparison with Pass 1
 // - Resample: standardises output format (44.1kHz/16-bit/mono)
@@ -88,7 +86,6 @@ var Pass2FilterOrder = []FilterID{
 	FilterDeesser,
 	FilterSpeechnorm,
 	FilterDynaudnorm,
-	FilterBleedGate,
 	FilterAlimiter,
 	FilterAnalysis,
 	FilterResample,
@@ -298,18 +295,6 @@ type FilterChainConfig struct {
 	LimiterAttack  float64 // ms, attack time
 	LimiterRelease float64 // ms, release time
 
-	// Bleed Gate (bleedgate) - catches amplified bleed/crosstalk after normalisation
-	// Positioned AFTER speechnorm/dynaudnorm to gate content that denoisers missed
-	// (denoisers preserve speech-like content, but headphone bleed IS speech-like)
-	// Uses gentler ratio than pre-gate to suppress rather than hard-cut
-	BleedGateEnabled   bool    // Enable bleed gate
-	BleedGateThreshold float64 // Activation threshold (0.0-1.0, linear) - calculated from predicted output bleed level
-	BleedGateRatio     float64 // Reduction ratio (gentler than pre-gate, e.g., 4:1)
-	BleedGateAttack    float64 // Attack time (ms)
-	BleedGateRelease   float64 // Release time (ms)
-	BleedGateRange     float64 // Level of gain reduction below threshold (0.0-1.0)
-	BleedGateKnee      float64 // Knee curve softness (1.0-8.0)
-
 	// Filter chain order - controls the sequence of filters in the processing chain
 	// Use DefaultFilterOrder or customise for experimentation
 	FilterOrder []FilterID
@@ -461,15 +446,6 @@ func DefaultFilterConfig() *FilterChainConfig {
 		// Enabled by default but tuneArnndn may disable for very clean sources
 		ArnnDnEnabled: false,
 		ArnnDnMix:     0.35, // Initial mix (will be tuned adaptively based on measurements)
-
-		// Bleed Gate - catches amplified bleed/crosstalk after normalisation
-		BleedGateEnabled:   false,
-		BleedGateThreshold: 0.01,  // -40dBFS default (will be calculated from predicted output bleed level)
-		BleedGateRatio:     4.0,   // 4:1 ratio (gentler than pre-gate, suppresses rather than cuts)
-		BleedGateAttack:    15,    // 15ms attack (faster than pre-gate to catch transient bleed)
-		BleedGateRelease:   200,   // 200ms release (smooth, natural decay)
-		BleedGateRange:     0.125, // -18dB reduction (less aggressive than pre-gate's -24dB)
-		BleedGateKnee:      3.0,   // Soft knee for smooth engagement
 
 		// Limiter - brick-wall safety net with soft knee (via ASC)
 		LimiterEnabled: false,
@@ -1002,29 +978,6 @@ func (cfg *FilterChainConfig) buildArnnDnFilter() string {
 	return fmt.Sprintf("arnndn=m=%s:mix=%.2f", modelPath, cfg.ArnnDnMix)
 }
 
-// buildBleedGateFilter builds the bleed gate filter specification.
-// Positioned AFTER speechnorm/dynaudnorm to catch bleed/crosstalk that was amplified
-// during normalisation. Uses gentler ratio (4:1) compared to pre-gate (2:1) because
-// it's suppressing rather than cleaning inter-speech gaps.
-//
-// This filter addresses the "headphone bleed" problem where normalisation amplifies
-// low-level content (like bleed from headphones) that denoisers couldn't remove because
-// it's speech-like content that they're designed to preserve.
-func (cfg *FilterChainConfig) buildBleedGateFilter() string {
-	if !cfg.BleedGateEnabled {
-		return ""
-	}
-	return fmt.Sprintf(
-		"agate=threshold=%.6f:ratio=%.1f:attack=%.0f:release=%.0f:range=%.4f:knee=%.1f",
-		cfg.BleedGateThreshold,
-		cfg.BleedGateRatio,
-		cfg.BleedGateAttack,
-		cfg.BleedGateRelease,
-		cfg.BleedGateRange,
-		cfg.BleedGateKnee,
-	)
-}
-
 // buildAlimiterFilter builds the alimiter (true peak limiter) filter specification.
 // Brick-wall safety net using lookahead and ASC for smooth, musical limiting.
 func (cfg *FilterChainConfig) buildAlimiterFilter() string {
@@ -1066,7 +1019,6 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 		FilterDeesser:        cfg.buildDeesserFilter,
 		FilterSpeechnorm:     cfg.buildSpeechnormFilter,
 		FilterArnndn:         cfg.buildArnnDnFilter,
-		FilterBleedGate:      cfg.buildBleedGateFilter,
 		FilterDynaudnorm:     cfg.buildDynaudnormFilter,
 		FilterAlimiter:       cfg.buildAlimiterFilter,
 	}
@@ -1252,7 +1204,6 @@ func buildNoiseProfileFilterSpec(noiseDuration time.Duration, config *FilterChai
 		FilterDeesser:        config.buildDeesserFilter,
 		FilterSpeechnorm:     config.buildSpeechnormFilter,
 		FilterDynaudnorm:     config.buildDynaudnormFilter,
-		FilterBleedGate:      config.buildBleedGateFilter,
 		FilterAlimiter:       config.buildAlimiterFilter,
 	}
 
