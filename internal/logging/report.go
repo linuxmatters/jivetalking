@@ -818,7 +818,12 @@ func formatDS201HumFilterInternal(f *os.File, cfg *processor.FilterChainConfig, 
 // formatDS201LowPassFilter outputs DS201-inspired low-pass filter details
 func formatDS201LowPassFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
 	if !cfg.DS201LPEnabled {
-		fmt.Fprintf(f, "%sDS201 lowpass: DISABLED\n", prefix)
+		// Show reason for being disabled (pass-through mode)
+		if cfg.DS201LPReason != "" {
+			fmt.Fprintf(f, "%sDS201 lowpass: DISABLED (%s)\n", prefix, cfg.DS201LPReason)
+		} else {
+			fmt.Fprintf(f, "%sDS201 lowpass: DISABLED\n", prefix)
+		}
 		return
 	}
 

@@ -344,13 +344,12 @@ const (
 	lpContentScoreThreshold = 3 // Score needed to classify as speech or music
 
 	// Speech HF noise detection thresholds
-	lpRolloffCentroidRatio = 2.5    // Above: large gap suggests HF energy not from voice
-	lpRolloffHeadroom      = 1000   // Hz - cutoff = rolloff - this value
-	lpSlopeHFEmphasis      = -1e-05 // Above: unusually flat/rising HF
-	lpSlopeCutoff          = 12000  // Hz - cutoff when slope trigger fires
-	lpZCRHigh              = 0.10   // Above: high zero crossings (HF noise indicator)
-	lpZCRCentroidThreshold = 4000   // Hz - ZCR trigger only valid if centroid below this
-	lpZCRCutoff            = 10000  // Hz - cutoff when ZCR trigger fires
+	lpRolloffEnableThreshold = 14000 // Hz - enable lowpass when rolloff > this
+	lpRolloffHeadroom        = 2000  // Hz - cutoff = rolloff + this value (per spec)
+	lpRolloffDarkVoice       = 8000  // Hz - disable if rolloff < this (voice already dark)
+	lpZCRHigh                = 0.10  // Above: high zero crossings (HF noise indicator)
+	lpZCRCentroidThreshold   = 4000  // Hz - ZCR trigger only valid if centroid below this
+	lpZCRCutoff              = 12000 // Hz - cutoff when ZCR trigger fires (per spec)
 
 	// ==========================================================================
 	// Dolby SR-Inspired Single-Stage Denoise (afftdn)
@@ -732,77 +731,60 @@ func tuneDS201LowPass(config *FilterChainConfig, m *AudioMeasurements) {
 // tuneDS201LowPassForSpeech checks HF noise indicators and enables lowpass if warranted.
 // Only called when content type is speech.
 //
-// Default behaviour: Always-on ultrasonic cleanup at 18kHz with conservative settings.
-// Ultrasonics serve no purpose for speech and can cause encoding artifacts.
+// Default behaviour: DISABLED — only activates when measurements indicate benefit.
+// Per DS201-INSPIRED-GATE.md spec:
 //
-// Trigger conditions for aggressive filtering (in priority order):
-//  1. Large rolloff/centroid gap (>2.5x) - HF energy not from voice → cutoff = rolloff - 1000
-//  2. Flat spectral slope (>-1e-05) - unusual HF emphasis → cutoff = 12000
-//  3. High ZCR (>0.10) with low centroid (<4000) - HF noise pattern → cutoff = 10000
+// Trigger conditions (in priority order):
+//  1. Rolloff < 8kHz → disabled (voice already dark)
+//  2. Rolloff > 14kHz → enabled at rolloff + 2kHz (ultrasonic cleanup)
+//  3. High ZCR (>0.10) with low centroid (<4000) → possible HF noise, enable at 12kHz
 //
 // Constraints:
 //   - Never cut below 8kHz (sibilance lives at 4-8kHz, air/presence at 8-12kHz)
-//   - Never cut above 18kHz (no audible benefit)
-//   - Gentler slope and mix for borderline cases (cutoff < 12kHz)
+//   - Conservative approach — preserves natural voice character
 func tuneDS201LowPassForSpeech(config *FilterChainConfig, m *AudioMeasurements) {
-	// Default: conservative ultrasonic cleanup (always-on for speech)
-	// 18kHz cutoff, gentle slope, blended with dry - transparent to audible content
-	config.DS201LPEnabled = true
-	config.DS201LPFreq = 18000
-	config.DS201LPPoles = 1 // 6dB/oct - very gentle
-	config.DS201LPMix = 0.8 // Blend with dry for transparency
-	config.DS201LPReason = "ultrasonic cleanup"
+	// Default: DISABLED per spec — only activate when measurements indicate benefit
+	config.DS201LPEnabled = false
+	config.DS201LPFreq = ds201LPDefaultFreq
+	config.DS201LPPoles = 1 // 6dB/oct - gentle
+	config.DS201LPMix = 1.0
+	config.DS201LPReason = "no HF issues detected"
 
-	var cutoff float64
-	var reason string
-
-	// Condition 1: Large rolloff-to-centroid gap
-	// Suggests HF energy is not from voice harmonics
-	if m.SpectralCentroid > 0 {
-		ratio := m.SpectralRolloff / m.SpectralCentroid
-		if ratio > lpRolloffCentroidRatio {
-			cutoff = m.SpectralRolloff - lpRolloffHeadroom
-			reason = "rolloff/centroid gap"
-		}
+	// Condition 1: Voice already dark (rolloff < 8kHz)
+	// No benefit from lowpass — would only remove wanted content
+	if m.SpectralRolloff < lpRolloffDarkVoice {
+		config.DS201LPReason = "voice already dark (rolloff < 8kHz)"
+		return
 	}
 
-	// Condition 2: Unusually flat spectral slope (HF emphasis)
-	// Negative slope is normal; near-zero or positive suggests HF noise
-	if m.SpectralSlope > lpSlopeHFEmphasis {
-		candidate := float64(lpSlopeCutoff)
-		if cutoff == 0 || candidate < cutoff {
-			cutoff = candidate
-			reason = "flat spectral slope"
+	// Condition 2: High rolloff (> 14kHz) — ultrasonic content present
+	// Enable at rolloff + 2kHz to clean up ultrasonics while preserving audible content
+	if m.SpectralRolloff > lpRolloffEnableThreshold {
+		cutoff := m.SpectralRolloff + lpRolloffHeadroom
+		// Clamp to reasonable maximum
+		if cutoff > 20000 {
+			cutoff = 20000
 		}
+		config.DS201LPEnabled = true
+		config.DS201LPFreq = cutoff
+		config.DS201LPPoles = 1 // 6dB/oct - very gentle for ultrasonic cleanup
+		config.DS201LPMix = 1.0
+		config.DS201LPReason = "ultrasonic cleanup (rolloff > 14kHz)"
+		return
 	}
 
 	// Condition 3: High ZCR with low centroid (HF noise, not sibilance)
 	// Sibilance has high ZCR AND high centroid; noise has high ZCR with low centroid
 	if m.ZeroCrossingsRate > lpZCRHigh && m.SpectralCentroid < lpZCRCentroidThreshold {
-		candidate := float64(lpZCRCutoff)
-		if cutoff == 0 || candidate < cutoff {
-			cutoff = candidate
-			reason = "high ZCR with low centroid"
-		}
+		config.DS201LPEnabled = true
+		config.DS201LPFreq = lpZCRCutoff
+		config.DS201LPPoles = 1 // 6dB/oct - gentle
+		config.DS201LPMix = 0.8 // Blend with dry for transparency
+		config.DS201LPReason = "high ZCR with low centroid (HF noise)"
+		return
 	}
 
-	// Apply aggressive filtering if HF noise detected
-	if cutoff > 0 {
-		// Clamp to safe range
-		cutoff = clamp(cutoff, ds201LPMinFreq, 18000)
-
-		config.DS201LPFreq = cutoff
-		config.DS201LPReason = reason
-
-		// Gentler slope and mix for borderline cases
-		if cutoff < 12000 {
-			config.DS201LPPoles = 1 // 6dB/oct - very gentle
-			config.DS201LPMix = 0.8 // Blend with dry
-		} else {
-			config.DS201LPPoles = 2 // 12dB/oct - standard
-			config.DS201LPMix = 1.0 // Full wet
-		}
-	}
+	// No triggers fired — keep disabled
 }
 
 // tuneNoiseReduction adapts FFT noise reduction based on measurements.

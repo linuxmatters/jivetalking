@@ -529,30 +529,30 @@ func TestTuneDS201LowPass(t *testing.T) {
 			centroid:        3736,
 			slope:           -5.66e-05,
 			zcr:             0.052,
-			wantEnabled:     true,
+			wantEnabled:     false, // Per spec: default disabled, rolloff 8809 < 14000 so no ultrasonic trigger
 			wantContentType: ContentSpeech,
-			wantReason:      "ultrasonic cleanup",
-			wantFreqMin:     18000,
-			wantFreqMax:     18000,
-			desc:            "typical podcast: no HF noise, conservative 18kHz ultrasonic cleanup",
+			wantReason:      "no HF issues detected",
+			wantFreqMin:     0, // Not checked when disabled
+			wantFreqMax:     0,
+			desc:            "typical podcast: rolloff < 14kHz, no triggers, LP disabled per spec",
 		},
-		// Test case 2: Speech with high rolloff gap → enabled
+		// Test case 2: Speech with high rolloff (>14kHz) → ultrasonic cleanup
 		{
-			name:            "speech with rolloff gap",
+			name:            "speech with ultrasonic content",
 			kurtosis:        8.0,
 			flatness:        0.40,
 			flux:            0.002,
 			crest:           40.0,
-			rolloff:         14000,
-			centroid:        4000,
+			rolloff:         15000, // > 14000 threshold
+			centroid:        5000,
 			slope:           -3e-05,
 			zcr:             0.05,
 			wantEnabled:     true,
 			wantContentType: ContentSpeech,
-			wantReason:      "rolloff/centroid gap",
-			wantFreqMin:     13000, // 14000 - 1000 = 13000
-			wantFreqMax:     13000,
-			desc:            "rolloff/centroid=3.5>2.5, enables LP at rolloff-1000",
+			wantReason:      "ultrasonic cleanup (rolloff > 14kHz)",
+			wantFreqMin:     17000, // 15000 + 2000 = 17000
+			wantFreqMax:     17000,
+			desc:            "rolloff > 14kHz, enables LP at rolloff + 2kHz",
 		},
 		// Test case 3: Music characteristics → disabled
 		{
@@ -586,23 +586,23 @@ func TestTuneDS201LowPass(t *testing.T) {
 			wantReason:      "mixed content, conservative",
 			desc:            "ambiguous content, LP disabled to be safe",
 		},
-		// Test case 5: Flat spectral slope trigger
+		// Test case 5: Dark voice (rolloff < 8kHz) → disabled per spec
 		{
-			name:            "speech with flat slope",
+			name:            "dark voice - already limited HF",
 			kurtosis:        7.5,
 			flatness:        0.42,
 			flux:            0.002,
 			crest:           35.0,
-			rolloff:         10000,
-			centroid:        5000,
-			slope:           -8e-06, // > -1e-05 (unusual HF emphasis)
+			rolloff:         7000, // < 8kHz dark voice threshold
+			centroid:        3500,
+			slope:           -8e-06,
 			zcr:             0.05,
-			wantEnabled:     true,
+			wantEnabled:     false,
 			wantContentType: ContentSpeech,
-			wantReason:      "flat spectral slope",
-			wantFreqMin:     12000,
-			wantFreqMax:     12000,
-			desc:            "slope > -1e-05 indicates HF emphasis",
+			wantReason:      "voice already dark (rolloff < 8kHz)",
+			wantFreqMin:     0,
+			wantFreqMax:     0,
+			desc:            "rolloff < 8kHz means voice is naturally dark, no LP needed",
 		},
 		// Test case 6: High ZCR with low centroid trigger
 		{
@@ -611,18 +611,18 @@ func TestTuneDS201LowPass(t *testing.T) {
 			flatness:        0.38,
 			flux:            0.002,
 			crest:           40.0,
-			rolloff:         8500,   // 8500/3500 = 2.43 < 2.5 (won't trigger rolloff gap)
-			centroid:        3500,   // < 4000
-			slope:           -4e-05, // < -1e-05 (won't trigger slope)
-			zcr:             0.12,   // > 0.10 (will trigger ZCR)
+			rolloff:         9000, // > 8kHz (not dark), < 14kHz (no ultrasonic)
+			centroid:        3500, // < 4000
+			slope:           -4e-05,
+			zcr:             0.12, // > 0.10 (will trigger ZCR)
 			wantEnabled:     true,
 			wantContentType: ContentSpeech,
-			wantReason:      "high ZCR with low centroid",
-			wantFreqMin:     10000,
-			wantFreqMax:     10000,
-			desc:            "ZCR>0.10 AND centroid<4000 indicates HF noise",
+			wantReason:      "high ZCR with low centroid (HF noise)",
+			wantFreqMin:     12000,
+			wantFreqMax:     12000,
+			desc:            "ZCR>0.10 AND centroid<4000 indicates HF noise, enable at 12kHz per spec",
 		},
-		// Test case 7: High ZCR but high centroid (not noise) → ultrasonic cleanup only
+		// Test case 7: High ZCR but high centroid (sibilance, not noise) → disabled
 		{
 			name:            "speech with high ZCR high centroid",
 			kurtosis:        8.0,
@@ -632,31 +632,31 @@ func TestTuneDS201LowPass(t *testing.T) {
 			rolloff:         9000,
 			centroid:        5000, // > 4000, so ZCR trigger doesn't fire
 			slope:           -4e-05,
-			zcr:             0.12, // > 0.10 but centroid too high
-			wantEnabled:     true,
+			zcr:             0.12,  // > 0.10 but centroid too high
+			wantEnabled:     false, // Per spec: default disabled, no triggers matched
 			wantContentType: ContentSpeech,
-			wantReason:      "ultrasonic cleanup",
-			wantFreqMin:     18000,
-			wantFreqMax:     18000,
-			desc:            "high ZCR with high centroid is sibilance - ultrasonic cleanup only",
+			wantReason:      "no HF issues detected",
+			wantFreqMin:     0,
+			wantFreqMax:     0,
+			desc:            "high ZCR with high centroid is sibilance (not noise), LP disabled",
 		},
-		// Test case 8: Multiple triggers - lowest cutoff wins
+		// Test case 8: Very high rolloff (>18kHz) - capped at 20kHz
 		{
-			name:            "multiple HF noise indicators",
+			name:            "speech with very high rolloff",
 			kurtosis:        7.0,
 			flatness:        0.40,
 			flux:            0.002,
 			crest:           35.0,
-			rolloff:         14000,
-			centroid:        3500,   // < 4000
-			slope:           -5e-06, // > -1e-05
-			zcr:             0.15,   // > 0.10
+			rolloff:         19000, // > 14kHz threshold
+			centroid:        5000,
+			slope:           -3e-05,
+			zcr:             0.05,
 			wantEnabled:     true,
 			wantContentType: ContentSpeech,
-			wantReason:      "high ZCR with low centroid", // Lowest cutoff (10000) wins
-			wantFreqMin:     10000,
-			wantFreqMax:     10000,
-			desc:            "when multiple triggers, lowest cutoff is used",
+			wantReason:      "ultrasonic cleanup (rolloff > 14kHz)",
+			wantFreqMin:     20000, // 19000 + 2000 = 21000, capped at 20000
+			wantFreqMax:     20000,
+			desc:            "rolloff + 2kHz capped at 20kHz",
 		},
 	}
 
