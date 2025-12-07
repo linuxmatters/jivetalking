@@ -41,8 +41,7 @@ const (
 
 	// Processing filters (Pass 2 only)
 	FilterAdeclick       FilterID = "adeclick"
-	FilterAfftdn         FilterID = "afftdn"        // Profile-based FFT denoise (uses noise sample)
-	FilterAfftdnSimple   FilterID = "afftdn_simple" // Sample-free FFT denoise (no noise sample needed)
+	FilterAfftdn         FilterID = "afftdn" // Profile-based FFT denoise (uses noise sample)
 	FilterArnndn         FilterID = "arnndn"
 	FilterLA2ACompressor FilterID = "la2a_compressor" // Teletronix LA-2A style optical compressor
 	FilterDeesser        FilterID = "deesser"
@@ -84,7 +83,6 @@ var Pass2FilterOrder = []FilterID{
 	FilterAdeclick,
 	FilterDolbySRSingle,
 	FilterAfftdn,
-	FilterAfftdnSimple,
 	FilterArnndn,
 	FilterDS201Gate,
 	FilterLA2ACompressor,
@@ -219,15 +217,6 @@ type FilterChainConfig struct {
 	NoiseTrack           bool          // Enable automatic noise tracking (tn=1) - used when no profile
 	NoiseProfilePath     string        // Path to extracted noise profile WAV file (empty = use tracking mode)
 	NoiseProfileDuration time.Duration // Duration of noise profile sample (for atrim calculation)
-
-	// Simple Noise Reduction (afftdn_simple) - sample-free spectral denoising
-	// Does not require a noise sample - uses adaptive noise model with conservative settings.
-	// Intended as a standalone filter for testing, and eventually as fallback when
-	// profile-based afftdn fails to find a suitable noise sample.
-	AfftdnSimpleEnabled        bool    // Enable sample-free afftdn filter
-	AfftdnSimpleNoiseFloor     float64 // dB, estimated noise floor from Pass 1
-	AfftdnSimpleNoiseReduction float64 // dB, reduction amount (conservative: 6-10dB)
-	AfftdnSimpleNoiseType      string  // Noise type: "w" (white), "v" (vinyl), "s" (shellac)
 
 	// Dolby SR Single-Stage Denoise inspired by "Least Treatment" philosophy
 	// - afftdn: spectral noise floor reduction with gain smoothing
@@ -378,18 +367,11 @@ func DefaultFilterConfig() *FilterChainConfig {
 		AdeclickEnabled: false,
 		AdeclickMethod:  "s", // overlap-save (default for better quality)
 
-		// Noise Reduction (profile-based) - disabled while testing AfftdnSimple
+		// Noise Reduction (profile-based) - disabled, Dolby SR Single handles denoising
 		AfftdnEnabled:  false,
 		NoiseFloor:     -25.0, // Placeholder, will be updated from measurements
 		NoiseReduction: 12.0,  // 12 dB reduction (FFT denoise default, good for speech)
 		NoiseTrack:     true,  // Enable adaptive tracking
-
-		// Simple Noise Reduction (sample-free) - enabled for testing
-		// Uses adaptive noise type with conservative settings (6-10dB cap)
-		AfftdnSimpleEnabled:        false,
-		AfftdnSimpleNoiseFloor:     -50.0, // Placeholder, will be updated from measurements
-		AfftdnSimpleNoiseReduction: 10.0,  // Conservative default, tuned adaptively (capped at 6-10dB)
-		AfftdnSimpleNoiseType:      "w",   // White noise default, tuned adaptively based on spectral profile
 
 		// Dolby SR-Inspired Single-Stage Denoise
 		// Implements SR philosophy: Least Treatment, artifact masking
@@ -823,64 +805,6 @@ func (cfg *FilterChainConfig) buildAfftdnFilter() string {
 	)
 }
 
-// buildAfftdnSimpleFilter builds the sample-free afftdn filter specification.
-// This filter does not require a noise sample - it uses a white noise model (nt=w)
-// with conservative settings to provide gentle denoising without risking voice degradation.
-//
-// Key differences from profile-based afftdn:
-// - No noise sample required (no sn start/stop commands)
-// - Uses white noise type (nt=w) - safe default for unknown noise characteristics
-// - Conservative noise reduction (6-15dB cap) to avoid voice artifacts
-// - Higher residual floor (-45dB) to avoid "musical noise" artifacts
-// - Slower adaptivity (0.7) for stability without profile guidance
-// - Tracking mode enabled (tn=1) to adapt to changing noise conditions
-//
-// Intended for testing and as fallback when profile-based afftdn can't find a valid sample.
-func (cfg *FilterChainConfig) buildAfftdnSimpleFilter() string {
-	if !cfg.AfftdnSimpleEnabled {
-		return ""
-	}
-
-	// Clamp noise floor to afftdn's valid range: -80 to -20 dB
-	noiseFloorClamped := cfg.AfftdnSimpleNoiseFloor
-	if noiseFloorClamped < -80.0 {
-		noiseFloorClamped = -80.0
-	} else if noiseFloorClamped > -20.0 {
-		noiseFloorClamped = -20.0
-	}
-
-	// Conservative parameters for sample-free mode
-	// Higher residual floor (-45dB) leaves more residual to avoid "musical noise" artifacts
-	// when the noise profile is imprecise (which it always is without a sample)
-	residualFloor := -45.0
-
-	// Higher adaptivity (0.7) means slower adaptation for stability
-	// (afftdn: 0 = instant, 1 = slowest; default 0.5)
-	adaptivity := 0.7
-
-	// Gain smoothing to reduce artifacts
-	gainSmooth := 5
-
-	// Select noise type (default to white if not set)
-	noiseType := cfg.AfftdnSimpleNoiseType
-	if noiseType == "" {
-		noiseType = "w"
-	}
-
-	return fmt.Sprintf(
-		"afftdn=nf=%.1f:nr=%.1f:tn=%d:rf=%.1f:ad=%.2f:fo=%.1f:gs=%d:om=%s:nt=%s",
-		noiseFloorClamped,
-		cfg.AfftdnSimpleNoiseReduction,
-		1, // Tracking mode enabled - adapt to changing noise
-		residualFloor,
-		adaptivity,
-		1.0, // Floor offset factor
-		gainSmooth,
-		"o",       // Output mode: filtered audio
-		noiseType, // Noise type: adaptive based on spectral profile
-	)
-}
-
 // buildDolbySRSingleFilter builds the Dolby SR-inspired single-stage filter.
 // Implements the Dolby SR noise reduction philosophy:
 // - Least Treatment: we never remove 100% of noise
@@ -1080,7 +1004,6 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 		FilterAdeclick:       cfg.buildAdeclickFilter,
 		FilterDolbySRSingle:  cfg.buildDolbySRSingleFilter,
 		FilterAfftdn:         cfg.buildAfftdnFilter,
-		FilterAfftdnSimple:   cfg.buildAfftdnSimpleFilter,
 		FilterDS201Gate:      cfg.buildDS201GateFilter,
 		FilterLA2ACompressor: cfg.buildLA2ACompressorFilter,
 		FilterDeesser:        cfg.buildDeesserFilter,

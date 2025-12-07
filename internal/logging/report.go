@@ -656,8 +656,6 @@ func formatFilter(f *os.File, filterID processor.FilterID, cfg *processor.Filter
 		formatAdeclickFilter(f, cfg, prefix)
 	case processor.FilterAfftdn:
 		formatAfftdnFilter(f, cfg, m, prefix)
-	case processor.FilterAfftdnSimple:
-		formatAfftdnSimpleFilter(f, cfg, m, prefix)
 	case processor.FilterDolbySRSingle:
 		formatDolbySRSingleFilter(f, cfg, m, prefix)
 	case processor.FilterArnndn:
@@ -926,50 +924,6 @@ func formatAfftdnFilter(f *os.File, cfg *processor.FilterChainConfig, m *process
 			fmt.Fprintf(f, ", headroom %.1f dB (%s)", m.NoiseReductionHeadroom, quality)
 		}
 		fmt.Fprintln(f, "")
-	}
-}
-
-// formatAfftdnSimpleFilter outputs afftdn_simple (sample-free) filter details
-func formatAfftdnSimpleFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
-	if !cfg.AfftdnSimpleEnabled {
-		fmt.Fprintf(f, "%safftdn_simple: DISABLED\n", prefix)
-		return
-	}
-
-	// Show noise type with explanation
-	noiseType := cfg.AfftdnSimpleNoiseType
-	if noiseType == "" {
-		noiseType = "w"
-	}
-	noiseTypeDesc := map[string]string{
-		"w": "white (broadband)",
-		"v": "vinyl (LF-weighted)",
-		"s": "shellac (HF-weighted)",
-	}[noiseType]
-	if noiseTypeDesc == "" {
-		noiseTypeDesc = noiseType
-	}
-
-	fmt.Fprintf(f, "%safftdn_simple: %.1f dB reduction, type %s\n",
-		prefix, cfg.AfftdnSimpleNoiseReduction, noiseTypeDesc)
-	fmt.Fprintf(f, "        Floor: %.1f dBFS (from Pass 1 measurements)\n", cfg.AfftdnSimpleNoiseFloor)
-
-	// Show noise type selection rationale
-	if m != nil {
-		switch noiseType {
-		case "v":
-			fmt.Fprintf(f, "        Rationale: vinyl mode — LF emphasis (decrease %.3f, slope %.2e)\n",
-				m.SpectralDecrease, m.SpectralSlope)
-		case "s":
-			fmt.Fprintf(f, "        Rationale: shellac mode — HF emphasis (centroid %.0f Hz, rolloff %.0f Hz)\n",
-				m.SpectralCentroid, m.SpectralRolloff)
-		case "w":
-			if m.SpectralFlatness > 0.6 {
-				fmt.Fprintf(f, "        Rationale: white mode — high flatness (%.3f)\n", m.SpectralFlatness)
-			} else {
-				fmt.Fprintf(f, "        Rationale: white mode — default (no strong spectral bias)\n")
-			}
-		}
 	}
 }
 
