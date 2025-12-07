@@ -333,7 +333,125 @@ const (
 	defaultHumFrequency       = 50.0  // UK mains
 	defaultHumHarmonics       = 4
 	defaultHumWidth           = 1.0 // Hz
+
+	// ==========================================================================
+	// DS201 Low-Pass Content Detection Thresholds
+	// ==========================================================================
+	// These thresholds classify content as speech, music, or mixed based on
+	// spectral characteristics. The lowpass filter is only enabled for speech
+	// content when HF noise indicators are present.
+
+	// Speech characteristics: peaked, tonal, stable
+	lpContentKurtosisSpeech = 6.0   // Above: energy peaked at voice harmonics
+	lpContentFlatnessSpeech = 0.45  // Below: tonal, not noise-like
+	lpContentFluxSpeech     = 0.003 // Below: stable sustained phonation
+	lpContentCrestSpeech    = 30.0  // Above: dominant voice peaks
+
+	// Music characteristics: spread, uniform, varied
+	lpContentKurtosisMusic = 5.0   // Below: energy spread across instruments
+	lpContentFlatnessMusic = 0.55  // Above: more uniform spectral energy
+	lpContentFluxMusic     = 0.005 // Above: rhythmic variation
+	lpContentCrestMusic    = 25.0  // Below: multiple sources averaging out
+
+	// Content type decision threshold
+	lpContentScoreThreshold = 3 // Score needed to classify as speech or music
+
+	// Speech HF noise detection thresholds
+	lpRolloffCentroidRatio = 2.5    // Above: large gap suggests HF energy not from voice
+	lpRolloffHeadroom      = 1000   // Hz - cutoff = rolloff - this value
+	lpSlopeHFEmphasis      = -1e-05 // Above: unusually flat/rising HF
+	lpSlopeCutoff          = 12000  // Hz - cutoff when slope trigger fires
+	lpZCRHigh              = 0.10   // Above: high zero crossings (HF noise indicator)
+	lpZCRCentroidThreshold = 4000   // Hz - ZCR trigger only valid if centroid below this
+	lpZCRCutoff            = 10000  // Hz - cutoff when ZCR trigger fires
 )
+
+// ContentType classifies audio content for adaptive filter tuning.
+type ContentType int
+
+const (
+	// ContentSpeech indicates speech-dominant content (podcast, voice recording).
+	// Lowpass may enable if HF noise indicators are present.
+	ContentSpeech ContentType = iota
+
+	// ContentMusic indicates music-dominant content (bumpers, stings, jingles).
+	// Lowpass is always disabled to preserve full spectrum.
+	ContentMusic
+
+	// ContentMixed indicates unclear or mixed content (speech over music bed).
+	// Conservative approach: lowpass disabled to avoid audible HF loss.
+	ContentMixed
+)
+
+// String returns a human-readable name for the content type.
+func (c ContentType) String() string {
+	switch c {
+	case ContentSpeech:
+		return "speech"
+	case ContentMusic:
+		return "music"
+	case ContentMixed:
+		return "mixed"
+	default:
+		return "unknown"
+	}
+}
+
+// detectContentType classifies audio content based on spectral measurements.
+// Returns ContentSpeech, ContentMusic, or ContentMixed.
+//
+// Speech characteristics:
+//   - High kurtosis (>6): energy peaked at voice harmonics
+//   - Lower flatness (<0.45): tonal, not noise-like
+//   - Low flux (<0.003): stable sustained phonation
+//   - High crest (>30): dominant voice peaks
+//
+// Music characteristics:
+//   - Low kurtosis (<5): energy spread across instruments
+//   - Higher flatness (>0.55): more uniform spectral energy
+//   - Higher flux (>0.005): rhythmic variation
+//   - Lower crest (<25): multiple sources averaging out
+func detectContentType(m *AudioMeasurements) ContentType {
+	speechScore := 0
+	musicScore := 0
+
+	// Kurtosis: speech is peaked, music is spread
+	if m.SpectralKurtosis > lpContentKurtosisSpeech {
+		speechScore++
+	} else if m.SpectralKurtosis < lpContentKurtosisMusic {
+		musicScore++
+	}
+
+	// Flatness: speech is tonal, music is flatter
+	if m.SpectralFlatness < lpContentFlatnessSpeech {
+		speechScore++
+	} else if m.SpectralFlatness > lpContentFlatnessMusic {
+		musicScore++
+	}
+
+	// Flux: speech is stable, music varies
+	if m.SpectralFlux < lpContentFluxSpeech {
+		speechScore++
+	} else if m.SpectralFlux > lpContentFluxMusic {
+		musicScore++
+	}
+
+	// Crest: speech has dominant peaks
+	if m.SpectralCrest > lpContentCrestSpeech {
+		speechScore++
+	} else if m.SpectralCrest < lpContentCrestMusic {
+		musicScore++
+	}
+
+	// Decision: require threshold score to classify definitively
+	if speechScore >= lpContentScoreThreshold {
+		return ContentSpeech
+	}
+	if musicScore >= lpContentScoreThreshold {
+		return ContentMusic
+	}
+	return ContentMixed
+}
 
 // AdaptConfig tunes all filter parameters based on Pass 1 measurements.
 // This is the main entry point for adaptive configuration.
@@ -560,44 +678,115 @@ func tuneDS201HumNotch(config *FilterChainConfig, measurements *AudioMeasurement
 	}
 }
 
-// tuneDS201LowPass adapts the DS201-inspired low-pass filter based on spectral measurements.
+// tuneDS201LowPass adapts the DS201-inspired low-pass filter based on content type
+// and spectral measurements.
 //
-// DS201-inspired approach: frequency-conscious filtering that only enables when clear benefit.
-// The low-pass filter removes ultrasonic content and HF noise without affecting audible speech.
+// Content-aware approach:
+//   - Music: Always disabled - preserve full spectrum including cymbals, air, synth harmonics
+//   - Mixed: Disabled - conservative approach to avoid audible HF loss
+//   - Speech: Enabled only when HF noise indicators are present
 //
-// Logic:
-//   - If SpectralRolloff < 8000 Hz → disable LP (voice already dark, no HF to filter)
-//   - If SpectralRolloff > 14000 Hz → enable LP at rolloff + headroom (reject ultrasonics)
-//   - If ZeroCrossingsRate > 0.15 AND SpectralCentroid < 3000 → possible HF noise, enable at 12kHz
-//   - Never filter below 8kHz (preserve all audible speech content)
-func tuneDS201LowPass(config *FilterChainConfig, measurements *AudioMeasurements) {
+// The DS201's LP filter prevents false gate triggers from ultrasonic noise.
+// Since we filter the audio path (not true sidechain), we must be conservative
+// to avoid audible HF loss.
+func tuneDS201LowPass(config *FilterChainConfig, m *AudioMeasurements) {
 	// Start disabled - only enable when we detect clear benefit
 	config.DS201LPEnabled = false
 	config.DS201LPFreq = ds201LPDefaultFreq
 
-	// If spectral rolloff is very low, voice is already dark - no need for LP
-	if measurements.SpectralRolloff < ds201LPMinFreq {
-		return
+	// Detect content type
+	contentType := detectContentType(m)
+	config.DS201LPContentType = contentType
+
+	// Calculate rolloff/centroid ratio for logging
+	if m.SpectralCentroid > 0 {
+		config.DS201LPRolloffRatio = m.SpectralRolloff / m.SpectralCentroid
 	}
 
-	// If rolloff is high (>14kHz), there's significant HF content - filter ultrasonics
-	if measurements.SpectralRolloff > 14000.0 {
-		config.DS201LPEnabled = true
-		// Set cutoff above rolloff to preserve audible content, reject ultrasonics
-		config.DS201LPFreq = math.Min(measurements.SpectralRolloff+ds201LPHeadroom, ds201LPDefaultFreq)
+	switch contentType {
+	case ContentMusic:
+		// Music: preserve full spectrum
+		config.DS201LPReason = "music content detected"
 		return
+
+	case ContentMixed:
+		// Mixed content: disable to be safe
+		config.DS201LPReason = "mixed content, conservative"
+		return
+
+	case ContentSpeech:
+		// Speech: check for HF noise indicators
+		tuneDS201LowPassForSpeech(config, m)
+	}
+}
+
+// tuneDS201LowPassForSpeech checks HF noise indicators and enables lowpass if warranted.
+// Only called when content type is speech.
+//
+// Trigger conditions (in priority order):
+//  1. Large rolloff/centroid gap (>2.5x) - HF energy not from voice → cutoff = rolloff - 1000
+//  2. Flat spectral slope (>-1e-05) - unusual HF emphasis → cutoff = 12000
+//  3. High ZCR (>0.10) with low centroid (<4000) - HF noise pattern → cutoff = 10000
+//
+// Constraints:
+//   - Never cut below 8kHz (sibilance lives at 4-8kHz, air/presence at 8-12kHz)
+//   - Never cut above 18kHz (no audible benefit)
+//   - Gentler slope and mix for borderline cases (cutoff < 12kHz)
+func tuneDS201LowPassForSpeech(config *FilterChainConfig, m *AudioMeasurements) {
+	// Default: disabled (speech without HF noise indicators)
+	config.DS201LPEnabled = false
+	config.DS201LPReason = "speech, no HF noise indicators"
+
+	var cutoff float64
+	var reason string
+
+	// Condition 1: Large rolloff-to-centroid gap
+	// Suggests HF energy is not from voice harmonics
+	if m.SpectralCentroid > 0 {
+		ratio := m.SpectralRolloff / m.SpectralCentroid
+		if ratio > lpRolloffCentroidRatio {
+			cutoff = m.SpectralRolloff - lpRolloffHeadroom
+			reason = "rolloff/centroid gap"
+		}
 	}
 
-	// Detect HF noise: high zero crossings with low spectral centroid
-	// This pattern suggests noise is dominating the upper frequencies
-	const hfNoiseZeroCrossings = 0.15
-	const darkVoiceCentroid = 3000.0
-	const hfNoiseFilterFreq = 12000.0
+	// Condition 2: Unusually flat spectral slope (HF emphasis)
+	// Negative slope is normal; near-zero or positive suggests HF noise
+	if m.SpectralSlope > lpSlopeHFEmphasis {
+		candidate := float64(lpSlopeCutoff)
+		if cutoff == 0 || candidate < cutoff {
+			cutoff = candidate
+			reason = "flat spectral slope"
+		}
+	}
 
-	if measurements.ZeroCrossingsRate > hfNoiseZeroCrossings && measurements.SpectralCentroid < darkVoiceCentroid {
+	// Condition 3: High ZCR with low centroid (HF noise, not sibilance)
+	// Sibilance has high ZCR AND high centroid; noise has high ZCR with low centroid
+	if m.ZeroCrossingsRate > lpZCRHigh && m.SpectralCentroid < lpZCRCentroidThreshold {
+		candidate := float64(lpZCRCutoff)
+		if cutoff == 0 || candidate < cutoff {
+			cutoff = candidate
+			reason = "high ZCR with low centroid"
+		}
+	}
+
+	// Apply cutoff if any condition matched
+	if cutoff > 0 {
+		// Clamp to safe range
+		cutoff = clamp(cutoff, ds201LPMinFreq, 18000)
+
 		config.DS201LPEnabled = true
-		config.DS201LPFreq = hfNoiseFilterFreq
-		return
+		config.DS201LPFreq = cutoff
+		config.DS201LPReason = reason
+
+		// Gentler slope and mix for borderline cases
+		if cutoff < 12000 {
+			config.DS201LPPoles = 1 // 6dB/oct - very gentle
+			config.DS201LPMix = 0.8 // Blend with dry
+		} else {
+			config.DS201LPPoles = 2 // 12dB/oct - standard
+			config.DS201LPMix = 1.0 // Full wet
+		}
 	}
 }
 

@@ -406,93 +406,285 @@ func TestTuneDS201HighPass(t *testing.T) {
 	}
 }
 
-func TestTuneDS201LowPass(t *testing.T) {
+func TestDetectContentType(t *testing.T) {
 	// Constants from adaptive.go for reference:
-	// ds201LPDefaultFreq = 16000.0 Hz
-	// ds201LPMinFreq     = 8000.0 Hz
-	// ds201LPHeadroom    = 2000.0 Hz
-	// HF noise detection: ZCR > 0.15 AND centroid < 3000 Hz
+	// lpContentKurtosisSpeech  = 6.0   (speech > this)
+	// lpContentKurtosisMusic   = 5.0   (music < this)
+	// lpContentFlatnessSpeech  = 0.45  (speech < this)
+	// lpContentFlatnessMusic   = 0.55  (music > this)
+	// lpContentFluxSpeech      = 0.003 (speech < this)
+	// lpContentFluxMusic       = 0.005 (music > this)
+	// lpContentCrestSpeech     = 30.0  (speech > this)
+	// lpContentCrestMusic      = 25.0  (music < this)
+	// lpContentScoreThreshold  = 3     (need 3+ to classify)
 
 	tests := []struct {
-		name        string
-		rolloff     float64 // spectral rolloff (Hz)
-		zcr         float64 // zero crossings rate
-		centroid    float64 // spectral centroid (Hz)
-		wantEnabled bool
-		wantFreqMin float64 // minimum expected frequency (0 = don't check)
-		wantFreqMax float64 // maximum expected frequency (0 = don't check)
-		desc        string
+		name     string
+		kurtosis float64
+		flatness float64
+		flux     float64
+		crest    float64
+		want     ContentType
+		desc     string
 	}{
 		{
-			name:        "dark voice - LP disabled",
-			rolloff:     6000,
-			zcr:         0.05,
-			centroid:    2500,
-			wantEnabled: false,
-			desc:        "rolloff < 8000 Hz means voice is already dark, no LP needed",
+			name:     "clear speech - podcast voice",
+			kurtosis: 9.2,   // > 6 (speech)
+			flatness: 0.38,  // < 0.45 (speech)
+			flux:     0.002, // < 0.003 (speech)
+			crest:    45.0,  // > 30 (speech)
+			want:     ContentSpeech,
+			desc:     "all metrics indicate speech (score 4)",
 		},
 		{
-			name:        "normal voice - LP disabled",
-			rolloff:     10000,
-			zcr:         0.08,
-			centroid:    5000,
-			wantEnabled: false,
-			desc:        "rolloff between 8000-14000 Hz with normal ZCR, no clear benefit",
+			name:     "clear music - instrumental",
+			kurtosis: 3.5,   // < 5 (music)
+			flatness: 0.61,  // > 0.55 (music)
+			flux:     0.008, // > 0.005 (music)
+			crest:    18.0,  // < 25 (music)
+			want:     ContentMusic,
+			desc:     "all metrics indicate music (score 4)",
 		},
 		{
-			name:        "high rolloff - ultrasonics filtered",
-			rolloff:     15000,
-			zcr:         0.05,
-			centroid:    5000,
-			wantEnabled: true,
-			wantFreqMin: 16000, // rolloff + headroom = 17000, capped at 16000
-			wantFreqMax: 16000,
-			desc:        "rolloff > 14000 Hz enables LP to filter ultrasonics",
+			name:     "mixed content - speech over music",
+			kurtosis: 5.2,   // between 5-6 (neither)
+			flatness: 0.52,  // between 0.45-0.55 (neither)
+			flux:     0.004, // between 0.003-0.005 (neither)
+			crest:    27.0,  // between 25-30 (neither)
+			want:     ContentMixed,
+			desc:     "ambiguous metrics produce mixed (score 0-0)",
 		},
 		{
-			name:        "very high rolloff",
-			rolloff:     14500,
-			zcr:         0.05,
-			centroid:    5000,
-			wantEnabled: true,
-			wantFreqMin: 16000, // 14500 + 2000 = 16500, capped at 16000
-			wantFreqMax: 16000,
-			desc:        "rolloff > 14000 sets cutoff at rolloff + headroom (capped at 16000)",
+			name:     "borderline speech - 3 indicators",
+			kurtosis: 7.0,   // > 6 (speech)
+			flatness: 0.40,  // < 0.45 (speech)
+			flux:     0.002, // < 0.003 (speech)
+			crest:    20.0,  // < 30 (neither), < 25 (music!)
+			want:     ContentSpeech,
+			desc:     "3 speech indicators is enough (score 3-1)",
 		},
 		{
-			name:        "HF noise detected",
-			rolloff:     10000,
-			zcr:         0.20, // > 0.15
-			centroid:    2500, // < 3000
-			wantEnabled: true,
-			wantFreqMin: 12000,
-			wantFreqMax: 12000,
-			desc:        "high ZCR + low centroid pattern indicates HF noise",
+			name:     "borderline music - 3 indicators",
+			kurtosis: 4.0,   // < 5 (music)
+			flatness: 0.60,  // > 0.55 (music)
+			flux:     0.006, // > 0.005 (music)
+			crest:    35.0,  // > 30 (speech!)
+			want:     ContentMusic,
+			desc:     "3 music indicators is enough (score 1-3)",
 		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &AudioMeasurements{
+				SpectralKurtosis: tt.kurtosis,
+				SpectralFlatness: tt.flatness,
+				SpectralFlux:     tt.flux,
+				SpectralCrest:    tt.crest,
+			}
+
+			got := detectContentType(m)
+
+			if got != tt.want {
+				t.Errorf("detectContentType() = %v, want %v [%s]", got, tt.want, tt.desc)
+			}
+		})
+	}
+}
+
+func TestTuneDS201LowPass(t *testing.T) {
+	// Constants from adaptive.go for reference:
+	// Content detection: speech needs kurtosis>6, flatness<0.45, flux<0.003, crest>30 (3+ matches)
+	// HF noise triggers (speech only):
+	//   - Rolloff/centroid > 2.5 → cutoff = rolloff - 1000
+	//   - Slope > -1e-05 → cutoff = 12000
+	//   - ZCR > 0.10 AND centroid < 4000 → cutoff = 10000
+	// Cutoff clamped to 8000-18000
+
+	tests := []struct {
+		name            string
+		kurtosis        float64
+		flatness        float64
+		flux            float64
+		crest           float64
+		rolloff         float64
+		centroid        float64
+		slope           float64
+		zcr             float64
+		wantEnabled     bool
+		wantContentType ContentType
+		wantReason      string
+		wantFreqMin     float64 // 0 = don't check
+		wantFreqMax     float64
+		desc            string
+	}{
+		// Test case 1: Clean podcast speech → disabled (no HF noise indicators)
 		{
-			name:        "high ZCR but bright voice",
-			rolloff:     10000,
-			zcr:         0.20,
-			centroid:    5000, // > 3000
-			wantEnabled: false,
-			desc:        "high ZCR with normal centroid is speech, not noise",
+			name:            "clean podcast speech - no HF noise",
+			kurtosis:        9.2,
+			flatness:        0.38,
+			flux:            0.002,
+			crest:           45.0,
+			rolloff:         8809,
+			centroid:        3736,
+			slope:           -5.66e-05,
+			zcr:             0.052,
+			wantEnabled:     false,
+			wantContentType: ContentSpeech,
+			wantReason:      "speech, no HF noise indicators",
+			desc:            "typical podcast: rolloff/centroid=2.36<2.5, slope<-1e-05, ZCR<0.10",
+		},
+		// Test case 2: Speech with high rolloff gap → enabled
+		{
+			name:            "speech with rolloff gap",
+			kurtosis:        8.0,
+			flatness:        0.40,
+			flux:            0.002,
+			crest:           40.0,
+			rolloff:         14000,
+			centroid:        4000,
+			slope:           -3e-05,
+			zcr:             0.05,
+			wantEnabled:     true,
+			wantContentType: ContentSpeech,
+			wantReason:      "rolloff/centroid gap",
+			wantFreqMin:     13000, // 14000 - 1000 = 13000
+			wantFreqMax:     13000,
+			desc:            "rolloff/centroid=3.5>2.5, enables LP at rolloff-1000",
+		},
+		// Test case 3: Music characteristics → disabled
+		{
+			name:            "music sting",
+			kurtosis:        3.5,
+			flatness:        0.61,
+			flux:            0.008,
+			crest:           18.0,
+			rolloff:         16000, // Would trigger LP if speech
+			centroid:        5500,
+			slope:           -2e-05,
+			zcr:             0.08,
+			wantEnabled:     false,
+			wantContentType: ContentMusic,
+			wantReason:      "music content detected",
+			desc:            "music detected, LP disabled to preserve full spectrum",
+		},
+		// Test case 4: Mixed characteristics → disabled (conservative)
+		{
+			name:            "speech over music bed",
+			kurtosis:        5.2,
+			flatness:        0.52,
+			flux:            0.004,
+			crest:           27.0,
+			rolloff:         12000,
+			centroid:        4200,
+			slope:           -2e-05,
+			zcr:             0.06,
+			wantEnabled:     false,
+			wantContentType: ContentMixed,
+			wantReason:      "mixed content, conservative",
+			desc:            "ambiguous content, LP disabled to be safe",
+		},
+		// Test case 5: Flat spectral slope trigger
+		{
+			name:            "speech with flat slope",
+			kurtosis:        7.5,
+			flatness:        0.42,
+			flux:            0.002,
+			crest:           35.0,
+			rolloff:         10000,
+			centroid:        5000,
+			slope:           -8e-06, // > -1e-05 (unusual HF emphasis)
+			zcr:             0.05,
+			wantEnabled:     true,
+			wantContentType: ContentSpeech,
+			wantReason:      "flat spectral slope",
+			wantFreqMin:     12000,
+			wantFreqMax:     12000,
+			desc:            "slope > -1e-05 indicates HF emphasis",
+		},
+		// Test case 6: High ZCR with low centroid trigger
+		{
+			name:            "speech with HF noise pattern",
+			kurtosis:        8.0,
+			flatness:        0.38,
+			flux:            0.002,
+			crest:           40.0,
+			rolloff:         8500,   // 8500/3500 = 2.43 < 2.5 (won't trigger rolloff gap)
+			centroid:        3500,   // < 4000
+			slope:           -4e-05, // < -1e-05 (won't trigger slope)
+			zcr:             0.12,   // > 0.10 (will trigger ZCR)
+			wantEnabled:     true,
+			wantContentType: ContentSpeech,
+			wantReason:      "high ZCR with low centroid",
+			wantFreqMin:     10000,
+			wantFreqMax:     10000,
+			desc:            "ZCR>0.10 AND centroid<4000 indicates HF noise",
+		},
+		// Test case 7: High ZCR but high centroid (not noise)
+		{
+			name:            "speech with high ZCR high centroid",
+			kurtosis:        8.0,
+			flatness:        0.38,
+			flux:            0.002,
+			crest:           40.0,
+			rolloff:         9000,
+			centroid:        5000, // > 4000, so ZCR trigger doesn't fire
+			slope:           -4e-05,
+			zcr:             0.12, // > 0.10 but centroid too high
+			wantEnabled:     false,
+			wantContentType: ContentSpeech,
+			wantReason:      "speech, no HF noise indicators",
+			desc:            "high ZCR with high centroid is sibilance, not noise",
+		},
+		// Test case 8: Multiple triggers - lowest cutoff wins
+		{
+			name:            "multiple HF noise indicators",
+			kurtosis:        7.0,
+			flatness:        0.40,
+			flux:            0.002,
+			crest:           35.0,
+			rolloff:         14000,
+			centroid:        3500,   // < 4000
+			slope:           -5e-06, // > -1e-05
+			zcr:             0.15,   // > 0.10
+			wantEnabled:     true,
+			wantContentType: ContentSpeech,
+			wantReason:      "high ZCR with low centroid", // Lowest cutoff (10000) wins
+			wantFreqMin:     10000,
+			wantFreqMax:     10000,
+			desc:            "when multiple triggers, lowest cutoff is used",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			config := newTestConfig()
-			measurements := &AudioMeasurements{
+			m := &AudioMeasurements{
+				SpectralKurtosis:  tt.kurtosis,
+				SpectralFlatness:  tt.flatness,
+				SpectralFlux:      tt.flux,
+				SpectralCrest:     tt.crest,
 				SpectralRolloff:   tt.rolloff,
-				ZeroCrossingsRate: tt.zcr,
 				SpectralCentroid:  tt.centroid,
+				SpectralSlope:     tt.slope,
+				ZeroCrossingsRate: tt.zcr,
 			}
 
-			tuneDS201LowPass(config, measurements)
+			tuneDS201LowPass(config, m)
 
 			if config.DS201LPEnabled != tt.wantEnabled {
 				t.Errorf("DS201LPEnabled = %v, want %v [%s]",
 					config.DS201LPEnabled, tt.wantEnabled, tt.desc)
+			}
+
+			if config.DS201LPContentType != tt.wantContentType {
+				t.Errorf("DS201LPContentType = %v, want %v [%s]",
+					config.DS201LPContentType, tt.wantContentType, tt.desc)
+			}
+
+			if config.DS201LPReason != tt.wantReason {
+				t.Errorf("DS201LPReason = %q, want %q [%s]",
+					config.DS201LPReason, tt.wantReason, tt.desc)
 			}
 
 			if tt.wantEnabled && tt.wantFreqMin > 0 {

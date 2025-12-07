@@ -819,6 +819,21 @@ func formatDS201HumFilterInternal(f *os.File, cfg *processor.FilterChainConfig, 
 func formatDS201LowPassFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
 	if !cfg.DS201LPEnabled {
 		fmt.Fprintf(f, "%sDS201 lowpass: DISABLED\n", prefix)
+		// Show reason why disabled
+		if cfg.DS201LPReason != "" {
+			fmt.Fprintf(f, "        Rationale: %s\n", cfg.DS201LPReason)
+		}
+		// Show content type detection metrics
+		if m != nil {
+			fmt.Fprintf(f, "        Content type: %s (kurtosis %.1f, flatness %.3f, flux %.4f)\n",
+				cfg.DS201LPContentType.String(), m.SpectralKurtosis, m.SpectralFlatness, m.SpectralFlux)
+			// For speech content, show why no HF noise was detected
+			if cfg.DS201LPContentType == processor.ContentSpeech {
+				fmt.Fprintf(f, "        Rolloff/centroid ratio: %.2f (threshold 2.5)\n", cfg.DS201LPRolloffRatio)
+				fmt.Fprintf(f, "        Spectral slope: %.2e (threshold -1e-05)\n", m.SpectralSlope)
+				fmt.Fprintf(f, "        ZCR: %.4f (threshold 0.10, centroid %.0f Hz)\n", m.ZeroCrossingsRate, m.SpectralCentroid)
+			}
+		}
 		return
 	}
 
@@ -843,15 +858,33 @@ func formatDS201LowPassFilter(f *os.File, cfg *processor.FilterChainConfig, m *p
 		header += ", " + cfg.DS201LPTransform
 	}
 
+	// Show mix if not full wet
+	if cfg.DS201LPMix > 0 && cfg.DS201LPMix < 1.0 {
+		header += fmt.Sprintf(", mix %.0f%%", cfg.DS201LPMix*100)
+	}
+
 	header += ")"
 	fmt.Fprintln(f, header)
 
-	// Show adaptive rationale
+	// Show rationale
+	if cfg.DS201LPReason != "" {
+		fmt.Fprintf(f, "        Rationale: %s\n", cfg.DS201LPReason)
+	}
+
+	// Show content type detection metrics
 	if m != nil {
-		if m.SpectralRolloff > 14000 {
-			fmt.Fprintf(f, "        Rationale: high spectral rolloff (%.0f Hz) — filtering ultrasonics\n", m.SpectralRolloff)
-		} else if m.ZeroCrossingsRate > 0.15 && m.SpectralCentroid < 3000 {
-			fmt.Fprintf(f, "        Rationale: HF noise detected (ZCR %.2f, centroid %.0f Hz)\n",
+		fmt.Fprintf(f, "        Content type: %s (kurtosis %.1f, flatness %.3f, flux %.4f)\n",
+			cfg.DS201LPContentType.String(), m.SpectralKurtosis, m.SpectralFlatness, m.SpectralFlux)
+
+		// Show the triggering metric details
+		switch cfg.DS201LPReason {
+		case "rolloff/centroid gap":
+			fmt.Fprintf(f, "        Rolloff/centroid ratio: %.2f > 2.5 (rolloff %.0f Hz, centroid %.0f Hz)\n",
+				cfg.DS201LPRolloffRatio, m.SpectralRolloff, m.SpectralCentroid)
+		case "flat spectral slope":
+			fmt.Fprintf(f, "        Spectral slope: %.2e > -1e-05 (unusual HF emphasis)\n", m.SpectralSlope)
+		case "high ZCR with low centroid":
+			fmt.Fprintf(f, "        ZCR: %.4f > 0.10, centroid %.0f Hz < 4000 Hz (HF noise pattern)\n",
 				m.ZeroCrossingsRate, m.SpectralCentroid)
 		}
 	}

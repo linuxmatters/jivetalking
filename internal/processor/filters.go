@@ -192,13 +192,16 @@ type FilterChainConfig struct {
 
 	// DS201-Inspired Low-Pass Filter (lowpass) - removes ultrasonic noise
 	// Part of the DS201 side-chain composite: prevents HF noise from triggering gate
-	// Enabled adaptively based on SpectralRolloff and ZCR measurements
-	DS201LPEnabled   bool    // Enable DS201 low-pass filter
-	DS201LPFreq      float64 // Hz, cutoff frequency (removes frequencies above this)
-	DS201LPPoles     int     // Filter poles: 1=6dB/oct (gentle), 2=12dB/oct (standard)
-	DS201LPWidth     float64 // Q factor: 0.707=Butterworth (default)
-	DS201LPMix       float64 // Wet/dry mix (0-1, 1=full filter)
-	DS201LPTransform string  // Filter transform: "tdii" (best accuracy), "zdf", etc.
+	// Enabled adaptively based on content type and HF noise indicators
+	DS201LPEnabled      bool        // Enable DS201 low-pass filter
+	DS201LPFreq         float64     // Hz, cutoff frequency (removes frequencies above this)
+	DS201LPPoles        int         // Filter poles: 1=6dB/oct (gentle), 2=12dB/oct (standard)
+	DS201LPWidth        float64     // Q factor: 0.707=Butterworth (default)
+	DS201LPMix          float64     // Wet/dry mix (0-1, 1=full filter)
+	DS201LPTransform    string      // Filter transform: "tdii" (best accuracy), "zdf", etc.
+	DS201LPContentType  ContentType // Detected content type (speech/music/mixed)
+	DS201LPReason       string      // Why enabled/disabled (for logging)
+	DS201LPRolloffRatio float64     // Actual rolloff/centroid ratio (for logging)
 
 	// Click/Pop Removal (adeclick) - removes clicks and pops
 	AdeclickEnabled bool   // Enable adeclick filter
@@ -365,7 +368,7 @@ func DefaultFilterConfig() *FilterChainConfig {
 
 		// DS201-Inspired Low-pass Filter - removes ultrasonic noise (part of DS201 side-chain)
 		// Disabled by default; enabled adaptively by tuneDS201LowPass when SpectralRolloff indicates benefit
-		DS201LPEnabled:   false,
+		DS201LPEnabled:   true,
 		DS201LPFreq:      16000.0, // 16kHz cutoff (conservative default, preserves all audible content)
 		DS201LPPoles:     2,       // 12dB/oct standard slope
 		DS201LPWidth:     0.707,   // Butterworth Q (maximally flat passband)
