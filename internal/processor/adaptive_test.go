@@ -518,9 +518,9 @@ func TestTuneDS201LowPass(t *testing.T) {
 		wantFreqMax     float64
 		desc            string
 	}{
-		// Test case 1: Clean podcast speech → disabled (no HF noise indicators)
+		// Test case 1: Clean podcast speech → ultrasonic cleanup (always-on)
 		{
-			name:            "clean podcast speech - no HF noise",
+			name:            "clean podcast speech - ultrasonic cleanup",
 			kurtosis:        9.2,
 			flatness:        0.38,
 			flux:            0.002,
@@ -529,10 +529,12 @@ func TestTuneDS201LowPass(t *testing.T) {
 			centroid:        3736,
 			slope:           -5.66e-05,
 			zcr:             0.052,
-			wantEnabled:     false,
+			wantEnabled:     true,
 			wantContentType: ContentSpeech,
-			wantReason:      "speech, no HF noise indicators",
-			desc:            "typical podcast: rolloff/centroid=2.36<2.5, slope<-1e-05, ZCR<0.10",
+			wantReason:      "ultrasonic cleanup",
+			wantFreqMin:     18000,
+			wantFreqMax:     18000,
+			desc:            "typical podcast: no HF noise, conservative 18kHz ultrasonic cleanup",
 		},
 		// Test case 2: Speech with high rolloff gap → enabled
 		{
@@ -620,7 +622,7 @@ func TestTuneDS201LowPass(t *testing.T) {
 			wantFreqMax:     10000,
 			desc:            "ZCR>0.10 AND centroid<4000 indicates HF noise",
 		},
-		// Test case 7: High ZCR but high centroid (not noise)
+		// Test case 7: High ZCR but high centroid (not noise) → ultrasonic cleanup only
 		{
 			name:            "speech with high ZCR high centroid",
 			kurtosis:        8.0,
@@ -631,10 +633,12 @@ func TestTuneDS201LowPass(t *testing.T) {
 			centroid:        5000, // > 4000, so ZCR trigger doesn't fire
 			slope:           -4e-05,
 			zcr:             0.12, // > 0.10 but centroid too high
-			wantEnabled:     false,
+			wantEnabled:     true,
 			wantContentType: ContentSpeech,
-			wantReason:      "speech, no HF noise indicators",
-			desc:            "high ZCR with high centroid is sibilance, not noise",
+			wantReason:      "ultrasonic cleanup",
+			wantFreqMin:     18000,
+			wantFreqMax:     18000,
+			desc:            "high ZCR with high centroid is sibilance - ultrasonic cleanup only",
 		},
 		// Test case 8: Multiple triggers - lowest cutoff wins
 		{

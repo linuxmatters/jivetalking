@@ -723,7 +723,10 @@ func tuneDS201LowPass(config *FilterChainConfig, m *AudioMeasurements) {
 // tuneDS201LowPassForSpeech checks HF noise indicators and enables lowpass if warranted.
 // Only called when content type is speech.
 //
-// Trigger conditions (in priority order):
+// Default behaviour: Always-on ultrasonic cleanup at 18kHz with conservative settings.
+// Ultrasonics serve no purpose for speech and can cause encoding artifacts.
+//
+// Trigger conditions for aggressive filtering (in priority order):
 //  1. Large rolloff/centroid gap (>2.5x) - HF energy not from voice → cutoff = rolloff - 1000
 //  2. Flat spectral slope (>-1e-05) - unusual HF emphasis → cutoff = 12000
 //  3. High ZCR (>0.10) with low centroid (<4000) - HF noise pattern → cutoff = 10000
@@ -733,9 +736,13 @@ func tuneDS201LowPass(config *FilterChainConfig, m *AudioMeasurements) {
 //   - Never cut above 18kHz (no audible benefit)
 //   - Gentler slope and mix for borderline cases (cutoff < 12kHz)
 func tuneDS201LowPassForSpeech(config *FilterChainConfig, m *AudioMeasurements) {
-	// Default: disabled (speech without HF noise indicators)
-	config.DS201LPEnabled = false
-	config.DS201LPReason = "speech, no HF noise indicators"
+	// Default: conservative ultrasonic cleanup (always-on for speech)
+	// 18kHz cutoff, gentle slope, blended with dry - transparent to audible content
+	config.DS201LPEnabled = true
+	config.DS201LPFreq = 18000
+	config.DS201LPPoles = 1 // 6dB/oct - very gentle
+	config.DS201LPMix = 0.8 // Blend with dry for transparency
+	config.DS201LPReason = "ultrasonic cleanup"
 
 	var cutoff float64
 	var reason string
@@ -770,12 +777,11 @@ func tuneDS201LowPassForSpeech(config *FilterChainConfig, m *AudioMeasurements) 
 		}
 	}
 
-	// Apply cutoff if any condition matched
+	// Apply aggressive filtering if HF noise detected
 	if cutoff > 0 {
 		// Clamp to safe range
 		cutoff = clamp(cutoff, ds201LPMinFreq, 18000)
 
-		config.DS201LPEnabled = true
 		config.DS201LPFreq = cutoff
 		config.DS201LPReason = reason
 
