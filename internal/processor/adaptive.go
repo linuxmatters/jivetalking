@@ -134,6 +134,14 @@ const (
 	ds201GateSilenceCrestThreshold = 25.0 // dB - above: use RMS (noise has spikes)
 	ds201GateEntropyClean          = 0.7  // Above: can use peak detection
 
+	// Makeup gain: based on LUFS gap to target
+	// Applies gentle gain recovery post-gate, avoiding normaliser artifacts
+	// Conservative approach: only a fraction of gap, capped to avoid clipping
+	ds201GateMakeupLUFSScale  = 0.25 // Apply 25% of LUFS gap as makeup
+	ds201GateMakeupMinGapLUFS = 8.0  // Only apply makeup if gap > 8 LU
+	ds201GateMakeupMaxDB      = 4.0  // Cap at 4 dB (~1.58 linear) to avoid clipping
+	ds201GateMakeupTPHeadroom = -3.0 // Skip makeup if true peak already > -3 dBTP
+
 	// DS201 Low-Pass filter tuning
 	ds201LPDefaultFreq = 16000.0 // Hz - default cutoff (preserves all audible content)
 	ds201LPMinFreq     = 8000.0  // Hz - minimum cutoff (never filter below this)
@@ -1207,8 +1215,13 @@ func tuneDS201Gate(config *FilterChainConfig, measurements *AudioMeasurements) {
 	// 7. Detection: RMS for bleed, peak for clean
 	config.DS201GateDetection = calculateDS201GateDetection(silenceEntropy, silenceCrest)
 
-	// 8. Makeup: 1.0 (loudness normalisation handles it)
-	config.DS201GateMakeup = 1.0
+	// 8. Makeup: adaptive based on LUFS gap to target
+	// Provides gentle gain recovery post-gate without normaliser artifacts
+	config.DS201GateMakeup = calculateDS201GateMakeup(
+		measurements.InputI,
+		measurements.InputTP,
+		config.TargetI,
+	)
 }
 
 // calculateDS201GateThreshold determines threshold ensuring sufficient gap above noise
@@ -1407,6 +1420,58 @@ func calculateDS201GateDetection(silenceEntropy, silenceCrestDB float64) string 
 
 	// Default: RMS is safer for speech
 	return "rms"
+}
+
+// calculateDS201GateMakeup determines post-gate makeup gain based on LUFS gap.
+//
+// Rather than relying on later normalisation stages which can introduce artifacts,
+// this provides gentle gain recovery immediately after gating. The makeup is:
+// - A fraction of the LUFS gap to target (conservative approach)
+// - Only applied if the gap exceeds a minimum threshold
+// - Capped to avoid clipping (considers true peak headroom)
+// - Returned as linear gain (1.0 = unity, 2.0 = +6dB)
+//
+// This helps quiet recordings come up without the pumping/breathing artifacts
+// that dynamic normalisers can introduce.
+func calculateDS201GateMakeup(inputLUFS, inputTP, targetLUFS float64) float64 {
+	// Calculate LUFS gap to target
+	lufsGap := targetLUFS - inputLUFS
+	if lufsGap < 0 {
+		lufsGap = 0 // Audio is already louder than target
+	}
+
+	// Skip makeup if gap is small (audio is already close to target)
+	if lufsGap < ds201GateMakeupMinGapLUFS {
+		return 1.0
+	}
+
+	// Skip makeup if true peak is already high (no headroom)
+	if inputTP > ds201GateMakeupTPHeadroom {
+		return 1.0
+	}
+
+	// Calculate makeup as fraction of gap
+	makeupDB := lufsGap * ds201GateMakeupLUFSScale
+
+	// Cap to maximum to avoid clipping
+	if makeupDB > ds201GateMakeupMaxDB {
+		makeupDB = ds201GateMakeupMaxDB
+	}
+
+	// Also limit based on true peak headroom
+	// If TP is -5 dBTP, we have ~5 dB headroom before clipping at -0.3 dBTP
+	tpHeadroom := -0.3 - inputTP // How much room before target TP
+	if makeupDB > tpHeadroom {
+		makeupDB = tpHeadroom
+	}
+
+	// Don't apply negative makeup
+	if makeupDB < 0 {
+		return 1.0
+	}
+
+	// Convert dB to linear for agate's makeup parameter
+	return dbToLinear(makeupDB)
 }
 
 // tuneLA2ACompressor applies Teletronix LA-2A style optical compressor tuning.

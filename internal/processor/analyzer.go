@@ -259,7 +259,13 @@ func extractFrameMetadata(metadata *ffmpeg.AVDictionary, acc *metadataAccumulato
 	}
 
 	if value, ok := getFloatMetadata(metadata, metaKeyEbur128TruePeak); ok {
-		acc.ebur128InputTP = value
+		// ebur128 reports true_peak as linear ratio, convert to dBTP
+		// dBTP = 20 * log10(linear)
+		if value > 0 {
+			acc.ebur128InputTP = 20 * math.Log10(value)
+		} else {
+			acc.ebur128InputTP = -120.0 // Floor for zero/negative values
+		}
 	}
 
 	if value, ok := getFloatMetadata(metadata, metaKeyEbur128LRA); ok {
@@ -544,7 +550,13 @@ func extractOutputFrameMetadata(metadata *ffmpeg.AVDictionary, acc *outputMetada
 		acc.ebur128Found = true
 	}
 	if value, ok := getFloatMetadata(metadata, metaKeyEbur128TruePeak); ok {
-		acc.ebur128OutputTP = value
+		// ebur128 reports true_peak as linear ratio, convert to dBTP
+		// dBTP = 20 * log10(linear)
+		if value > 0 {
+			acc.ebur128OutputTP = 20 * math.Log10(value)
+		} else {
+			acc.ebur128OutputTP = -120.0 // Floor for zero/negative values
+		}
 	}
 	if value, ok := getFloatMetadata(metadata, metaKeyEbur128LRA); ok {
 		acc.ebur128OutputLRA = value

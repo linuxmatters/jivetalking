@@ -386,7 +386,6 @@ func DefaultFilterConfig() *FilterChainConfig {
 
 		// DS201-Inspired Gate - soft expander for natural speech transitions
 		// All parameters set adaptively based on Pass 1 measurements
-		// See docs/DS201-INSPIRED-GATE.md for design rationale
 		DS201GateEnabled:   true,
 		DS201GateThreshold: 0.01,   // -40dBFS default (adaptive: based on silence peak + headroom)
 		DS201GateRatio:     2.0,    // 2:1 ratio - soft expander (adaptive: based on LRA)
@@ -811,7 +810,6 @@ func (cfg *FilterChainConfig) buildDolbySRBandProfile() string {
 // Uses soft expander approach (2:1-4:1 ratio) rather than hard gate for natural speech.
 // Supports sub-millisecond attack (0.5ms+) for transient preservation.
 // Detection mode is adaptive: RMS for tonal bleed, peak for clean recordings.
-// See docs/DS201-INSPIRED-GATE.md for design rationale.
 func (cfg *FilterChainConfig) buildDS201GateFilter() string {
 	if !cfg.DS201GateEnabled {
 		return ""

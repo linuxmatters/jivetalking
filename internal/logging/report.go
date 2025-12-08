@@ -1097,6 +1097,12 @@ func formatDS201GateFilter(f *os.File, cfg *processor.FilterChainConfig, m *proc
 	fmt.Fprintf(f, "        Timing: attack %.2fms, release %.0fms (soft expander)\n", cfg.DS201GateAttack, cfg.DS201GateRelease)
 	fmt.Fprintf(f, "        Range: %.1f dB reduction, knee %.1f\n", rangeDB, cfg.DS201GateKnee)
 
+	// Show makeup gain if applied (> 1.0 linear = 0 dB)
+	if cfg.DS201GateMakeup > 1.01 { // Small tolerance for floating point
+		makeupDB := linearToDb(cfg.DS201GateMakeup)
+		fmt.Fprintf(f, "        Makeup: +%.1f dB (LUFS gap recovery)\n", makeupDB)
+	}
+
 	// Show rationale based on measurements
 	if m != nil {
 		var rationale []string
