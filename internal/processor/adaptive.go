@@ -63,13 +63,12 @@ const (
 	deessIntensityMin    = 0.3 // Minimum before disabling
 
 	// DS201 Gate tuning constants
-	// Threshold calculation: sits above noise/bleed peaks, below quiet speech
-	ds201GateThresholdMinDB       = -70.0 // dB - professional studio floor
+	// Threshold calculation: ensures sufficient gap above noise for effective soft expansion
+	ds201GateThresholdMinDB       = -50.0 // dB - minimum threshold (quiet speech floor)
 	ds201GateThresholdMaxDB       = -25.0 // dB - never gate above this (would cut speech)
 	ds201GateCrestFactorThreshold = 20.0  // dB - above this, use peak reference instead of RMS
-	ds201GateHeadroomClean        = 3.0   // dB - headroom above reference for clean recordings
-	ds201GateHeadroomModerate     = 6.0   // dB - headroom for moderate noise
-	ds201GateHeadroomNoisy        = 10.0  // dB - headroom for noisy recordings
+	ds201GateTargetReductionDB    = 12.0  // dB - target noise reduction from soft expander
+	ds201GateTargetThresholdDB    = -40.0 // dB - target threshold for clean recordings (quiet speech/breath level)
 
 	// Ratio: based on LRA (loudness range)
 	ds201GateLRAWide     = 15.0 // LU - above: wide dynamics, gentle ratio
@@ -95,13 +94,23 @@ const (
 	ds201GateFluxLow          = 0.01 // Low flux threshold
 	ds201GateZCRLow           = 0.08 // Low zero crossings rate
 	ds201GateFluxHigh         = 0.05 // High flux threshold
-	ds201GateReleaseSustained = 400  // ms - for sustained speech
-	ds201GateReleaseMod       = 300  // ms - standard
-	ds201GateReleaseDynamic   = 200  // ms - for dynamic content
+	ds201GateReleaseSustained = 300  // ms - for sustained speech (was 400)
+	ds201GateReleaseMod       = 250  // ms - standard (was 300)
+	ds201GateReleaseDynamic   = 180  // ms - for dynamic content (was 200)
 	ds201GateReleaseHoldComp  = 50   // ms - compensation for lack of hold parameter
 	ds201GateReleaseTonalComp = 75   // ms - extra for tonal bleed (hide pump)
 	ds201GateReleaseMin       = 150  // ms - minimum release
 	ds201GateReleaseMax       = 500  // ms - maximum release
+
+	// Adaptive release based on noise entropy (higher entropy = more broadband = faster release)
+	// Tonal noise (low entropy) needs slow release to hide pumping artifacts
+	// Broadband/mixed noise (higher entropy) benefits from faster release to cut noise quickly
+	// Reference: Mark's entropy ~0.09 (very tonal), Martin's ~0.14 (mixed)
+	ds201GateReleaseEntropyVeryTonal = 0.10 // Below: very tonal (pure hum/bleed) - slowest
+	ds201GateReleaseEntropyTonal     = 0.12 // Below: tonal noise - slow release
+	ds201GateReleaseEntropyMixed     = 0.16 // Below: mixed character - moderate release
+	// Above 0.16: broadband-ish noise - faster release OK
+	ds201GateReleaseEntropyReduce = 100 // ms - reduction for broadband-ish noise
 
 	// Range: based on silence entropy and noise floor
 	// Tonal noise sounds worse when hard-gated - gentler range hides pumping
@@ -354,6 +363,14 @@ const (
 	dolbySRNRMax = 6.0 // dB - moderate ceiling for noisy sources
 	dolbySRGSMin = 10  // Higher minimum smoothing (hide gain changes)
 	dolbySRGSMax = 20  // Much higher smoothing (very slow, transparent)
+
+	// Warm voice detection for NR boost (noise hides more in dark/warm voices)
+	// Low centroid + high skewness + negative decrease = warm voice needing extra NR
+	dolbySRWarmCentroid  = 4000.0 // Hz - below: warm/dark voice
+	dolbySRWarmSkewness  = 1.5    // Above: bass-concentrated energy
+	dolbySRWarmDecrease  = -0.1   // Below: strong LF emphasis
+	dolbySRWarmNRBoost   = 1.0    // dB - extra NR for warm voices (subtle)
+	dolbySRVeryWarmBoost = 0.5    // dB - additional boost for very warm (skewness > 1.8)
 )
 
 // ContentType classifies audio content for adaptive filter tuning.
@@ -812,8 +829,26 @@ func tuneDolbySR(config *FilterChainConfig, measurements *AudioMeasurements, luf
 		baseNR += lufsGap * 0.1
 	}
 
-	// Clamp to hybrid-appropriate limits
-	config.DolbySRNoiseReduction = clamp(baseNR, dolbySRNRMin, dolbySRNRMax)
+	// Warm voice boost: dark/warm voices mask noise less in lower frequencies
+	// This allows slightly more aggressive NR without audible artifacts
+	// Criteria: low centroid + high skewness + strong bass (negative decrease)
+	isWarmVoice := measurements.SpectralCentroid < dolbySRWarmCentroid &&
+		measurements.SpectralSkewness > dolbySRWarmSkewness &&
+		measurements.SpectralDecrease < dolbySRWarmDecrease
+	if isWarmVoice {
+		baseNR += dolbySRWarmNRBoost
+		// Extra boost for very warm voices (e.g., deep male voice)
+		if measurements.SpectralSkewness > 1.8 {
+			baseNR += dolbySRVeryWarmBoost
+		}
+	}
+
+	// Clamp to hybrid-appropriate limits (allow slightly higher max for warm voices)
+	maxNR := dolbySRNRMax
+	if isWarmVoice {
+		maxNR = dolbySRNRMax + dolbySRWarmNRBoost // Allow warm voice boost to exceed normal max
+	}
+	config.DolbySRNoiseReduction = clamp(baseNR, dolbySRNRMin, maxNR)
 
 	// Gain smoothing: always use high values to hide any gain changes completely
 	// Since we're only doing subtle NR, we can afford very slow response
@@ -1114,26 +1149,34 @@ func tuneDeesserCentroidOnly(config *FilterChainConfig, measurements *AudioMeasu
 //   - Detection: RMS for tonal bleed/noisy silence, peak for clean recordings
 //   - Makeup: 1.0 (loudness normalisation handles level compensation)
 func tuneDS201Gate(config *FilterChainConfig, measurements *AudioMeasurements) {
-	// Determine if we have tonal noise (likely bleed/hum)
-	var tonalNoise bool
+	// Extract silence sample characteristics for gate tuning
 	var silenceEntropy, silenceCrest, silencePeak float64
 
 	if measurements.NoiseProfile != nil {
 		silenceEntropy = measurements.NoiseProfile.Entropy
 		silenceCrest = measurements.NoiseProfile.CrestFactor
 		silencePeak = measurements.NoiseProfile.PeakLevel
-		tonalNoise = silenceEntropy < ds201GateEntropyTonal
+	} else {
+		// NoiseProfile unavailable - use conservative defaults for broadband noise
+		// Entropy 0.65 triggers broadband range (-27 dB) for effective gating
+		// Without silence analysis, assume typical room noise characteristics
+		silenceEntropy = 0.65
+		silenceCrest = 15.0 // Moderate crest, use RMS detection
+		silencePeak = 0     // Will fall back to NoiseFloor for threshold
 	}
 
+	// 2. Ratio: based on LRA (loudness range) - soft expander approach
+	// Calculate ratio FIRST since threshold depends on it
+	config.DS201GateRatio = calculateDS201GateRatio(measurements.InputLRA)
+
 	// 1. Threshold: sits above noise/bleed peaks, below quiet speech
+	// Gap is derived from ratio to achieve target reduction
 	config.DS201GateThreshold = calculateDS201GateThreshold(
 		measurements.NoiseFloor,
 		silencePeak,
 		silenceCrest,
+		config.DS201GateRatio,
 	)
-
-	// 2. Ratio: based on LRA (loudness range) - soft expander approach
-	config.DS201GateRatio = calculateDS201GateRatio(measurements.InputLRA)
 
 	// 3. Attack: based on MaxDifference, SpectralFlux, and SpectralCrest
 	// DS201-inspired: supports sub-millisecond attack for transient preservation
@@ -1143,12 +1186,13 @@ func tuneDS201Gate(config *FilterChainConfig, measurements *AudioMeasurements) {
 		measurements.SpectralCrest,
 	)
 
-	// 4. Release: based on flux, ZCR, and noise character
+	// 4. Release: based on flux, ZCR, and noise character (including entropy)
 	// Includes +50ms compensation for lack of Hold parameter
+	// Higher entropy = more broadband noise = faster release to cut noise quickly
 	config.DS201GateRelease = calculateDS201GateRelease(
 		measurements.SpectralFlux,
 		measurements.ZeroCrossingsRate,
-		tonalNoise,
+		silenceEntropy,
 	)
 
 	// 5. Range: based on silence entropy and noise floor
@@ -1167,38 +1211,44 @@ func tuneDS201Gate(config *FilterChainConfig, measurements *AudioMeasurements) {
 	config.DS201GateMakeup = 1.0
 }
 
-// calculateDS201GateThreshold determines the gate threshold based on noise characteristics.
-// When silence has high crest factor (transient spikes), use peak as reference.
-// Otherwise use noise floor. Add headroom based on noise severity.
-func calculateDS201GateThreshold(noiseFloorDB, silencePeakDB, silenceCrestDB float64) float64 {
-	var referenceDB float64
+// calculateDS201GateThreshold determines threshold ensuring sufficient gap above noise
+// for effective soft expansion. The gap is derived from the ratio (which comes from LRA)
+// to achieve a target reduction depth.
+//
+// Soft expander math: reduction = gap × (1 - 1/ratio)
+// Solving for gap: gap = targetReduction / (1 - 1/ratio)
+//
+// Examples for 12dB target reduction:
+//   - 1.5:1 ratio (wide LRA)   → gap = 12 / (1 - 1/1.5) = 36 dB
+//   - 2.0:1 ratio (moderate)   → gap = 12 / (1 - 1/2.0) = 24 dB
+//   - 2.5:1 ratio (narrow LRA) → gap = 12 / (1 - 1/2.5) = 20 dB
+//
+// This makes the gate more aggressive when dynamics are narrow (tighter ratio),
+// and more conservative when dynamics are wide (gentler ratio preserves expression).
+//
+// Approach:
+// 1. For high-crest noise (transients/bleed): threshold = silencePeak + small margin
+// 2. For stable noise: threshold = max(noiseFloor + derivedGap, targetThreshold)
+// 3. Clamp to [minThreshold, maxThreshold] to protect quiet speech
+func calculateDS201GateThreshold(noiseFloorDB, silencePeakDB, silenceCrestDB, ratio float64) float64 {
+	var thresholdDB float64
 
-	// Determine reference level based on crest factor
 	if silenceCrestDB > ds201GateCrestFactorThreshold && silencePeakDB != 0 {
-		// Noise has transients (e.g., bleed) - use peak as reference
-		referenceDB = silencePeakDB
+		// Noise has transients (e.g., bleed from other mics) - threshold must clear peaks
+		// Use peak + small margin to ensure gate opens cleanly
+		thresholdDB = silencePeakDB + 3.0
 	} else {
-		// Stable noise - use floor
-		referenceDB = noiseFloorDB
+		// Derive minimum gap from ratio to achieve target reduction
+		// gap = targetReduction / (1 - 1/ratio)
+		minGapDB := ds201GateTargetReductionDB / (1.0 - 1.0/ratio)
+		minGapThreshold := noiseFloorDB + minGapDB
+
+		// Use whichever is higher: the derived gap threshold or the target threshold
+		// This ensures clean recordings still get effective gating
+		thresholdDB = max(minGapThreshold, ds201GateTargetThresholdDB)
 	}
 
-	// Determine headroom based on reference level (higher = more noisy = more headroom)
-	var headroomDB float64
-	switch {
-	case referenceDB < -70:
-		// Very clean - tight threshold safe
-		headroomDB = ds201GateHeadroomClean
-	case referenceDB < -50:
-		// Moderate - standard headroom
-		headroomDB = ds201GateHeadroomModerate
-	default:
-		// Noisy - generous headroom to avoid cutting quiet speech
-		headroomDB = ds201GateHeadroomNoisy
-	}
-
-	thresholdDB := referenceDB + headroomDB
-
-	// Safety limits
+	// Safety limits - protect quiet speech while ensuring gate can still work
 	thresholdDB = clamp(thresholdDB, ds201GateThresholdMinDB, ds201GateThresholdMaxDB)
 
 	return dbToLinear(thresholdDB)
@@ -1253,8 +1303,17 @@ func calculateDS201GateAttack(maxDiff, spectralFlux, spectralCrest float64) floa
 
 // calculateDS201GateRelease determines release time based on content and noise character.
 // Compensates for lack of hold parameter by extending release (+50ms).
-// Tonal bleed needs slower release to hide the pumping artifact.
-func calculateDS201GateRelease(spectralFlux, zcr float64, tonalNoise bool) float64 {
+//
+// Entropy-based adaptation:
+//   - Very tonal noise (entropy < 0.1): slowest release - hide pumping on pure hum/bleed
+//   - Tonal noise (entropy < 0.15): slow release - some pumping hiding needed
+//   - Mixed noise (entropy < 0.2): moderate release
+//   - Broadband-ish (entropy >= 0.2): faster release - cut noise quickly without pumping risk
+//
+// This allows voices with more broadband room noise (like Martin's) to benefit from
+// tighter release that cuts noise faster when speech stops, while preserving the
+// slow release for tonal bleed/hum that would otherwise pump audibly.
+func calculateDS201GateRelease(spectralFlux, zcr, silenceEntropy float64) float64 {
 	var baseRelease float64
 
 	switch {
@@ -1271,9 +1330,24 @@ func calculateDS201GateRelease(spectralFlux, zcr float64, tonalNoise bool) float
 	// Compensate for lack of hold parameter
 	baseRelease += ds201GateReleaseHoldComp
 
-	// Tonal bleed needs slower release to hide pumping
-	if tonalNoise {
+	// Entropy-based release adjustment
+	// Very tonal noise needs slowest release to hide pumping artifacts
+	// Higher entropy (broadband-ish) allows faster release to cut noise quickly
+	switch {
+	case silenceEntropy < ds201GateReleaseEntropyVeryTonal:
+		// Pure tonal (hum, bleed) - maximum release time
 		baseRelease += ds201GateReleaseTonalComp
+	case silenceEntropy < ds201GateReleaseEntropyTonal:
+		// Tonal noise - slow release, reduced compensation
+		baseRelease += ds201GateReleaseTonalComp * 0.7
+	case silenceEntropy < ds201GateReleaseEntropyMixed:
+		// Mixed character - moderate release, slight reduction
+		// Don't add tonal comp, and reduce base slightly to cut noise faster
+		baseRelease -= ds201GateReleaseEntropyReduce * 0.3
+	default:
+		// Broadband-ish noise - faster release to cut noise quickly
+		// No tonal compensation, and reduce base release
+		baseRelease -= ds201GateReleaseEntropyReduce
 	}
 
 	return clamp(baseRelease, float64(ds201GateReleaseMin), float64(ds201GateReleaseMax))

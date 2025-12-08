@@ -809,11 +809,17 @@ func TestTuneDS201Gate(t *testing.T) {
 	// based on measurements including NoiseProfile (silence sample analysis).
 	//
 	// Key constants from adaptive.go:
-	// gateThresholdMinDB = -70.0 dB (professional studio floor)
+	// gateThresholdMinDB = -50.0 dB (quiet speech floor)
 	// gateThresholdMaxDB = -25.0 dB (never gate above this - would cut speech)
 	// gateCrestFactorThreshold = 20.0 dB (when to use peak vs floor)
-	// gateHeadroomClean = 3.0 dB, gateHeadroomModerate = 6.0 dB, gateHeadroomNoisy = 10.0 dB
+	// gateTargetReductionDB = 12.0 dB (target noise reduction)
+	// gateTargetThresholdDB = -40.0 dB (target for clean recordings)
 	// gateRatioGentle = 1.5, gateRatioMod = 2.0, gateRatioTight = 2.5
+	//
+	// Gap is derived from ratio: gap = targetReduction / (1 - 1/ratio)
+	// - ratio 1.5 → gap = 12 / 0.333 = 36 dB
+	// - ratio 2.0 → gap = 12 / 0.5 = 24 dB
+	// - ratio 2.5 → gap = 12 / 0.6 = 20 dB
 
 	t.Run("threshold calculation", func(t *testing.T) {
 		tests := []struct {
@@ -821,43 +827,48 @@ func TestTuneDS201Gate(t *testing.T) {
 			noiseFloor      float64 // dB
 			silencePeak     float64 // dB
 			silenceCrest    float64 // dB - determines if we use peak or floor
+			inputLRA        float64 // LU - determines ratio, which determines gap
 			wantThresholdDB float64 // expected threshold dB
 			tolerance       float64 // tolerance in dB
 			desc            string
 		}{
 			{
-				name:            "clean studio - uses floor + 3dB headroom",
+				name:            "clean studio - uses target threshold",
 				noiseFloor:      -75.0,
 				silencePeak:     -70.0,
-				silenceCrest:    10.0,  // Low crest = stable noise, use floor
-				wantThresholdDB: -70.0, // Clamped to min (-70)
+				silenceCrest:    10.0, // Low crest = stable noise, use floor
+				inputLRA:        8.0,  // Narrow LRA → ratio 2.5 → gap 20dB → -75+20=-55, but target -40 is higher
+				wantThresholdDB: -40.0,
 				tolerance:       1.0,
-				desc:            "very clean, clamped to min",
+				desc:            "very clean, uses target threshold -40dB",
 			},
 			{
-				name:            "typical podcast - uses floor + 6dB headroom",
+				name:            "typical podcast - derived gap with moderate ratio",
 				noiseFloor:      -55.0,
 				silencePeak:     -50.0,
-				silenceCrest:    10.0,  // Low crest = stable noise
-				wantThresholdDB: -49.0, // -55 + 6dB headroom (moderate: ref < -50)
+				silenceCrest:    10.0, // Low crest = stable noise
+				inputLRA:        12.0, // Moderate LRA → ratio 2.0 → gap 24dB → -55+24=-31
+				wantThresholdDB: -31.0,
 				tolerance:       1.0,
-				desc:            "moderate noise floor",
+				desc:            "moderate noise floor with derived gap",
 			},
 			{
-				name:            "noisy room - uses floor + 10dB headroom",
+				name:            "noisy room - derived gap",
 				noiseFloor:      -42.0,
 				silencePeak:     -38.0,
 				silenceCrest:    10.0,
-				wantThresholdDB: -32.0, // -42 + 10dB headroom (noisy: ref >= -50)
+				inputLRA:        8.0, // Narrow LRA → ratio 2.5 → gap 20dB → -42+20=-22, clamped to -25
+				wantThresholdDB: -25.0,
 				tolerance:       1.0,
-				desc:            "noisy floor needs generous headroom",
+				desc:            "noisy floor, threshold clamped to max",
 			},
 			{
-				name:            "bleed with high crest - uses peak + headroom",
+				name:            "bleed with high crest - uses peak + margin",
 				noiseFloor:      -55.0,
 				silencePeak:     -48.0, // Transient spikes
 				silenceCrest:    25.0,  // High crest = transient bleed
-				wantThresholdDB: -38.0, // -48 (peak) + 10dB headroom (peak >= -50)
+				inputLRA:        12.0,
+				wantThresholdDB: -45.0, // -48 (peak) + 3dB margin
 				tolerance:       1.0,
 				desc:            "high crest factor triggers peak reference",
 			},
@@ -866,6 +877,7 @@ func TestTuneDS201Gate(t *testing.T) {
 				noiseFloor:      -20.0,
 				silencePeak:     -15.0,
 				silenceCrest:    25.0,
+				inputLRA:        8.0,
 				wantThresholdDB: -25.0, // Clamped to max
 				tolerance:       0.5,
 				desc:            "threshold capped to avoid cutting speech",
@@ -877,6 +889,7 @@ func TestTuneDS201Gate(t *testing.T) {
 				config := newTestConfig()
 				measurements := &AudioMeasurements{
 					NoiseFloor: tt.noiseFloor,
+					InputLRA:   tt.inputLRA,
 					NoiseProfile: &NoiseProfile{
 						PeakLevel:   tt.silencePeak,
 						CrestFactor: tt.silenceCrest,
@@ -1072,6 +1085,89 @@ func TestTuneDS201Gate(t *testing.T) {
 		// Detection should default to RMS when no profile
 		if config.DS201GateDetection != "rms" {
 			t.Errorf("DS201GateDetection = %q, want 'rms' (default for missing profile)", config.DS201GateDetection)
+		}
+	})
+
+	t.Run("release based on noise entropy", func(t *testing.T) {
+		// Release times adapt based on silence entropy:
+		// - Very tonal (< 0.1): slowest release (hide pumping on pure hum)
+		// - Tonal (< 0.15): slow release (some pumping hiding)
+		// - Mixed (< 0.2): moderate release
+		// - Broadband-ish (>= 0.2): faster release (cut noise quickly)
+		//
+		// Base constants:
+		// ds201GateReleaseMod = 300ms (base for typical content)
+		// ds201GateReleaseHoldComp = 50ms (compensate for no hold param)
+		// ds201GateReleaseTonalComp = 75ms (extra for tonal)
+		// ds201GateReleaseEntropyReduce = 100ms (reduction for broadband)
+
+		// Current thresholds:
+		// - veryTonal: < 0.10
+		// - tonal: < 0.12
+		// - mixed: < 0.16
+		// - broadband: >= 0.16
+		//
+		// Base release values (lowered for tighter noise control):
+		// - ds201GateReleaseMod = 250ms (was 300ms)
+		// - ds201GateReleaseSustained = 300ms (was 400ms)
+		// - ds201GateReleaseDynamic = 180ms (was 200ms)
+		tests := []struct {
+			name           string
+			entropy        float64
+			wantReleaseMin float64 // minimum expected release (ms)
+			wantReleaseMax float64 // maximum expected release (ms)
+			desc           string
+		}{
+			{
+				name:           "very tonal noise (pure hum)",
+				entropy:        0.08, // < 0.10 → very tonal
+				wantReleaseMin: 350,  // base 250 + hold 50 + full tonal 75 = 375ms
+				wantReleaseMax: 420,
+				desc:           "very tonal needs slowest release to hide pumping",
+			},
+			{
+				name:           "tonal noise (hum/bleed)",
+				entropy:        0.11, // >= 0.10 && < 0.12 → tonal (70% compensation)
+				wantReleaseMin: 320,  // base 250 + hold 50 + 70% tonal ~52 = 352ms
+				wantReleaseMax: 400,
+				desc:           "tonal needs slow release for pumping hiding",
+			},
+			{
+				name:           "mixed noise character",
+				entropy:        0.14, // >= 0.12 && < 0.16 → mixed (30% reduction)
+				wantReleaseMin: 240,  // base 250 + hold 50 - 30% reduce ~30 = 270ms
+				wantReleaseMax: 320,
+				desc:           "mixed needs moderate release to cut noise faster",
+			},
+			{
+				name:           "broadband-ish noise",
+				entropy:        0.20, // >= 0.16 → broadband (full reduction)
+				wantReleaseMin: 150,  // base 250 + hold 50 - reduce 100 = 200ms
+				wantReleaseMax: 250,
+				desc:           "broadband needs faster release to cut noise",
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				config := newTestConfig()
+				measurements := &AudioMeasurements{
+					NoiseFloor:   -55.0,
+					SpectralFlux: 0.02, // Moderate flux (uses ds201GateReleaseMod)
+					NoiseProfile: &NoiseProfile{
+						PeakLevel:   -50.0,
+						CrestFactor: 15.0,
+						Entropy:     tt.entropy,
+					},
+				}
+
+				tuneDS201Gate(config, measurements)
+
+				if config.DS201GateRelease < tt.wantReleaseMin || config.DS201GateRelease > tt.wantReleaseMax {
+					t.Errorf("DS201GateRelease = %.1f ms, want %.1f-%.1f ms [%s]",
+						config.DS201GateRelease, tt.wantReleaseMin, tt.wantReleaseMax, tt.desc)
+				}
+			})
 		}
 	})
 }
@@ -2229,6 +2325,92 @@ func TestCalculateNoiseFloorSeverity(t *testing.T) {
 			if got < tt.wantMin || got > tt.wantMax {
 				t.Errorf("calculateNoiseFloorSeverity(%.1f) = %.2f, want %.2f-%.2f",
 					tt.noiseFloor, got, tt.wantMin, tt.wantMax)
+			}
+		})
+	}
+}
+
+func TestTuneDolbySR_WarmVoiceBoost(t *testing.T) {
+	// Tests for the warm voice NR boost feature
+	// Warm voices mask noise less in lower frequencies, allowing slightly more NR
+	// Criteria: low centroid (<4000 Hz) + high skewness (>1.5) + strong bass (decrease < -0.1)
+	// Constants:
+	// dolbySRWarmNRBoost   = 1.0 dB (extra NR for warm voices)
+	// dolbySRVeryWarmBoost = 0.5 dB (additional boost for very warm, skewness > 1.8)
+
+	tests := []struct {
+		name            string
+		centroid        float64
+		skewness        float64
+		decrease        float64
+		noiseFloor      float64
+		wantNRMin       float64
+		wantNRMax       float64
+		wantDescription string
+	}{
+		// Mark's bright voice - no boost expected
+		{
+			name:            "bright voice (Mark profile)",
+			centroid:        5785.0, // Above 4000 Hz
+			skewness:        1.13,   // Below 1.5
+			decrease:        -0.026, // Above -0.1
+			noiseFloor:      -75.7,
+			wantNRMin:       2.0,
+			wantNRMax:       4.5, // No warm boost
+			wantDescription: "bright voice, no boost",
+		},
+		// Martin's warm voice - full boost expected
+		{
+			name:            "warm voice (Martin profile)",
+			centroid:        3736.0,  // Below 4000 Hz
+			skewness:        1.946,   // Above 1.8 (very warm)
+			decrease:        -0.2378, // Below -0.1
+			noiseFloor:      -75.1,
+			wantNRMin:       4.5,
+			wantNRMax:       7.5, // Base ~2.4 + warm 1.0 + very warm 0.5 = ~4-5, max allows 7
+			wantDescription: "very warm voice, full boost (1.5 dB total)",
+		},
+		// Moderately warm voice - partial boost
+		{
+			name:            "moderately warm voice",
+			centroid:        3800.0, // Below 4000 Hz
+			skewness:        1.6,    // Above 1.5 but below 1.8
+			decrease:        -0.15,  // Below -0.1
+			noiseFloor:      -75.0,
+			wantNRMin:       3.5,
+			wantNRMax:       5.5, // Base ~2.4 + warm 1.0 = ~3.4, no very warm boost
+			wantDescription: "warm voice, +1.0 dB boost only",
+		},
+		// Dark centroid but not warm (low skewness) - no boost
+		{
+			name:            "dark but not warm voice",
+			centroid:        3500.0, // Below 4000 Hz
+			skewness:        1.2,    // Below 1.5
+			decrease:        -0.05,  // Above -0.1
+			noiseFloor:      -75.0,
+			wantNRMin:       2.0,
+			wantNRMax:       4.5, // No warm boost (skewness too low)
+			wantDescription: "dark but not warm, no boost",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := newTestConfig()
+			config.DolbySREnabled = true
+			measurements := &AudioMeasurements{
+				NoiseFloor:       tt.noiseFloor,
+				SpectralCentroid: tt.centroid,
+				SpectralSkewness: tt.skewness,
+				SpectralDecrease: tt.decrease,
+				SpectralFlatness: 0.5, // Neutral flatness
+			}
+
+			tuneDolbySR(config, measurements, 10.0) // Standard LUFS gap
+
+			if config.DolbySRNoiseReduction < tt.wantNRMin || config.DolbySRNoiseReduction > tt.wantNRMax {
+				t.Errorf("DolbySRNoiseReduction = %.1f dB, want %.1f-%.1f dB (%s)",
+					config.DolbySRNoiseReduction, tt.wantNRMin, tt.wantNRMax, tt.wantDescription)
 			}
 		})
 	}

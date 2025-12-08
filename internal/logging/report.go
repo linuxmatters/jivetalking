@@ -1119,10 +1119,18 @@ func formatDS201GateFilter(f *os.File, cfg *processor.FilterChainConfig, m *proc
 			rationale = append(rationale, fmt.Sprintf("LRA %.1f LU (%s)", m.InputLRA, lraType))
 		}
 
-		// Noise character for range/detection
+		// Noise character for range/detection and release
+		// Thresholds: very tonal < 0.10, tonal < 0.12, mixed < 0.16, broadband >= 0.16
 		if m.NoiseProfile != nil {
-			if m.NoiseProfile.Entropy < 0.3 {
-				rationale = append(rationale, "tonal noise detected")
+			entropy := m.NoiseProfile.Entropy
+			if entropy < 0.10 {
+				rationale = append(rationale, fmt.Sprintf("very tonal (entropy %.2f, slow release)", entropy))
+			} else if entropy < 0.12 {
+				rationale = append(rationale, fmt.Sprintf("tonal (entropy %.2f)", entropy))
+			} else if entropy < 0.16 {
+				rationale = append(rationale, fmt.Sprintf("mixed (entropy %.2f, faster release)", entropy))
+			} else {
+				rationale = append(rationale, fmt.Sprintf("broadband-ish (entropy %.2f, fast release)", entropy))
 			}
 		}
 
