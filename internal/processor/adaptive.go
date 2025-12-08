@@ -350,10 +350,10 @@ const (
 
 	// afftdn limits (subtle but effective: DS201 gate handles silence, this polishes under speech)
 	// Slightly higher ceiling for noisy sources, but still conservative
-	dolbySRSingleNRMin = 2.0 // dB - barely perceptible (for clean sources)
-	dolbySRSingleNRMax = 6.0 // dB - moderate ceiling for noisy sources
-	dolbySRSingleGSMin = 10  // Higher minimum smoothing (hide gain changes)
-	dolbySRSingleGSMax = 20  // Much higher smoothing (very slow, transparent)
+	dolbySRNRMin = 2.0 // dB - barely perceptible (for clean sources)
+	dolbySRNRMax = 6.0 // dB - moderate ceiling for noisy sources
+	dolbySRGSMin = 10  // Higher minimum smoothing (hide gain changes)
+	dolbySRGSMax = 20  // Much higher smoothing (very slow, transparent)
 )
 
 // ContentType classifies audio content for adaptive filter tuning.
@@ -457,7 +457,7 @@ func AdaptConfig(config *FilterChainConfig, measurements *AudioMeasurements) {
 	// Order matters: gate threshold calculated BEFORE denoise filters
 	tuneDS201HighPass(config, measurements, lufsGap) // Composite: highpass + hum notch
 	tuneDS201LowPass(config, measurements)           // Ultrasonic rejection (adaptive)
-	tuneDolbySRSingle(config, measurements, lufsGap) // Dolby SR-inspired denoise (uses afftdn internally)
+	tuneDolbySR(config, measurements, lufsGap)       // Dolby SR-inspired denoise (uses afftdn internally)
 	tuneArnndn(config, measurements, lufsGap)        // RNN denoise (LUFS gap + noise floor based)
 	tuneDS201Gate(config, measurements)              // DS201-style soft expander gate
 	tuneDeesser(config, measurements)
@@ -760,47 +760,7 @@ func tuneDS201LowPassForSpeech(config *FilterChainConfig, m *AudioMeasurements) 
 	// No triggers fired — keep disabled
 }
 
-// selectAfftdnNoiseType chooses the optimal noise model based on spectral measurements.
-//
-// The afftdn filter's noise type (nt) parameter affects how it models the noise profile:
-//   - "w" (white): Flat spectrum - best for broadband hiss, HVAC, fan noise
-//   - "v" (vinyl): LF-weighted spectrum - best for rumble, hum, tonal LF noise
-//   - "s" (shellac): HF-weighted spectrum - best for tape hiss, preamp noise
-//
-// Selection criteria:
-//   - High spectral flatness + high entropy → broadband noise → white
-//   - Strong LF emphasis (low decrease, steep negative slope) → rumble/hum → vinyl
-//   - High centroid + rolloff → HF-dominant noise → shellac
-//   - Otherwise → white (safe default)
-func selectAfftdnNoiseType(m *AudioMeasurements) string {
-	// High flatness + high entropy = broadband hiss → white
-	// Flatness > 0.6 indicates relatively uniform spectral energy
-	// Entropy > 0.5 indicates random/noisy rather than tonal content
-	if m.SpectralFlatness > 0.6 && m.NoiseProfile != nil && m.NoiseProfile.Entropy > 0.5 {
-		return "w"
-	}
-
-	// Strong LF emphasis + steep negative slope = rumble + hum → vinyl
-	// SpectralDecrease < -0.1 indicates energy concentrated in lower frequencies
-	// SpectralSlope < -0.00003 indicates steep high-to-low frequency rolloff
-	// This pattern is typical of mains hum, HVAC rumble, and room resonance
-	if m.SpectralDecrease < -0.1 && m.SpectralSlope < -0.00003 {
-		return "v"
-	}
-
-	// High-frequency emphasis = tape hiss / preamp noise → shellac
-	// Centroid > 6000 Hz indicates brightness/HF energy
-	// Rolloff > 10000 Hz indicates significant content above 10kHz
-	// This pattern is typical of analog tape hiss or preamp self-noise
-	if m.SpectralCentroid > 6000 && m.SpectralRolloff > 10000 {
-		return "s"
-	}
-
-	// Safe default: white noise model
-	return "w"
-}
-
-// tuneDolbySRSingle adapts the Dolby SR-inspired denoise filter based on measurements.
+// tuneDolbySR adapts the Dolby SR-inspired denoise filter based on measurements.
 //
 // Strategy:
 //   - Conservative parameters (transparency over depth)
@@ -813,16 +773,20 @@ func selectAfftdnNoiseType(m *AudioMeasurements) string {
 //   - Noise character → gain smoothing (tonal needs more smoothing)
 //   - Tonal vs broadband → adaptivity speed
 
-func tuneDolbySRSingle(config *FilterChainConfig, measurements *AudioMeasurements, lufsGap float64) {
-	if !config.DolbySRSingleEnabled {
+func tuneDolbySR(config *FilterChainConfig, measurements *AudioMeasurements, lufsGap float64) {
+	if !config.DolbySREnabled {
 		return
 	}
 
 	// Set noise floor from measurements
-	config.DolbySRSingleNoiseFloor = measurements.NoiseFloor
+	config.DolbySRNoiseFloor = measurements.NoiseFloor
 
-	// Select noise type based on spectral characteristics
-	config.DolbySRSingleNoiseType = selectAfftdnNoiseType(measurements)
+	// Always use custom noise type to enable 15-band Bark-scale profile
+	// The bn parameter provides voice-protective multi-band processing
+	config.DolbySRNoiseType = "c"
+
+	// Tune the 15-band profile based on spectral characteristics
+	tuneDolbySRBandProfile(config, measurements)
 
 	// Determine noise floor severity for scaling parameters
 	noiseFloorSeverity := calculateNoiseFloorSeverity(measurements.NoiseFloor)
@@ -840,7 +804,7 @@ func tuneDolbySRSingle(config *FilterChainConfig, measurements *AudioMeasurement
 
 	// Base NR from noise floor severity (2-6dB range)
 	// Clean sources get minimal NR, noisy sources get more
-	baseNR := lerp(dolbySRSingleNRMin, dolbySRSingleNRMax, noiseFloorSeverity)
+	baseNR := lerp(dolbySRNRMin, dolbySRNRMax, noiseFloorSeverity)
 
 	// Add small NR boost for high LUFS gap (noise gets amplified by normalisation)
 	// Scale very conservatively (0.1x) to avoid over-processing
@@ -849,32 +813,32 @@ func tuneDolbySRSingle(config *FilterChainConfig, measurements *AudioMeasurement
 	}
 
 	// Clamp to hybrid-appropriate limits
-	config.DolbySRSingleNoiseReduction = clamp(baseNR, dolbySRSingleNRMin, dolbySRSingleNRMax)
+	config.DolbySRNoiseReduction = clamp(baseNR, dolbySRNRMin, dolbySRNRMax)
 
 	// Gain smoothing: always use high values to hide any gain changes completely
 	// Since we're only doing subtle NR, we can afford very slow response
 	if isTonalNoise {
-		config.DolbySRSingleGainSmooth = dolbySRSingleGSMax // 20: very smooth for tonal
+		config.DolbySRGainSmooth = dolbySRGSMax // 20: very smooth for tonal
 	} else if measurements.SpectralFlatness > 0.6 {
-		config.DolbySRSingleGainSmooth = dolbySRSingleGSMin + 4 // 14: still smooth for broadband
+		config.DolbySRGainSmooth = dolbySRGSMin + 4 // 14: still smooth for broadband
 	} else {
-		config.DolbySRSingleGainSmooth = (dolbySRSingleGSMin + dolbySRSingleGSMax) / 2 // 15: balanced
+		config.DolbySRGainSmooth = (dolbySRGSMin + dolbySRGSMax) / 2 // 15: balanced
 	}
 
 	// Adaptivity: always slow to prevent any audible gain changes
 	// Transparency is more important than tracking dynamics
 	if isTonalNoise {
-		config.DolbySRSingleAdaptivity = 0.3 // Very slow for tonal
+		config.DolbySRAdaptivity = 0.3 // Very slow for tonal
 	} else if measurements.SpectralFlatness > 0.6 {
-		config.DolbySRSingleAdaptivity = 0.5 // Still slow for broadband
+		config.DolbySRAdaptivity = 0.5 // Still slow for broadband
 	} else {
-		config.DolbySRSingleAdaptivity = 0.4 // Default: slow
+		config.DolbySRAdaptivity = 0.4 // Default: slow
 	}
 
 	// Residual floor: Least Treatment — always leave plenty of room noise
 	// Higher floor = more residual noise = no audible artefacts
 	// DS201 gate handles silence; this just needs to not make speech sound processed
-	config.DolbySRSingleResidualFloor = lerp(-32.0, -26.0, noiseFloorSeverity)
+	config.DolbySRResidualFloor = lerp(-32.0, -26.0, noiseFloorSeverity)
 }
 
 // calculateNoiseFloorSeverity returns a 0-1 value indicating noise severity.
@@ -888,6 +852,79 @@ func calculateNoiseFloorSeverity(noiseFloor float64) float64 {
 	}
 	// Linear interpolation between clean and noisy thresholds
 	return (noiseFloor - dolbySRFloorClean) / (dolbySRFloorNoisy - dolbySRFloorClean)
+}
+
+// tuneDolbySRBandProfile adapts the 15-band Bark-scale NR profile based on spectral measurements.
+// This implements voice-protective multi-band processing inspired by Dolby SR's multi-compander design.
+//
+// Band mapping (approximate at 48kHz, bm=1.25):
+//
+//	0: ~20-50Hz    sub-bass        | 8:  ~1350-2000Hz  upper F2
+//	1: ~50-100Hz   bass            | 9:  ~2000-2756Hz  consonant transitions
+//	2: ~100-172Hz  chest resonance | 10: ~2756-4000Hz  sibilance begins
+//	3: ~172-270Hz  low formants    | 11: ~4000-5500Hz  primary sibilance
+//	4: ~270-400Hz  male fundamentals | 12: ~5500-7500Hz  consonant detail
+//	5: ~400-600Hz  female fundamentals | 13: ~7500-10000Hz air/breath
+//	6: ~600-900Hz  F1-F2 transition  | 14: ~10000-16000Hz+ ultra-HF
+//	7: ~900-1350Hz core intelligibility
+//
+// Strategy:
+//   - Base profile protects voice bands 3-9 (172-2756Hz) with reduced NR
+//   - High spectral centroid (>2500Hz): reduce HF NR to preserve consonant detail
+//   - Low spectral centroid (<1500Hz): increase LF NR for bass-heavy sources
+//   - Noisy sources: increase voice band NR towards uniform (accept some voice coloration)
+func tuneDolbySRBandProfile(config *FilterChainConfig, measurements *AudioMeasurements) {
+	// Start with default voice-protective profile (copied from DefaultFilterConfig)
+	// Scale factors: 1.0 = full NR, lower = voice protection
+	bandScales := []float64{
+		1.0, // Band 0: sub-bass - full NR
+		1.0, // Band 1: bass - full NR
+		0.7, // Band 2: chest resonance - moderate protection
+		0.5, // Band 3: low formants - strong protection
+		0.4, // Band 4: male fundamentals - strongest protection
+		0.4, // Band 5: female fundamentals - strongest protection
+		0.5, // Band 6: F1-F2 transition - strong protection
+		0.5, // Band 7: core intelligibility - strong protection
+		0.6, // Band 8: upper F2 - moderate protection
+		0.7, // Band 9: consonant transitions - moderate protection
+		0.8, // Band 10: sibilance begins - light protection
+		0.9, // Band 11: primary sibilance - minimal protection
+		1.0, // Band 12: consonant detail - full NR
+		1.0, // Band 13: air/breath - full NR
+		1.0, // Band 14: ultra-HF - full NR
+	}
+
+	// Adapt based on spectral centroid (voice presence indicator)
+	if measurements.SpectralCentroid > 2500 {
+		// High centroid = lots of HF content (crisp consonants, sibilance)
+		// Reduce HF band NR to preserve consonant detail and air
+		for i := 10; i < 15; i++ {
+			bandScales[i] *= 0.7
+		}
+	}
+
+	if measurements.SpectralCentroid < 1500 {
+		// Low centroid = bass-heavy voice or room rumble
+		// Can safely increase LF band NR
+		bandScales[0] = min(bandScales[0]*1.2, 1.0)
+		bandScales[1] = min(bandScales[1]*1.2, 1.0)
+	}
+
+	// Noisy sources need more uniform NR (accept some voice coloration for noise reduction)
+	if measurements.NoiseFloor > dolbySRFloorNoisy {
+		for i := 2; i < 10; i++ {
+			bandScales[i] = min(bandScales[i]+0.2, 1.0)
+		}
+	}
+
+	// Very clean sources can use even more voice protection
+	if measurements.NoiseFloor < dolbySRFloorClean {
+		for i := 3; i < 9; i++ {
+			bandScales[i] *= 0.8 // Reduce voice band NR further
+		}
+	}
+
+	config.DolbySRBandProfile = bandScales
 }
 
 // tuneArnndn adapts RNN-based noise reduction based on measurements.

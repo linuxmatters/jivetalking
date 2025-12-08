@@ -26,7 +26,7 @@ func newTestConfig() *FilterChainConfig {
 		// Processing filters (all disabled by default)
 		DS201HPEnabled:       false,
 		AdeclickEnabled:      false,
-		DolbySRSingleEnabled: false,
+		DolbySREnabled:       false,
 		DS201GateEnabled:     false,
 		LA2AEnabled:          false,
 		DeessEnabled:         false,
@@ -938,7 +938,7 @@ func TestPass2FilterOrder(t *testing.T) {
 			FilterDownmix,
 			FilterDS201HighPass, // Composite: includes hum notch filters
 			FilterAdeclick,
-			FilterDolbySRSingle,
+			FilterDolbySR,
 			FilterArnndn,
 			FilterDS201Gate,
 			FilterLA2ACompressor,

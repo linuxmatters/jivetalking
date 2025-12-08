@@ -674,8 +674,8 @@ func formatFilter(f *os.File, filterID processor.FilterID, cfg *processor.Filter
 		formatDS201LowPassFilter(f, cfg, m, prefix)
 	case processor.FilterAdeclick:
 		formatAdeclickFilter(f, cfg, prefix)
-	case processor.FilterDolbySRSingle:
-		formatDolbySRSingleFilter(f, cfg, m, prefix)
+	case processor.FilterDolbySR:
+		formatDolbySRFilter(f, cfg, m, prefix)
 	case processor.FilterArnndn:
 		formatArnndnFilter(f, cfg, m, prefix)
 	case processor.FilterDS201Gate:
@@ -910,39 +910,64 @@ func formatAdeclickFilter(f *os.File, cfg *processor.FilterChainConfig, prefix s
 	fmt.Fprintf(f, "%sadeclick: %s method\n", prefix, method)
 }
 
-// formatDolbySRSingleFilter outputs Dolby SR-inspired denoise filter details
-// Uses afftdn with adaptive severity scaling;
-func formatDolbySRSingleFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
-	if !cfg.DolbySRSingleEnabled {
-		fmt.Fprintf(f, "%sDolby SR single: DISABLED\n", prefix)
+// formatDolbySRFilter outputs Dolby SR-inspired denoise filter details
+// Uses afftdn with 15-band Bark-scale voice-protective profile
+func formatDolbySRFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
+	if !cfg.DolbySREnabled {
+		fmt.Fprintf(f, "%sDolby SR: DISABLED\n", prefix)
 		return
 	}
 
 	// Show noise type with explanation
-	noiseType := cfg.DolbySRSingleNoiseType
+	noiseType := cfg.DolbySRNoiseType
 	if noiseType == "" {
-		noiseType = "w"
+		noiseType = "c"
 	}
 	noiseTypeDesc := map[string]string{
 		"w": "white (broadband)",
 		"v": "vinyl (LF-weighted)",
 		"s": "shellac (HF-weighted)",
+		"c": "custom (15-band profile)",
 	}[noiseType]
 	if noiseTypeDesc == "" {
 		noiseTypeDesc = noiseType
 	}
 
 	// Header: filter name and key parameters
-	fmt.Fprintf(f, "%sDolby SR single: afftdn %.1f dB (type %s)\n",
-		prefix, cfg.DolbySRSingleNoiseReduction, noiseTypeDesc)
+	fmt.Fprintf(f, "%sDolby SR: afftdn %.1f dB (type %s)\n",
+		prefix, cfg.DolbySRNoiseReduction, noiseTypeDesc)
 
 	// afftdn parameters
 	fmt.Fprintf(f, "        afftdn: nr=%.1f dB, gs=%d, rf=%.1f dB, ad=%.2f\n",
-		cfg.DolbySRSingleNoiseReduction, cfg.DolbySRSingleGainSmooth,
-		cfg.DolbySRSingleResidualFloor, cfg.DolbySRSingleAdaptivity)
+		cfg.DolbySRNoiseReduction, cfg.DolbySRGainSmooth,
+		cfg.DolbySRResidualFloor, cfg.DolbySRAdaptivity)
 
 	// Noise floor from measurements
-	fmt.Fprintf(f, "        Floor: %.1f dBFS (from Pass 1 measurements)\n", cfg.DolbySRSingleNoiseFloor)
+	fmt.Fprintf(f, "        Floor: %.1f dBFS (from Pass 1 measurements)\n", cfg.DolbySRNoiseFloor)
+
+	// Show 15-band profile if using custom noise type
+	if noiseType == "c" && len(cfg.DolbySRBandProfile) == 15 {
+		// Calculate per-band NR values for display
+		fmt.Fprintf(f, "        Band profile (15-band Bark scale, voice-protective):\n")
+		fmt.Fprintf(f, "          LF bands 0-2:  ")
+		for i := 0; i < 3; i++ {
+			bandNR := cfg.DolbySRNoiseReduction * cfg.DolbySRBandProfile[i]
+			fmt.Fprintf(f, "%.1f ", bandNR)
+		}
+		fmt.Fprintf(f, "dB (sub-bass to chest)\n")
+		fmt.Fprintf(f, "          Voice bands 3-9: ")
+		for i := 3; i < 10; i++ {
+			bandNR := cfg.DolbySRNoiseReduction * cfg.DolbySRBandProfile[i]
+			fmt.Fprintf(f, "%.1f ", bandNR)
+		}
+		fmt.Fprintf(f, "dB (formants, protected)\n")
+		fmt.Fprintf(f, "          HF bands 10-14: ")
+		for i := 10; i < 15; i++ {
+			bandNR := cfg.DolbySRNoiseReduction * cfg.DolbySRBandProfile[i]
+			fmt.Fprintf(f, "%.1f ", bandNR)
+		}
+		fmt.Fprintf(f, "dB (sibilance to air)\n")
+	}
 
 	// Show adaptive rationale
 	if m != nil {
@@ -969,24 +994,22 @@ func formatDolbySRSingleFilter(f *os.File, cfg *processor.FilterChainConfig, m *
 			}
 		}
 
-		// Noise type selection rationale
-		switch noiseType {
-		case "v":
-			fmt.Fprintf(f, "        Type rationale: vinyl mode — LF emphasis (decrease %.3f, slope %.2e)\n",
-				m.SpectralDecrease, m.SpectralSlope)
-		case "s":
-			fmt.Fprintf(f, "        Type rationale: shellac mode — HF emphasis (centroid %.0f Hz, rolloff %.0f Hz)\n",
-				m.SpectralCentroid, m.SpectralRolloff)
-		case "w":
-			if m.SpectralFlatness > 0.6 {
-				fmt.Fprintf(f, "        Type rationale: white mode — high flatness (%.3f)\n", m.SpectralFlatness)
-			} else {
-				fmt.Fprintf(f, "        Type rationale: white mode — default (no strong spectral bias)\n")
+		// Band profile adaptation rationale
+		if noiseType == "c" {
+			if m.SpectralCentroid > 2500 {
+				fmt.Fprintf(f, "        Profile adaptation: HF reduced (centroid %.0f Hz > 2500)\n", m.SpectralCentroid)
+			} else if m.SpectralCentroid < 1500 {
+				fmt.Fprintf(f, "        Profile adaptation: LF increased (centroid %.0f Hz < 1500)\n", m.SpectralCentroid)
+			}
+			if m.NoiseFloor > -55 {
+				fmt.Fprintf(f, "        Profile adaptation: voice bands increased (noisy source)\n")
+			} else if m.NoiseFloor < -80 {
+				fmt.Fprintf(f, "        Profile adaptation: voice bands reduced (very clean source)\n")
 			}
 		}
 
 		// SR philosophy note
-		fmt.Fprintf(f, "        SR philosophy: afftdn-only, Least Treatment (gate handles silence)\n")
+		fmt.Fprintf(f, "        SR philosophy: 15-band voice-protective, Least Treatment (gate handles silence)\n")
 	}
 }
 

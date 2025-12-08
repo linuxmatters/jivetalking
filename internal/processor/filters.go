@@ -36,7 +36,7 @@ const (
 
 	// Dolby SR-inspired noise reduction (Pass 2 only)
 	// Implements Dolby SR philosophy: Least Treatment, transparency over depth
-	FilterDolbySRSingle FilterID = "dolbysr_single"
+	FilterDolbySR FilterID = "dolbysr"
 
 	// Processing filters (Pass 2 only)
 	FilterAdeclick       FilterID = "adeclick"
@@ -64,7 +64,7 @@ var Pass1FilterOrder = []FilterID{
 // - DS201Hum: removes mains hum (50/60Hz + harmonics) before other filters
 // - DS201LowPass: removes ultrasonic content that could trigger false gates (adaptive)
 // - Adeclick: removes impulse noise before spectral processing (currently disabled)
-// - DolbySRSingle: single-stage denoising inspired by Dolby SR "Least Treatment" philosophy
+// - DolbySR: denoising inspired by Dolby SR "Least Treatment" philosophy
 // - Arnndn: AI-based denoising for complex/dynamic noise patterns
 // - DS201Gate: soft expander for inter-speech cleanup (after denoising lowers floor)
 // - LA2ACompressor: LA-2A style optical compression evens dynamics before normalisation
@@ -79,7 +79,7 @@ var Pass2FilterOrder = []FilterID{
 	FilterDS201HighPass,
 	FilterDS201LowPass,
 	FilterAdeclick,
-	FilterDolbySRSingle,
+	FilterDolbySR,
 	FilterArnndn,
 	FilterDS201Gate,
 	FilterLA2ACompressor,
@@ -204,16 +204,17 @@ type FilterChainConfig struct {
 	AdeclickEnabled bool   // Enable adeclick filter
 	AdeclickMethod  string // 'a' = overlap-add, 's' = overlap-save (default: 's')
 
-	// Dolby SR Single-Stage Denoise inspired by "Least Treatment" philosophy
+	// Dolby SR Denoise inspired by "Least Treatment" philosophy
 	// Uses afftdn internally for spectral noise floor reduction
 
-	DolbySRSingleEnabled        bool    // Enable Dolby SR single-stage filter
-	DolbySRSingleNoiseFloor     float64 // dB, from measurements (-80 to -20)
-	DolbySRSingleNoiseReduction float64 // dB, afftdn reduction amount (conservative: 6-10)
-	DolbySRSingleGainSmooth     int     // afftdn artifact prevention (3-14)
-	DolbySRSingleResidualFloor  float64 // dB, afftdn Least Treatment floor (-45 to -32)
-	DolbySRSingleAdaptivity     float64 // afftdn adaptivity (0-1, how fast gains adjust)
-	DolbySRSingleNoiseType      string  // afftdn noise type: "w" (white), "v" (vinyl), "s" (shellac)
+	DolbySREnabled        bool      // Enable Dolby SR filter
+	DolbySRNoiseFloor     float64   // dB, from measurements (-80 to -20)
+	DolbySRNoiseReduction float64   // dB, afftdn reduction amount (conservative: 6-10)
+	DolbySRGainSmooth     int       // afftdn artifact prevention (3-14)
+	DolbySRResidualFloor  float64   // dB, afftdn Least Treatment floor (-45 to -32)
+	DolbySRAdaptivity     float64   // afftdn adaptivity (0-1, how fast gains adjust)
+	DolbySRNoiseType      string    // afftdn noise type: "w" (white), "v" (vinyl), "s" (shellac), "c" (custom)
+	DolbySRBandProfile    []float64 // 15-band Bark-scale NR profile (voice-protective scales 0-1)
 
 	// DS201-Inspired Gate (agate) - Drawmer DS201 style soft expander
 	// Uses gentle ratio (2:1-4:1) rather than DS201's hard gate for natural speech transitions.
@@ -353,16 +354,35 @@ func DefaultFilterConfig() *FilterChainConfig {
 		AdeclickEnabled: false,
 		AdeclickMethod:  "s", // overlap-save (default for better quality)
 
-		// Dolby SR-Inspired Single-Stage Denoise
+		// Dolby SR-Inspired Denoise
 		// Implements SR philosophy: Least Treatment, artifact masking
 		// Uses afftdn internally for spectral processing
-		DolbySRSingleEnabled:        false,
-		DolbySRSingleNoiseFloor:     -50.0, // Placeholder, will be updated from measurements
-		DolbySRSingleNoiseReduction: 8.0,   // Conservative default (adaptive: 4-12dB)
-		DolbySRSingleGainSmooth:     8,     // Balanced default (adaptive: 3-14)
-		DolbySRSingleResidualFloor:  -38.0, // Least Treatment floor (adaptive: -42 to -34)
-		DolbySRSingleAdaptivity:     0.70,  // Default adaptivity (adaptive: 0.5-0.85)
-		DolbySRSingleNoiseType:      "w",   // White noise default, tuned adaptively
+		DolbySREnabled:        true,
+		DolbySRNoiseFloor:     -50.0, // Placeholder, will be updated from measurements
+		DolbySRNoiseReduction: 8.0,   // Conservative default (adaptive: 4-12dB)
+		DolbySRGainSmooth:     8,     // Balanced default (adaptive: 3-14)
+		DolbySRResidualFloor:  -38.0, // Least Treatment floor (adaptive: -42 to -34)
+		DolbySRAdaptivity:     0.70,  // Default adaptivity (adaptive: 0.5-0.85)
+		DolbySRNoiseType:      "c",   // Custom noise type enables bn band profile
+		// Voice-protective 15-band Bark-scale profile (bands 3-9 = 172-2756Hz protected)
+		// Scale factors: 1.0 = full NR, lower values = voice protection
+		DolbySRBandProfile: []float64{
+			1.0, // Band 0: ~20-50Hz sub-bass - full NR
+			1.0, // Band 1: ~50-100Hz bass - full NR
+			0.7, // Band 2: ~100-172Hz chest resonance - moderate protection
+			0.5, // Band 3: ~172-270Hz low formants (F1 lower) - strong protection
+			0.4, // Band 4: ~270-400Hz male fundamentals - strongest protection
+			0.4, // Band 5: ~400-600Hz female fundamentals, F1 - strongest protection
+			0.5, // Band 6: ~600-900Hz F1-F2 transition - strong protection
+			0.5, // Band 7: ~900-1350Hz core intelligibility (F2) - strong protection
+			0.6, // Band 8: ~1350-2000Hz upper F2, clarity - moderate protection
+			0.7, // Band 9: ~2000-2756Hz consonant transitions - moderate protection
+			0.8, // Band 10: ~2756-4000Hz sibilance begins - light protection
+			0.9, // Band 11: ~4000-5500Hz primary sibilance - minimal protection
+			1.0, // Band 12: ~5500-7500Hz consonant detail - full NR
+			1.0, // Band 13: ~7500-10000Hz air/breath - full NR
+			1.0, // Band 14: ~10000-16000Hz+ ultra-HF presence - full NR
+		},
 
 		// DS201-Inspired Gate - soft expander for natural speech transitions
 		// All parameters set adaptively based on Pass 1 measurements
@@ -713,45 +733,78 @@ func (cfg *FilterChainConfig) buildAdeclickFilter() string {
 	return fmt.Sprintf("adeclick=m=%s", cfg.AdeclickMethod)
 }
 
-// buildDolbySRSingleFilter builds the Dolby SR-inspired single-stage filter.
+// buildDolbySRFilter builds the Dolby SR-inspired filter.
 // Implements the Dolby SR noise reduction philosophy:
 // - Least Treatment: we never remove 100% of noise
 // - Artifact masking: different processing approaches mask each other's artifacts
 // - Transparency over depth: conservative parameters on each stage
-func (cfg *FilterChainConfig) buildDolbySRSingleFilter() string {
-	if !cfg.DolbySRSingleEnabled {
+func (cfg *FilterChainConfig) buildDolbySRFilter() string {
+	if !cfg.DolbySREnabled {
 		return ""
 	}
 
 	// Clamp noise floor to afftdn's valid range: -80 to -20 dB
-	noiseFloorClamped := cfg.DolbySRSingleNoiseFloor
+	noiseFloorClamped := cfg.DolbySRNoiseFloor
 	if noiseFloorClamped < -80.0 {
 		noiseFloorClamped = -80.0
 	} else if noiseFloorClamped > -20.0 {
 		noiseFloorClamped = -20.0
 	}
 
-	// Select noise type (default to white if not set)
-	noiseType := cfg.DolbySRSingleNoiseType
+	// Select noise type (default to custom for multi-band profile)
+	noiseType := cfg.DolbySRNoiseType
 	if noiseType == "" {
-		noiseType = "w"
+		noiseType = "c"
 	}
 
 	// Build afftdn component: spectral noise floor reduction
 	// tn=enabled for noise tracking (no sample required)
-	afftdnSpec := fmt.Sprintf(
-		"afftdn=nf=%.1f:nr=%.1f:tn=enabled:gs=%d:rf=%.1f:ad=%.2f:nt=%s",
-		noiseFloorClamped,
-		cfg.DolbySRSingleNoiseReduction,
-		cfg.DolbySRSingleGainSmooth,
-		cfg.DolbySRSingleResidualFloor,
-		cfg.DolbySRSingleAdaptivity,
-		noiseType,
-	)
+	var afftdnSpec string
+	if noiseType == "c" && len(cfg.DolbySRBandProfile) == 15 {
+		// Custom noise type with 15-band Bark-scale profile
+		// bn parameter provides per-band NR values for voice protection
+		bandProfile := cfg.buildDolbySRBandProfile()
+		afftdnSpec = fmt.Sprintf(
+			"afftdn=nf=%.1f:nr=%.1f:tn=enabled:gs=%d:rf=%.1f:ad=%.2f:nt=c:bn='%s'",
+			noiseFloorClamped,
+			cfg.DolbySRNoiseReduction,
+			cfg.DolbySRGainSmooth,
+			cfg.DolbySRResidualFloor,
+			cfg.DolbySRAdaptivity,
+			bandProfile,
+		)
+	} else {
+		// Standard noise type (w=white, v=vinyl, s=shellac)
+		afftdnSpec = fmt.Sprintf(
+			"afftdn=nf=%.1f:nr=%.1f:tn=enabled:gs=%d:rf=%.1f:ad=%.2f:nt=%s",
+			noiseFloorClamped,
+			cfg.DolbySRNoiseReduction,
+			cfg.DolbySRGainSmooth,
+			cfg.DolbySRResidualFloor,
+			cfg.DolbySRAdaptivity,
+			noiseType,
+		)
+	}
 
-	// The DS201 gate handles silence NR; DolbySRSingle just needs to polish
+	// The DS201 gate handles silence NR; DolbySR just needs to polish
 	// noise under speech without introducing new artefacts.
 	return afftdnSpec
+}
+
+// buildDolbySRBandProfile creates the 15-band noise profile string for afftdn bn parameter.
+// Higher values = more NR. Voice bands get lower values via DolbySRBandProfile scale factors.
+// The profile is Bark-scale based (psychoacoustic frequency bands).
+func (cfg *FilterChainConfig) buildDolbySRBandProfile() string {
+	baseNR := cfg.DolbySRNoiseReduction
+
+	var bands []string
+	for _, scale := range cfg.DolbySRBandProfile {
+		// Scale the base NR by the band's protection factor
+		bandNR := baseNR * scale
+		bands = append(bands, fmt.Sprintf("%.1f", bandNR))
+	}
+
+	return strings.Join(bands, " ")
 }
 
 // buildDS201GateFilter builds the DS201-inspired gate filter specification.
@@ -910,7 +963,7 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 		FilterDS201HighPass:  cfg.buildDS201HighpassFilter,
 		FilterDS201LowPass:   cfg.buildDS201LowPassFilter,
 		FilterAdeclick:       cfg.buildAdeclickFilter,
-		FilterDolbySRSingle:  cfg.buildDolbySRSingleFilter,
+		FilterDolbySR:        cfg.buildDolbySRFilter,
 		FilterDS201Gate:      cfg.buildDS201GateFilter,
 		FilterLA2ACompressor: cfg.buildLA2ACompressorFilter,
 		FilterDeesser:        cfg.buildDeesserFilter,

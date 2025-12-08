@@ -1934,16 +1934,16 @@ func TestTuneSpeechnorm(t *testing.T) {
 }
 
 // =============================================================================
-// Dolby SR-Inspired Single-Stage Hybrid Denoise Tests
+// Dolby SR-Inspired Denoise Tests
 // =============================================================================
 
-func TestTuneDolbySRSingle_NoiseFloorSeverity(t *testing.T) {
+func TestTuneDolbySR_NoiseFloorSeverity(t *testing.T) {
 	// Constants from adaptive.go for reference:
 	// dolbySRFloorClean    = -80.0 dBFS (below: minimal processing - studio quality)
 	// dolbySRFloorModerate = -65.0 dBFS (standard processing - home office)
 	// dolbySRFloorNoisy    = -55.0 dBFS (above: aggressive processing)
-	// dolbySRSingleNRMin   = 2.0 dB (barely perceptible)
-	// dolbySRSingleNRMax   = 6.0 dB (moderate ceiling for noisy sources)
+	// dolbySRNRMin         = 2.0 dB (barely perceptible)
+	// dolbySRNRMax         = 6.0 dB (moderate ceiling for noisy sources)
 
 	tests := []struct {
 		name              string
@@ -2014,26 +2014,26 @@ func TestTuneDolbySRSingle_NoiseFloorSeverity(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			config := newTestConfig()
-			config.DolbySRSingleEnabled = true
+			config.DolbySREnabled = true
 			measurements := &AudioMeasurements{
 				NoiseFloor:       tt.noiseFloor,
 				SpectralFlatness: 0.5, // Neutral flatness
 			}
 
-			tuneDolbySRSingle(config, measurements, tt.lufsGap)
+			tuneDolbySR(config, measurements, tt.lufsGap)
 
 			// Verify noise floor is set from measurements
-			if config.DolbySRSingleNoiseFloor != tt.noiseFloor {
-				t.Errorf("DolbySRSingleNoiseFloor = %.1f, want %.1f",
-					config.DolbySRSingleNoiseFloor, tt.noiseFloor)
+			if config.DolbySRNoiseFloor != tt.noiseFloor {
+				t.Errorf("DolbySRNoiseFloor = %.1f, want %.1f",
+					config.DolbySRNoiseFloor, tt.noiseFloor)
 			}
 		})
 	}
 }
 
-func TestTuneDolbySRSingle_NoiseCharacter(t *testing.T) {
+func TestTuneDolbySR_NoiseCharacter(t *testing.T) {
 	// Tests for tonal vs broadband noise character tuning
-	// Since DolbySR Single is now VERY subtle (gate does heavy lifting):
+	// Since DolbySR is now VERY subtle (gate does heavy lifting):
 	// - All cases use maximum softness (10)
 	// - All cases use slow adaptivity (0.3-0.5)
 	// - All cases use high gain smoothing (14-20)
@@ -2083,7 +2083,7 @@ func TestTuneDolbySRSingle_NoiseCharacter(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			config := newTestConfig()
-			config.DolbySRSingleEnabled = true
+			config.DolbySREnabled = true
 			measurements := &AudioMeasurements{
 				NoiseFloor:       -55.0, // Moderate noise (won't affect character tuning)
 				SpectralFlatness: tt.spectralFlatness,
@@ -2092,58 +2092,58 @@ func TestTuneDolbySRSingle_NoiseCharacter(t *testing.T) {
 				},
 			}
 
-			tuneDolbySRSingle(config, measurements, 10.0) // Standard LUFS gap
+			tuneDolbySR(config, measurements, 10.0) // Standard LUFS gap
 
 			// Verify adaptivity
-			if math.Abs(config.DolbySRSingleAdaptivity-tt.wantAdaptivity) > 0.01 {
-				t.Errorf("DolbySRSingleAdaptivity = %.2f, want %.2f (%s)",
-					config.DolbySRSingleAdaptivity, tt.wantAdaptivity, tt.wantDescription)
+			if math.Abs(config.DolbySRAdaptivity-tt.wantAdaptivity) > 0.01 {
+				t.Errorf("DolbySRAdaptivity = %.2f, want %.2f (%s)",
+					config.DolbySRAdaptivity, tt.wantAdaptivity, tt.wantDescription)
 			}
 
 			// Verify gain smoothing
-			if config.DolbySRSingleGainSmooth != tt.wantGainSmooth {
-				t.Errorf("DolbySRSingleGainSmooth = %d, want %d (%s)",
-					config.DolbySRSingleGainSmooth, tt.wantGainSmooth, tt.wantDescription)
+			if config.DolbySRGainSmooth != tt.wantGainSmooth {
+				t.Errorf("DolbySRGainSmooth = %d, want %d (%s)",
+					config.DolbySRGainSmooth, tt.wantGainSmooth, tt.wantDescription)
 			}
 		})
 	}
 }
 
-func TestTuneDolbySRSingle_Disabled(t *testing.T) {
+func TestTuneDolbySR_Disabled(t *testing.T) {
 	// Verify tuner doesn't modify config when filter is disabled
 	config := newTestConfig()
-	config.DolbySRSingleEnabled = false
+	config.DolbySREnabled = false
 
 	measurements := &AudioMeasurements{
 		NoiseFloor:       -50.0,
 		SpectralFlatness: 0.5,
 	}
 
-	tuneDolbySRSingle(config, measurements, 15.0)
+	tuneDolbySR(config, measurements, 15.0)
 
-	// Config should be unchanged (DolbySRSingle should remain disabled)
-	if config.DolbySRSingleEnabled {
-		t.Error("DolbySRSingleEnabled should remain false")
+	// Config should be unchanged (DolbySR should remain disabled)
+	if config.DolbySREnabled {
+		t.Error("DolbySREnabled should remain false")
 	}
 }
 
-func TestBuildDolbySRSingleFilter(t *testing.T) {
+func TestBuildDolbySRFilter(t *testing.T) {
 	// Verify the filter builder produces valid afftdn chain
 
 	config := newTestConfig()
-	config.DolbySRSingleEnabled = true
-	config.DolbySRSingleNoiseFloor = -55.0
-	config.DolbySRSingleNoiseReduction = 3.0  // Explicit NR setting
-	config.DolbySRSingleGainSmooth = 15       // High smoothing
-	config.DolbySRSingleResidualFloor = -30.0 // High floor (leave room noise)
-	config.DolbySRSingleAdaptivity = 0.40     // Slow
-	config.DolbySRSingleNoiseType = "w"
+	config.DolbySREnabled = true
+	config.DolbySRNoiseFloor = -55.0
+	config.DolbySRNoiseReduction = 3.0  // Explicit NR setting
+	config.DolbySRGainSmooth = 15       // High smoothing
+	config.DolbySRResidualFloor = -30.0 // High floor (leave room noise)
+	config.DolbySRAdaptivity = 0.40     // Slow
+	config.DolbySRNoiseType = "w"
 
-	filter := config.buildDolbySRSingleFilter()
+	filter := config.buildDolbySRFilter()
 
 	// Verify filter is not empty
 	if filter == "" {
-		t.Error("buildDolbySRSingleFilter returned empty string when enabled")
+		t.Error("buildDolbySRFilter returned empty string when enabled")
 	}
 
 	// Verify afftdn parameters are present
@@ -2164,14 +2164,14 @@ func TestBuildDolbySRSingleFilter(t *testing.T) {
 	}
 }
 
-func TestBuildDolbySRSingleFilter_Disabled(t *testing.T) {
+func TestBuildDolbySRFilter_Disabled(t *testing.T) {
 	config := newTestConfig()
-	config.DolbySRSingleEnabled = false
+	config.DolbySREnabled = false
 
-	filter := config.buildDolbySRSingleFilter()
+	filter := config.buildDolbySRFilter()
 
 	if filter != "" {
-		t.Errorf("buildDolbySRSingleFilter should return empty when disabled, got: %s", filter)
+		t.Errorf("buildDolbySRFilter should return empty when disabled, got: %s", filter)
 	}
 }
 
