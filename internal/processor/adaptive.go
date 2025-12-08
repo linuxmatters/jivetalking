@@ -105,7 +105,6 @@ const (
 	// Adaptive release based on noise entropy (higher entropy = more broadband = faster release)
 	// Tonal noise (low entropy) needs slow release to hide pumping artifacts
 	// Broadband/mixed noise (higher entropy) benefits from faster release to cut noise quickly
-	// Reference: Mark's entropy ~0.09 (very tonal), Martin's ~0.14 (mixed)
 	ds201GateReleaseEntropyVeryTonal = 0.10 // Below: very tonal (pure hum/bleed) - slowest
 	ds201GateReleaseEntropyTonal     = 0.12 // Below: tonal noise - slow release
 	ds201GateReleaseEntropyMixed     = 0.16 // Below: mixed character - moderate release
@@ -360,7 +359,6 @@ const (
 
 	// Noise floor severity thresholds for processing intensity
 	// Expanded range for better differentiation between clean/noisy sources
-	// Mark (-80 dBFS) should get minimal, Martin (-72 dBFS) should get moderate
 	dolbySRFloorClean    = -80.0 // dBFS - below: minimal processing (studio quality)
 	dolbySRFloorModerate = -65.0 // dBFS - standard processing (home office)
 	dolbySRFloorNoisy    = -55.0 // dBFS - above: aggressive processing (noisy environment)
@@ -591,14 +589,14 @@ func tuneDS201HighPass(config *FilterChainConfig, measurements *AudioMeasurement
 	//
 	// This removes subsonic rumble while preserving bass character.
 	if measurements.SpectralDecrease < spectralDecreaseVeryWarm {
-		// Very warm voice (e.g. Popey -0.095, Martin -0.238)
+		// Very warm voice
 		// Use minimal settings: 30Hz cutoff, gentle Q, 50% mix
 		config.DS201HPFreq = ds201HPVeryWarmFreq
 		config.DS201HPWidth = ds201HPVeryWarmWidth
 		config.DS201HPMix = ds201HPVeryWarmMix
 		config.DS201HPPoles = 1 // Gentle 6dB/oct slope
 	} else if measurements.SpectralSkewness > spectralSkewnessLFEmphasis {
-		// Significant LF emphasis (e.g. Mark: skewness 1.132)
+		// Significant LF emphasis
 		// Use warm settings: 40Hz cutoff, gentle Q, 70% mix
 		config.DS201HPFreq = ds201HPWarmFreq
 		config.DS201HPWidth = ds201HPWarmWidth
@@ -1323,7 +1321,7 @@ func calculateDS201GateAttack(maxDiff, spectralFlux, spectralCrest float64) floa
 //   - Mixed noise (entropy < 0.2): moderate release
 //   - Broadband-ish (entropy >= 0.2): faster release - cut noise quickly without pumping risk
 //
-// This allows voices with more broadband room noise (like Martin's) to benefit from
+// This allows voices with more broadband room noise to benefit from
 // tighter release that cuts noise faster when speech stops, while preserving the
 // slow release for tonal bleed/hum that would otherwise pump audibly.
 func calculateDS201GateRelease(spectralFlux, zcr, silenceEntropy float64) float64 {

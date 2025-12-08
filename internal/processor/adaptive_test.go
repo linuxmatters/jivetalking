@@ -150,7 +150,7 @@ func TestTuneDS201HighPass(t *testing.T) {
 
 		// Skewness-based protection (moderate decrease but LF emphasis)
 		{
-			name:             "Mark's voice profile - moderate decrease, high skewness - warm highpass",
+			name:             "moderate decrease, high skewness - warm highpass",
 			centroid:         5785,                           // bright centroid
 			spectralDecrease: -0.026,                         // moderate decrease (between -0.05 and 0)
 			spectralSkewness: 1.132,                          // LF emphasis (> 1.0)
@@ -2162,10 +2162,10 @@ func TestTuneDolbySR_NoiseFloorSeverity(t *testing.T) {
 			wantPercentMax:    18.0, // Extremely light
 			wantNRDescription: "barely perceptible for very clean source",
 		},
-		// Moderate noise (-65 to -72dB) → moderate processing (Martin's range)
+		// Moderate noise (-65 to -72dB) → moderate processing
 		{
 			name:              "moderate noise - moderate processing",
-			noiseFloor:        -72.0, // Martin's actual noise floor
+			noiseFloor:        -72.0,
 			lufsGap:           10.0,
 			wantNRMin:         2.5,
 			wantNRMax:         4.5,   // Some NR (severity ~0.32)
@@ -2390,8 +2390,8 @@ func TestCalculateNoiseFloorSeverity(t *testing.T) {
 			wantMax:    0.01,
 		},
 		{
-			name:       "martin noise floor",
-			noiseFloor: -72.0, // Martin's actual floor: severity = 8/25 = 0.32
+			name:       "test-sample noise floor",
+			noiseFloor: -72.0, // actual floor: severity = 8/25 = 0.32
 			wantMin:    0.30,
 			wantMax:    0.35,
 		},
@@ -2444,9 +2444,9 @@ func TestTuneDolbySR_WarmVoiceBoost(t *testing.T) {
 		wantNRMax       float64
 		wantDescription string
 	}{
-		// Mark's bright voice - no boost expected
+		// Bright voice - no boost expected
 		{
-			name:            "bright voice (Mark profile)",
+			name:            "bright voice",
 			centroid:        5785.0, // Above 4000 Hz
 			skewness:        1.13,   // Below 1.5
 			decrease:        -0.026, // Above -0.1
@@ -2455,9 +2455,9 @@ func TestTuneDolbySR_WarmVoiceBoost(t *testing.T) {
 			wantNRMax:       4.5, // No warm boost
 			wantDescription: "bright voice, no boost",
 		},
-		// Martin's warm voice - full boost expected
+		// Warm voice - full boost expected
 		{
-			name:            "warm voice (Martin profile)",
+			name:            "warm voice",
 			centroid:        3736.0,  // Below 4000 Hz
 			skewness:        1.946,   // Above 1.8 (very warm)
 			decrease:        -0.2378, // Below -0.1
