@@ -1154,6 +1154,7 @@ func TestTuneDS201Gate(t *testing.T) {
 				measurements := &AudioMeasurements{
 					NoiseFloor:   -55.0,
 					SpectralFlux: 0.02, // Moderate flux (uses ds201GateReleaseMod)
+					InputLRA:     15.0, // Above LRA threshold (10 LU) to avoid LRA-based extension
 					NoiseProfile: &NoiseProfile{
 						PeakLevel:   -50.0,
 						CrestFactor: 15.0,
@@ -1166,6 +1167,78 @@ func TestTuneDS201Gate(t *testing.T) {
 				if config.DS201GateRelease < tt.wantReleaseMin || config.DS201GateRelease > tt.wantReleaseMax {
 					t.Errorf("DS201GateRelease = %.1f ms, want %.1f-%.1f ms [%s]",
 						config.DS201GateRelease, tt.wantReleaseMin, tt.wantReleaseMax, tt.desc)
+				}
+			})
+		}
+	})
+
+	t.Run("release extension based on LRA", func(t *testing.T) {
+		// Tests for LRA-based release extension
+		// Low LRA audio has speech at similar levels, causing rapid gate
+		// open/close cycles that pump audibly. Longer release smooths this.
+		//
+		// Constants:
+		// ds201GateReleaseLRALow = 10.0 LU (below: extend release)
+		// ds201GateReleaseLRAVeryLow = 8.0 LU (below: maximum extension)
+		// ds201GateReleaseLRAExtension = 100ms (extension for low LRA)
+		// ds201GateReleaseLRAMaxExt = 150ms (max extension for very low LRA)
+
+		tests := []struct {
+			name           string
+			lra            float64
+			wantReleaseMin float64 // relative to base release
+			wantReleaseMax float64
+			desc           string
+		}{
+			{
+				name:           "wide LRA - no extension",
+				lra:            16.0, // Well above 10 LU threshold
+				wantReleaseMin: 250,  // Base release (no extension)
+				wantReleaseMax: 320,
+				desc:           "wide dynamics don't need release extension",
+			},
+			{
+				name:           "moderate LRA - no extension",
+				lra:            12.0, // Above 10 LU threshold
+				wantReleaseMin: 250,
+				wantReleaseMax: 320,
+				desc:           "moderate dynamics don't need release extension",
+			},
+			{
+				name:           "low LRA - partial extension",
+				lra:            9.0, // Between 8-10 LU, scaled extension
+				wantReleaseMin: 290, // Base ~300 + 50% of 100ms extension
+				wantReleaseMax: 380,
+				desc:           "low dynamics need release extension to hide pumping",
+			},
+			{
+				name:           "very low LRA - maximum extension",
+				lra:            7.0, // Below 8 LU, full 150ms extension
+				wantReleaseMin: 380, // Base ~300 + 150ms max extension
+				wantReleaseMax: 500,
+				desc:           "very low dynamics need maximum release extension",
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				config := newTestConfig()
+				measurements := &AudioMeasurements{
+					NoiseFloor:   -55.0,
+					SpectralFlux: 0.02, // Moderate flux
+					InputLRA:     tt.lra,
+					NoiseProfile: &NoiseProfile{
+						PeakLevel:   -50.0,
+						CrestFactor: 15.0,
+						Entropy:     0.14, // Mixed entropy (no tonal extension)
+					},
+				}
+
+				tuneDS201Gate(config, measurements)
+
+				if config.DS201GateRelease < tt.wantReleaseMin || config.DS201GateRelease > tt.wantReleaseMax {
+					t.Errorf("DS201GateRelease = %.1f ms (LRA=%.1f LU), want %.1f-%.1f ms [%s]",
+						config.DS201GateRelease, tt.lra, tt.wantReleaseMin, tt.wantReleaseMax, tt.desc)
 				}
 			})
 		}

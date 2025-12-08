@@ -393,7 +393,7 @@ func DefaultFilterConfig() *FilterChainConfig {
 		DS201GateRelease:   350,    // 350ms release (adaptive: based on flux/ZCR, +50ms hold compensation)
 		DS201GateRange:     0.0625, // -24dB reduction (adaptive: based on silence entropy)
 		DS201GateKnee:      3.0,    // Soft knee (adaptive: based on spectral crest)
-		DS201GateMakeup:    1.0,    // No makeup gain (normalization handles it)
+		DS201GateMakeup:    1.0,    // Adaptive makeup (LUFS-based)
 		DS201GateDetection: "rms",  // RMS detection (adaptive: rms for bleed, peak for clean)
 
 		// LA-2A Compressor - Teletronix LA-2A style optical compressor emulation

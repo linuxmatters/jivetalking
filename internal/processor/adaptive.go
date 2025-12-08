@@ -100,7 +100,7 @@ const (
 	ds201GateReleaseHoldComp  = 50   // ms - compensation for lack of hold parameter
 	ds201GateReleaseTonalComp = 75   // ms - extra for tonal bleed (hide pump)
 	ds201GateReleaseMin       = 150  // ms - minimum release
-	ds201GateReleaseMax       = 500  // ms - maximum release
+	ds201GateReleaseMax       = 600  // ms - maximum release (increased for low LRA)
 
 	// Adaptive release based on noise entropy (higher entropy = more broadband = faster release)
 	// Tonal noise (low entropy) needs slow release to hide pumping artifacts
@@ -110,6 +110,14 @@ const (
 	ds201GateReleaseEntropyMixed     = 0.16 // Below: mixed character - moderate release
 	// Above 0.16: broadband-ish noise - faster release OK
 	ds201GateReleaseEntropyReduce = 100 // ms - reduction for broadband-ish noise
+
+	// LRA-based release extension (low dynamic range = more pumping risk)
+	// When speech has narrow loudness range (<12 LU), gate opens/closes rapidly
+	// on similar-level segments, causing audible pumping. Longer release helps.
+	ds201GateReleaseLRALow       = 10.0 // LU - below: low dynamic range, extend release
+	ds201GateReleaseLRAVeryLow   = 8.0  // LU - below: very low LRA, maximum extension
+	ds201GateReleaseLRAExtension = 100  // ms - extension for low LRA audio
+	ds201GateReleaseLRAMaxExt    = 150  // ms - maximum extension for very low LRA
 
 	// Range: based on silence entropy and noise floor
 	// Tonal noise sounds worse when hard-gated - gentler range hides pumping
@@ -1192,13 +1200,15 @@ func tuneDS201Gate(config *FilterChainConfig, measurements *AudioMeasurements) {
 		measurements.SpectralCrest,
 	)
 
-	// 4. Release: based on flux, ZCR, and noise character (including entropy)
+	// 4. Release: based on flux, ZCR, noise character (entropy), and LRA
 	// Includes +50ms compensation for lack of Hold parameter
 	// Higher entropy = more broadband noise = faster release to cut noise quickly
+	// Low LRA = narrow dynamics = extend release to prevent pumping
 	config.DS201GateRelease = calculateDS201GateRelease(
 		measurements.SpectralFlux,
 		measurements.ZeroCrossingsRate,
 		silenceEntropy,
+		measurements.InputLRA,
 	)
 
 	// 5. Range: based on silence entropy and noise floor
@@ -1321,10 +1331,14 @@ func calculateDS201GateAttack(maxDiff, spectralFlux, spectralCrest float64) floa
 //   - Mixed noise (entropy < 0.2): moderate release
 //   - Broadband-ish (entropy >= 0.2): faster release - cut noise quickly without pumping risk
 //
+// LRA-based extension:
+//   - Low LRA (<10 LU): speech at similar levels, gate opens/closes rapidly → pumping
+//   - Very low LRA (<8 LU): maximum release extension to hide pumping
+//
 // This allows voices with more broadband room noise to benefit from
 // tighter release that cuts noise faster when speech stops, while preserving the
 // slow release for tonal bleed/hum that would otherwise pump audibly.
-func calculateDS201GateRelease(spectralFlux, zcr, silenceEntropy float64) float64 {
+func calculateDS201GateRelease(spectralFlux, zcr, silenceEntropy, lra float64) float64 {
 	var baseRelease float64
 
 	switch {
@@ -1359,6 +1373,21 @@ func calculateDS201GateRelease(spectralFlux, zcr, silenceEntropy float64) float6
 		// Broadband-ish noise - faster release to cut noise quickly
 		// No tonal compensation, and reduce base release
 		baseRelease -= ds201GateReleaseEntropyReduce
+	}
+
+	// LRA-based release extension
+	// Low dynamic range audio has speech at similar levels throughout, causing
+	// the gate to open/close rapidly on adjacent segments → audible pumping.
+	// Longer release smooths out these transitions.
+	switch {
+	case lra < ds201GateReleaseLRAVeryLow:
+		// Very low LRA (<8 LU) - maximum extension
+		baseRelease += ds201GateReleaseLRAMaxExt
+	case lra < ds201GateReleaseLRALow:
+		// Low LRA (<10 LU) - proportional extension
+		// Scale from full extension at 8 LU to zero at 10 LU
+		extensionScale := (ds201GateReleaseLRALow - lra) / (ds201GateReleaseLRALow - ds201GateReleaseLRAVeryLow)
+		baseRelease += ds201GateReleaseLRAExtension * extensionScale
 	}
 
 	return clamp(baseRelease, float64(ds201GateReleaseMin), float64(ds201GateReleaseMax))
