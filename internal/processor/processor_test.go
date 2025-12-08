@@ -23,7 +23,7 @@ func TestProcessAudio(t *testing.T) {
 	config.AnalysisEnabled = true
 	config.ResampleEnabled = true
 	config.DS201HPEnabled = true // Basic processing
-	config.LimiterEnabled = true  // Safety limiter
+	config.LimiterEnabled = true // Safety limiter
 
 	// Process the audio with a no-op progress callback
 	result, err := ProcessAudio(testFile, config, func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements) {
@@ -76,7 +76,6 @@ func TestFilterChainBuilder(t *testing.T) {
 		TargetOffset: 0.5,
 		NoiseFloor:   -60.0,
 	}
-	config.NoiseFloor = config.Measurements.NoiseFloor
 
 	// Enable additional filters for Pass 2 test
 	config.DS201HPEnabled = true

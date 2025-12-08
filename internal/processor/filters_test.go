@@ -26,7 +26,6 @@ func newTestConfig() *FilterChainConfig {
 		// Processing filters (all disabled by default)
 		DS201HPEnabled:       false,
 		AdeclickEnabled:      false,
-		AfftdnEnabled:        false,
 		DolbySRSingleEnabled: false,
 		DS201GateEnabled:     false,
 		LA2AEnabled:          false,
@@ -46,9 +45,6 @@ func newTestConfig() *FilterChainConfig {
 		DS201HumHarmonics:  4,
 		DS201HumWidth:      1.0,
 		AdeclickMethod:     "s",
-		NoiseFloor:         -50.0,
-		NoiseReduction:     12.0,
-		NoiseTrack:         true,
 		DS201GateThreshold: 0.01,
 		DS201GateRatio:     2.0,
 		DS201GateAttack:    20,
@@ -130,7 +126,6 @@ func TestBuildFilterSpec(t *testing.T) {
 		config := newTestConfig()
 		// Enable specific filters for this test
 		config.DS201HPEnabled = true
-		config.AfftdnEnabled = true
 		config.DS201GateEnabled = true
 		config.LA2AEnabled = true
 		config.DeessEnabled = true
@@ -147,7 +142,6 @@ func TestBuildFilterSpec(t *testing.T) {
 			name   string
 		}{
 			{"highpass=f=", "highpass"},
-			{"afftdn=nf=", "afftdn (noise reduction)"},
 			{"agate=threshold=", "agate"},
 			{"acompressor=threshold=", "acompressor"},
 			{"deesser=i=", "deesser"},
@@ -168,7 +162,6 @@ func TestBuildFilterSpec(t *testing.T) {
 		config := newTestConfig()
 		// Enable all filters to maximize coverage
 		config.DS201HPEnabled = true
-		config.AfftdnEnabled = true
 		config.DS201GateEnabled = true
 		config.LA2AEnabled = true
 		config.DeessEnabled = true
@@ -187,7 +180,6 @@ func TestBuildFilterSpec(t *testing.T) {
 		config := newTestConfig()
 		// Enable all filters to maximize coverage
 		config.DS201HPEnabled = true
-		config.AfftdnEnabled = true
 		config.DS201GateEnabled = true
 		config.LA2AEnabled = true
 		config.DeessEnabled = true
@@ -326,86 +318,6 @@ func TestBuildDS201HighpassFilter(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestBuildAfftdnFilter(t *testing.T) {
-	tests := []struct {
-		name           string
-		enabled        bool
-		noiseFloor     float64
-		noiseReduction float64
-		wantIn         []string
-	}{
-		{
-			name:           "light noise reduction",
-			enabled:        true,
-			noiseFloor:     -50.0,
-			noiseReduction: 12.0,
-			wantIn:         []string{"afftdn=nf=-50.0", "nr=12.0"},
-		},
-		{
-			name:           "moderate noise reduction",
-			enabled:        true,
-			noiseFloor:     -45.0,
-			noiseReduction: 24.0,
-			wantIn:         []string{"afftdn=nf=-45.0", "nr=24.0"},
-		},
-		{
-			name:           "aggressive noise reduction",
-			enabled:        true,
-			noiseFloor:     -40.0,
-			noiseReduction: 35.0,
-			wantIn:         []string{"afftdn=nf=-40.0", "nr=35.0"},
-		},
-		{
-			name:           "noise floor clamped to min (-80)",
-			enabled:        true,
-			noiseFloor:     -100.0, // below -80 limit
-			noiseReduction: 12.0,
-			wantIn:         []string{"afftdn=nf=-80.0"}, // clamped
-		},
-		{
-			name:           "noise floor clamped to max (-20)",
-			enabled:        true,
-			noiseFloor:     -10.0, // above -20 limit
-			noiseReduction: 12.0,
-			wantIn:         []string{"afftdn=nf=-20.0"}, // clamped
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			config := newTestConfig()
-			config.AfftdnEnabled = tt.enabled
-			config.NoiseFloor = tt.noiseFloor
-			config.NoiseReduction = tt.noiseReduction
-
-			spec := config.buildAfftdnFilter()
-
-			if !tt.enabled {
-				if spec != "" {
-					t.Errorf("buildAfftdnFilter() = %q, want empty", spec)
-				}
-				return
-			}
-
-			for _, want := range tt.wantIn {
-				if !strings.Contains(spec, want) {
-					t.Errorf("buildAfftdnFilter() = %q, want to contain %q", spec, want)
-				}
-			}
-		})
-	}
-
-	t.Run("disabled returns empty", func(t *testing.T) {
-		config := newTestConfig()
-		config.AfftdnEnabled = false
-
-		spec := config.buildAfftdnFilter()
-		if spec != "" {
-			t.Errorf("buildAfftdnFilter() = %q, want empty when disabled", spec)
-		}
-	})
 }
 
 func TestBuildDS201GateFilter(t *testing.T) {
@@ -727,7 +639,7 @@ func TestFilterOrderRespected(t *testing.T) {
 	config := newTestConfig()
 	// Enable filters that appear at start and end
 	config.DS201HPEnabled = true
-	config.AfftdnEnabled = true
+	config.DS201GateEnabled = true
 	config.LimiterEnabled = true
 	config.DeessEnabled = true
 	config.DeessIntensity = 0.5
@@ -738,16 +650,16 @@ func TestFilterOrderRespected(t *testing.T) {
 
 	// Find positions of key filters
 	highpassPos := strings.Index(spec, "highpass=")
-	afftdnPos := strings.Index(spec, "afftdn=")
+	gatePos := strings.Index(spec, "agate=")
 	limiterPos := strings.Index(spec, "alimiter=")
 	aformatPos := strings.Index(spec, "aformat=sample_rates=")
 
-	// Verify order: highpass < afftdn < limiter < aformat
-	if highpassPos >= afftdnPos {
-		t.Errorf("highpass (pos %d) should come before afftdn (pos %d)", highpassPos, afftdnPos)
+	// Verify order: highpass < gate < limiter < aformat
+	if highpassPos >= gatePos {
+		t.Errorf("highpass (pos %d) should come before agate (pos %d)", highpassPos, gatePos)
 	}
-	if afftdnPos >= limiterPos {
-		t.Errorf("afftdn (pos %d) should come before alimiter (pos %d)", afftdnPos, limiterPos)
+	if gatePos >= limiterPos {
+		t.Errorf("agate (pos %d) should come before alimiter (pos %d)", gatePos, limiterPos)
 	}
 	if limiterPos >= aformatPos {
 		t.Errorf("alimiter (pos %d) should come before aformat (pos %d)", limiterPos, aformatPos)
@@ -1026,7 +938,7 @@ func TestPass2FilterOrder(t *testing.T) {
 			FilterDownmix,
 			FilterDS201HighPass, // Composite: includes hum notch filters
 			FilterAdeclick,
-			FilterAfftdn,
+			FilterDolbySRSingle,
 			FilterArnndn,
 			FilterDS201Gate,
 			FilterLA2ACompressor,

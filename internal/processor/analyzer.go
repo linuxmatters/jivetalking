@@ -371,10 +371,6 @@ type AudioMeasurements struct {
 	// Derived suggestions for Pass 2 adaptive processing
 	SuggestedGateThreshold float64 `json:"suggested_gate_threshold"` // Suggested gate threshold (linear amplitude)
 	NoiseReductionHeadroom float64 `json:"noise_reduction_headroom"` // dB gap between noise and quiet speech
-
-	// Pass 2 noise profile processing stats (populated during processing)
-	NoiseProfileFramesFed int `json:"noise_profile_frames_fed,omitempty"` // Number of noise frames fed for spectral learning
-	MainFramesProcessed   int `json:"main_frames_processed,omitempty"`    // Number of main audio frames processed
 }
 
 // SilenceAnalysis contains measurements from a silence region.

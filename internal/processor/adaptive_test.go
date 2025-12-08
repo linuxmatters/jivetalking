@@ -5,111 +5,6 @@ import (
 	"testing"
 )
 
-func TestTuneNoiseReduction(t *testing.T) {
-	// Constants from adaptive.go for reference:
-	// noiseReductionBase = 12.0 dB
-	// noiseReductionMin  = 6.0 dB
-	// noiseReductionMax  = 40.0 dB
-
-	tests := []struct {
-		name          string
-		inputI        float64 // measured input LUFS
-		targetI       float64 // target LUFS (typically -16)
-		wantReduction float64 // expected noise reduction in dB
-	}{
-		// Normal scaling: base (12) + LUFS gap
-		{
-			name:          "near target - minimal boost",
-			inputI:        -18,
-			targetI:       -16,
-			wantReduction: 14, // 12 + 2
-		},
-		{
-			name:          "moderate gap",
-			inputI:        -26,
-			targetI:       -16,
-			wantReduction: 22, // 12 + 10
-		},
-		{
-			name:          "typical podcast gap",
-			inputI:        -30,
-			targetI:       -16,
-			wantReduction: 26, // 12 + 14
-		},
-
-		// Clamping behaviour
-		{
-			name:          "very quiet source - clamped to max",
-			inputI:        -46,
-			targetI:       -16,
-			wantReduction: 40, // 12 + 30 = 42, clamped to noiseReductionMax (40)
-		},
-		{
-			name:          "extremely quiet source - clamped to max",
-			inputI:        -60,
-			targetI:       -16,
-			wantReduction: 40, // 12 + 44 = 56, clamped to 40
-		},
-		{
-			name:          "loud source - negative gap uses base only",
-			inputI:        -12,
-			targetI:       -16,
-			wantReduction: 8, // 12 + (-4) = 8, above min
-		},
-		{
-			name:          "very loud source - clamped to min",
-			inputI:        -6,
-			targetI:       -16,
-			wantReduction: 6, // 12 + (-10) = 2, clamped to noiseReductionMin (6)
-		},
-
-		// Edge cases
-		{
-			name:          "no LUFS measurement - fallback to base",
-			inputI:        0, // triggers fallback
-			targetI:       -16,
-			wantReduction: 12, // noiseReductionBase
-		},
-		{
-			name:          "exact target - base only",
-			inputI:        -16,
-			targetI:       -16,
-			wantReduction: 12, // 12 + 0
-		},
-
-		// Boundary: exactly at max before clamping
-		{
-			name:          "boundary: exactly 28dB gap",
-			inputI:        -44,
-			targetI:       -16,
-			wantReduction: 40, // 12 + 28 = 40, exactly at max
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Setup
-			config := newTestConfig()
-			config.TargetI = tt.targetI
-			measurements := &AudioMeasurements{
-				InputI: tt.inputI,
-			}
-
-			// Calculate LUFS gap as done in AdaptConfig
-			lufsGap := calculateLUFSGap(tt.targetI, tt.inputI)
-
-			// Execute
-			tuneNoiseReduction(config, measurements, lufsGap)
-
-			// Verify
-			if config.NoiseReduction != tt.wantReduction {
-				t.Errorf("NoiseReduction = %.1f dB, want %.1f dB (inputI=%.1f, targetI=%.1f, gap=%.1f)",
-					config.NoiseReduction, tt.wantReduction, tt.inputI, tt.targetI, lufsGap)
-			}
-		})
-	}
-}
-
 func TestTuneDS201HighPass(t *testing.T) {
 	// Helper to create noise profile with given characteristics
 	makeNoiseProfile := func(noiseFloor, entropy float64) *NoiseProfile {
@@ -1292,7 +1187,6 @@ func TestSanitizeConfig(t *testing.T) {
 	// Uses defaults from adaptive.go:
 	// defaultHighpassFreq   = 80.0
 	// defaultDeessIntensity = 0.0
-	// defaultNoiseReduction = 12.0
 	// defaultLA2ARatio      = 2.5
 	// defaultLA2AThreshold  = -20.0
 	// defaultLA2AMakeup     = 3.0
@@ -1309,7 +1203,6 @@ func TestSanitizeConfig(t *testing.T) {
 			config: FilterChainConfig{
 				DS201HPFreq:        100.0,
 				DeessIntensity:     0.3,
-				NoiseReduction:     18.0,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
 				LA2AMakeup:         4.0,
@@ -1318,7 +1211,6 @@ func TestSanitizeConfig(t *testing.T) {
 			want: FilterChainConfig{
 				DS201HPFreq:        100.0,
 				DeessIntensity:     0.3,
-				NoiseReduction:     18.0,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
 				LA2AMakeup:         4.0,
@@ -1332,7 +1224,6 @@ func TestSanitizeConfig(t *testing.T) {
 			config: FilterChainConfig{
 				DS201HPFreq:        math.NaN(),
 				DeessIntensity:     0.3,
-				NoiseReduction:     18.0,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
 				LA2AMakeup:         4.0,
@@ -1341,7 +1232,6 @@ func TestSanitizeConfig(t *testing.T) {
 			want: FilterChainConfig{
 				DS201HPFreq:        80.0, // defaultHighpassFreq
 				DeessIntensity:     0.3,
-				NoiseReduction:     18.0,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
 				LA2AMakeup:         4.0,
@@ -1353,7 +1243,6 @@ func TestSanitizeConfig(t *testing.T) {
 			config: FilterChainConfig{
 				DS201HPFreq:        100.0,
 				DeessIntensity:     math.NaN(),
-				NoiseReduction:     18.0,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
 				LA2AMakeup:         4.0,
@@ -1362,7 +1251,6 @@ func TestSanitizeConfig(t *testing.T) {
 			want: FilterChainConfig{
 				DS201HPFreq:        100.0,
 				DeessIntensity:     0.0, // defaultDeessIntensity
-				NoiseReduction:     18.0,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
 				LA2AMakeup:         4.0,
@@ -1370,11 +1258,9 @@ func TestSanitizeConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "NaN NoiseReduction gets default",
 			config: FilterChainConfig{
 				DS201HPFreq:        100.0,
 				DeessIntensity:     0.3,
-				NoiseReduction:     math.NaN(),
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
 				LA2AMakeup:         4.0,
@@ -1383,7 +1269,6 @@ func TestSanitizeConfig(t *testing.T) {
 			want: FilterChainConfig{
 				DS201HPFreq:        100.0,
 				DeessIntensity:     0.3,
-				NoiseReduction:     12.0, // defaultNoiseReduction
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
 				LA2AMakeup:         4.0,
@@ -1395,7 +1280,6 @@ func TestSanitizeConfig(t *testing.T) {
 			config: FilterChainConfig{
 				DS201HPFreq:        100.0,
 				DeessIntensity:     0.3,
-				NoiseReduction:     18.0,
 				LA2ARatio:          math.NaN(),
 				LA2AThreshold:      -24.0,
 				LA2AMakeup:         4.0,
@@ -1404,7 +1288,6 @@ func TestSanitizeConfig(t *testing.T) {
 			want: FilterChainConfig{
 				DS201HPFreq:        100.0,
 				DeessIntensity:     0.3,
-				NoiseReduction:     18.0,
 				LA2ARatio:          3.0, // defaultLA2ARatio (LA-2A inspired)
 				LA2AThreshold:      -24.0,
 				LA2AMakeup:         4.0,
@@ -1416,7 +1299,6 @@ func TestSanitizeConfig(t *testing.T) {
 			config: FilterChainConfig{
 				DS201HPFreq:        100.0,
 				DeessIntensity:     0.3,
-				NoiseReduction:     18.0,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      math.NaN(),
 				LA2AMakeup:         4.0,
@@ -1425,7 +1307,6 @@ func TestSanitizeConfig(t *testing.T) {
 			want: FilterChainConfig{
 				DS201HPFreq:        100.0,
 				DeessIntensity:     0.3,
-				NoiseReduction:     18.0,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -18.0, // defaultLA2AThreshold (LA-2A inspired)
 				LA2AMakeup:         4.0,
@@ -1437,7 +1318,6 @@ func TestSanitizeConfig(t *testing.T) {
 			config: FilterChainConfig{
 				DS201HPFreq:        100.0,
 				DeessIntensity:     0.3,
-				NoiseReduction:     18.0,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
 				LA2AMakeup:         math.NaN(),
@@ -1446,7 +1326,6 @@ func TestSanitizeConfig(t *testing.T) {
 			want: FilterChainConfig{
 				DS201HPFreq:        100.0,
 				DeessIntensity:     0.3,
-				NoiseReduction:     18.0,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
 				LA2AMakeup:         2.0, // defaultLA2AMakeup (LA-2A inspired)
@@ -1458,7 +1337,6 @@ func TestSanitizeConfig(t *testing.T) {
 			config: FilterChainConfig{
 				DS201HPFreq:        100.0,
 				DeessIntensity:     0.3,
-				NoiseReduction:     18.0,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
 				LA2AMakeup:         4.0,
@@ -1467,7 +1345,6 @@ func TestSanitizeConfig(t *testing.T) {
 			want: FilterChainConfig{
 				DS201HPFreq:        100.0,
 				DeessIntensity:     0.3,
-				NoiseReduction:     18.0,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
 				LA2AMakeup:         4.0,
@@ -1481,7 +1358,6 @@ func TestSanitizeConfig(t *testing.T) {
 			config: FilterChainConfig{
 				DS201HPFreq:        math.Inf(1),
 				DeessIntensity:     math.Inf(1),
-				NoiseReduction:     math.Inf(1),
 				LA2ARatio:          math.Inf(1),
 				LA2AThreshold:      math.Inf(1),
 				LA2AMakeup:         math.Inf(1),
@@ -1490,7 +1366,6 @@ func TestSanitizeConfig(t *testing.T) {
 			want: FilterChainConfig{
 				DS201HPFreq:        80.0,
 				DeessIntensity:     0.0,
-				NoiseReduction:     12.0,
 				LA2ARatio:          3.0,   // LA-2A inspired
 				LA2AThreshold:      -18.0, // LA-2A inspired
 				LA2AMakeup:         2.0,   // LA-2A inspired
@@ -1502,7 +1377,6 @@ func TestSanitizeConfig(t *testing.T) {
 			config: FilterChainConfig{
 				DS201HPFreq:        math.Inf(-1),
 				DeessIntensity:     math.Inf(-1),
-				NoiseReduction:     math.Inf(-1),
 				LA2ARatio:          math.Inf(-1),
 				LA2AThreshold:      math.Inf(-1),
 				LA2AMakeup:         math.Inf(-1),
@@ -1511,7 +1385,6 @@ func TestSanitizeConfig(t *testing.T) {
 			want: FilterChainConfig{
 				DS201HPFreq:        80.0,
 				DeessIntensity:     0.0,
-				NoiseReduction:     12.0,
 				LA2ARatio:          3.0,   // LA-2A inspired
 				LA2AThreshold:      -18.0, // LA-2A inspired
 				LA2AMakeup:         2.0,   // LA-2A inspired
@@ -1526,7 +1399,6 @@ func TestSanitizeConfig(t *testing.T) {
 			config: FilterChainConfig{
 				DS201HPFreq:        100.0,
 				DeessIntensity:     0.0, // zero is valid for DeessIntensity
-				NoiseReduction:     18.0,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
 				LA2AMakeup:         4.0,
@@ -1535,7 +1407,6 @@ func TestSanitizeConfig(t *testing.T) {
 			want: FilterChainConfig{
 				DS201HPFreq:        100.0,
 				DeessIntensity:     0.0,
-				NoiseReduction:     18.0,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
 				LA2AMakeup:         4.0,
@@ -1547,7 +1418,6 @@ func TestSanitizeConfig(t *testing.T) {
 			config: FilterChainConfig{
 				DS201HPFreq:        100.0,
 				DeessIntensity:     0.3,
-				NoiseReduction:     18.0,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
 				LA2AMakeup:         4.0,
@@ -1556,7 +1426,6 @@ func TestSanitizeConfig(t *testing.T) {
 			want: FilterChainConfig{
 				DS201HPFreq:        100.0,
 				DeessIntensity:     0.3,
-				NoiseReduction:     18.0,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
 				LA2AMakeup:         4.0,
@@ -1571,7 +1440,6 @@ func TestSanitizeConfig(t *testing.T) {
 			config: FilterChainConfig{
 				DS201HPFreq:        0.0, // passes through (edge case: probably invalid, but sanitize doesn't clamp)
 				DeessIntensity:     0.0, // valid: de-essing disabled
-				NoiseReduction:     0.0, // passes through (edge case: no reduction)
 				LA2ARatio:          0.0, // passes through (edge case: probably invalid)
 				LA2AThreshold:      0.0, // passes through (0 dB threshold)
 				LA2AMakeup:         0.0, // passes through (0 dB makeup)
@@ -1580,7 +1448,6 @@ func TestSanitizeConfig(t *testing.T) {
 			want: FilterChainConfig{
 				DS201HPFreq:        0.0,
 				DeessIntensity:     0.0,
-				NoiseReduction:     0.0,
 				LA2ARatio:          0.0,
 				LA2AThreshold:      0.0,
 				LA2AMakeup:         0.0,
@@ -1594,7 +1461,6 @@ func TestSanitizeConfig(t *testing.T) {
 			config: FilterChainConfig{
 				DS201HPFreq:        100.0,
 				DeessIntensity:     0.3,
-				NoiseReduction:     18.0,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -40.0, // very aggressive threshold
 				LA2AMakeup:         4.0,
@@ -1603,7 +1469,6 @@ func TestSanitizeConfig(t *testing.T) {
 			want: FilterChainConfig{
 				DS201HPFreq:        100.0,
 				DeessIntensity:     0.3,
-				NoiseReduction:     18.0,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -40.0,
 				LA2AMakeup:         4.0,
@@ -1617,7 +1482,6 @@ func TestSanitizeConfig(t *testing.T) {
 			config: FilterChainConfig{
 				DS201HPFreq:        math.NaN(),
 				DeessIntensity:     math.NaN(),
-				NoiseReduction:     math.NaN(),
 				LA2ARatio:          math.NaN(),
 				LA2AThreshold:      math.NaN(),
 				LA2AMakeup:         math.NaN(),
@@ -1626,7 +1490,6 @@ func TestSanitizeConfig(t *testing.T) {
 			want: FilterChainConfig{
 				DS201HPFreq:        80.0,
 				DeessIntensity:     0.0,
-				NoiseReduction:     12.0,
 				LA2ARatio:          3.0,   // LA-2A inspired
 				LA2AThreshold:      -18.0, // LA-2A inspired
 				LA2AMakeup:         2.0,   // LA-2A inspired
@@ -1640,7 +1503,6 @@ func TestSanitizeConfig(t *testing.T) {
 			config: FilterChainConfig{
 				DS201HPFreq:        100.0,
 				DeessIntensity:     0.3,
-				NoiseReduction:     18.0,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
 				LA2AMakeup:         4.0,
@@ -1649,7 +1511,6 @@ func TestSanitizeConfig(t *testing.T) {
 			want: FilterChainConfig{
 				DS201HPFreq:        100.0,
 				DeessIntensity:     0.3,
-				NoiseReduction:     18.0,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
 				LA2AMakeup:         4.0,
@@ -1670,9 +1531,6 @@ func TestSanitizeConfig(t *testing.T) {
 			}
 			if config.DeessIntensity != tt.want.DeessIntensity {
 				t.Errorf("DeessIntensity = %v, want %v", config.DeessIntensity, tt.want.DeessIntensity)
-			}
-			if config.NoiseReduction != tt.want.NoiseReduction {
-				t.Errorf("NoiseReduction = %v, want %v", config.NoiseReduction, tt.want.NoiseReduction)
 			}
 			if config.LA2ARatio != tt.want.LA2ARatio {
 				t.Errorf("LA2ARatio = %v, want %v", config.LA2ARatio, tt.want.LA2ARatio)
@@ -2164,13 +2022,6 @@ func TestTuneDolbySRSingle_NoiseFloorSeverity(t *testing.T) {
 
 			tuneDolbySRSingle(config, measurements, tt.lufsGap)
 
-			// Verify NR is within expected range
-			if config.DolbySRSingleNoiseReduction < tt.wantNRMin ||
-				config.DolbySRSingleNoiseReduction > tt.wantNRMax {
-				t.Errorf("DolbySRSingleNoiseReduction = %.1f, want %.1f-%.1f (%s)",
-					config.DolbySRSingleNoiseReduction, tt.wantNRMin, tt.wantNRMax, tt.wantNRDescription)
-			}
-
 			// Verify noise floor is set from measurements
 			if config.DolbySRSingleNoiseFloor != tt.noiseFloor {
 				t.Errorf("DolbySRSingleNoiseFloor = %.1f, want %.1f",
@@ -2262,7 +2113,6 @@ func TestTuneDolbySRSingle_Disabled(t *testing.T) {
 	// Verify tuner doesn't modify config when filter is disabled
 	config := newTestConfig()
 	config.DolbySRSingleEnabled = false
-	config.DolbySRSingleNoiseReduction = 99.0 // Sentinel value
 
 	measurements := &AudioMeasurements{
 		NoiseFloor:       -50.0,
@@ -2271,10 +2121,9 @@ func TestTuneDolbySRSingle_Disabled(t *testing.T) {
 
 	tuneDolbySRSingle(config, measurements, 15.0)
 
-	// Config should be unchanged
-	if config.DolbySRSingleNoiseReduction != 99.0 {
-		t.Errorf("DolbySRSingleNoiseReduction modified when disabled: got %.1f, want 99.0",
-			config.DolbySRSingleNoiseReduction)
+	// Config should be unchanged (DolbySRSingle should remain disabled)
+	if config.DolbySRSingleEnabled {
+		t.Error("DolbySRSingleEnabled should remain false")
 	}
 }
 
@@ -2284,7 +2133,7 @@ func TestBuildDolbySRSingleFilter(t *testing.T) {
 	config := newTestConfig()
 	config.DolbySRSingleEnabled = true
 	config.DolbySRSingleNoiseFloor = -55.0
-	config.DolbySRSingleNoiseReduction = 3.0  // Subtle (max 4dB)
+	config.DolbySRSingleNoiseReduction = 3.0  // Explicit NR setting
 	config.DolbySRSingleGainSmooth = 15       // High smoothing
 	config.DolbySRSingleResidualFloor = -30.0 // High floor (leave room noise)
 	config.DolbySRSingleAdaptivity = 0.40     // Slow

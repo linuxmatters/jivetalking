@@ -55,11 +55,6 @@ const (
 	lufsGapModerate   = 15.0 // dB - moderate gain required
 	lufsGapAggressive = 25.0 // dB - aggressive processing needed
 
-	// Noise reduction (afftdn) parameters
-	noiseReductionBase = 12.0 // dB - baseline for clean recordings
-	noiseReductionMin  = 6.0  // dB - minimum (always some reduction)
-	noiseReductionMax  = 40.0 // dB - maximum (afftdn stability limit)
-
 	// De-esser intensity levels
 	deessIntensityBright = 0.6 // Bright voice base intensity
 	deessIntensityNormal = 0.5 // Normal voice base intensity
@@ -286,11 +281,6 @@ const (
 	arnnDnFlatnessAdjust = 0.1   // Increase mix for broadband noise
 	arnnDnEntropyAdjust  = 0.1   // Increase mix for random noise
 
-	// afftdn interaction adjustments
-	arnnDnAfftdnGentleAdjust = -0.1 // Reduce mix when afftdn is doing primary denoising
-	arnnDnAfftdnAggressAdj   = -0.2 // Further reduce when afftdn is aggressive
-	arnnDnAfftdnAggressThres = 20.0 // dB - afftdn reduction above this is "aggressive"
-
 	// Mix limits
 	arnnDnMixMin = 0.1 // Minimum mix (below this, filter has negligible effect)
 	arnnDnMixMax = 0.8 // Maximum mix (above risks artifacts)
@@ -302,7 +292,6 @@ const (
 	// Default fallback values for sanitization
 	ds201DefaultHPFreq        = 80.0
 	defaultDeessIntensity     = 0.0
-	defaultNoiseReduction     = 12.0
 	defaultLA2ARatio          = 3.0   // LA-2A baseline ratio
 	defaultLA2AThreshold      = -18.0 // Moderate threshold
 	defaultLA2AMakeup         = 2.0   // Conservative makeup
@@ -460,13 +449,6 @@ func detectContentType(m *AudioMeasurements) ContentType {
 func AdaptConfig(config *FilterChainConfig, measurements *AudioMeasurements) {
 	// Store measurements reference
 	config.Measurements = measurements
-	config.NoiseFloor = measurements.NoiseFloor
-
-	// Set noise profile path and duration if available (enables precise afftdn sample_noise mode)
-	if measurements.NoiseProfile != nil && measurements.NoiseProfile.FilePath != "" {
-		config.NoiseProfilePath = measurements.NoiseProfile.FilePath
-		config.NoiseProfileDuration = measurements.NoiseProfile.Duration
-	}
 
 	// Calculate LUFS gap once - used by multiple tuning functions
 	lufsGap := calculateLUFSGap(config.TargetI, measurements.InputI)
@@ -475,8 +457,7 @@ func AdaptConfig(config *FilterChainConfig, measurements *AudioMeasurements) {
 	// Order matters: gate threshold calculated BEFORE denoise filters
 	tuneDS201HighPass(config, measurements, lufsGap) // Composite: highpass + hum notch
 	tuneDS201LowPass(config, measurements)           // Ultrasonic rejection (adaptive)
-	tuneNoiseReduction(config, measurements, lufsGap)
-	tuneDolbySRSingle(config, measurements, lufsGap) // Dolby SR-inspired denoise (afftdn)
+	tuneDolbySRSingle(config, measurements, lufsGap) // Dolby SR-inspired denoise (uses afftdn internally)
 	tuneArnndn(config, measurements, lufsGap)        // RNN denoise (LUFS gap + noise floor based)
 	tuneDS201Gate(config, measurements)              // DS201-style soft expander gate
 	tuneDeesser(config, measurements)
@@ -779,56 +760,6 @@ func tuneDS201LowPassForSpeech(config *FilterChainConfig, m *AudioMeasurements) 
 	// No triggers fired — keep disabled
 }
 
-// tuneNoiseReduction adapts FFT noise reduction based on measurements.
-//
-// Key insight: If we apply 30dB of gain later (via speechnorm/dynaudnorm),
-// we need to remove 30dB of noise NOW, or it will be amplified with speech.
-//
-// Data-driven strategy using NoiseReductionHeadroom:
-// - NoiseReductionHeadroom = gap between RMS level (speech) and noise floor
-// - Larger headroom means cleaner recording = more aggressive NR is safe
-// - Smaller headroom means noise is close to speech = be conservative
-//
-// Combined approach:
-// 1. Use LUFS gap to determine how much gain will be applied later
-// 2. Scale by headroom factor: high headroom allows more reduction
-// 3. Clamp to 6-40dB (afftdn stability limits)
-func tuneNoiseReduction(config *FilterChainConfig, measurements *AudioMeasurements, lufsGap float64) {
-	if measurements.InputI == 0.0 {
-		// Fallback if no LUFS measurement
-		config.NoiseReduction = noiseReductionBase
-		return
-	}
-
-	// Start with base reduction plus LUFS gap (the gain we'll apply later)
-	adaptiveReduction := noiseReductionBase + lufsGap
-
-	// Adjust based on noise reduction headroom (data-driven)
-	// This tells us how much "room" we have between speech and noise
-	if measurements.NoiseReductionHeadroom > 0 {
-		// Scale factor based on headroom:
-		// - Headroom < 15dB: noisy recording, reduce NR intensity (scale 0.7)
-		// - Headroom 15-30dB: typical, use calculated value (scale 1.0)
-		// - Headroom > 30dB: clean recording, can be more aggressive (scale 1.2)
-		var headroomScale float64
-		switch {
-		case measurements.NoiseReductionHeadroom < 15.0:
-			// Noisy recording - be conservative to avoid speech artifacts
-			headroomScale = 0.7
-		case measurements.NoiseReductionHeadroom < 30.0:
-			// Typical recording - use calculated value
-			headroomScale = 1.0
-		default:
-			// Clean recording - can be more aggressive
-			headroomScale = 1.2
-		}
-		adaptiveReduction *= headroomScale
-	}
-
-	// Clamp to reasonable limits (afftdn stability)
-	config.NoiseReduction = clamp(adaptiveReduction, noiseReductionMin, noiseReductionMax)
-}
-
 // selectAfftdnNoiseType chooses the optimal noise model based on spectral measurements.
 //
 // The afftdn filter's noise type (nt) parameter affects how it models the noise profile:
@@ -1005,7 +936,7 @@ func tuneArnndn(config *FilterChainConfig, measurements *AudioMeasurements, _ fl
 	}
 
 	// Calculate mix based on noise floor severity and spectral characteristics
-	mix := calculateArnnDnMix(measurements, silenceFlatness, silenceEntropy, config.AfftdnEnabled, config.NoiseReduction)
+	mix := calculateArnnDnMix(measurements, silenceFlatness, silenceEntropy)
 
 	// If calculated mix is negligible, disable filter
 	if mix < arnnDnMinMix {
@@ -1018,7 +949,7 @@ func tuneArnndn(config *FilterChainConfig, measurements *AudioMeasurements, _ fl
 
 // calculateArnnDnMix computes the optimal arnndn mix based on measurements.
 // Returns a value between arnnDnMixMin and arnnDnMixMax.
-func calculateArnnDnMix(m *AudioMeasurements, silenceFlatness, silenceEntropy float64, afftdnEnabled bool, afftdnReduction float64) float64 {
+func calculateArnnDnMix(m *AudioMeasurements, silenceFlatness, silenceEntropy float64) float64 {
 	// Baseline from noise floor severity
 	var baseMix float64
 	switch {
@@ -1057,15 +988,6 @@ func calculateArnnDnMix(m *AudioMeasurements, silenceFlatness, silenceEntropy fl
 	// Adjustment: High silence entropy = random noise, RNN handles well
 	if silenceEntropy > arnnDnSilenceEntThreshold {
 		baseMix += arnnDnEntropyAdjust // +0.1
-	}
-
-	// Adjustment: When afftdn is doing primary denoising, arnndn only cleans residuals
-	if afftdnEnabled {
-		if afftdnReduction > arnnDnAfftdnAggressThres {
-			baseMix += arnnDnAfftdnAggressAdj // -0.2 for aggressive afftdn
-		} else {
-			baseMix += arnnDnAfftdnGentleAdjust // -0.1 for gentle afftdn
-		}
 	}
 
 	return clamp(baseMix, arnnDnMixMin, arnnDnMixMax)
@@ -1699,9 +1621,8 @@ func sanitizeConfig(config *FilterChainConfig) {
 	config.DS201LPWidth = sanitizeFloat(config.DS201LPWidth, 0.707) // Butterworth default
 	config.DS201LPMix = sanitizeFloat(config.DS201LPMix, 1.0)       // Full wet default
 
-	// De-esser and noise reduction
+	// De-esser intensity
 	config.DeessIntensity = sanitizeFloat(config.DeessIntensity, defaultDeessIntensity)
-	config.NoiseReduction = sanitizeFloat(config.NoiseReduction, defaultNoiseReduction)
 
 	// LA-2A compressor
 	config.LA2ARatio = sanitizeFloat(config.LA2ARatio, defaultLA2ARatio)

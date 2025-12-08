@@ -674,8 +674,6 @@ func formatFilter(f *os.File, filterID processor.FilterID, cfg *processor.Filter
 		formatDS201LowPassFilter(f, cfg, m, prefix)
 	case processor.FilterAdeclick:
 		formatAdeclickFilter(f, cfg, prefix)
-	case processor.FilterAfftdn:
-		formatAfftdnFilter(f, cfg, m, prefix)
 	case processor.FilterDolbySRSingle:
 		formatDolbySRSingleFilter(f, cfg, m, prefix)
 	case processor.FilterArnndn:
@@ -912,41 +910,6 @@ func formatAdeclickFilter(f *os.File, cfg *processor.FilterChainConfig, prefix s
 	fmt.Fprintf(f, "%sadeclick: %s method\n", prefix, method)
 }
 
-// formatAfftdnFilter outputs afftdn filter details
-func formatAfftdnFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
-	if !cfg.AfftdnEnabled {
-		fmt.Fprintf(f, "%safftdn: DISABLED\n", prefix)
-		return
-	}
-
-	// Method: profile-based or tracking
-	method := "adaptive tracking"
-	if cfg.NoiseProfilePath != "" {
-		method = fmt.Sprintf("noise profile (%.2fs sample)", cfg.NoiseProfileDuration.Seconds())
-	}
-
-	fmt.Fprintf(f, "%safftdn: %.1f dB reduction, floor %.1f dB\n",
-		prefix, cfg.NoiseReduction, cfg.NoiseFloor)
-	fmt.Fprintf(f, "        Method: %s\n", method)
-
-	// Show adaptive rationale
-	if m != nil && m.InputI != 0 {
-		lufsGap := cfg.TargetI - m.InputI
-		fmt.Fprintf(f, "        Rationale: %.1f dB LUFS gap", lufsGap)
-
-		if m.NoiseReductionHeadroom > 0 {
-			quality := "typical"
-			if m.NoiseReductionHeadroom < 15 {
-				quality = "noisy (conservative NR)"
-			} else if m.NoiseReductionHeadroom > 30 {
-				quality = "clean (aggressive NR)"
-			}
-			fmt.Fprintf(f, ", headroom %.1f dB (%s)", m.NoiseReductionHeadroom, quality)
-		}
-		fmt.Fprintln(f, "")
-	}
-}
-
 // formatDolbySRSingleFilter outputs Dolby SR-inspired denoise filter details
 // Uses afftdn with adaptive severity scaling;
 func formatDolbySRSingleFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
@@ -1072,9 +1035,6 @@ func formatArnndnFilter(f *os.File, cfg *processor.FilterChainConfig, m *process
 		}
 		if m.NoiseProfile != nil && m.NoiseProfile.Entropy > 0.5 {
 			adjustments = append(adjustments, fmt.Sprintf("+10%% entropy %.2f", m.NoiseProfile.Entropy))
-		}
-		if cfg.AfftdnEnabled {
-			adjustments = append(adjustments, "-10% afftdn active")
 		}
 
 		if len(adjustments) > 0 {

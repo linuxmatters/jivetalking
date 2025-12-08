@@ -56,17 +56,17 @@ Key patterns from ffmpeg-statigo:
 
 **Filter chain order (intentional):**
 ```
-highpass → adeclick → afftdn/arnndn → agate → acompressor → deesser → speechnorm/dynaudnorm → alimiter
+highpass → adeclick → dolby-sr-single → arnndn → agate → acompressor → deesser → speechnorm/dynaudnorm → alimiter
 ```
 
 Each filter prepares audio for the next. Rumble removal before spectral analysis. Compression before de-essing (compression emphasises sibilance). Normalization last so it sees fully processed signal.
 
 ## Adaptive Processing Patterns
 
-Filter parameters adapt based on Pass 1 measurements. See `processor.go` lines 40-150:
+Filter parameters adapt based on Pass 1 measurements. See `adaptive.go`:
 
 - **Highpass frequency:** 60-120Hz based on spectral centroid and LUFS gap
-- **Noise reduction:** 6-40dB scaled to upcoming gain requirement
+- **Dolby SR Single:** Adaptive afftdn (2-6dB) for subtle noise reduction
 - **De-esser intensity:** 0.0-0.6 based on spectral centroid + rolloff
 - **Gate threshold:** Derived from measured noise floor
 
