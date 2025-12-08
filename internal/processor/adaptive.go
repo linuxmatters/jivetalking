@@ -239,11 +239,15 @@ const (
 	la2aNoiseFloorClean = -65.0 // dBFS - below: clean enough for full wet
 	la2aNoiseFloorNoisy = -45.0 // dBFS - above: noisy, reduce wet
 
-	// LA-2A Makeup Gain: Compensate for gain reduction
-	// Calculate from expected reduction, but be conservative
-	la2aMakeupMultiplier = 0.65 // Conservative (let normalisation handle rest)
-	la2aMakeupMin        = 1.0  // dB minimum makeup
-	la2aMakeupMax        = 5.0  // dB maximum makeup (avoid over-driving)
+	// LA-2A Makeup Gain: LUFS-based gain staging (like DS201 gate)
+	// Rather than estimating gain reduction, use LUFS gap to target for
+	// consistent loudness alignment across the processing chain.
+	la2aMakeupLUFSScale  = 0.35 // Apply 35% of LUFS gap as makeup (more than gate's 25%)
+	la2aMakeupMinGapLUFS = 6.0  // Only apply makeup if gap > 6 LU (lower threshold than gate)
+	la2aMakeupMaxDB      = 6.0  // dB maximum makeup (compressor can handle more than gate)
+	la2aMakeupTPHeadroom = -2.0 // Skip makeup if true peak already > -2 dBTP
+	la2aMakeupMin        = 0.0  // dB minimum makeup (can be zero)
+	la2aMakeupMax        = 6.0  // dB maximum makeup (legacy, for clamp)
 
 	// Dynaudnorm fixed parameters
 	dynaudnormFrameLen   = 500  // ms - balanced frame length
@@ -1714,32 +1718,71 @@ func tuneLA2AMix(config *FilterChainConfig, measurements *AudioMeasurements) {
 	config.LA2AMix = mix
 }
 
-// tuneLA2AMakeup sets makeup gain to compensate for gain reduction.
-// Calculated conservatively - let downstream normalisation handle the rest.
+// tuneLA2AMakeup sets makeup gain based on LUFS gap to target.
+//
+// Like the DS201 gate makeup, this uses LUFS-based gain staging rather than
+// estimating gain reduction from compression parameters. This provides:
+// - More consistent loudness alignment across the processing chain
+// - Better integration with downstream normalisation stages
+// - Predictable behaviour regardless of input dynamics
+//
+// The LA2A makeup is slightly more aggressive than the gate (35% vs 25% of gap)
+// since compression is earlier in the chain and the limiter provides a safety net.
 func tuneLA2AMakeup(config *FilterChainConfig, measurements *AudioMeasurements) {
-	// Calculate expected gain reduction
-	// GR ≈ (peak_level - threshold) * (1 - 1/ratio)
-	if measurements.PeakLevel == 0 || config.LA2AThreshold == 0 {
-		config.LA2AMakeup = la2aMakeupMin
-		return
+	config.LA2AMakeup = calculateLA2AMakeup(
+		measurements.InputI,
+		measurements.InputTP,
+		config.TargetI,
+	)
+}
+
+// calculateLA2AMakeup determines post-compression makeup gain based on LUFS gap.
+//
+// Similar to DS201 gate makeup but slightly more aggressive since:
+// - Compressor is earlier in chain (more stages to refine afterwards)
+// - Compressor reduces dynamics, so peaks are less likely to clip
+// - Limiter at end of chain provides safety net
+//
+// Returns makeup gain in dB (not linear, unlike DS201 gate which returns linear).
+func calculateLA2AMakeup(inputLUFS, inputTP, targetLUFS float64) float64 {
+	// Calculate LUFS gap to target
+	lufsGap := targetLUFS - inputLUFS
+	if lufsGap < 0 {
+		lufsGap = 0 // Audio is already louder than target
 	}
 
-	// Amount signal exceeds threshold
-	overshoot := measurements.PeakLevel - config.LA2AThreshold
-	if overshoot <= 0 {
-		// Signal below threshold - minimal makeup
-		config.LA2AMakeup = la2aMakeupMin
-		return
+	// Skip makeup if gap is small (audio is already close to target)
+	if lufsGap < la2aMakeupMinGapLUFS {
+		return la2aMakeupMin
 	}
 
-	// Expected reduction based on ratio
-	reduction := overshoot * (1.0 - 1.0/config.LA2ARatio)
+	// Skip makeup if true peak is already high (no headroom)
+	if inputTP > la2aMakeupTPHeadroom {
+		return la2aMakeupMin
+	}
 
-	// Conservative makeup (let normalisation handle the rest)
-	makeup := reduction * la2aMakeupMultiplier
+	// Calculate makeup as fraction of gap
+	makeupDB := lufsGap * la2aMakeupLUFSScale
 
-	// Clamp to safe range
-	config.LA2AMakeup = clamp(makeup, la2aMakeupMin, la2aMakeupMax)
+	// Cap to maximum to avoid over-driving
+	if makeupDB > la2aMakeupMaxDB {
+		makeupDB = la2aMakeupMaxDB
+	}
+
+	// Also limit based on true peak headroom
+	// If TP is -5 dBTP, we have ~5 dB headroom before clipping at -0.3 dBTP
+	// But compressor reduces peaks, so we can be slightly more aggressive
+	tpHeadroom := -0.3 - inputTP
+	if makeupDB > tpHeadroom {
+		makeupDB = tpHeadroom
+	}
+
+	// Don't apply negative makeup
+	if makeupDB < la2aMakeupMin {
+		return la2aMakeupMin
+	}
+
+	return makeupDB
 }
 
 // tuneDynaudnorm sets conservative fixed parameters for dynaudnorm.

@@ -408,7 +408,7 @@ func DefaultFilterConfig() *FilterChainConfig {
 		LA2ARatio:     3.0, // 3:1 ratio (LA-2A Compress mode baseline)
 		LA2AAttack:    10,  // 10ms attack (LA-2A fixed attack, preserves transients)
 		LA2ARelease:   200, // 200ms release (LA-2A two-stage approximation)
-		LA2AMakeup:    2,   // 2dB makeup gain (conservative, normalisation handles rest)
+		LA2AMakeup:    0,   // Adaptive makeup (LUFS-based gain staging like DS201 gate)
 		LA2AKnee:      4.0, // Soft knee (LA-2A T4 optical cell characteristic)
 		LA2AMix:       1.0, // 100% wet (true LA-2A has no parallel compression)
 

@@ -1339,6 +1339,127 @@ func TestTuneDS201Gate(t *testing.T) {
 			})
 		}
 	})
+
+	t.Run("LA2A_Makeup", func(t *testing.T) {
+		// Tests for calculateLA2AMakeup
+		// LUFS-based makeup provides gentle gain recovery post-compression
+		//
+		// Constants:
+		// la2aMakeupLUFSScale = 0.35 (35% of gap, more aggressive than gate)
+		// la2aMakeupMinGapLUFS = 6.0 (only apply if gap > 6 LU)
+		// la2aMakeupMaxDB = 6.0 (cap at 6 dB)
+		// la2aMakeupTPHeadroom = -2.0 (skip if TP > -2)
+
+		tests := []struct {
+			name         string
+			inputLUFS    float64
+			inputTP      float64
+			targetLUFS   float64
+			wantMakeupDB float64
+			tolerance    float64
+			desc         string
+		}{
+			{
+				name:         "loud audio - no makeup needed",
+				inputLUFS:    -18.0,
+				inputTP:      -3.0,
+				targetLUFS:   -16.0,
+				wantMakeupDB: 0.0, // Gap only 2 LU, below minimum 6 LU
+				tolerance:    0.1,
+				desc:         "small gap means no makeup",
+			},
+			{
+				name:         "moderate gap - some makeup",
+				inputLUFS:    -26.0,
+				inputTP:      -8.0,
+				targetLUFS:   -16.0,
+				wantMakeupDB: 3.5, // Gap 10 LU × 0.35 = 3.5 dB
+				tolerance:    0.1,
+				desc:         "10 LU gap gives 3.5 dB makeup",
+			},
+			{
+				name:         "quiet audio - moderate makeup",
+				inputLUFS:    -31.0,
+				inputTP:      -8.0,
+				targetLUFS:   -16.0,
+				wantMakeupDB: 5.25, // Gap 15 LU × 0.35 = 5.25 dB
+				tolerance:    0.1,
+				desc:         "15 LU gap gives 5.25 dB makeup",
+			},
+			{
+				name:         "very quiet audio - capped makeup",
+				inputLUFS:    -40.0,
+				inputTP:      -10.0,
+				targetLUFS:   -16.0,
+				wantMakeupDB: 6.0, // Gap 24 LU × 0.35 = 8.4 dB, capped to 6 dB
+				tolerance:    0.1,
+				desc:         "makeup capped at 6 dB max",
+			},
+			{
+				name:         "high true peak - no makeup",
+				inputLUFS:    -31.0,
+				inputTP:      -1.0, // Already very loud peaks
+				targetLUFS:   -16.0,
+				wantMakeupDB: 0.0, // TP > -2 dBTP, skip makeup
+				tolerance:    0.1,
+				desc:         "no headroom due to high true peak",
+			},
+			{
+				name:         "limited by true peak headroom",
+				inputLUFS:    -31.0,
+				inputTP:      -3.0, // Only 2.7 dB headroom to -0.3 target
+				targetLUFS:   -16.0,
+				wantMakeupDB: 2.7, // Limited by TP headroom (-0.3 - (-3.0) = 2.7)
+				tolerance:    0.1,
+				desc:         "true peak headroom limits makeup",
+			},
+			{
+				name:         "audio louder than target",
+				inputLUFS:    -14.0,
+				inputTP:      -5.0,
+				targetLUFS:   -16.0,
+				wantMakeupDB: 0.0, // Negative gap, no makeup
+				tolerance:    0.1,
+				desc:         "no makeup when already loud",
+			},
+			{
+				name:         "exactly at minimum gap threshold",
+				inputLUFS:    -22.0,
+				inputTP:      -8.0,
+				targetLUFS:   -16.0,
+				wantMakeupDB: 2.1, // Gap exactly 6 LU × 0.35 = 2.1 dB
+				tolerance:    0.1,
+				desc:         "at minimum gap threshold applies makeup",
+			},
+			{
+				name:         "just below minimum gap threshold",
+				inputLUFS:    -21.5,
+				inputTP:      -8.0,
+				targetLUFS:   -16.0,
+				wantMakeupDB: 0.0, // Gap 5.5 LU, below minimum 6 LU
+				tolerance:    0.1,
+				desc:         "below minimum gap threshold means no makeup",
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				makeupDB := calculateLA2AMakeup(tt.inputLUFS, tt.inputTP, tt.targetLUFS)
+
+				if tt.wantMakeupDB == 0 {
+					if makeupDB > 0.1 {
+						t.Errorf("LA2AMakeup = %.2f dB, want ~0 dB [%s]",
+							makeupDB, tt.desc)
+					}
+				} else {
+					if math.Abs(makeupDB-tt.wantMakeupDB) > tt.tolerance {
+						t.Errorf("LA2AMakeup = %.2f dB, want ~%.1f dB [%s]",
+							makeupDB, tt.wantMakeupDB, tt.desc)
+					}
+				}
+			})
+		}
+	})
 }
 
 // linearToDB converts linear amplitude to dB for test error messages
