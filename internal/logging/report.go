@@ -911,105 +911,61 @@ func formatAdeclickFilter(f *os.File, cfg *processor.FilterChainConfig, prefix s
 }
 
 // formatDolbySRFilter outputs Dolby SR-inspired denoise filter details
-// Uses afftdn with 15-band Bark-scale voice-protective profile
+// Uses 6-band mcompand multiband expander with FLAT reduction curve
 func formatDolbySRFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
 	if !cfg.DolbySREnabled {
 		fmt.Fprintf(f, "%sDolby SR: DISABLED\n", prefix)
 		return
 	}
 
-	// Show noise type with explanation
-	noiseType := cfg.DolbySRNoiseType
-	if noiseType == "" {
-		noiseType = "c"
-	}
-	noiseTypeDesc := map[string]string{
-		"w": "white (broadband)",
-		"v": "vinyl (LF-weighted)",
-		"s": "shellac (HF-weighted)",
-		"c": "custom (15-band profile)",
-	}[noiseType]
-	if noiseTypeDesc == "" {
-		noiseTypeDesc = noiseType
-	}
+	// Header: filter name and expansion level
+	fmt.Fprintf(f, "%sDolby SR: Noise Reduction (6-band voice-protective expander)\n", prefix)
+	fmt.Fprintf(f, "        Expansion: %.0f dB (FLAT reduction curve)\n", cfg.DolbySRExpansionDB)
+	fmt.Fprintf(f, "        Threshold: %.0f dB\n", cfg.DolbySRThresholdDB)
+	fmt.Fprintf(f, "        Makeup gain: +%.1f dB\n", cfg.DolbySRMakeupGainDB)
 
-	// Header: filter name and key parameters
-	fmt.Fprintf(f, "%sDolby SR: afftdn %.1f dB (type %s)\n",
-		prefix, cfg.DolbySRNoiseReduction, noiseTypeDesc)
-
-	// afftdn parameters
-	fmt.Fprintf(f, "        afftdn: nr=%.1f dB, gs=%d, rf=%.1f dB, ad=%.2f\n",
-		cfg.DolbySRNoiseReduction, cfg.DolbySRGainSmooth,
-		cfg.DolbySRResidualFloor, cfg.DolbySRAdaptivity)
-
-	// Noise floor from measurements
-	fmt.Fprintf(f, "        Floor: %.1f dBFS (from Pass 1 measurements)\n", cfg.DolbySRNoiseFloor)
-
-	// Show 15-band profile if using custom noise type
-	if noiseType == "c" && len(cfg.DolbySRBandProfile) == 15 {
-		// Calculate per-band NR values for display
-		fmt.Fprintf(f, "        Band profile (15-band Bark scale, voice-protective):\n")
-		fmt.Fprintf(f, "          LF bands 0-2:  ")
-		for i := 0; i < 3; i++ {
-			bandNR := cfg.DolbySRNoiseReduction * cfg.DolbySRBandProfile[i]
-			fmt.Fprintf(f, "%.1f ", bandNR)
+	// Show 6-band configuration
+	if len(cfg.DolbySRBands) == 6 {
+		fmt.Fprintf(f, "        Bands:\n")
+		bandNames := []string{"Sub-bass", "Chest", "Voice F1", "Voice F2", "Presence", "Air"}
+		for i, band := range cfg.DolbySRBands {
+			bandExp := cfg.DolbySRExpansionDB * band.ScalePercent / 100.0
+			fmt.Fprintf(f, "          %s (0-%d Hz): %.0fdB, %.0fms/%.0fms, knee %.0f\n",
+				bandNames[i], int(band.CrossoverHz), bandExp,
+				band.Attack*1000, band.Decay*1000, band.SoftKnee)
 		}
-		fmt.Fprintf(f, "dB (sub-bass to chest)\n")
-		fmt.Fprintf(f, "          Voice bands 3-9: ")
-		for i := 3; i < 10; i++ {
-			bandNR := cfg.DolbySRNoiseReduction * cfg.DolbySRBandProfile[i]
-			fmt.Fprintf(f, "%.1f ", bandNR)
-		}
-		fmt.Fprintf(f, "dB (formants, protected)\n")
-		fmt.Fprintf(f, "          HF bands 10-14: ")
-		for i := 10; i < 15; i++ {
-			bandNR := cfg.DolbySRNoiseReduction * cfg.DolbySRBandProfile[i]
-			fmt.Fprintf(f, "%.1f ", bandNR)
-		}
-		fmt.Fprintf(f, "dB (sibilance to air)\n")
 	}
 
 	// Show adaptive rationale
 	if m != nil {
-		// Noise floor severity classification
+		// Classify source based on RMS trough (aligned with lockstep threshold+expansion tiers)
+		// Tiers: < -85 dB (clean), -85 to -80 dB (moderate), > -80 dB (noisy)
 		var severityDesc string
 		switch {
-		case m.NoiseFloor <= -65:
+		case m.RMSTrough < -85:
 			severityDesc = "clean"
-		case m.NoiseFloor <= -55:
+		case m.RMSTrough < -80:
 			severityDesc = "moderate"
 		default:
 			severityDesc = "noisy"
 		}
-		fmt.Fprintf(f, "        Rationale: %s source (floor %.1f dBFS)\n", severityDesc, m.NoiseFloor)
 
-		// Noise character (tonal vs broadband)
-		if m.NoiseProfile != nil && m.NoiseProfile.Entropy > 0 {
-			if m.NoiseProfile.Entropy < 0.4 {
-				fmt.Fprintf(f, "        Character: tonal noise (entropy %.2f) → gentle processing\n", m.NoiseProfile.Entropy)
-			} else if m.SpectralFlatness > 0.6 {
-				fmt.Fprintf(f, "        Character: broadband noise (flatness %.2f) → responsive processing\n", m.SpectralFlatness)
-			} else {
-				fmt.Fprintf(f, "        Character: mixed noise → balanced processing\n")
-			}
+		// Lockstep rationale (threshold + expansion tuned together)
+		var thresholdRationale string
+		switch {
+		case m.RMSTrough < -85:
+			thresholdRationale = "gentle treatment"
+		case m.RMSTrough < -80:
+			thresholdRationale = "balanced treatment"
+		default:
+			thresholdRationale = "aggressive treatment"
 		}
 
-		// Band profile adaptation rationale
-		if noiseType == "c" {
-			if m.SpectralCentroid > 2500 {
-				fmt.Fprintf(f, "        Profile adaptation: HF reduced (centroid %.0f Hz > 2500)\n", m.SpectralCentroid)
-			} else if m.SpectralCentroid < 1500 {
-				fmt.Fprintf(f, "        Profile adaptation: LF increased (centroid %.0f Hz < 1500)\n", m.SpectralCentroid)
-			}
-			if m.NoiseFloor > -55 {
-				fmt.Fprintf(f, "        Profile adaptation: voice bands increased (noisy source)\n")
-			} else if m.NoiseFloor < -80 {
-				fmt.Fprintf(f, "        Profile adaptation: voice bands reduced (very clean source)\n")
-			}
-		}
+		fmt.Fprintf(f, "        Rationale: %s source (trough %.1f dBFS) → %.0f dB expansion, %.0f dB threshold (%s)\n",
+			severityDesc, m.RMSTrough, cfg.DolbySRExpansionDB, cfg.DolbySRThresholdDB, thresholdRationale)
 
 		// SR philosophy note
-		fmt.Fprintf(f, "        SR philosophy: 15-band voice-protective, Least Treatment (gate handles silence)\n")
+		fmt.Fprintf(f, "        SR philosophy: 6-band voice-protective, FLAT curve (gate handles silence)\n")
 	}
 }
 

@@ -24,16 +24,16 @@ func newTestConfig() *FilterChainConfig {
 		ResampleFrameSize:     4096,
 
 		// Processing filters (all disabled by default)
-		DS201HPEnabled:       false,
-		AdeclickEnabled:      false,
-		DolbySREnabled:       false,
-		DS201GateEnabled:     false,
-		LA2AEnabled:          false,
-		DeessEnabled:         false,
-		DynaudnormEnabled:    false,
-		SpeechnormEnabled:    false,
-		ArnnDnEnabled:        false,
-		LimiterEnabled:       false,
+		DS201HPEnabled:    false,
+		AdeclickEnabled:   false,
+		DolbySREnabled:    false,
+		DS201GateEnabled:  false,
+		LA2AEnabled:       false,
+		DeessEnabled:      false,
+		DynaudnormEnabled: false,
+		SpeechnormEnabled: false,
+		ArnnDnEnabled:     false,
+		LimiterEnabled:    false,
 
 		// Sensible defaults for parameters (used when filter is enabled)
 		DS201HPFreq:        80.0,
@@ -749,8 +749,8 @@ func TestBuildAnalysisFilter(t *testing.T) {
 		if !strings.Contains(result, "astats=metadata=1") {
 			t.Error("buildAnalysisFilter() missing astats filter")
 		}
-		if !strings.Contains(result, "measure_perchannel=Noise_floor+Dynamic_range+RMS_level+Peak_level") {
-			t.Error("buildAnalysisFilter() missing detailed astats measurements")
+		if !strings.Contains(result, "measure_perchannel=Noise_floor+Dynamic_range+RMS_level+RMS_trough+Peak_level") {
+			t.Error("buildAnalysisFilter() missing detailed astats measurements (including RMS_trough)")
 		}
 		if !strings.Contains(result, "aspectralstats=win_size=2048") {
 			t.Error("buildAnalysisFilter() missing aspectralstats filter")
@@ -990,6 +990,163 @@ func TestDefaultFilterOrder(t *testing.T) {
 			if DefaultFilterOrder[i] != Pass2FilterOrder[i] {
 				t.Errorf("DefaultFilterOrder[%d] = %q, Pass2FilterOrder[%d] = %q",
 					i, DefaultFilterOrder[i], i, Pass2FilterOrder[i])
+			}
+		}
+	})
+}
+
+// =============================================================================
+// Dolby SR mcompand Filter Tests
+// =============================================================================
+
+func TestBuildFlatReductionCurve(t *testing.T) {
+	// Tests the FLAT reduction curve builder which is key to artifact-free noise elimination.
+	// All points below threshold receive identical dB reduction.
+	// Note: commas are escaped with \, for mcompand args parameter.
+	tests := []struct {
+		expansion float64
+		threshold float64
+		want      string
+	}{
+		{12, -50, `-90/-102\,-75/-87\,-50/-50\,-30/-30\,0/0`},
+		{13, -50, `-90/-103\,-75/-88\,-50/-50\,-30/-30\,0/0`},
+		{14, -50, `-90/-104\,-75/-89\,-50/-50\,-30/-30\,0/0`},
+		{16, -50, `-90/-106\,-75/-91\,-50/-50\,-30/-30\,0/0`},
+		// Adaptive threshold tests
+		{13, -47, `-90/-103\,-75/-88\,-47/-47\,-30/-30\,0/0`},
+		{13, -45, `-90/-103\,-75/-88\,-45/-45\,-30/-30\,0/0`},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("expansion_%.0fdB_threshold_%.0fdB", tt.expansion, tt.threshold), func(t *testing.T) {
+			got := buildFlatReductionCurve(tt.expansion, tt.threshold)
+			if got != tt.want {
+				t.Errorf("buildFlatReductionCurve(%.0f, %.0f) = %q, want %q", tt.expansion, tt.threshold, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDefaultDolbySRBands(t *testing.T) {
+	// Verify the 6-band voice-protective configuration
+	bands := defaultDolbySRBands()
+
+	if len(bands) != 6 {
+		t.Fatalf("Expected 6 bands, got %d", len(bands))
+	}
+
+	// Expected configuration matches defaultDolbySRBands() in filters.go
+	expected := []struct {
+		name         string
+		crossover    float64
+		scalePercent float64
+		attack       float64
+		decay        float64
+		softKnee     float64
+	}{
+		{"Sub-bass", 100, 100, 0.006, 0.095, 6},
+		{"Chest", 300, 100, 0.005, 0.100, 8},
+		{"Voice F1", 800, 105, 0.005, 0.100, 10},
+		{"Voice F2", 3300, 103, 0.005, 0.100, 12},
+		{"Presence", 8000, 100, 0.002, 0.085, 10},
+		{"Air", 20500, 95, 0.002, 0.080, 6},
+	}
+
+	for i, want := range expected {
+		got := bands[i]
+		if got.CrossoverHz != want.crossover {
+			t.Errorf("Band %d (%s) CrossoverHz = %.0f, want %.0f", i, want.name, got.CrossoverHz, want.crossover)
+		}
+		if got.ScalePercent != want.scalePercent {
+			t.Errorf("Band %d (%s) ScalePercent = %.0f, want %.0f", i, want.name, got.ScalePercent, want.scalePercent)
+		}
+		if math.Abs(got.Attack-want.attack) > 0.0001 {
+			t.Errorf("Band %d (%s) Attack = %.4f, want %.4f", i, want.name, got.Attack, want.attack)
+		}
+		if math.Abs(got.Decay-want.decay) > 0.0001 {
+			t.Errorf("Band %d (%s) Decay = %.4f, want %.4f", i, want.name, got.Decay, want.decay)
+		}
+		if got.SoftKnee != want.softKnee {
+			t.Errorf("Band %d (%s) SoftKnee = %.0f, want %.0f", i, want.name, got.SoftKnee, want.softKnee)
+		}
+	}
+}
+
+func TestBuildDolbySRMcompandFilter(t *testing.T) {
+	t.Run("enabled with standard config", func(t *testing.T) {
+		config := newTestConfig()
+		config.DolbySREnabled = true
+		config.DolbySRExpansionDB = 13.0
+		config.DolbySRMakeupGainDB = 1.3
+		config.DolbySRBands = defaultDolbySRBands()
+
+		filter := config.buildDolbySRFilter()
+
+		// Must not be empty
+		if filter == "" {
+			t.Fatal("buildDolbySRFilter returned empty string when enabled")
+		}
+
+		// Must contain mcompand
+		if !strings.Contains(filter, "mcompand=") {
+			t.Errorf("Filter missing mcompand=\nGot: %s", filter)
+		}
+
+		// Must contain 6 crossover frequencies (6 bands)
+		expectedCrossovers := []string{"100", "300", "800", "3300", "8000", "20500"}
+		for _, freq := range expectedCrossovers {
+			if !strings.Contains(filter, freq) {
+				t.Errorf("Filter missing crossover frequency %s\nGot: %s", freq, filter)
+			}
+		}
+
+		// Must contain FLAT reduction curve points for 13dB expansion
+		if !strings.Contains(filter, "-90/-103") {
+			t.Errorf("Filter missing FLAT curve point -90/-103\nGot: %s", filter)
+		}
+		if !strings.Contains(filter, "-75/-88") {
+			t.Errorf("Filter missing FLAT curve point -75/-88\nGot: %s", filter)
+		}
+
+		// Must contain volume filter for makeup gain (workaround for mcompand bug)
+		if !strings.Contains(filter, "volume=1.3dB:precision=double") {
+			t.Errorf("Filter missing makeup gain volume filter\nGot: %s", filter)
+		}
+	})
+
+	t.Run("disabled returns empty", func(t *testing.T) {
+		config := newTestConfig()
+		config.DolbySREnabled = false
+
+		filter := config.buildDolbySRFilter()
+
+		if filter != "" {
+			t.Errorf("buildDolbySRFilter should return empty when disabled, got: %s", filter)
+		}
+	})
+
+	t.Run("different expansion levels", func(t *testing.T) {
+		expansions := []float64{12, 14, 16}
+		for _, exp := range expansions {
+			config := newTestConfig()
+			config.DolbySREnabled = true
+			config.DolbySRExpansionDB = exp
+			config.DolbySRThresholdDB = -50
+			config.DolbySRMakeupGainDB = 1.3
+			config.DolbySRBands = defaultDolbySRBands()
+
+			filter := config.buildDolbySRFilter()
+
+			// Verify curve changes with expansion
+			curve := buildFlatReductionCurve(exp, -50)
+			// Check the first point (e.g., -90/-102 for 12dB)
+			expectedPoint := fmt.Sprintf("-90/%.0f", -90-exp)
+			if !strings.Contains(filter, expectedPoint) {
+				t.Errorf("Filter with %.0fdB expansion missing curve point %s\nGot: %s", exp, expectedPoint, filter)
+			}
+			// Sanity check: curve should be in the filter
+			if !strings.Contains(filter, curve[:20]) { // Check first 20 chars of curve
+				t.Errorf("Filter missing expected curve prefix for %.0fdB\nExpected curve: %s\nGot filter: %s", exp, curve, filter)
 			}
 		}
 	})

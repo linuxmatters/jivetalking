@@ -46,7 +46,7 @@ Measures your audio's characteristics to drive adaptive processing:
 |--------|-------------|--------------|
 | **High-pass** | DS201 side-chain | Removes subsonic rumble (60–100 Hz, adaptive to voice) |
 | **Low-pass** | DS201 side-chain | Removes ultrasonic content that triggers false processing |
-| **Noise reduction** | Dolby SR | 15-band Bark-scale spectral denoising with voice protection |
+| **Noise reduction** | Dolby SR | 6-band voice-protective multiband expander with FLAT reduction curve |
 | **RNN denoise** | — | AI-based cleanup for complex noise patterns |
 | **Gate** | DS201 expander | Soft expansion (2:1–4:1) for natural inter-phrase cleanup |
 | **Compressor** | LA-2A | Programme-dependent optical compression with ~10ms attack |
@@ -141,7 +141,7 @@ internal/
 ### Design Documentation
 
 - [FilterGate: Drawmer DS201](docs/FilterGate-Drawmer%20DS201.md) — Soft expander gate with adaptive threshold
-- [FilterNoise: Dolby SR](docs/FilterNoise-Dolby%20SR.md) — 15-band voice-protective noise reduction
+- [FilterNoise: Dolby SR](docs/FilterNoise-Dolby%20SR.md) — 6-band voice-protective noise reduction
 - [FilterCompressor: LA-2A](docs/FilterCompressor-Teletronix%20LA-2A.md) — Programme-dependent optical compression
 
 ---
