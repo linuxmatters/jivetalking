@@ -327,6 +327,48 @@ func formatDynamicRangeComparison(output, input float64) string {
 	return result
 }
 
+// maxRealisticCrestFactor is the upper bound for realistic audio crest factor.
+// Typical speech: 10-25 dB. Values >40 dB indicate measurement across near-silence
+// (peak/tiny-RMS = huge ratio). We clamp to 40 dB and note the anomaly.
+const maxRealisticCrestFactor = 40.0
+
+// formatCrestFactor clamps crest factor to a realistic maximum.
+// Very high values (>40 dB) indicate FFmpeg astats measured across audio segments
+// with near-silence periods, causing peak/RMS to be extremely large.
+func formatCrestFactor(value float64) string {
+	if value > maxRealisticCrestFactor {
+		return fmt.Sprintf(">%.0f dB (measured %.1f dB — includes near-silence)", maxRealisticCrestFactor, value)
+	}
+	return fmt.Sprintf("%.1f dB", value)
+}
+
+// formatCrestFactorComparison formats crest factor with comparison to input value
+func formatCrestFactorComparison(output, input float64) string {
+	result := formatCrestFactor(output)
+
+	// Clamp both for comparison
+	outputClamped := output
+	if outputClamped > maxRealisticCrestFactor {
+		outputClamped = maxRealisticCrestFactor
+	}
+	inputClamped := input
+	if inputClamped > maxRealisticCrestFactor {
+		inputClamped = maxRealisticCrestFactor
+	}
+
+	// Add comparison (using clamped values for "unchanged" check)
+	tolerance := 0.5
+	if math.Abs(outputClamped-inputClamped) < tolerance {
+		result += " (unchanged)"
+	} else if input > maxRealisticCrestFactor {
+		result += fmt.Sprintf(" (was >%.0f dB)", maxRealisticCrestFactor)
+	} else {
+		result += fmt.Sprintf(" (was %.1f dB)", input)
+	}
+
+	return result
+}
+
 // ReportData contains all the information needed to generate an analysis report
 type ReportData struct {
 	InputPath    string
@@ -367,18 +409,40 @@ func GenerateReport(data ReportData) error {
 	fmt.Fprintln(f, "----------------------")
 	if data.Result != nil && data.Result.Measurements != nil {
 		m := data.Result.Measurements
+		// Loudness measurements from ebur128
 		fmt.Fprintf(f, "Integrated Loudness: %.1f LUFS\n", m.InputI)
+		fmt.Fprintf(f, "Momentary Loudness:  %.1f LUFS (400ms window)\n", m.MomentaryLoudness)
+		fmt.Fprintf(f, "Short-term Loudness: %.1f LUFS (3s window)\n", m.ShortTermLoudness)
 		fmt.Fprintf(f, "True Peak:           %.1f dBTP\n", m.InputTP)
+		fmt.Fprintf(f, "Sample Peak:         %.1f dBFS\n", m.SamplePeak)
 		fmt.Fprintf(f, "Loudness Range:      %.1f LU\n", m.InputLRA)
-		fmt.Fprintf(f, "Noise Floor:         %.1f dB (measured)\n", m.NoiseFloor)
+
+		// Noise floor measurements
+		fmt.Fprintf(f, "Noise Floor:         %.1f dB (derived)\n", m.NoiseFloor)
+		if m.AstatsNoiseFloor != 0 && !math.IsInf(m.AstatsNoiseFloor, -1) {
+			fmt.Fprintf(f, "FFmpeg Noise Floor:  %.1f dB (astats)\n", m.AstatsNoiseFloor)
+		}
 		// Show adaptive silence detection threshold if different from default
 		if m.SilenceDetectLevel != 0 && m.SilenceDetectLevel != -50.0 {
 			fmt.Fprintf(f, "Silence Threshold:   %.1f dB (adaptive from %.1f dB pre-scan)\n",
 				m.SilenceDetectLevel, m.PreScanNoiseFloor)
 		}
+
+		// Dynamic range and level statistics
 		fmt.Fprintf(f, "Dynamic Range:       %s\n", formatDynamicRange(m.DynamicRange))
 		fmt.Fprintf(f, "RMS Level:           %.1f dBFS\n", m.RMSLevel)
+		fmt.Fprintf(f, "RMS Peak:            %.1f dBFS (loudest segments)\n", m.RMSPeak)
+		fmt.Fprintf(f, "RMS Trough:          %.1f dBFS (quietest segments)\n", m.RMSTrough)
 		fmt.Fprintf(f, "Peak Level:          %.1f dBFS\n", m.PeakLevel)
+		if m.MinLevel != 0 {
+			fmt.Fprintf(f, "Min Level:           %.1f dBFS\n", m.MinLevel)
+		}
+		if m.MaxLevel != 0 {
+			fmt.Fprintf(f, "Max Level:           %.1f dBFS\n", m.MaxLevel)
+		}
+		if m.CrestFactor > 0 {
+			fmt.Fprintf(f, "Crest Factor:        %s (peak-to-RMS)\n", formatCrestFactor(m.CrestFactor))
+		}
 
 		// Spectral analysis (aspectralstats measurements) with characteristic interpretations
 		fmt.Fprintf(f, "Spectral Mean:       %s (avg magnitude)\n", formatSpectralValue(m.SpectralMean, 6))
@@ -395,21 +459,57 @@ func GenerateReport(data ReportData) error {
 		fmt.Fprintf(f, "Spectral Decrease:   %s — %s\n", formatSpectralValue(m.SpectralDecrease, 6), interpretDecrease(m.SpectralDecrease))
 		fmt.Fprintf(f, "Spectral Rolloff:    %.0f Hz — %s\n", m.SpectralRolloff, interpretRolloff(m.SpectralRolloff))
 
-		// Additional signal quality measurements
+		// Signal quality and audio characteristics
+		fmt.Fprintln(f, "")
+		fmt.Fprintln(f, "Signal Quality:")
+		if m.BitDepth > 0 {
+			fmt.Fprintf(f, "  Effective Bit Depth: %.1f bits\n", m.BitDepth)
+		}
+		if m.NumberOfSamples > 0 {
+			fmt.Fprintf(f, "  Total Samples:       %.0f\n", m.NumberOfSamples)
+		}
 		if m.DCOffset != 0 {
-			fmt.Fprintf(f, "DC Offset:           %.6f\n", m.DCOffset)
+			fmt.Fprintf(f, "  DC Offset:           %.6f\n", m.DCOffset)
 		}
 		if m.FlatFactor > 0 {
-			fmt.Fprintf(f, "Flat Factor:         %.1f (clipping indicator)\n", m.FlatFactor)
+			fmt.Fprintf(f, "  Flat Factor:         %.1f (clipping indicator)\n", m.FlatFactor)
+		}
+		if m.Entropy > 0 {
+			fmt.Fprintf(f, "  Signal Entropy:      %.3f (randomness)\n", m.Entropy)
 		}
 		if m.ZeroCrossingsRate > 0 {
-			fmt.Fprintf(f, "Zero Crossings Rate: %.4f\n", m.ZeroCrossingsRate)
+			fmt.Fprintf(f, "  Zero Crossings Rate: %.4f\n", m.ZeroCrossingsRate)
 		}
-		if m.MaxDifference > 0 {
-			// Convert to percentage of full scale for readability
-			// Max difference is in sample units; 32768 is full scale for 16-bit
-			maxDiffPercent := (m.MaxDifference / 32768.0) * 100.0
-			fmt.Fprintf(f, "Max Difference:      %.1f%% FS (transient indicator)\n", maxDiffPercent)
+		if m.ZeroCrossings > 0 {
+			fmt.Fprintf(f, "  Zero Crossings:      %.0f total\n", m.ZeroCrossings)
+		}
+
+		// Sample-to-sample change metrics (transient/click indicators)
+		if m.MaxDifference > 0 || m.MeanDifference > 0 {
+			fmt.Fprintln(f, "")
+			fmt.Fprintln(f, "Sample Variation (transient indicators):")
+			if m.MaxDifference > 0 {
+				maxDiffPercent := (m.MaxDifference / 32768.0) * 100.0
+				fmt.Fprintf(f, "  Max Difference:      %.1f%% FS\n", maxDiffPercent)
+			}
+			if m.MinDifference > 0 {
+				minDiffPercent := (m.MinDifference / 32768.0) * 100.0
+				fmt.Fprintf(f, "  Min Difference:      %.4f%% FS\n", minDiffPercent)
+			}
+			if m.MeanDifference > 0 {
+				meanDiffPercent := (m.MeanDifference / 32768.0) * 100.0
+				fmt.Fprintf(f, "  Mean Difference:     %.4f%% FS\n", meanDiffPercent)
+			}
+			if m.RMSDifference > 0 {
+				rmsDiffPercent := (m.RMSDifference / 32768.0) * 100.0
+				fmt.Fprintf(f, "  RMS Difference:      %.4f%% FS\n", rmsDiffPercent)
+			}
+		}
+
+		// Interval sampling summary
+		if len(m.IntervalSamples) > 0 {
+			fmt.Fprintln(f, "")
+			fmt.Fprintf(f, "Interval Samples:    %d × 250ms windows analysed\n", len(m.IntervalSamples))
 		}
 
 		// Silence candidates (all evaluated candidates with scores)
@@ -476,12 +576,37 @@ func GenerateReport(data ReportData) error {
 			m := data.Result.Measurements // Input measurements for comparison
 
 			if m != nil {
+				// Loudness measurements from ebur128
 				fmt.Fprintf(f, "Integrated Loudness: %.1f LUFS %s\n", om.OutputI, formatComparison(om.OutputI, m.InputI, "LUFS", 1))
+				fmt.Fprintf(f, "Momentary Loudness:  %.1f LUFS %s\n", om.MomentaryLoudness, formatComparison(om.MomentaryLoudness, m.MomentaryLoudness, "LUFS", 1))
+				fmt.Fprintf(f, "Short-term Loudness: %.1f LUFS %s\n", om.ShortTermLoudness, formatComparison(om.ShortTermLoudness, m.ShortTermLoudness, "LUFS", 1))
 				fmt.Fprintf(f, "True Peak:           %.1f dBTP %s\n", om.OutputTP, formatComparison(om.OutputTP, m.InputTP, "dBTP", 1))
+				fmt.Fprintf(f, "Sample Peak:         %.1f dBFS %s\n", om.SamplePeak, formatComparison(om.SamplePeak, m.SamplePeak, "dBFS", 1))
 				fmt.Fprintf(f, "Loudness Range:      %.1f LU %s\n", om.OutputLRA, formatComparison(om.OutputLRA, m.InputLRA, "LU", 1))
+
+				// Noise floor comparison
+				if om.AstatsNoiseFloor != 0 && !math.IsInf(om.AstatsNoiseFloor, -1) {
+					fmt.Fprintf(f, "FFmpeg Noise Floor:  %.1f dB %s\n", om.AstatsNoiseFloor, formatComparison(om.AstatsNoiseFloor, m.AstatsNoiseFloor, "dB", 1))
+				}
+				if om.NoiseFloorCount != 0 {
+					fmt.Fprintf(f, "Noise Floor Count:   %.0f samples %s\n", om.NoiseFloorCount, formatComparisonNoUnit(om.NoiseFloorCount, m.NoiseFloorCount, 0))
+				}
+
+				// Dynamic range and level statistics
 				fmt.Fprintf(f, "Dynamic Range:       %s\n", formatDynamicRangeComparison(om.DynamicRange, m.DynamicRange))
 				fmt.Fprintf(f, "RMS Level:           %.1f dBFS %s\n", om.RMSLevel, formatComparison(om.RMSLevel, m.RMSLevel, "dBFS", 1))
+				fmt.Fprintf(f, "RMS Peak:            %.1f dBFS %s\n", om.RMSPeak, formatComparison(om.RMSPeak, m.RMSPeak, "dBFS", 1))
+				fmt.Fprintf(f, "RMS Trough:          %.1f dBFS %s\n", om.RMSTrough, formatComparison(om.RMSTrough, m.RMSTrough, "dBFS", 1))
 				fmt.Fprintf(f, "Peak Level:          %.1f dBFS %s\n", om.PeakLevel, formatComparison(om.PeakLevel, m.PeakLevel, "dBFS", 1))
+				if om.MinLevel != 0 {
+					fmt.Fprintf(f, "Min Level:           %.1f dBFS %s\n", om.MinLevel, formatComparison(om.MinLevel, m.MinLevel, "dBFS", 1))
+				}
+				if om.MaxLevel != 0 {
+					fmt.Fprintf(f, "Max Level:           %.1f dBFS %s\n", om.MaxLevel, formatComparison(om.MaxLevel, m.MaxLevel, "dBFS", 1))
+				}
+				if om.CrestFactor > 0 {
+					fmt.Fprintf(f, "Crest Factor:        %s\n", formatCrestFactorComparison(om.CrestFactor, m.CrestFactor))
+				}
 
 				// Spectral analysis (aspectralstats measurements) with characteristic interpretations
 				fmt.Fprintf(f, "Spectral Mean:       %s %s\n", formatSpectralValue(om.SpectralMean, 6), formatComparisonSpectral(om.SpectralMean, m.SpectralMean, 6))
@@ -497,6 +622,57 @@ func GenerateReport(data ReportData) error {
 				fmt.Fprintf(f, "Spectral Slope:      %s — %s %s\n", formatSpectralValue(om.SpectralSlope, 9), interpretSlope(om.SpectralSlope), formatComparisonSpectral(om.SpectralSlope, m.SpectralSlope, 9))
 				fmt.Fprintf(f, "Spectral Decrease:   %s — %s %s\n", formatSpectralValue(om.SpectralDecrease, 6), interpretDecrease(om.SpectralDecrease), formatComparisonSpectral(om.SpectralDecrease, m.SpectralDecrease, 6))
 				fmt.Fprintf(f, "Spectral Rolloff:    %.0f Hz — %s %s\n", om.SpectralRolloff, interpretRolloff(om.SpectralRolloff), formatComparison(om.SpectralRolloff, m.SpectralRolloff, "Hz", 0))
+
+				// Signal quality comparison
+				fmt.Fprintln(f, "")
+				fmt.Fprintln(f, "Signal Quality:")
+				if om.BitDepth > 0 {
+					fmt.Fprintf(f, "  Effective Bit Depth: %.1f bits %s\n", om.BitDepth, formatComparisonNoUnit(om.BitDepth, m.BitDepth, 1))
+				}
+				if om.NumberOfSamples > 0 {
+					fmt.Fprintf(f, "  Total Samples:       %.0f\n", om.NumberOfSamples)
+				}
+				if om.DCOffset != 0 || m.DCOffset != 0 {
+					fmt.Fprintf(f, "  DC Offset:           %.6f %s\n", om.DCOffset, formatComparisonNoUnit(om.DCOffset, m.DCOffset, 6))
+				}
+				if om.FlatFactor > 0 || m.FlatFactor > 0 {
+					fmt.Fprintf(f, "  Flat Factor:         %.1f %s\n", om.FlatFactor, formatComparisonNoUnit(om.FlatFactor, m.FlatFactor, 1))
+				}
+				if om.Entropy > 0 {
+					fmt.Fprintf(f, "  Signal Entropy:      %.3f %s\n", om.Entropy, formatComparisonNoUnit(om.Entropy, m.Entropy, 3))
+				}
+				if om.ZeroCrossingsRate > 0 {
+					fmt.Fprintf(f, "  Zero Crossings Rate: %.4f %s\n", om.ZeroCrossingsRate, formatComparisonNoUnit(om.ZeroCrossingsRate, m.ZeroCrossingsRate, 4))
+				}
+				if om.ZeroCrossings > 0 {
+					fmt.Fprintf(f, "  Zero Crossings:      %.0f total\n", om.ZeroCrossings)
+				}
+
+				// Sample variation comparison
+				if om.MaxDifference > 0 || m.MaxDifference > 0 {
+					fmt.Fprintln(f, "")
+					fmt.Fprintln(f, "Sample Variation:")
+					if om.MaxDifference > 0 {
+						maxDiffPercent := (om.MaxDifference / 32768.0) * 100.0
+						inputMaxDiffPercent := (m.MaxDifference / 32768.0) * 100.0
+						fmt.Fprintf(f, "  Max Difference:      %.1f%% FS %s\n", maxDiffPercent, formatComparison(maxDiffPercent, inputMaxDiffPercent, "%%", 1))
+					}
+					if om.MinDifference > 0 {
+						minDiffPercent := (om.MinDifference / 32768.0) * 100.0
+						inputMinDiffPercent := (m.MinDifference / 32768.0) * 100.0
+						fmt.Fprintf(f, "  Min Difference:      %.4f%% FS %s\n", minDiffPercent, formatComparison(minDiffPercent, inputMinDiffPercent, "%%", 4))
+					}
+					if om.MeanDifference > 0 {
+						meanDiffPercent := (om.MeanDifference / 32768.0) * 100.0
+						inputMeanDiffPercent := (m.MeanDifference / 32768.0) * 100.0
+						fmt.Fprintf(f, "  Mean Difference:     %.4f%% FS %s\n", meanDiffPercent, formatComparison(meanDiffPercent, inputMeanDiffPercent, "%%", 4))
+					}
+					if om.RMSDifference > 0 {
+						rmsDiffPercent := (om.RMSDifference / 32768.0) * 100.0
+						inputRMSDiffPercent := (m.RMSDifference / 32768.0) * 100.0
+						fmt.Fprintf(f, "  RMS Difference:      %.4f%% FS %s\n", rmsDiffPercent, formatComparison(rmsDiffPercent, inputRMSDiffPercent, "%%", 4))
+					}
+				}
 			} else {
 				fmt.Fprintf(f, "Integrated Loudness: %.1f LUFS\n", om.OutputI)
 				fmt.Fprintf(f, "True Peak:           %.1f dBTP\n", om.OutputTP)
@@ -504,6 +680,51 @@ func GenerateReport(data ReportData) error {
 				fmt.Fprintf(f, "Dynamic Range:       %s\n", formatDynamicRange(om.DynamicRange))
 				fmt.Fprintf(f, "RMS Level:           %.1f dBFS\n", om.RMSLevel)
 				fmt.Fprintf(f, "Peak Level:          %.1f dBFS\n", om.PeakLevel)
+
+				// Additional astats measurements
+				if om.RMSTrough != 0 {
+					fmt.Fprintf(f, "RMS Trough:          %.1f dBFS\n", om.RMSTrough)
+				}
+				if om.RMSPeak != 0 {
+					fmt.Fprintf(f, "RMS Peak:            %.1f dBFS\n", om.RMSPeak)
+				}
+				if om.CrestFactor != 0 {
+					fmt.Fprintf(f, "Crest Factor:        %s\n", formatCrestFactor(om.CrestFactor))
+				}
+				if om.Entropy != 0 {
+					fmt.Fprintf(f, "Signal Entropy:      %.3f\n", om.Entropy)
+				}
+				if om.MinLevel != 0 {
+					minLevelPercent := (om.MinLevel / 32768.0) * 100.0
+					fmt.Fprintf(f, "Min Level:           %.4f%% FS\n", minLevelPercent)
+				}
+				if om.MaxLevel != 0 {
+					maxLevelPercent := (om.MaxLevel / 32768.0) * 100.0
+					fmt.Fprintf(f, "Max Level:           %.4f%% FS\n", maxLevelPercent)
+				}
+				if om.AstatsNoiseFloor != 0 {
+					fmt.Fprintf(f, "Astats Noise Floor:  %.1f dBFS\n", om.AstatsNoiseFloor)
+				}
+				if om.NoiseFloorCount != 0 {
+					fmt.Fprintf(f, "Noise Floor Count:   %.0f samples\n", om.NoiseFloorCount)
+				}
+				if om.BitDepth != 0 {
+					fmt.Fprintf(f, "Bit Depth:           %.1f bits\n", om.BitDepth)
+				}
+				if om.NumberOfSamples != 0 {
+					fmt.Fprintf(f, "Sample Count:        %.0f\n", om.NumberOfSamples)
+				}
+
+				// Additional ebur128 momentary/short-term
+				if om.MomentaryLoudness != 0 {
+					fmt.Fprintf(f, "Momentary Loudness:  %.1f LUFS\n", om.MomentaryLoudness)
+				}
+				if om.ShortTermLoudness != 0 {
+					fmt.Fprintf(f, "Short-term Loudness: %.1f LUFS\n", om.ShortTermLoudness)
+				}
+				if om.SamplePeak != 0 {
+					fmt.Fprintf(f, "Sample Peak:         %.1f dBFS\n", om.SamplePeak)
+				}
 
 				// Spectral analysis (aspectralstats measurements) with characteristic interpretations
 				fmt.Fprintf(f, "Spectral Mean:       %s (avg magnitude)\n", formatSpectralValue(om.SpectralMean, 6))

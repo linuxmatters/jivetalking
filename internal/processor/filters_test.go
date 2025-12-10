@@ -749,8 +749,8 @@ func TestBuildAnalysisFilter(t *testing.T) {
 		if !strings.Contains(result, "astats=metadata=1") {
 			t.Error("buildAnalysisFilter() missing astats filter")
 		}
-		if !strings.Contains(result, "measure_perchannel=Noise_floor+Dynamic_range+RMS_level+RMS_trough+Peak_level") {
-			t.Error("buildAnalysisFilter() missing detailed astats measurements (including RMS_trough)")
+		if !strings.Contains(result, "measure_perchannel=all") {
+			t.Error("buildAnalysisFilter() should request all astats measurements")
 		}
 		if !strings.Contains(result, "aspectralstats=win_size=2048") {
 			t.Error("buildAnalysisFilter() missing aspectralstats filter")
@@ -758,8 +758,8 @@ func TestBuildAnalysisFilter(t *testing.T) {
 		if !strings.Contains(result, "measure=all") {
 			t.Error("buildAnalysisFilter() should collect all spectral measurements")
 		}
-		if !strings.Contains(result, "ebur128=metadata=1:peak=true") {
-			t.Error("buildAnalysisFilter() missing ebur128 filter")
+		if !strings.Contains(result, "ebur128=metadata=1:peak=sample+true") {
+			t.Errorf("buildAnalysisFilter() missing ebur128 filter with sample+true peak, got %q", result)
 		}
 		if !strings.Contains(result, "target=-16") {
 			t.Errorf("buildAnalysisFilter() missing target=-16, got %q", result)
@@ -876,7 +876,8 @@ func TestBuildResampleFilter(t *testing.T) {
 
 func TestPass1FilterOrder(t *testing.T) {
 	t.Run("includes correct filters in order", func(t *testing.T) {
-		expected := []FilterID{FilterDownmix, FilterAnalysis, FilterSilenceDetect}
+		// Pass 1 now uses interval sampling for silence detection (no silencedetect filter)
+		expected := []FilterID{FilterDownmix, FilterAnalysis}
 
 		if len(Pass1FilterOrder) != len(expected) {
 			t.Fatalf("Pass1FilterOrder has %d filters, want %d", len(Pass1FilterOrder), len(expected))
@@ -895,10 +896,11 @@ func TestPass1FilterOrder(t *testing.T) {
 		}
 	})
 
-	t.Run("ends with SilenceDetect", func(t *testing.T) {
+	t.Run("ends with Analysis", func(t *testing.T) {
+		// After removing silencedetect, Pass 1 now ends with Analysis
 		last := Pass1FilterOrder[len(Pass1FilterOrder)-1]
-		if last != FilterSilenceDetect {
-			t.Errorf("Pass1FilterOrder should end with FilterSilenceDetect, got %q", last)
+		if last != FilterAnalysis {
+			t.Errorf("Pass1FilterOrder should end with FilterAnalysis, got %q", last)
 		}
 	})
 }

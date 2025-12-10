@@ -57,6 +57,417 @@ type SilenceCandidateMetrics struct {
 	Score float64 // Composite score for candidate ranking
 }
 
+// IntervalSample contains all measurements for a 250ms audio window.
+// Captures comprehensive metrics from astats, aspectralstats, and ebur128 for
+// silence detection, adaptive filter tuning, and post-hoc analysis.
+type IntervalSample struct {
+	Timestamp time.Duration `json:"timestamp"` // Start of this interval
+
+	// ─── astats amplitude metrics ───────────────────────────────────────────────
+	RMSLevel          float64 `json:"rms_level"`           // dBFS, RMS level for this window
+	PeakLevel         float64 `json:"peak_level"`          // dBFS, peak level for this window
+	RMSTrough         float64 `json:"rms_trough"`          // dBFS, minimum RMS (noise floor proxy)
+	RMSPeak           float64 `json:"rms_peak"`            // dBFS, maximum RMS
+	DynamicRange      float64 `json:"dynamic_range"`       // dB, peak-to-trough range
+	CrestFactor       float64 `json:"crest_factor"`        // dB, peak/RMS ratio (converted from linear)
+	FlatFactor        float64 `json:"flat_factor"`         // Flatness indicator (clipping detection)
+	DCOffset          float64 `json:"dc_offset"`           // DC offset value
+	ZeroCrossingsRate float64 `json:"zero_crossings_rate"` // Zero crossings per second
+	Entropy           float64 `json:"entropy"`             // Signal entropy (astats)
+	MinLevel          float64 `json:"min_level"`           // dBFS, minimum sample level (converted from linear)
+	MaxLevel          float64 `json:"max_level"`           // dBFS, maximum sample level (converted from linear)
+	MinDifference     float64 `json:"min_difference"`      // Minimum sample-to-sample difference
+	MaxDifference     float64 `json:"max_difference"`      // Maximum sample-to-sample difference (transients)
+	MeanDifference    float64 `json:"mean_difference"`     // Mean sample-to-sample difference
+	RMSDifference     float64 `json:"rms_difference"`      // RMS of sample-to-sample differences
+
+	// ─── aspectralstats spectral metrics ────────────────────────────────────────
+	SpectralMean     float64 `json:"spectral_mean"`     // Average magnitude
+	SpectralVariance float64 `json:"spectral_variance"` // Magnitude spread
+	SpectralCentroid float64 `json:"spectral_centroid"` // Hz - "brightness", speech 300-3000 Hz
+	SpectralSpread   float64 `json:"spectral_spread"`   // Hz - frequency bandwidth
+	SpectralSkewness float64 `json:"spectral_skewness"` // Distribution asymmetry
+	SpectralKurtosis float64 `json:"spectral_kurtosis"` // Distribution peakedness
+	SpectralEntropy  float64 `json:"spectral_entropy"`  // 0-1 - speech has lower entropy than noise
+	SpectralFlatness float64 `json:"spectral_flatness"` // 0-1 - high = noise-like, low = tonal
+	SpectralCrest    float64 `json:"spectral_crest"`    // Spectral peakiness
+	SpectralFlux     float64 `json:"spectral_flux"`     // Rate of spectral change (transitions)
+	SpectralSlope    float64 `json:"spectral_slope"`    // High-frequency roll-off rate
+	SpectralDecrease float64 `json:"spectral_decrease"` // High-frequency energy decay
+	SpectralRolloff  float64 `json:"spectral_rolloff"`  // Hz - frequency below which 85% energy lies
+
+	// ─── ebur128 loudness metrics ───────────────────────────────────────────────
+	MomentaryLUFS  float64 `json:"momentary_lufs"`  // LUFS - 400ms window loudness
+	ShortTermLUFS  float64 `json:"short_term_lufs"` // LUFS - 3s window loudness
+	IntegratedLUFS float64 `json:"integrated_lufs"` // LUFS - cumulative integrated loudness
+	LoudnessRange  float64 `json:"loudness_range"`  // LU - loudness range (LRA)
+	TruePeak       float64 `json:"true_peak"`       // dBTP - true peak level
+	SamplePeak     float64 `json:"sample_peak"`     // dBFS - sample peak level
+}
+
+// intervalAccumulator holds accumulated values for a 250ms interval window.
+// Values are aggregated appropriately: sums for averaging, min/max for extremes.
+type intervalAccumulator struct {
+	frameCount int // Number of frames in this interval
+
+	// ─── astats accumulators ────────────────────────────────────────────────────
+	// RMS level: sum-of-squares for proper power averaging
+	rmsLinearSum float64 // Sum of linear power values (10^(dBFS/10))
+
+	peakMax              float64 // Maximum peak level (dBFS)
+	rmsTroughMin         float64 // Minimum RMS trough (dBFS)
+	rmsPeakMax           float64 // Maximum RMS peak (dBFS)
+	dynamicRangeSum      float64 // Sum for averaging
+	crestFactorSum       float64 // Sum for averaging
+	flatFactorSum        float64 // Sum for averaging
+	dcOffsetSum          float64 // Sum for averaging
+	zeroCrossingsRateSum float64 // Sum for averaging
+	entropySum           float64 // Sum for averaging (astats entropy)
+	minLevelMin          float64 // Minimum of min levels
+	maxLevelMax          float64 // Maximum of max levels
+	minDifferenceMin     float64 // Minimum difference
+	maxDifferenceMax     float64 // Maximum difference (transients)
+	meanDifferenceSum    float64 // Sum for averaging
+	rmsDifferenceSum     float64 // Sum for averaging
+
+	// ─── aspectralstats accumulators ────────────────────────────────────────────
+	spectralMeanSum     float64
+	spectralVarianceSum float64
+	spectralCentroidSum float64
+	spectralSpreadSum   float64
+	spectralSkewnessSum float64
+	spectralKurtosisSum float64
+	spectralEntropySum  float64
+	spectralFlatnessSum float64
+	spectralCrestSum    float64
+	spectralFluxSum     float64
+	spectralSlopeSum    float64
+	spectralDecreaseSum float64
+	spectralRolloffSum  float64
+
+	// ─── ebur128 accumulators ───────────────────────────────────────────────────
+	momentaryLUFSSum  float64
+	shortTermLUFSSum  float64
+	integratedLUFSSum float64
+	loudnessRangeSum  float64
+	truePeakMax       float64 // Maximum true peak
+	samplePeakMax     float64 // Maximum sample peak
+}
+
+// intervalFrameMetrics holds all per-frame metrics extracted from FFmpeg metadata.
+type intervalFrameMetrics struct {
+	// astats
+	RMSLevel          float64
+	PeakLevel         float64
+	RMSTrough         float64
+	RMSPeak           float64
+	DynamicRange      float64
+	CrestFactor       float64
+	FlatFactor        float64
+	DCOffset          float64
+	ZeroCrossingsRate float64
+	Entropy           float64
+	MinLevel          float64
+	MaxLevel          float64
+	MinDifference     float64
+	MaxDifference     float64
+	MeanDifference    float64
+	RMSDifference     float64
+
+	// aspectralstats
+	SpectralMean     float64
+	SpectralVariance float64
+	SpectralCentroid float64
+	SpectralSpread   float64
+	SpectralSkewness float64
+	SpectralKurtosis float64
+	SpectralEntropy  float64
+	SpectralFlatness float64
+	SpectralCrest    float64
+	SpectralFlux     float64
+	SpectralSlope    float64
+	SpectralDecrease float64
+	SpectralRolloff  float64
+
+	// ebur128
+	MomentaryLUFS  float64
+	ShortTermLUFS  float64
+	IntegratedLUFS float64
+	LoudnessRange  float64
+	TruePeak       float64
+	SamplePeak     float64
+}
+
+// add accumulates a frame's metrics into the interval.
+func (a *intervalAccumulator) add(m intervalFrameMetrics) {
+	// RMS: convert from dBFS to linear power for proper averaging
+	if m.RMSLevel > -120 {
+		linearPower := math.Pow(10, m.RMSLevel/10)
+		a.rmsLinearSum += linearPower
+	}
+
+	// Peak levels: keep maximum
+	if a.frameCount == 0 || m.PeakLevel > a.peakMax {
+		a.peakMax = m.PeakLevel
+	}
+	if a.frameCount == 0 || m.RMSPeak > a.rmsPeakMax {
+		a.rmsPeakMax = m.RMSPeak
+	}
+	if a.frameCount == 0 || m.TruePeak > a.truePeakMax {
+		a.truePeakMax = m.TruePeak
+	}
+	if a.frameCount == 0 || m.SamplePeak > a.samplePeakMax {
+		a.samplePeakMax = m.SamplePeak
+	}
+	if a.frameCount == 0 || m.MaxLevel > a.maxLevelMax {
+		a.maxLevelMax = m.MaxLevel
+	}
+	if a.frameCount == 0 || m.MaxDifference > a.maxDifferenceMax {
+		a.maxDifferenceMax = m.MaxDifference
+	}
+
+	// Trough/minimum levels: keep minimum (but avoid -inf)
+	if a.frameCount == 0 || (m.RMSTrough > -120 && m.RMSTrough < a.rmsTroughMin) {
+		a.rmsTroughMin = m.RMSTrough
+	}
+	if a.frameCount == 0 || (m.MinLevel != 0 && m.MinLevel < a.minLevelMin) {
+		a.minLevelMin = m.MinLevel
+	}
+	if a.frameCount == 0 || (m.MinDifference != 0 && m.MinDifference < a.minDifferenceMin) {
+		a.minDifferenceMin = m.MinDifference
+	}
+
+	// astats sums for averaging
+	a.dynamicRangeSum += m.DynamicRange
+	a.crestFactorSum += m.CrestFactor
+	a.flatFactorSum += m.FlatFactor
+	a.dcOffsetSum += m.DCOffset
+	a.zeroCrossingsRateSum += m.ZeroCrossingsRate
+	a.entropySum += m.Entropy
+	a.meanDifferenceSum += m.MeanDifference
+	a.rmsDifferenceSum += m.RMSDifference
+
+	// aspectralstats sums for averaging
+	a.spectralMeanSum += m.SpectralMean
+	a.spectralVarianceSum += m.SpectralVariance
+	a.spectralCentroidSum += m.SpectralCentroid
+	a.spectralSpreadSum += m.SpectralSpread
+	a.spectralSkewnessSum += m.SpectralSkewness
+	a.spectralKurtosisSum += m.SpectralKurtosis
+	a.spectralEntropySum += m.SpectralEntropy
+	a.spectralFlatnessSum += m.SpectralFlatness
+	a.spectralCrestSum += m.SpectralCrest
+	a.spectralFluxSum += m.SpectralFlux
+	a.spectralSlopeSum += m.SpectralSlope
+	a.spectralDecreaseSum += m.SpectralDecrease
+	a.spectralRolloffSum += m.SpectralRolloff
+
+	// ebur128 sums for averaging
+	a.momentaryLUFSSum += m.MomentaryLUFS
+	a.shortTermLUFSSum += m.ShortTermLUFS
+	a.integratedLUFSSum += m.IntegratedLUFS
+	a.loudnessRangeSum += m.LoudnessRange
+
+	a.frameCount++
+}
+
+// finalize converts accumulated values to an IntervalSample.
+func (a *intervalAccumulator) finalize(timestamp time.Duration) IntervalSample {
+	sample := IntervalSample{
+		Timestamp: timestamp,
+
+		// Min/max values (already computed)
+		PeakLevel:     a.peakMax,
+		RMSTrough:     a.rmsTroughMin,
+		RMSPeak:       a.rmsPeakMax,
+		MinLevel:      a.minLevelMin,
+		MaxLevel:      a.maxLevelMax,
+		MinDifference: a.minDifferenceMin,
+		MaxDifference: a.maxDifferenceMax,
+		TruePeak:      a.truePeakMax,
+		SamplePeak:    a.samplePeakMax,
+	}
+
+	if a.frameCount > 0 {
+		n := float64(a.frameCount)
+
+		// RMS: convert accumulated linear power back to dBFS
+		if a.rmsLinearSum > 0 {
+			sample.RMSLevel = 10 * math.Log10(a.rmsLinearSum/n)
+		} else {
+			sample.RMSLevel = -120.0
+		}
+
+		// astats averages
+		sample.DynamicRange = a.dynamicRangeSum / n
+		sample.CrestFactor = a.crestFactorSum / n
+		sample.FlatFactor = a.flatFactorSum / n
+		sample.DCOffset = a.dcOffsetSum / n
+		sample.ZeroCrossingsRate = a.zeroCrossingsRateSum / n
+		sample.Entropy = a.entropySum / n
+		sample.MeanDifference = a.meanDifferenceSum / n
+		sample.RMSDifference = a.rmsDifferenceSum / n
+
+		// aspectralstats averages
+		sample.SpectralMean = a.spectralMeanSum / n
+		sample.SpectralVariance = a.spectralVarianceSum / n
+		sample.SpectralCentroid = a.spectralCentroidSum / n
+		sample.SpectralSpread = a.spectralSpreadSum / n
+		sample.SpectralSkewness = a.spectralSkewnessSum / n
+		sample.SpectralKurtosis = a.spectralKurtosisSum / n
+		sample.SpectralEntropy = a.spectralEntropySum / n
+		sample.SpectralFlatness = a.spectralFlatnessSum / n
+		sample.SpectralCrest = a.spectralCrestSum / n
+		sample.SpectralFlux = a.spectralFluxSum / n
+		sample.SpectralSlope = a.spectralSlopeSum / n
+		sample.SpectralDecrease = a.spectralDecreaseSum / n
+		sample.SpectralRolloff = a.spectralRolloffSum / n
+
+		// ebur128 averages
+		sample.MomentaryLUFS = a.momentaryLUFSSum / n
+		sample.ShortTermLUFS = a.shortTermLUFSSum / n
+		sample.IntegratedLUFS = a.integratedLUFSSum / n
+		sample.LoudnessRange = a.loudnessRangeSum / n
+	}
+
+	return sample
+}
+
+// reset clears the accumulator for the next interval.
+func (a *intervalAccumulator) reset() {
+	a.frameCount = 0
+
+	// astats
+	a.rmsLinearSum = 0
+	a.peakMax = -120.0
+	a.rmsTroughMin = 0
+	a.rmsPeakMax = -120.0
+	a.dynamicRangeSum = 0
+	a.crestFactorSum = 0
+	a.flatFactorSum = 0
+	a.dcOffsetSum = 0
+	a.zeroCrossingsRateSum = 0
+	a.entropySum = 0
+	a.minLevelMin = 0
+	a.maxLevelMax = 0
+	a.minDifferenceMin = 0
+	a.maxDifferenceMax = 0
+	a.meanDifferenceSum = 0
+	a.rmsDifferenceSum = 0
+
+	// aspectralstats
+	a.spectralMeanSum = 0
+	a.spectralVarianceSum = 0
+	a.spectralCentroidSum = 0
+	a.spectralSpreadSum = 0
+	a.spectralSkewnessSum = 0
+	a.spectralKurtosisSum = 0
+	a.spectralEntropySum = 0
+	a.spectralFlatnessSum = 0
+	a.spectralCrestSum = 0
+	a.spectralFluxSum = 0
+	a.spectralSlopeSum = 0
+	a.spectralDecreaseSum = 0
+	a.spectralRolloffSum = 0
+
+	// ebur128
+	a.momentaryLUFSSum = 0
+	a.shortTermLUFSSum = 0
+	a.integratedLUFSSum = 0
+	a.loudnessRangeSum = 0
+	a.truePeakMax = -120.0
+	a.samplePeakMax = -120.0
+}
+
+// Silence detection constants for interval-based analysis
+const (
+	// intervalSilenceHeadroom is added to noise floor to determine silence threshold
+	intervalSilenceHeadroom = 6.0 // dB
+
+	// minimumSilenceIntervals is the minimum number of consecutive silent intervals
+	// for a region to be considered a valid silence candidate (250ms * 4 = 1s minimum)
+	minimumSilenceIntervals = 4
+
+	// spectralFlatnessThreshold: above this value indicates noise-like (not speech)
+	// Speech has structured harmonics (low flatness), noise is more uniform (high flatness)
+	spectralFlatnessThreshold = 0.3
+
+	// spectralCentroidMaxHz: silence/noise typically has lower frequency content than speech
+	// Voice energy is concentrated in 300-3000Hz range
+	spectralCentroidMaxHz = 1500.0
+)
+
+// findSilenceCandidatesFromIntervals identifies silence regions from interval samples.
+// Uses multi-metric discrimination: RMS level, spectral flatness, and spectral centroid.
+// Returns silence regions that meet minimum duration requirements.
+func findSilenceCandidatesFromIntervals(intervals []IntervalSample, noiseFloor float64) []SilenceRegion {
+	if len(intervals) == 0 {
+		return nil
+	}
+
+	// Adaptive threshold: noise floor + headroom
+	threshold := noiseFloor + intervalSilenceHeadroom
+
+	var candidates []SilenceRegion
+	var currentStart time.Duration
+	var silentIntervalCount int
+	inSilence := false
+
+	for i, interval := range intervals {
+		// Multi-metric silence discrimination:
+		// 1. RMS level below threshold (quiet)
+		// 2. Spectral flatness above threshold (noise-like, not speech harmonics)
+		// 3. Spectral centroid below threshold (low frequency content)
+		isSilent := interval.RMSLevel < threshold &&
+			interval.SpectralFlatness > spectralFlatnessThreshold &&
+			interval.SpectralCentroid < spectralCentroidMaxHz
+
+		if isSilent {
+			if !inSilence {
+				// Start of a new potential silence region
+				currentStart = interval.Timestamp
+				silentIntervalCount = 1
+				inSilence = true
+			} else {
+				silentIntervalCount++
+			}
+		} else if inSilence {
+			// End of silence region
+			if silentIntervalCount >= minimumSilenceIntervals {
+				// Calculate end time from last silent interval
+				lastSilentIdx := i - 1
+				if lastSilentIdx >= 0 && lastSilentIdx < len(intervals) {
+					endTime := intervals[lastSilentIdx].Timestamp + 250*time.Millisecond
+					duration := endTime - currentStart
+
+					candidates = append(candidates, SilenceRegion{
+						Start:    currentStart,
+						End:      endTime,
+						Duration: duration,
+					})
+				}
+			}
+			inSilence = false
+			silentIntervalCount = 0
+		}
+	}
+
+	// Handle silence at end of file
+	if inSilence && silentIntervalCount >= minimumSilenceIntervals {
+		lastInterval := intervals[len(intervals)-1]
+		endTime := lastInterval.Timestamp + 250*time.Millisecond
+		duration := endTime - currentStart
+
+		candidates = append(candidates, SilenceRegion{
+			Start:    currentStart,
+			End:      endTime,
+			Duration: duration,
+		})
+	}
+
+	return candidates
+}
+
 // Cached metadata keys for frame extraction - avoids per-frame C string allocations
 // These use GlobalCStr which maintains an internal cache, so identical strings share the same CStr
 var (
@@ -75,18 +486,35 @@ var (
 	metaKeySpectralDecrease = ffmpeg.GlobalCStr("lavfi.aspectralstats.1.decrease")
 	metaKeySpectralRolloff  = ffmpeg.GlobalCStr("lavfi.aspectralstats.1.rolloff")
 
-	// astats metadata keys
+	// astats per-channel metadata keys (channel .1 for mono after downmix)
 	metaKeyDynamicRange      = ffmpeg.GlobalCStr("lavfi.astats.1.Dynamic_range")
 	metaKeyRMSLevel          = ffmpeg.GlobalCStr("lavfi.astats.1.RMS_level")
 	metaKeyPeakLevel         = ffmpeg.GlobalCStr("lavfi.astats.1.Peak_level")
 	metaKeyRMSTrough         = ffmpeg.GlobalCStr("lavfi.astats.1.RMS_trough")
+	metaKeyRMSPeak           = ffmpeg.GlobalCStr("lavfi.astats.1.RMS_peak")
 	metaKeyDCOffset          = ffmpeg.GlobalCStr("lavfi.astats.1.DC_offset")
 	metaKeyFlatFactor        = ffmpeg.GlobalCStr("lavfi.astats.1.Flat_factor")
+	metaKeyCrestFactor       = ffmpeg.GlobalCStr("lavfi.astats.1.Crest_factor")
 	metaKeyZeroCrossingsRate = ffmpeg.GlobalCStr("lavfi.astats.1.Zero_crossings_rate")
+	metaKeyZeroCrossings     = ffmpeg.GlobalCStr("lavfi.astats.1.Zero_crossings")
 	metaKeyMaxDifference     = ffmpeg.GlobalCStr("lavfi.astats.1.Max_difference")
+	metaKeyMinDifference     = ffmpeg.GlobalCStr("lavfi.astats.1.Min_difference")
+	metaKeyMeanDifference    = ffmpeg.GlobalCStr("lavfi.astats.1.Mean_difference")
+	metaKeyRMSDifference     = ffmpeg.GlobalCStr("lavfi.astats.1.RMS_difference")
 	metaKeyEntropy           = ffmpeg.GlobalCStr("lavfi.astats.1.Entropy")
+	metaKeyMinLevel          = ffmpeg.GlobalCStr("lavfi.astats.1.Min_level")
+	metaKeyMaxLevel          = ffmpeg.GlobalCStr("lavfi.astats.1.Max_level")
+	metaKeyNoiseFloor        = ffmpeg.GlobalCStr("lavfi.astats.1.Noise_floor")
+	metaKeyNoiseFloorCount   = ffmpeg.GlobalCStr("lavfi.astats.1.Noise_floor_count")
+	metaKeyBitDepth          = ffmpeg.GlobalCStr("lavfi.astats.1.Bit_depth")
+	metaKeyNumberOfSamples   = ffmpeg.GlobalCStr("lavfi.astats.1.Number_of_samples")
+
+	// ebur128 metadata keys
 	metaKeyEbur128I          = ffmpeg.GlobalCStr("lavfi.r128.I")
+	metaKeyEbur128M          = ffmpeg.GlobalCStr("lavfi.r128.M")
+	metaKeyEbur128S          = ffmpeg.GlobalCStr("lavfi.r128.S")
 	metaKeyEbur128TruePeak   = ffmpeg.GlobalCStr("lavfi.r128.true_peak")
+	metaKeyEbur128SamplePeak = ffmpeg.GlobalCStr("lavfi.r128.sample_peak")
 	metaKeyEbur128LRA        = ffmpeg.GlobalCStr("lavfi.r128.LRA")
 
 	// Silence detection metadata keys (from silencedetect filter)
@@ -124,15 +552,31 @@ type metadataAccumulators struct {
 	astatsRMSLevel          float64
 	astatsPeakLevel         float64
 	astatsRMSTrough         float64
+	astatsRMSPeak           float64
 	astatsDCOffset          float64
 	astatsFlatFactor        float64
+	astatsCrestFactor       float64
 	astatsZeroCrossingsRate float64
+	astatsZeroCrossings     float64
 	astatsMaxDifference     float64
+	astatsMinDifference     float64
+	astatsMeanDifference    float64
+	astatsRMSDifference     float64
+	astatsEntropy           float64
+	astatsMinLevel          float64
+	astatsMaxLevel          float64
+	astatsNoiseFloor        float64
+	astatsNoiseFloorCount   float64
+	astatsBitDepth          float64
+	astatsNumberOfSamples   float64
 	astatsFound             bool
 
 	// ebur128 measurements (cumulative - we keep latest values)
 	ebur128InputI   float64
+	ebur128InputM   float64 // Momentary loudness (400ms window, updates per frame)
+	ebur128InputS   float64 // Short-term loudness (3s window)
 	ebur128InputTP  float64
+	ebur128InputSP  float64 // Sample peak
 	ebur128InputLRA float64
 	ebur128Found    bool
 
@@ -152,6 +596,105 @@ func getFloatMetadata(metadata *ffmpeg.AVDictionary, key *ffmpeg.CStr) (float64,
 		}
 	}
 	return 0.0, false
+}
+
+// linearRatioToDB converts a linear ratio (e.g., Crest_factor) to decibels.
+// FFmpeg's astats Crest_factor is reported as a linear ratio (peak/RMS), not in dB.
+func linearRatioToDB(ratio float64) float64 {
+	if ratio <= 0 {
+		return -120.0 // Floor for zero/negative values
+	}
+	return 20 * math.Log10(ratio)
+}
+
+// linearSampleToDBFS converts a linear sample value to dBFS.
+// FFmpeg's astats Min_level and Max_level are reported as linear sample values
+// (typically -1.0 to +1.0 for float audio, or integer sample values).
+// We normalize assuming the value represents the fraction of full scale.
+func linearSampleToDBFS(sample float64) float64 {
+	absVal := math.Abs(sample)
+	if absVal <= 0 {
+		return -120.0 // Floor for zero values
+	}
+	// For normalized float audio (-1.0 to +1.0), this is direct
+	// For integer sample values, we need to detect and normalize
+	// If abs value > 1.0, assume integer samples and normalize to 16-bit range
+	if absVal > 1.0 {
+		// Likely integer sample value (e.g., from 16-bit audio: -32768 to 32767)
+		absVal = absVal / 32768.0
+	}
+	if absVal > 1.0 {
+		absVal = 1.0 // Clamp to 0 dBFS max
+	}
+	return 20 * math.Log10(absVal)
+}
+
+// extractIntervalFrameMetrics extracts all metrics from a frame for interval accumulation.
+// Collects comprehensive measurements from astats, aspectralstats, and ebur128.
+// Applies unit conversions for metrics that FFmpeg reports in linear units.
+func extractIntervalFrameMetrics(metadata *ffmpeg.AVDictionary) intervalFrameMetrics {
+	var m intervalFrameMetrics
+
+	// astats metrics
+	m.RMSLevel, _ = getFloatMetadata(metadata, metaKeyRMSLevel)
+	m.PeakLevel, _ = getFloatMetadata(metadata, metaKeyPeakLevel)
+	m.RMSTrough, _ = getFloatMetadata(metadata, metaKeyRMSTrough)
+	m.RMSPeak, _ = getFloatMetadata(metadata, metaKeyRMSPeak)
+	m.DynamicRange, _ = getFloatMetadata(metadata, metaKeyDynamicRange)
+
+	// CrestFactor: FFmpeg reports as linear ratio (peak/RMS), convert to dB
+	if rawCrest, ok := getFloatMetadata(metadata, metaKeyCrestFactor); ok {
+		m.CrestFactor = linearRatioToDB(rawCrest)
+	}
+
+	m.FlatFactor, _ = getFloatMetadata(metadata, metaKeyFlatFactor)
+	m.DCOffset, _ = getFloatMetadata(metadata, metaKeyDCOffset)
+	m.ZeroCrossingsRate, _ = getFloatMetadata(metadata, metaKeyZeroCrossingsRate)
+	m.Entropy, _ = getFloatMetadata(metadata, metaKeyEntropy)
+
+	// MinLevel/MaxLevel: FFmpeg reports as linear sample values, convert to dBFS
+	if rawMin, ok := getFloatMetadata(metadata, metaKeyMinLevel); ok {
+		m.MinLevel = linearSampleToDBFS(rawMin)
+	}
+	if rawMax, ok := getFloatMetadata(metadata, metaKeyMaxLevel); ok {
+		m.MaxLevel = linearSampleToDBFS(rawMax)
+	}
+
+	m.MinDifference, _ = getFloatMetadata(metadata, metaKeyMinDifference)
+	m.MaxDifference, _ = getFloatMetadata(metadata, metaKeyMaxDifference)
+	m.MeanDifference, _ = getFloatMetadata(metadata, metaKeyMeanDifference)
+	m.RMSDifference, _ = getFloatMetadata(metadata, metaKeyRMSDifference)
+
+	// aspectralstats metrics
+	m.SpectralMean, _ = getFloatMetadata(metadata, metaKeySpectralMean)
+	m.SpectralVariance, _ = getFloatMetadata(metadata, metaKeySpectralVariance)
+	m.SpectralCentroid, _ = getFloatMetadata(metadata, metaKeySpectralCentroid)
+	m.SpectralSpread, _ = getFloatMetadata(metadata, metaKeySpectralSpread)
+	m.SpectralSkewness, _ = getFloatMetadata(metadata, metaKeySpectralSkewness)
+	m.SpectralKurtosis, _ = getFloatMetadata(metadata, metaKeySpectralKurtosis)
+	m.SpectralEntropy, _ = getFloatMetadata(metadata, metaKeySpectralEntropy)
+	m.SpectralFlatness, _ = getFloatMetadata(metadata, metaKeySpectralFlatness)
+	m.SpectralCrest, _ = getFloatMetadata(metadata, metaKeySpectralCrest)
+	m.SpectralFlux, _ = getFloatMetadata(metadata, metaKeySpectralFlux)
+	m.SpectralSlope, _ = getFloatMetadata(metadata, metaKeySpectralSlope)
+	m.SpectralDecrease, _ = getFloatMetadata(metadata, metaKeySpectralDecrease)
+	m.SpectralRolloff, _ = getFloatMetadata(metadata, metaKeySpectralRolloff)
+
+	// ebur128 metrics - TruePeak and SamplePeak need linear-to-dB conversion
+	m.MomentaryLUFS, _ = getFloatMetadata(metadata, metaKeyEbur128M)
+	m.ShortTermLUFS, _ = getFloatMetadata(metadata, metaKeyEbur128S)
+	m.IntegratedLUFS, _ = getFloatMetadata(metadata, metaKeyEbur128I)
+	m.LoudnessRange, _ = getFloatMetadata(metadata, metaKeyEbur128LRA)
+
+	// ebur128 peak values are linear ratios, convert to dB
+	if rawTP, ok := getFloatMetadata(metadata, metaKeyEbur128TruePeak); ok {
+		m.TruePeak = linearRatioToDB(rawTP)
+	}
+	if rawSP, ok := getFloatMetadata(metadata, metaKeyEbur128SamplePeak); ok {
+		m.SamplePeak = linearRatioToDB(rawSP)
+	}
+
+	return m
 }
 
 // extractFrameMetadata extracts audio analysis metadata from a filtered frame.
@@ -226,6 +769,11 @@ func extractFrameMetadata(metadata *ffmpeg.AVDictionary, acc *metadataAccumulato
 		acc.astatsRMSTrough = value
 	}
 
+	// Extract RMS_peak - RMS level of loudest segments
+	if value, ok := getFloatMetadata(metadata, metaKeyRMSPeak); ok {
+		acc.astatsRMSPeak = value
+	}
+
 	// Extract DC_offset - mean amplitude displacement from zero
 	// High values indicate DC bias that should be removed before processing
 	if value, ok := getFloatMetadata(metadata, metaKeyDCOffset); ok {
@@ -238,10 +786,21 @@ func extractFrameMetadata(metadata *ffmpeg.AVDictionary, acc *metadataAccumulato
 		acc.astatsFlatFactor = value
 	}
 
+	// Extract Crest_factor - FFmpeg reports as linear ratio (peak/RMS), convert to dB
+	// High values indicate impulsive/dynamic content, low values indicate compressed/limited audio
+	if value, ok := getFloatMetadata(metadata, metaKeyCrestFactor); ok {
+		acc.astatsCrestFactor = linearRatioToDB(value)
+	}
+
 	// Extract Zero_crossings_rate - rate of zero crossings per sample
 	// Low ZCR = bass-heavy/sustained tones, High ZCR = noise/sibilance
 	if value, ok := getFloatMetadata(metadata, metaKeyZeroCrossingsRate); ok {
 		acc.astatsZeroCrossingsRate = value
+	}
+
+	// Extract Zero_crossings - total number of zero crossings
+	if value, ok := getFloatMetadata(metadata, metaKeyZeroCrossings); ok {
+		acc.astatsZeroCrossings = value
 	}
 
 	// Extract Max_difference - largest sample-to-sample change
@@ -250,12 +809,69 @@ func extractFrameMetadata(metadata *ffmpeg.AVDictionary, acc *metadataAccumulato
 		acc.astatsMaxDifference = value
 	}
 
+	// Extract Min_difference - smallest sample-to-sample change
+	if value, ok := getFloatMetadata(metadata, metaKeyMinDifference); ok {
+		acc.astatsMinDifference = value
+	}
+
+	// Extract Mean_difference - average sample-to-sample change
+	if value, ok := getFloatMetadata(metadata, metaKeyMeanDifference); ok {
+		acc.astatsMeanDifference = value
+	}
+
+	// Extract RMS_difference - RMS of sample-to-sample changes
+	if value, ok := getFloatMetadata(metadata, metaKeyRMSDifference); ok {
+		acc.astatsRMSDifference = value
+	}
+
+	// Extract Entropy - signal randomness (1.0 = white noise, lower = more structured)
+	if value, ok := getFloatMetadata(metadata, metaKeyEntropy); ok {
+		acc.astatsEntropy = value
+	}
+
+	// Extract Min_level and Max_level - FFmpeg reports as linear sample values, convert to dBFS
+	if value, ok := getFloatMetadata(metadata, metaKeyMinLevel); ok {
+		acc.astatsMinLevel = linearSampleToDBFS(value)
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyMaxLevel); ok {
+		acc.astatsMaxLevel = linearSampleToDBFS(value)
+	}
+
+	// Extract Noise_floor - FFmpeg's own noise floor estimate (dBFS)
+	// Very useful for adaptive gate/noise reduction thresholds
+	if value, ok := getFloatMetadata(metadata, metaKeyNoiseFloor); ok {
+		acc.astatsNoiseFloor = value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyNoiseFloorCount); ok {
+		acc.astatsNoiseFloorCount = value
+	}
+
+	// Extract Bit_depth - effective bit depth of audio
+	if value, ok := getFloatMetadata(metadata, metaKeyBitDepth); ok {
+		acc.astatsBitDepth = value
+	}
+
+	// Extract Number_of_samples - total samples processed
+	if value, ok := getFloatMetadata(metadata, metaKeyNumberOfSamples); ok {
+		acc.astatsNumberOfSamples = value
+	}
+
 	// Extract ebur128 measurements (cumulative loudness analysis)
-	// ebur128 provides: M.* (momentary), S.* (short-term), I (integrated), LRA, sample_peak, true_peak
-	// We need the integrated loudness measurements for normalization
+	// ebur128 provides: M (momentary 400ms), S (short-term 3s), I (integrated), LRA, sample_peak, true_peak
+	// We need these for loudness normalization and interval-based analysis
 	if value, ok := getFloatMetadata(metadata, metaKeyEbur128I); ok {
 		acc.ebur128InputI = value
 		acc.ebur128Found = true
+	}
+
+	// Momentary loudness (400ms window) - useful for interval-based silence detection
+	if value, ok := getFloatMetadata(metadata, metaKeyEbur128M); ok {
+		acc.ebur128InputM = value
+	}
+
+	// Short-term loudness (3s window)
+	if value, ok := getFloatMetadata(metadata, metaKeyEbur128S); ok {
+		acc.ebur128InputS = value
 	}
 
 	if value, ok := getFloatMetadata(metadata, metaKeyEbur128TruePeak); ok {
@@ -265,6 +881,15 @@ func extractFrameMetadata(metadata *ffmpeg.AVDictionary, acc *metadataAccumulato
 			acc.ebur128InputTP = 20 * math.Log10(value)
 		} else {
 			acc.ebur128InputTP = -120.0 // Floor for zero/negative values
+		}
+	}
+
+	// Sample peak (linear ratio, convert to dB)
+	if value, ok := getFloatMetadata(metadata, metaKeyEbur128SamplePeak); ok {
+		if value > 0 {
+			acc.ebur128InputSP = 20 * math.Log10(value)
+		} else {
+			acc.ebur128InputSP = -120.0
 		}
 	}
 
@@ -323,9 +948,9 @@ func extractFrameMetadata(metadata *ffmpeg.AVDictionary, acc *metadataAccumulato
 	}
 }
 
-// AudioMeasurements contains the measurements from Pass 1 analysis
-// Uses ebur128 (LUFS/LRA), astats (dynamic range/noise floor), aspectralstats (spectral analysis),
-// and silencedetect (silence regions for noise profile extraction)
+// AudioMeasurements contains the measurements from Pass 1 analysis.
+// Uses ebur128 (LUFS/LRA), astats (dynamic range/noise floor), and aspectralstats (spectral analysis).
+// Silence detection is performed in Go using 250ms interval sampling for improved accuracy.
 type AudioMeasurements struct {
 	InputI       float64 `json:"input_i"`       // Integrated loudness (LUFS)
 	InputTP      float64 `json:"input_tp"`      // True peak (dBTP)
@@ -358,15 +983,36 @@ type AudioMeasurements struct {
 	RMSLevel     float64 `json:"rms_level"`     // Overall RMS level (dBFS)
 	PeakLevel    float64 `json:"peak_level"`    // Overall peak level (dBFS)
 	RMSTrough    float64 `json:"rms_trough"`    // RMS level of quietest segments - best noise floor indicator (dBFS)
+	RMSPeak      float64 `json:"rms_peak"`      // RMS level of loudest segments (dBFS)
 
 	// Additional astats measurements for adaptive processing
 	DCOffset          float64 `json:"dc_offset"`           // Mean amplitude displacement from zero (needs dcshift if significant)
 	FlatFactor        float64 `json:"flat_factor"`         // Consecutive samples at peak (indicates clipping/limiting)
+	CrestFactor       float64 `json:"crest_factor"`        // Peak-to-RMS ratio in dB (converted from linear)
 	ZeroCrossingsRate float64 `json:"zero_crossings_rate"` // Zero crossing rate (low=bass, high=noise/sibilance)
+	ZeroCrossings     float64 `json:"zero_crossings"`      // Total zero crossings
 	MaxDifference     float64 `json:"max_difference"`      // Largest sample-to-sample change (indicates clicks/pops)
+	MinDifference     float64 `json:"min_difference"`      // Smallest sample-to-sample change
+	MeanDifference    float64 `json:"mean_difference"`     // Average sample-to-sample change
+	RMSDifference     float64 `json:"rms_difference"`      // RMS of sample-to-sample changes
+	Entropy           float64 `json:"entropy"`             // Signal randomness (1.0 = white noise, lower = structured)
+	MinLevel          float64 `json:"min_level"`           // dBFS, minimum sample level (converted from linear)
+	MaxLevel          float64 `json:"max_level"`           // dBFS, maximum sample level (converted from linear)
+	AstatsNoiseFloor  float64 `json:"astats_noise_floor"`  // FFmpeg astats noise floor estimate (dBFS)
+	NoiseFloorCount   float64 `json:"noise_floor_count"`   // Number of samples in noise floor measurement
+	BitDepth          float64 `json:"bit_depth"`           // Effective bit depth of audio
+	NumberOfSamples   float64 `json:"number_of_samples"`   // Total samples processed
 
-	// Silence detection results from silencedetect filter
+	// ebur128 momentary/short-term loudness (useful for interval analysis)
+	MomentaryLoudness float64 `json:"momentary_loudness"`  // Momentary loudness (400ms window, LUFS)
+	ShortTermLoudness float64 `json:"short_term_loudness"` // Short-term loudness (3s window, LUFS)
+	SamplePeak        float64 `json:"sample_peak"`         // Sample peak (dBFS)
+
+	// Silence detection results (derived from interval sampling)
 	SilenceRegions []SilenceRegion `json:"silence_regions,omitempty"` // Detected silence regions
+
+	// 250ms interval samples for data-driven silence candidate detection
+	IntervalSamples []IntervalSample `json:"interval_samples,omitempty"` // Per-interval measurements
 
 	// Scored silence candidates (for debugging/reporting)
 	SilenceCandidates []SilenceCandidateMetrics `json:"silence_candidates,omitempty"` // All evaluated candidates with scores
@@ -419,12 +1065,30 @@ type OutputMeasurements struct {
 	RMSLevel     float64 `json:"rms_level"`     // Overall RMS level (dBFS)
 	PeakLevel    float64 `json:"peak_level"`    // Overall peak level (dBFS)
 	RMSTrough    float64 `json:"rms_trough"`    // RMS level of quietest segments (dBFS)
+	RMSPeak      float64 `json:"rms_peak"`      // RMS level of loudest segments (dBFS)
 
 	// Additional astats measurements
 	DCOffset          float64 `json:"dc_offset"`           // Mean amplitude displacement from zero
 	FlatFactor        float64 `json:"flat_factor"`         // Consecutive samples at peak (clipping indicator)
+	CrestFactor       float64 `json:"crest_factor"`        // Peak-to-RMS ratio in dB (converted from linear)
 	ZeroCrossingsRate float64 `json:"zero_crossings_rate"` // Zero crossing rate
+	ZeroCrossings     float64 `json:"zero_crossings"`      // Total zero crossings
 	MaxDifference     float64 `json:"max_difference"`      // Largest sample-to-sample change
+	MinDifference     float64 `json:"min_difference"`      // Smallest sample-to-sample change
+	MeanDifference    float64 `json:"mean_difference"`     // Average sample-to-sample change
+	RMSDifference     float64 `json:"rms_difference"`      // RMS of sample-to-sample changes
+	Entropy           float64 `json:"entropy"`             // Signal randomness
+	MinLevel          float64 `json:"min_level"`           // dBFS, minimum sample level (converted from linear)
+	MaxLevel          float64 `json:"max_level"`           // dBFS, maximum sample level (converted from linear)
+	AstatsNoiseFloor  float64 `json:"astats_noise_floor"`  // FFmpeg astats noise floor estimate (dBFS)
+	NoiseFloorCount   float64 `json:"noise_floor_count"`   // Number of samples in noise floor measurement
+	BitDepth          float64 `json:"bit_depth"`           // Effective bit depth
+	NumberOfSamples   float64 `json:"number_of_samples"`   // Total samples processed
+
+	// ebur128 momentary/short-term loudness
+	MomentaryLoudness float64 `json:"momentary_loudness"`  // Momentary loudness (400ms window, LUFS)
+	ShortTermLoudness float64 `json:"short_term_loudness"` // Short-term loudness (3s window, LUFS)
+	SamplePeak        float64 `json:"sample_peak"`         // Sample peak (dBFS)
 
 	// Silence region analysis (same region as Pass 1, for noise reduction comparison)
 	SilenceSample *SilenceAnalysis `json:"silence_sample,omitempty"` // Measurements from same silence region
@@ -454,15 +1118,31 @@ type outputMetadataAccumulators struct {
 	astatsRMSLevel          float64
 	astatsPeakLevel         float64
 	astatsRMSTrough         float64
+	astatsRMSPeak           float64
 	astatsDCOffset          float64
 	astatsFlatFactor        float64
+	astatsCrestFactor       float64
 	astatsZeroCrossingsRate float64
+	astatsZeroCrossings     float64
 	astatsMaxDifference     float64
+	astatsMinDifference     float64
+	astatsMeanDifference    float64
+	astatsRMSDifference     float64
+	astatsEntropy           float64
+	astatsMinLevel          float64
+	astatsMaxLevel          float64
+	astatsNoiseFloor        float64
+	astatsNoiseFloorCount   float64
+	astatsBitDepth          float64
+	astatsNumberOfSamples   float64
 	astatsFound             bool
 
 	// ebur128 measurements (cumulative - we keep latest values)
 	ebur128OutputI   float64
+	ebur128OutputM   float64 // Momentary loudness
+	ebur128OutputS   float64 // Short-term loudness
 	ebur128OutputTP  float64
+	ebur128OutputSP  float64 // Sample peak
 	ebur128OutputLRA float64
 	ebur128Found     bool
 }
@@ -531,23 +1211,70 @@ func extractOutputFrameMetadata(metadata *ffmpeg.AVDictionary, acc *outputMetada
 	if value, ok := getFloatMetadata(metadata, metaKeyRMSTrough); ok {
 		acc.astatsRMSTrough = value
 	}
+	if value, ok := getFloatMetadata(metadata, metaKeyRMSPeak); ok {
+		acc.astatsRMSPeak = value
+	}
 	if value, ok := getFloatMetadata(metadata, metaKeyDCOffset); ok {
 		acc.astatsDCOffset = value
 	}
 	if value, ok := getFloatMetadata(metadata, metaKeyFlatFactor); ok {
 		acc.astatsFlatFactor = value
 	}
+	// CrestFactor: FFmpeg reports as linear ratio (peak/RMS), convert to dB
+	if value, ok := getFloatMetadata(metadata, metaKeyCrestFactor); ok {
+		acc.astatsCrestFactor = linearRatioToDB(value)
+	}
 	if value, ok := getFloatMetadata(metadata, metaKeyZeroCrossingsRate); ok {
 		acc.astatsZeroCrossingsRate = value
 	}
+	if value, ok := getFloatMetadata(metadata, metaKeyZeroCrossings); ok {
+		acc.astatsZeroCrossings = value
+	}
 	if value, ok := getFloatMetadata(metadata, metaKeyMaxDifference); ok {
 		acc.astatsMaxDifference = value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyMinDifference); ok {
+		acc.astatsMinDifference = value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyMeanDifference); ok {
+		acc.astatsMeanDifference = value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyRMSDifference); ok {
+		acc.astatsRMSDifference = value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyEntropy); ok {
+		acc.astatsEntropy = value
+	}
+	// MinLevel/MaxLevel: FFmpeg reports as linear sample values, convert to dBFS
+	if value, ok := getFloatMetadata(metadata, metaKeyMinLevel); ok {
+		acc.astatsMinLevel = linearSampleToDBFS(value)
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyMaxLevel); ok {
+		acc.astatsMaxLevel = linearSampleToDBFS(value)
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyNoiseFloor); ok {
+		acc.astatsNoiseFloor = value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyNoiseFloorCount); ok {
+		acc.astatsNoiseFloorCount = value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyBitDepth); ok {
+		acc.astatsBitDepth = value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyNumberOfSamples); ok {
+		acc.astatsNumberOfSamples = value
 	}
 
 	// Extract ebur128 measurements
 	if value, ok := getFloatMetadata(metadata, metaKeyEbur128I); ok {
 		acc.ebur128OutputI = value
 		acc.ebur128Found = true
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyEbur128M); ok {
+		acc.ebur128OutputM = value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyEbur128S); ok {
+		acc.ebur128OutputS = value
 	}
 	if value, ok := getFloatMetadata(metadata, metaKeyEbur128TruePeak); ok {
 		// ebur128 reports true_peak as linear ratio, convert to dBTP
@@ -556,6 +1283,13 @@ func extractOutputFrameMetadata(metadata *ffmpeg.AVDictionary, acc *outputMetada
 			acc.ebur128OutputTP = 20 * math.Log10(value)
 		} else {
 			acc.ebur128OutputTP = -120.0 // Floor for zero/negative values
+		}
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyEbur128SamplePeak); ok {
+		if value > 0 {
+			acc.ebur128OutputSP = 20 * math.Log10(value)
+		} else {
+			acc.ebur128OutputSP = -120.0
 		}
 	}
 	if value, ok := getFloatMetadata(metadata, metaKeyEbur128LRA); ok {
@@ -572,19 +1306,35 @@ func finalizeOutputMeasurements(acc *outputMetadataAccumulators) *OutputMeasurem
 
 	m := &OutputMeasurements{
 		// ebur128 loudness measurements
-		OutputI:   acc.ebur128OutputI,
-		OutputTP:  acc.ebur128OutputTP,
-		OutputLRA: acc.ebur128OutputLRA,
+		OutputI:           acc.ebur128OutputI,
+		OutputTP:          acc.ebur128OutputTP,
+		OutputLRA:         acc.ebur128OutputLRA,
+		MomentaryLoudness: acc.ebur128OutputM,
+		ShortTermLoudness: acc.ebur128OutputS,
+		SamplePeak:        acc.ebur128OutputSP,
 
 		// astats time-domain measurements
 		DynamicRange:      acc.astatsDynamicRange,
 		RMSLevel:          acc.astatsRMSLevel,
 		PeakLevel:         acc.astatsPeakLevel,
 		RMSTrough:         acc.astatsRMSTrough,
+		RMSPeak:           acc.astatsRMSPeak,
 		DCOffset:          acc.astatsDCOffset,
 		FlatFactor:        acc.astatsFlatFactor,
+		CrestFactor:       acc.astatsCrestFactor,
 		ZeroCrossingsRate: acc.astatsZeroCrossingsRate,
+		ZeroCrossings:     acc.astatsZeroCrossings,
 		MaxDifference:     acc.astatsMaxDifference,
+		MinDifference:     acc.astatsMinDifference,
+		MeanDifference:    acc.astatsMeanDifference,
+		RMSDifference:     acc.astatsRMSDifference,
+		Entropy:           acc.astatsEntropy,
+		MinLevel:          acc.astatsMinLevel,
+		MaxLevel:          acc.astatsMaxLevel,
+		AstatsNoiseFloor:  acc.astatsNoiseFloor,
+		NoiseFloorCount:   acc.astatsNoiseFloorCount,
+		BitDepth:          acc.astatsBitDepth,
+		NumberOfSamples:   acc.astatsNumberOfSamples,
 	}
 
 	// Calculate average spectral statistics from aspectralstats
@@ -834,6 +1584,18 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 	// Accumulators for frame metadata extraction
 	acc := &metadataAccumulators{}
 
+	// Interval sampling for silence detection (250ms windows)
+	const intervalDuration = 250 * time.Millisecond
+	var intervals []IntervalSample
+	var intervalAcc intervalAccumulator
+	intervalAcc.reset() // Initialize with proper defaults
+	var intervalStartTime time.Duration
+	var lastFrameTime time.Duration // Track for end-of-file handling
+
+	// Get time base for PTS to time conversion
+	timeBase := reader.GetTimeBase()
+	timeBaseFloat := float64(timeBase.Num()) / float64(timeBase.Den())
+
 	for {
 		frame, err := reader.ReadFrame()
 		if err != nil {
@@ -870,8 +1632,31 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 				return nil, fmt.Errorf("failed to get filtered frame: %w", err)
 			}
 
-			// Extract measurements from frame metadata
+			// Extract measurements from frame metadata (whole-file accumulators)
 			extractFrameMetadata(filteredFrame.Metadata(), acc)
+
+			// Calculate frame timestamp from PTS
+			pts := filteredFrame.Pts()
+			var frameTime time.Duration
+			if pts != ffmpeg.AVNoptsValue {
+				frameTime = time.Duration(float64(pts) * timeBaseFloat * float64(time.Second))
+			}
+			lastFrameTime = frameTime
+
+			// Extract per-frame metrics for interval accumulation
+			metadata := filteredFrame.Metadata()
+			frameMetrics := extractIntervalFrameMetrics(metadata)
+
+			// Accumulate into current interval
+			intervalAcc.add(frameMetrics)
+
+			// Check if interval complete (250ms elapsed)
+			if frameTime-intervalStartTime >= intervalDuration {
+				// Finalize and store completed interval
+				intervals = append(intervals, intervalAcc.finalize(intervalStartTime))
+				intervalStartTime = frameTime
+				intervalAcc.reset()
+			}
 
 			ffmpeg.AVFrameUnref(filteredFrame)
 		}
@@ -894,8 +1679,34 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 		// Extract measurements from remaining frames
 		extractFrameMetadata(filteredFrame.Metadata(), acc)
 
+		// Calculate frame timestamp for interval accumulation
+		pts := filteredFrame.Pts()
+		var frameTime time.Duration
+		if pts != ffmpeg.AVNoptsValue {
+			frameTime = time.Duration(float64(pts) * timeBaseFloat * float64(time.Second))
+		}
+		lastFrameTime = frameTime
+
+		// Extract per-frame metrics for interval accumulation
+		metadata := filteredFrame.Metadata()
+		frameMetrics := extractIntervalFrameMetrics(metadata)
+
+		// Accumulate into current interval
+		intervalAcc.add(frameMetrics)
+
+		// Check if interval complete (250ms elapsed)
+		if frameTime-intervalStartTime >= intervalDuration {
+			intervals = append(intervals, intervalAcc.finalize(intervalStartTime))
+			intervalStartTime = frameTime
+			intervalAcc.reset()
+		}
+
 		ffmpeg.AVFrameUnref(filteredFrame)
 	}
+
+	// Note: We intentionally discard any partial interval at the end (per PLAN.md)
+	// as incomplete intervals would have unreliable metrics
+	_ = lastFrameTime // Silence unused variable warning (used for debugging if needed)
 
 	// Free the filter graph
 	ffmpeg.AVFilterGraphFree(&filterGraph)
@@ -946,12 +1757,32 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 		measurements.RMSLevel = acc.astatsRMSLevel
 		measurements.PeakLevel = acc.astatsPeakLevel
 		measurements.RMSTrough = acc.astatsRMSTrough
+		measurements.RMSPeak = acc.astatsRMSPeak
 
 		// Additional astats measurements for adaptive processing
 		measurements.DCOffset = acc.astatsDCOffset
 		measurements.FlatFactor = acc.astatsFlatFactor
+		measurements.CrestFactor = acc.astatsCrestFactor
 		measurements.ZeroCrossingsRate = acc.astatsZeroCrossingsRate
+		measurements.ZeroCrossings = acc.astatsZeroCrossings
 		measurements.MaxDifference = acc.astatsMaxDifference
+		measurements.MinDifference = acc.astatsMinDifference
+		measurements.MeanDifference = acc.astatsMeanDifference
+		measurements.RMSDifference = acc.astatsRMSDifference
+		measurements.Entropy = acc.astatsEntropy
+		measurements.MinLevel = acc.astatsMinLevel
+		measurements.MaxLevel = acc.astatsMaxLevel
+		measurements.AstatsNoiseFloor = acc.astatsNoiseFloor
+		measurements.NoiseFloorCount = acc.astatsNoiseFloorCount
+		measurements.BitDepth = acc.astatsBitDepth
+		measurements.NumberOfSamples = acc.astatsNumberOfSamples
+	}
+
+	// Store ebur128 momentary/short-term loudness
+	if acc.ebur128Found {
+		measurements.MomentaryLoudness = acc.ebur128InputM
+		measurements.ShortTermLoudness = acc.ebur128InputS
+		measurements.SamplePeak = acc.ebur128InputSP
 	}
 
 	// Derive noise floor using three-tier approach based on audio engineering best practices:
@@ -995,12 +1826,16 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 		measurements.NoiseFloor = -30.0
 	}
 
-	// Store detected silence regions
-	measurements.SilenceRegions = acc.silenceRegions
+	// Store 250ms interval samples for data-driven silence candidate detection
+	measurements.IntervalSamples = intervals
+
+	// Detect silence regions using interval-based analysis
+	// This replaces the FFmpeg silencedetect filter with multi-metric discrimination
+	measurements.SilenceRegions = findSilenceCandidatesFromIntervals(intervals, measurements.NoiseFloor)
 
 	// Extract noise profile from best silence region (if available)
 	// This provides precise noise floor measurement from actual silence in the recording
-	silenceResult := findBestSilenceRegion(filename, acc.silenceRegions, totalDuration, measurements.NoiseFloor)
+	silenceResult := findBestSilenceRegion(filename, measurements.SilenceRegions, totalDuration, measurements.NoiseFloor)
 
 	// Store all evaluated candidates for reporting/debugging
 	measurements.SilenceCandidates = silenceResult.Candidates
@@ -1124,15 +1959,16 @@ func calculateAdaptiveDS201GateThreshold(noiseFloor, rmsTrough float64) float64 
 	return threshold
 }
 
-// createAnalysisFilterGraph creates an AVFilterGraph for Pass 1 analysis
-// Uses astats, aspectralstats, silencedetect, and ebur128 filters to extract measurements
+// createAnalysisFilterGraph creates an AVFilterGraph for Pass 1 analysis.
+// Uses astats, aspectralstats, and ebur128 filters to extract measurements.
+// Silence detection is now performed in Go using 250ms interval sampling.
 func createAnalysisFilterGraph(
 	decCtx *ffmpeg.AVCodecContext,
 	config *FilterChainConfig,
 ) (*ffmpeg.AVFilterGraph, *ffmpeg.AVFilterContext, *ffmpeg.AVFilterContext, error) {
 	// Configure for Pass 1 analysis
 	// Uses unified BuildFilterSpec() with Pass1FilterOrder:
-	// Downmix → Analysis → SilenceDetect
+	// Downmix → Analysis
 	config.Pass = 1
 	config.FilterOrder = Pass1FilterOrder
 

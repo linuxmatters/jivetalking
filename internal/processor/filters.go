@@ -49,12 +49,12 @@ const (
 )
 
 // Pass1FilterOrder defines the filter chain for analysis pass.
-// Downmix → Analysis → SilenceDetect
-// No processing filters - just measurement and silence detection for noise profiling.
+// Downmix → Analysis
+// No processing filters - just measurement for adaptive processing.
+// Silence detection is now performed in Go using 250ms interval sampling.
 var Pass1FilterOrder = []FilterID{
 	FilterDownmix,
 	FilterAnalysis,
-	FilterSilenceDetect,
 }
 
 // Pass2FilterOrder defines the filter chain for processing pass.
@@ -556,14 +556,16 @@ func (cfg *FilterChainConfig) buildAnalysisFilter() string {
 	//   - rolloff: high-frequency energy point - de-esser intensity
 	//   - variance: spectral energy variation - dynamic content indicator
 	//   - mean, slope, decrease: additional spectral shape descriptors
-	// ebur128: provides integrated loudness (LUFS), true peak, and LRA via metadata
+	// ebur128: provides integrated loudness (LUFS), true peak, sample peak, and LRA via metadata
 	//   Upsamples to 192kHz internally for accurate true peak detection
 	//   metadata=1 writes per-frame loudness data to frame metadata (lavfi.r128.* keys)
-	//   peak=true enables true peak measurement (required for lavfi.r128.true_peak metadata)
+	//   peak=sample+true enables both sample peak and true peak measurement
+	//   (required for lavfi.r128.sample_peak and lavfi.r128.true_peak metadata)
+	// Note: astats measure_perchannel=all requests all available per-channel statistics
 	return fmt.Sprintf(
-		"astats=metadata=1:measure_perchannel=Noise_floor+Dynamic_range+RMS_level+RMS_trough+Peak_level+DC_offset+Flat_factor+Zero_crossings_rate+Max_difference,"+
+		"astats=metadata=1:measure_perchannel=all,"+
 			"aspectralstats=win_size=2048:win_func=hann:measure=all,"+
-			"ebur128=metadata=1:peak=true:target=%.0f",
+			"ebur128=metadata=1:peak=sample+true:target=%.0f",
 		cfg.TargetI)
 }
 
