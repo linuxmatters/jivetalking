@@ -1,7 +1,10 @@
 // Package processor handles audio analysis and processing
 package processor
 
-import "math"
+import (
+	"fmt"
+	"math"
+)
 
 // Adaptive tuning constants for audio processing.
 // These thresholds and limits control how filters adapt to input measurements.
@@ -71,6 +74,36 @@ const (
 	deessIntensityDark   = 0.4 // Dark voice base intensity
 	deessIntensityMax    = 0.8 // Maximum intensity limit
 	deessIntensityMin    = 0.3 // Minimum before disabling
+
+	// DC1 Declick tuning constants (CEDAR DC-1-inspired)
+	// Enables conditionally based on impulsive content indicators
+	// Uses OR logic: high MaxDiff OR high Crest can trigger (mouth noises have high crest but low MaxDiff)
+	//
+	// Enabling thresholds - based on MaxDifference (sample-to-sample jumps)
+	dc1MaxDiffLikely   = 0.25 // > 25% full scale: likely clicks present
+	dc1MaxDiffPossible = 0.12 // > 12% full scale: possible mild clicks/pops
+
+	// Enabling thresholds - based on SpectralCrest (impulsive energy)
+	// Mouth noises (lip smacks, pops) show high crest even with low MaxDiff
+	dc1CrestLikely   = 50.0 // > 50 dB: strong impulsive content (likely mouth noises)
+	dc1CrestPossible = 35.0 // > 35 dB: moderate impulsive content
+
+	// Threshold adaptation (detection sensitivity, 1-8)
+	dc1ThreshAggressive = 2.0 // For obvious click damage
+	dc1ThreshMild       = 4.0 // For mild mouth clicks
+	dc1ThreshMouthNoise = 5.0 // For subtle lip smacks (high crest, low MaxDiff)
+	dc1ThreshConserv    = 6.0 // For clean with transients
+
+	// Threshold adjustments based on spectral characteristics
+	dc1FlatnessNoisy   = 0.3  // SpectralFlatness > 0.3: noisy signal, raise threshold
+	dc1DynamicRangeLow = 10.0 // DynamicRange < 10dB: compressed audio, raise threshold
+
+	// Window adaptation (40-80 ms)
+	dc1WindowShort   = 45.0   // For fast speech, plosives (high centroid)
+	dc1WindowDefault = 55.0   // Default balanced
+	dc1WindowLong    = 70.0   // For bass-heavy content (low centroid)
+	dc1CentroidFast  = 3000.0 // Hz - above: use shorter window
+	dc1CentroidSlow  = 1500.0 // Hz - below: consider longer window
 
 	// DS201 Gate tuning constants
 	// Threshold calculation: ensures sufficient gap above noise for effective soft expansion
@@ -505,6 +538,7 @@ func AdaptConfig(config *FilterChainConfig, measurements *AudioMeasurements) {
 	// Order matters: gate threshold calculated BEFORE denoise filters
 	tuneDS201HighPass(config, measurements, lufsGap) // Composite: highpass + hum notch
 	tuneDS201LowPass(config, measurements)           // Ultrasonic rejection (adaptive)
+	tuneDC1Declick(config, measurements)             // CEDAR DC-1 inspired declicker
 	tuneDolbySR(config, measurements, lufsGap)       // Dolby SR-inspired denoise (uses afftdn internally)
 	tuneArnndn(config, measurements, lufsGap)        // RNN denoise (LUFS gap + noise floor based)
 	tuneDS201Gate(config, measurements)              // DS201-style soft expander gate
@@ -806,6 +840,97 @@ func tuneDS201LowPassForSpeech(config *FilterChainConfig, m *AudioMeasurements) 
 	}
 
 	// No triggers fired — keep disabled
+}
+
+// tuneDC1Declick conditionally enables and adapts the CEDAR DC-1-inspired declicker.
+//
+// The DC-1 philosophy: most recordings don't need declicking. Only enable when
+// Pass 1 measurements suggest impulsive content (clicks, pops, mouth noises).
+//
+// Decision tree:
+//   - MaxDifference > 0.35 AND SpectralCrest > 30dB → Enable (likely clicks)
+//   - MaxDifference > 0.25 AND SpectralCrest > 25dB → Enable with higher threshold (mild)
+//   - Otherwise → Disable (clean recording)
+//
+// When enabled, adapts:
+//   - Threshold: based on SpectralCrest, SpectralFlatness, DynamicRange
+//   - Window: based on SpectralCentroid (fast content → shorter windows)
+func tuneDC1Declick(config *FilterChainConfig, measurements *AudioMeasurements) {
+	// MaxDifference from astats is in sample units (0-32768 for 16-bit audio)
+	// Normalize to 0-1 ratio for comparison with thresholds
+	maxDiff := measurements.MaxDifference / 32768.0
+	crest := measurements.SpectralCrest
+
+	// Decision: enable when impulsive content detected
+	// Uses OR logic: high MaxDiff OR high Crest can trigger independently
+	// Mouth noises (lip smacks) have high crest but often low MaxDiff
+	switch {
+	case maxDiff > dc1MaxDiffLikely:
+		// Strong transient indicator - likely clicks/pops
+		config.DC1DeclickEnabled = true
+		config.DC1DeclickThreshold = dc1ThreshAggressive
+		config.DC1DeclickReason = fmt.Sprintf("likely clicks (MaxDiff=%.1f%%)",
+			maxDiff*100)
+
+	case crest > dc1CrestLikely:
+		// High spectral crest alone - likely mouth noises
+		// Use conservative settings since crest can be high in clean speech too
+		config.DC1DeclickEnabled = true
+		config.DC1DeclickThreshold = dc1ThreshMouthNoise
+		config.DC1DeclickReason = fmt.Sprintf("mouth noises (Crest=%.1fdB)",
+			crest)
+
+	case maxDiff > dc1MaxDiffPossible && crest > dc1CrestPossible:
+		// Both indicators elevated - mild clicks
+		config.DC1DeclickEnabled = true
+		config.DC1DeclickThreshold = dc1ThreshMild
+		config.DC1DeclickReason = fmt.Sprintf("possible clicks (MaxDiff=%.1f%%, Crest=%.1fdB)",
+			maxDiff*100, crest)
+
+	case crest > dc1CrestPossible:
+		// Moderate crest alone - possible subtle mouth noises
+		config.DC1DeclickEnabled = true
+		config.DC1DeclickThreshold = dc1ThreshConserv
+		config.DC1DeclickReason = fmt.Sprintf("possible mouth noises (Crest=%.1fdB)",
+			crest)
+
+	default:
+		// Clean recording - skip declicking
+		config.DC1DeclickEnabled = false
+		config.DC1DeclickReason = fmt.Sprintf("clean recording (MaxDiff=%.1f%%, Crest=%.1fdB)",
+			maxDiff*100, crest)
+		return
+	}
+
+	// Set default values for non-adaptive parameters (ensures valid filter spec)
+	config.DC1DeclickOverlap = 75.0 // 75% overlap (good quality)
+	config.DC1DeclickAROrder = 2.0  // 2% AR model order (low CPU)
+	config.DC1DeclickBurst = 2.0    // 2% burst handling (standard)
+	config.DC1DeclickMethod = "s"   // overlap-save (better quality)
+
+	// Threshold refinement based on spectral characteristics
+	if measurements.SpectralFlatness > dc1FlatnessNoisy {
+		// Noisy signal - raise threshold to avoid false positives
+		config.DC1DeclickThreshold = math.Min(config.DC1DeclickThreshold+2.0, dc1ThreshConserv)
+		config.DC1DeclickReason += "; +threshold (noisy)"
+	}
+	if measurements.DynamicRange < dc1DynamicRangeLow {
+		// Compressed audio - raise threshold to protect dynamics
+		config.DC1DeclickThreshold = math.Min(config.DC1DeclickThreshold+1.0, dc1ThreshConserv)
+		config.DC1DeclickReason += "; +threshold (compressed)"
+	}
+
+	// Window adaptation based on content type
+	switch {
+	case measurements.SpectralCentroid > dc1CentroidFast:
+		// Fast speech/plosives - shorter window preserves transients
+		config.DC1DeclickWindow = dc1WindowShort
+	case measurements.SpectralCentroid < dc1CentroidSlow:
+		// Bass-heavy content - longer window for better LF reconstruction
+		config.DC1DeclickWindow = dc1WindowLong
+	default:
+		config.DC1DeclickWindow = dc1WindowDefault
+	}
 }
 
 // tuneDolbySR adapts the Dolby SR-inspired 6-band mcompand expander based on measurements.

@@ -672,8 +672,8 @@ func formatFilter(f *os.File, filterID processor.FilterID, cfg *processor.Filter
 		formatDS201HighpassFilter(f, cfg, m, prefix)
 	case processor.FilterDS201LowPass:
 		formatDS201LowPassFilter(f, cfg, m, prefix)
-	case processor.FilterAdeclick:
-		formatAdeclickFilter(f, cfg, prefix)
+	case processor.FilterDC1Declick:
+		formatDC1DeclickFilter(f, cfg, prefix)
 	case processor.FilterDolbySR:
 		formatDolbySRFilter(f, cfg, m, prefix)
 	case processor.FilterArnndn:
@@ -896,18 +896,28 @@ func formatDS201LowPassFilter(f *os.File, cfg *processor.FilterChainConfig, m *p
 	}
 }
 
-// formatAdeclickFilter outputs adeclick filter details
-func formatAdeclickFilter(f *os.File, cfg *processor.FilterChainConfig, prefix string) {
-	if !cfg.AdeclickEnabled {
-		fmt.Fprintf(f, "%sadeclick: DISABLED\n", prefix)
+// formatDC1DeclickFilter outputs CEDAR DC-1-inspired declicker filter details
+func formatDC1DeclickFilter(f *os.File, cfg *processor.FilterChainConfig, prefix string) {
+	if !cfg.DC1DeclickEnabled {
+		if cfg.DC1DeclickReason != "" {
+			fmt.Fprintf(f, "%sDC1 Declick: DISABLED (%s)\n", prefix, cfg.DC1DeclickReason)
+		} else {
+			fmt.Fprintf(f, "%sDC1 Declick: DISABLED\n", prefix)
+		}
 		return
 	}
 
 	method := "overlap-save"
-	if cfg.AdeclickMethod == "a" {
+	if cfg.DC1DeclickMethod == "a" {
 		method = "overlap-add"
 	}
-	fmt.Fprintf(f, "%sadeclick: %s method\n", prefix, method)
+	fmt.Fprintf(f, "%sDC1 Declick: ENABLED\n", prefix)
+	fmt.Fprintf(f, "        Threshold: %.0f (1=aggressive, 8=conservative)\n", cfg.DC1DeclickThreshold)
+	fmt.Fprintf(f, "        Window: %.0fms, Overlap: %.0f%%, AR Order: %.0f%%\n", cfg.DC1DeclickWindow, cfg.DC1DeclickOverlap, cfg.DC1DeclickAROrder)
+	fmt.Fprintf(f, "        Method: %s\n", method)
+	if cfg.DC1DeclickReason != "" {
+		fmt.Fprintf(f, "        Reason: %s\n", cfg.DC1DeclickReason)
+	}
 }
 
 // formatDolbySRFilter outputs Dolby SR-inspired denoise filter details

@@ -804,6 +804,188 @@ func TestTuneDeesser(t *testing.T) {
 	}
 }
 
+func TestTuneDC1Declick(t *testing.T) {
+	// Tests the CEDAR DC-1-inspired declicker adaptive tuning.
+	// Uses OR logic: high MaxDiff OR high Crest can trigger independently.
+	// Mouth noises (lip smacks) have high crest but often low MaxDiff.
+	//
+	// Key constants from adaptive.go:
+	// dc1MaxDiffLikely = 0.25 (> 25% full scale: likely clicks)
+	// dc1MaxDiffPossible = 0.12 (> 12% full scale: possible clicks)
+	// dc1CrestLikely = 50.0 dB (strong impulsive content)
+	// dc1CrestPossible = 35.0 dB (moderate impulsive content)
+	// dc1ThreshAggressive = 2.0, dc1ThreshMild = 4.0, dc1ThreshMouthNoise = 5.0, dc1ThreshConserv = 6.0
+	// dc1WindowShort = 45.0ms, dc1WindowDefault = 55.0ms, dc1WindowLong = 70.0ms
+	// dc1CentroidFast = 3000.0 Hz, dc1CentroidSlow = 1500.0 Hz
+	//
+	// NOTE: MaxDifference from astats is in sample units (0-32768 for 16-bit audio)
+	// Test values below use the ratio (0-1) and are scaled by 32768 in the test loop
+
+	tests := []struct {
+		name          string
+		maxDiffRatio  float64 // 0-1 ratio, will be scaled by 32768 for MaxDifference
+		crest         float64
+		flatness      float64
+		dynamicRange  float64
+		centroid      float64
+		wantEnabled   bool
+		wantThreshold float64
+		wantWindow    float64
+		tolerance     float64
+	}{
+		{
+			name:         "clean recording - disabled",
+			maxDiffRatio: 0.08, // Below dc1MaxDiffPossible (0.12)
+			crest:        25.0, // Below dc1CrestPossible (35.0)
+			flatness:     0.1,
+			dynamicRange: 15.0,
+			centroid:     2000.0,
+			wantEnabled:  false,
+		},
+		{
+			name:          "high maxdiff alone - aggressive",
+			maxDiffRatio:  0.30, // > dc1MaxDiffLikely (0.25)
+			crest:         25.0, // Below crest thresholds
+			flatness:      0.1,
+			dynamicRange:  15.0,
+			centroid:      2000.0,
+			wantEnabled:   true,
+			wantThreshold: 2.0, // dc1ThreshAggressive
+			wantWindow:    55.0,
+			tolerance:     0.5,
+		},
+		{
+			name:          "high crest alone - mouth noises",
+			maxDiffRatio:  0.08, // Low MaxDiff (typical for mouth noises)
+			crest:         55.0, // > dc1CrestLikely (50.0)
+			flatness:      0.1,
+			dynamicRange:  15.0,
+			centroid:      2000.0,
+			wantEnabled:   true,
+			wantThreshold: 5.0, // dc1ThreshMouthNoise
+			wantWindow:    55.0,
+			tolerance:     0.5,
+		},
+		{
+			name:          "both elevated - mild clicks",
+			maxDiffRatio:  0.15, // > dc1MaxDiffPossible (0.12) but < dc1MaxDiffLikely (0.25)
+			crest:         40.0, // > dc1CrestPossible (35.0) but < dc1CrestLikely (50.0)
+			flatness:      0.1,
+			dynamicRange:  15.0,
+			centroid:      2000.0,
+			wantEnabled:   true,
+			wantThreshold: 4.0, // dc1ThreshMild
+			wantWindow:    55.0,
+			tolerance:     0.5,
+		},
+		{
+			name:          "moderate crest alone - possible mouth noises",
+			maxDiffRatio:  0.08, // Low MaxDiff
+			crest:         40.0, // > dc1CrestPossible (35.0) but < dc1CrestLikely (50.0)
+			flatness:      0.1,
+			dynamicRange:  15.0,
+			centroid:      2000.0,
+			wantEnabled:   true,
+			wantThreshold: 6.0, // dc1ThreshConserv
+			wantWindow:    55.0,
+			tolerance:     0.5,
+		},
+		{
+			name:          "noisy signal - raised threshold",
+			maxDiffRatio:  0.30, // High MaxDiff - aggressive base
+			crest:         25.0,
+			flatness:      0.4, // Above dc1FlatnessNoisy (0.3) - adds 2.0
+			dynamicRange:  15.0,
+			centroid:      2000.0,
+			wantEnabled:   true,
+			wantThreshold: 4.0, // 2.0 + 2.0 for noisy
+			wantWindow:    55.0,
+			tolerance:     0.5,
+		},
+		{
+			name:          "fast speech - short window",
+			maxDiffRatio:  0.30, // High MaxDiff
+			crest:         25.0,
+			flatness:      0.1,
+			dynamicRange:  15.0,
+			centroid:      4000.0, // > dc1CentroidFast (3000.0)
+			wantEnabled:   true,
+			wantThreshold: 2.0,  // dc1ThreshAggressive
+			wantWindow:    45.0, // dc1WindowShort
+			tolerance:     0.5,
+		},
+		{
+			name:          "bass-heavy - long window",
+			maxDiffRatio:  0.30, // High MaxDiff
+			crest:         25.0,
+			flatness:      0.1,
+			dynamicRange:  15.0,
+			centroid:      1000.0, // < dc1CentroidSlow (1500.0)
+			wantEnabled:   true,
+			wantThreshold: 2.0,  // dc1ThreshAggressive
+			wantWindow:    70.0, // dc1WindowLong
+			tolerance:     0.5,
+		},
+		{
+			name:          "compressed audio - raised threshold",
+			maxDiffRatio:  0.30, // High MaxDiff
+			crest:         25.0,
+			flatness:      0.1,
+			dynamicRange:  8.0, // Below dc1DynamicRangeLow (10.0) - adds 1.0
+			centroid:      2000.0,
+			wantEnabled:   true,
+			wantThreshold: 3.0, // 2.0 + 1.0 for compressed
+			wantWindow:    55.0,
+			tolerance:     0.5,
+		},
+		{
+			name:          "noisy and compressed - max threshold",
+			maxDiffRatio:  0.30, // High MaxDiff
+			crest:         25.0,
+			flatness:      0.4, // Noisy - adds 2.0
+			dynamicRange:  8.0, // Compressed - adds 1.0
+			centroid:      2000.0,
+			wantEnabled:   true,
+			wantThreshold: 5.0, // 2.0 + 2.0 (noisy) + 1.0 (compressed)
+			wantWindow:    55.0,
+			tolerance:     0.5,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := DefaultFilterConfig()
+			measurements := &AudioMeasurements{
+				MaxDifference:    tt.maxDiffRatio * 32768.0, // Scale to sample units
+				SpectralCrest:    tt.crest,
+				SpectralFlatness: tt.flatness,
+				DynamicRange:     tt.dynamicRange,
+				SpectralCentroid: tt.centroid,
+			}
+
+			tuneDC1Declick(config, measurements)
+
+			if config.DC1DeclickEnabled != tt.wantEnabled {
+				t.Errorf("DC1DeclickEnabled = %v, want %v", config.DC1DeclickEnabled, tt.wantEnabled)
+			}
+			if tt.wantEnabled {
+				if diff := math.Abs(config.DC1DeclickThreshold - tt.wantThreshold); diff > tt.tolerance {
+					t.Errorf("DC1DeclickThreshold = %.1f, want %.1f (±%.1f)",
+						config.DC1DeclickThreshold, tt.wantThreshold, tt.tolerance)
+				}
+				if diff := math.Abs(config.DC1DeclickWindow - tt.wantWindow); diff > tt.tolerance {
+					t.Errorf("DC1DeclickWindow = %.1f, want %.1f (±%.1f)",
+						config.DC1DeclickWindow, tt.wantWindow, tt.tolerance)
+				}
+			}
+			// Always check reason is set
+			if config.DC1DeclickReason == "" {
+				t.Error("DC1DeclickReason should be set")
+			}
+		})
+	}
+}
+
 func TestTuneDS201Gate(t *testing.T) {
 	// Tests the comprehensive gate tuning which calculates all gate parameters
 	// based on measurements including NoiseProfile (silence sample analysis).

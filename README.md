@@ -140,9 +140,10 @@ internal/
 
 ### Design Documentation
 
-- [FilterGate: Drawmer DS201](docs/FilterGate-Drawmer%20DS201.md) — Soft expander gate with adaptive threshold
-- [FilterNoise: Dolby SR](docs/FilterNoise-Dolby%20SR.md) — 6-band voice-protective noise reduction
-- [FilterCompressor: LA-2A](docs/FilterCompressor-Teletronix%20LA-2A.md) — Programme-dependent optical compression
+- [Gate: Drawmer DS201](docs/FilterGate-Drawmer%20DS201.md) — Soft expander gate with adaptive threshold
+- [Noise Removal: Dolby SR](docs/FilterNoise-Dolby%20SR.md) — 6-band voice-protective noise reduction
+- [Declick: DECAR DC-1](docs/FilterDeclick-CEDAR%20DC-1.md) — Autoregressive declicker
+- [Compressor: LA-2A](docs/FilterCompressor-Teletronix%20LA-2A.md) — Programme-dependent optical compression
 
 ---
 

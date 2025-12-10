@@ -39,7 +39,7 @@ const (
 	FilterDolbySR FilterID = "dolbysr"
 
 	// Processing filters (Pass 2 only)
-	FilterAdeclick       FilterID = "adeclick"
+	FilterDC1Declick     FilterID = "dc1_declick" // CEDAR DC-1 inspired declicker
 	FilterArnndn         FilterID = "arnndn"
 	FilterLA2ACompressor FilterID = "la2a_compressor" // Teletronix LA-2A style optical compressor
 	FilterDeesser        FilterID = "deesser"
@@ -63,7 +63,7 @@ var Pass1FilterOrder = []FilterID{
 // - DS201HighPass: removes subsonic rumble before other filters (DS201-inspired side-chain)
 // - DS201Hum: removes mains hum (50/60Hz + harmonics) before other filters
 // - DS201LowPass: removes ultrasonic content that could trigger false gates (adaptive)
-// - Adeclick: removes impulse noise before spectral processing (currently disabled)
+// - DC1Declick: CEDAR DC-1 inspired declicker - removes clicks/pops before spectral processing
 // - DolbySR: denoising inspired by Dolby SR "Least Treatment" philosophy
 // - Arnndn: AI-based denoising for complex/dynamic noise patterns
 // - DS201Gate: soft expander for inter-speech cleanup (after denoising lowers floor)
@@ -78,10 +78,10 @@ var Pass2FilterOrder = []FilterID{
 	FilterDownmix,
 	FilterDS201HighPass,
 	FilterDS201LowPass,
-	FilterAdeclick,
 	FilterDolbySR,
 	FilterArnndn,
 	FilterDS201Gate,
+	FilterDC1Declick,
 	FilterLA2ACompressor,
 	FilterDeesser,
 	FilterSpeechnorm,
@@ -243,9 +243,16 @@ type FilterChainConfig struct {
 	DS201LPReason       string      // Why enabled/disabled (for logging)
 	DS201LPRolloffRatio float64     // Actual rolloff/centroid ratio (for logging)
 
-	// Click/Pop Removal (adeclick) - removes clicks and pops
-	AdeclickEnabled bool   // Enable adeclick filter
-	AdeclickMethod  string // 'a' = overlap-add, 's' = overlap-save (default: 's')
+	// DC1 Declick (CEDAR DC-1-inspired) - removes clicks and pops via AR interpolation
+	// Conditionally enabled based on Pass 1 measurements (MaxDifference, SpectralCrest)
+	DC1DeclickEnabled   bool    // Enable DC1 declicker
+	DC1DeclickThreshold float64 // Detection sensitivity (1-8, lower = more aggressive)
+	DC1DeclickWindow    float64 // Analysis window size (40-80 ms)
+	DC1DeclickOverlap   float64 // Window overlap (50-95%)
+	DC1DeclickAROrder   float64 // AR model order as % of window (0-25%)
+	DC1DeclickBurst     float64 // Max burst length as % of window (0-10%)
+	DC1DeclickMethod    string  // 'a' = overlap-add, 's' = overlap-save
+	DC1DeclickReason    string  // Why enabled/disabled (for logging)
 
 	// Dolby SR Denoise - 6-band multiband compander inspired by "Least Treatment" philosophy
 	// Uses mcompand with FLAT reduction curve for artifact-free noise elimination
@@ -390,9 +397,16 @@ func DefaultFilterConfig() *FilterChainConfig {
 		DS201LPMix:       1.0,     // Full wet signal
 		DS201LPTransform: "tdii",  // Transposed Direct Form II - best floating-point accuracy
 
-		// Click/Pop Removal - use overlap-save method with defaults
-		AdeclickEnabled: false,
-		AdeclickMethod:  "s", // overlap-save (default for better quality)
+		// DC1 Declick (CEDAR DC-1-inspired) - removes clicks/pops via AR interpolation
+		// Enabled adaptively based on MaxDifference/SpectralCrest measurements
+		DC1DeclickEnabled:   false, // Enabled adaptively based on MaxDifference/SpectralCrest
+		DC1DeclickThreshold: 2.0,   // Default: conservative (CEDAR DC-1 medium sensitivity)
+		DC1DeclickWindow:    55.0,  // Default: 55ms (balanced)
+		DC1DeclickOverlap:   75.0,  // Default: 75% (good quality)
+		DC1DeclickAROrder:   2.0,   // Default: 2% (low CPU)
+		DC1DeclickBurst:     2.0,   // Default: 2% (standard burst handling)
+		DC1DeclickMethod:    "s",   // overlap-save (better quality)
+		DC1DeclickReason:    "",    // Set by tuneDC1Declick()
 
 		// Dolby SR-Inspired Denoise - 6-band multiband compander
 		// Implements SR philosophy: Least Treatment via FLAT reduction curve
@@ -741,14 +755,21 @@ func (cfg *FilterChainConfig) buildDS201LowPassFilter() string {
 	return lpSpec
 }
 
-// buildAdeclickFilter builds the adeclick (click/pop removal) filter specification.
-// Removes clicks, pops, and impulse noise using AR model.
-// m: method ('a' = overlap-add, 's' = overlap-save for better quality)
-func (cfg *FilterChainConfig) buildAdeclickFilter() string {
-	if !cfg.AdeclickEnabled {
+// buildDC1DeclickFilter builds the CEDAR DC-1-inspired declicker filter specification.
+// Uses FFmpeg's adeclick filter with AR interpolation for click/pop removal.
+// Parameters are tuned adaptively based on Pass 1 measurements.
+func (cfg *FilterChainConfig) buildDC1DeclickFilter() string {
+	if !cfg.DC1DeclickEnabled {
 		return ""
 	}
-	return fmt.Sprintf("adeclick=m=%s", cfg.AdeclickMethod)
+	return fmt.Sprintf("adeclick=window=%.0f:overlap=%.0f:arorder=%.0f:threshold=%.0f:burst=%.0f:method=%s",
+		cfg.DC1DeclickWindow,
+		cfg.DC1DeclickOverlap,
+		cfg.DC1DeclickAROrder,
+		cfg.DC1DeclickThreshold,
+		cfg.DC1DeclickBurst,
+		cfg.DC1DeclickMethod,
+	)
 }
 
 // buildDolbySRFilter builds the Dolby SR-inspired 6-band multiband compander filter.
@@ -991,7 +1012,7 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 		FilterResample:       cfg.buildResampleFilter,
 		FilterDS201HighPass:  cfg.buildDS201HighpassFilter,
 		FilterDS201LowPass:   cfg.buildDS201LowPassFilter,
-		FilterAdeclick:       cfg.buildAdeclickFilter,
+		FilterDC1Declick:     cfg.buildDC1DeclickFilter,
 		FilterDolbySR:        cfg.buildDolbySRFilter,
 		FilterDS201Gate:      cfg.buildDS201GateFilter,
 		FilterLA2ACompressor: cfg.buildLA2ACompressorFilter,
