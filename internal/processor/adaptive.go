@@ -54,6 +54,16 @@ const (
 	// LUFS gap thresholds for adaptive processing intensity
 	lufsGapModerate   = 15.0 // dB - moderate gain required
 	lufsGapAggressive = 25.0 // dB - aggressive processing needed
+	lufsGapExtreme    = 25.0 // dB - extreme gap, gate needs special handling
+
+	// Gentle gate mode: for extreme LUFS gap + low LRA
+	// Very quiet recordings with uniform levels cause the gate's soft expansion
+	// to apply varying gain reduction across similar speech levels, creating
+	// volume modulation ("hunting"). Use gentler parameters to prevent this.
+	ds201GateGentleLRAThreshold = 10.0 // LU - below this with extreme LUFS gap triggers gentle mode
+	ds201GateGentleRatio        = 1.2  // Minimal gain variation in expansion zone
+	ds201GateGentleKnee         = 2.0  // Sharper transition reduces hunting
+	ds201GateGentleMakeup       = 1.0  // Unity gain - no makeup
 
 	// De-esser intensity levels
 	deessIntensityBright = 0.6 // Bright voice base intensity
@@ -1040,6 +1050,12 @@ func tuneDS201Gate(config *FilterChainConfig, measurements *AudioMeasurements) {
 		silencePeak = 0     // Will fall back to NoiseFloor for threshold
 	}
 
+	// Calculate LUFS gap for threshold decision
+	lufsGap := config.TargetI - measurements.InputI
+	if lufsGap < 0 {
+		lufsGap = 0
+	}
+
 	// 2. Ratio: based on LRA (loudness range) - soft expander approach
 	// Calculate ratio FIRST since threshold depends on it
 	config.DS201GateRatio = calculateDS201GateRatio(measurements.InputLRA)
@@ -1051,6 +1067,7 @@ func tuneDS201Gate(config *FilterChainConfig, measurements *AudioMeasurements) {
 		silencePeak,
 		silenceCrest,
 		config.DS201GateRatio,
+		lufsGap,
 	)
 
 	// 3. Attack: based on MaxDifference, SpectralFlux, and SpectralCrest
@@ -1091,6 +1108,17 @@ func tuneDS201Gate(config *FilterChainConfig, measurements *AudioMeasurements) {
 		measurements.InputTP,
 		config.TargetI,
 	)
+
+	// Gentle gate mode override: for extreme LUFS gap + low LRA
+	// Very quiet recordings with uniform levels cause the gate's soft expansion
+	// to apply varying gain reduction across similar speech levels, creating
+	// volume modulation ("hunting"). Override to gentler parameters.
+	if lufsGap >= lufsGapExtreme && measurements.InputLRA < ds201GateGentleLRAThreshold {
+		config.DS201GateRatio = ds201GateGentleRatio
+		config.DS201GateKnee = ds201GateGentleKnee
+		config.DS201GateMakeup = ds201GateGentleMakeup
+		config.DS201GateGentleMode = true
+	}
 }
 
 // calculateDS201GateThreshold determines threshold ensuring sufficient gap above noise
@@ -1112,10 +1140,22 @@ func tuneDS201Gate(config *FilterChainConfig, measurements *AudioMeasurements) {
 // 1. For high-crest noise (transients/bleed): threshold = silencePeak + small margin
 // 2. For stable noise: threshold = max(noiseFloor + derivedGap, targetThreshold)
 // 3. Clamp to [minThreshold, maxThreshold] to protect quiet speech
-func calculateDS201GateThreshold(noiseFloorDB, silencePeakDB, silenceCrestDB, ratio float64) float64 {
+//
+// Special case for extreme LUFS gaps (>25 dB):
+// Very quiet recordings have exaggerated crest factors due to the low signal level.
+// Small peaks in silence appear large relative to the quiet RMS. Using peak-reference
+// in this case places the threshold too close to quiet speech, causing modulation.
+// Instead, use noise-floor-based threshold which is more reliable for quiet recordings.
+func calculateDS201GateThreshold(noiseFloorDB, silencePeakDB, silenceCrestDB, ratio, lufsGap float64) float64 {
 	var thresholdDB float64
 
-	if silenceCrestDB > ds201GateCrestFactorThreshold && silencePeakDB != 0 {
+	// For extreme LUFS gaps, skip peak-reference approach
+	// Very quiet recordings have exaggerated crest factors; noise floor is more reliable
+	usePeakReference := silenceCrestDB > ds201GateCrestFactorThreshold &&
+		silencePeakDB != 0 &&
+		lufsGap < lufsGapExtreme
+
+	if usePeakReference {
 		// Noise has transients (e.g., bleed from other mics) - threshold must clear peaks
 		// Use peak + small margin to ensure gate opens cleanly
 		thresholdDB = silencePeakDB + 3.0

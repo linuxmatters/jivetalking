@@ -1049,7 +1049,13 @@ func formatDS201GateFilter(f *os.File, cfg *processor.FilterChainConfig, m *proc
 		detection = "rms"
 	}
 
-	fmt.Fprintf(f, "%sDS201 gate: threshold %.1f dB, ratio %.1f:1, detection %s\n", prefix, thresholdDB, cfg.DS201GateRatio, detection)
+	// Show mode indicator if gentle mode is active
+	modeNote := ""
+	if cfg.DS201GateGentleMode {
+		modeNote = " [gentle mode]"
+	}
+
+	fmt.Fprintf(f, "%sDS201 gate: threshold %.1f dB, ratio %.1f:1, detection %s%s\n", prefix, thresholdDB, cfg.DS201GateRatio, detection, modeNote)
 	fmt.Fprintf(f, "        Timing: attack %.2fms, release %.0fms (soft expander)\n", cfg.DS201GateAttack, cfg.DS201GateRelease)
 	fmt.Fprintf(f, "        Range: %.1f dB reduction, knee %.1f\n", rangeDB, cfg.DS201GateKnee)
 
@@ -1063,9 +1069,21 @@ func formatDS201GateFilter(f *os.File, cfg *processor.FilterChainConfig, m *proc
 	if m != nil {
 		var rationale []string
 
-		// Threshold rationale
-		if m.NoiseProfile != nil && m.NoiseProfile.CrestFactor > 20 {
+		// Threshold rationale - must match logic in calculateDS201GateThreshold
+		// Peak reference is used when: crest > 20 AND peak != 0 AND lufsGap < 25
+		lufsGap := cfg.TargetI - m.InputI
+		if lufsGap < 0 {
+			lufsGap = 0
+		}
+		usePeakRef := m.NoiseProfile != nil &&
+			m.NoiseProfile.CrestFactor > 20 &&
+			m.NoiseProfile.PeakLevel != 0 &&
+			lufsGap < 25
+
+		if usePeakRef {
 			rationale = append(rationale, fmt.Sprintf("peak ref %.1f dB (crest %.1f dB)", m.NoiseProfile.PeakLevel, m.NoiseProfile.CrestFactor))
+		} else if lufsGap >= 25 && m.NoiseProfile != nil && m.NoiseProfile.CrestFactor > 20 {
+			rationale = append(rationale, fmt.Sprintf("noise floor %.1f dB (extreme LUFS gap %.0f dB, ignoring crest)", m.NoiseFloor, lufsGap))
 		} else {
 			rationale = append(rationale, fmt.Sprintf("noise floor %.1f dB", m.NoiseFloor))
 		}
@@ -1094,6 +1112,11 @@ func formatDS201GateFilter(f *os.File, cfg *processor.FilterChainConfig, m *proc
 			} else {
 				rationale = append(rationale, fmt.Sprintf("broadband-ish (entropy %.2f, fast release)", entropy))
 			}
+		}
+
+		// Gentle mode rationale - for extreme LUFS gap + low LRA recordings
+		if cfg.DS201GateGentleMode {
+			rationale = append(rationale, "gentle mode (extreme LUFS gap + low LRA)")
 		}
 
 		if len(rationale) > 0 {

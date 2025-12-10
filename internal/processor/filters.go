@@ -258,15 +258,16 @@ type FilterChainConfig struct {
 	// DS201-Inspired Gate (agate) - Drawmer DS201 style soft expander
 	// Uses gentle ratio (2:1-4:1) rather than DS201's hard gate for natural speech transitions.
 	// Sub-millisecond attack capability for transient preservation.
-	DS201GateEnabled   bool    // Enable DS201-style gate
-	DS201GateThreshold float64 // Activation threshold (0.0-1.0, linear)
-	DS201GateRatio     float64 // Reduction ratio - soft expander (2:1-4:1), not hard gate
-	DS201GateAttack    float64 // Attack time (ms) - supports 0.5ms+ for transient preservation
-	DS201GateRelease   float64 // Release time (ms) - includes +50ms to compensate for no Hold param
-	DS201GateRange     float64 // Level of gain reduction below threshold (0.0-1.0)
-	DS201GateKnee      float64 // Knee curve softness (1.0-8.0) - soft knee for natural transitions
-	DS201GateMakeup    float64 // Makeup gain after gating (1.0-64.0)
-	DS201GateDetection string  // Level detection mode: "rms" (default, smoother) or "peak" (tighter)
+	DS201GateEnabled    bool    // Enable DS201-style gate
+	DS201GateThreshold  float64 // Activation threshold (0.0-1.0, linear)
+	DS201GateRatio      float64 // Reduction ratio - soft expander (2:1-4:1), not hard gate
+	DS201GateAttack     float64 // Attack time (ms) - supports 0.5ms+ for transient preservation
+	DS201GateRelease    float64 // Release time (ms) - includes +50ms to compensate for no Hold param
+	DS201GateRange      float64 // Level of gain reduction below threshold (0.0-1.0)
+	DS201GateKnee       float64 // Knee curve softness (1.0-8.0) - soft knee for natural transitions
+	DS201GateMakeup     float64 // Makeup gain after gating (1.0-64.0)
+	DS201GateDetection  string  // Level detection mode: "rms" (default, smoother) or "peak" (tighter)
+	DS201GateGentleMode bool    // Gentle mode active - for extreme LUFS gap + low LRA recordings
 
 	// LA-2A Compressor - Teletronix LA-2A style optical compression
 	// The LA-2A is legendary for its gentle, program-dependent character from the T4 optical cell.
@@ -455,7 +456,7 @@ func DefaultFilterConfig() *FilterChainConfig {
 		DynaudnormAltBoundary: false, // Standard boundary mode (default)
 
 		// Speech Normalizer - alternative cycle-level normalization
-		SpeechnormEnabled:     false,
+		SpeechnormEnabled:     true,
 		SpeechnormPeak:        0.95,  // Target peak 0.95 (matches dynaudnorm)
 		SpeechnormExpansion:   3.0,   // Max 3x expansion (moderate, tames loud peaks)
 		SpeechnormCompression: 2.0,   // Max 2x compression (gentle, lifts quiet sections)
