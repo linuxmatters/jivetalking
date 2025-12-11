@@ -114,10 +114,6 @@ const (
 	// 16 dB provides good noise reduction for clean sources while preserving voice quality.
 	DolbySRDefaultExpansionDB = 16.0
 
-	// DolbySRDefaultMakeupGainDB compensates for Linkwitz-Riley crossover level loss.
-	// Applied via separate volume filter due to FFmpeg mcompand gain parameter bug.
-	DolbySRDefaultMakeupGainDB = 1.3
-
 	// DolbySRDefaultThresholdDB is the default expansion threshold.
 	// -50 dB is the baseline for clean sources; adapted to -45/-40 for noisier sources.
 	DolbySRDefaultThresholdDB = -50.0
@@ -256,11 +252,10 @@ type FilterChainConfig struct {
 
 	// Dolby SR Denoise - 6-band multiband compander inspired by "Least Treatment" philosophy
 	// Uses mcompand with FLAT reduction curve for artifact-free noise elimination
-	DolbySREnabled      bool                // Enable Dolby SR filter
-	DolbySRExpansionDB  float64             // Base expansion depth (12-16 dB, default: 13)
-	DolbySRThresholdDB  float64             // Expansion threshold (-50 to -45 dB, adaptive based on trough)
-	DolbySRBands        []DolbySRBandConfig // 6-band voice-protective configuration
-	DolbySRMakeupGainDB float64             // Linkwitz-Riley crossover compensation (default: 1.3)
+	DolbySREnabled     bool                // Enable Dolby SR filter
+	DolbySRExpansionDB float64             // Base expansion depth (12-16 dB, default: 13)
+	DolbySRThresholdDB float64             // Expansion threshold (-50 to -45 dB, adaptive based on trough)
+	DolbySRBands       []DolbySRBandConfig // 6-band voice-protective configuration
 
 	// DS201-Inspired Gate (agate) - Drawmer DS201 style soft expander
 	// Uses gentle ratio (2:1-4:1) rather than DS201's hard gate for natural speech transitions.
@@ -411,11 +406,10 @@ func DefaultFilterConfig() *FilterChainConfig {
 		// Dolby SR-Inspired Denoise - 6-band multiband compander
 		// Implements SR philosophy: Least Treatment via FLAT reduction curve
 		// Uses mcompand with voice-protective band scaling
-		DolbySREnabled:      true,
-		DolbySRExpansionDB:  DolbySRDefaultExpansionDB,  // 13 dB (adaptive: 12-16 based on noise floor)
-		DolbySRThresholdDB:  DolbySRDefaultThresholdDB,  // -50 dB (adaptive: -50/-47/-45 based on trough)
-		DolbySRBands:        defaultDolbySRBands(),      // 6-band voice-protective configuration
-		DolbySRMakeupGainDB: DolbySRDefaultMakeupGainDB, // 1.3 dB Linkwitz-Riley compensation
+		DolbySREnabled:     true,
+		DolbySRExpansionDB: DolbySRDefaultExpansionDB, // 13 dB (adaptive: 12-16 based on noise floor)
+		DolbySRThresholdDB: DolbySRDefaultThresholdDB, // -50 dB (adaptive: -50/-47/-45 based on trough)
+		DolbySRBands:       defaultDolbySRBands(),     // 6-band voice-protective configuration
 
 		// DS201-Inspired Gate - soft expander for natural speech transitions
 		// All parameters set adaptively based on Pass 1 measurements
@@ -503,6 +497,15 @@ func DefaultFilterConfig() *FilterChainConfig {
 // Used for converting dB parameters to FFmpeg's linear format
 func dbToLinear(db float64) float64 {
 	return math.Pow(10, db/20.0)
+}
+
+// linearToDb converts linear amplitude to decibel value
+// Inverse of dbToLinear
+func linearToDb(linear float64) float64 {
+	if linear <= 0 {
+		return -120.0 // Practical floor for audio
+	}
+	return 20.0 * math.Log10(linear)
 }
 
 // boolToInt converts a bool to 0 or 1 for FFmpeg filter parameters
@@ -832,14 +835,9 @@ func (cfg *FilterChainConfig) buildDolbySRFilter() string {
 	// Join bands with escaped pipe separators (space before and after)
 	filter := "mcompand=args=" + strings.Join(bandSpecs, " \\| ")
 
-	// Append makeup gain to compensate for Linkwitz-Riley crossover level loss
-	// Cannot use mcompand's inline gain parameter due to FFmpeg bug (af_mcompand.c:447)
-	// Use precision=double to match mcompand's 64-bit output format
-	makeupGain := cfg.DolbySRMakeupGainDB
-	if makeupGain == 0 {
-		makeupGain = DolbySRDefaultMakeupGainDB
-	}
-	filter += fmt.Sprintf(",volume=%.1fdB:precision=double", makeupGain)
+	// Note: Linkwitz-Riley crossover compensation is applied in the LA2A compressor
+	// makeup gain when DolbySR is enabled (see tuneLA2AMakeup in adaptive.go).
+	// This simplifies gain staging by consolidating makeup gains in one place.
 
 	return filter
 }

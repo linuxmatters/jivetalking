@@ -174,3 +174,4 @@ The LA-2A operates on already-cleaned audio, so it can focus on its strength: ge
 - Universal Audio, "LA-2A Leveling Amplifier" reissue documentation
 - Dennis Fink, "The History of the LA-2A" (Mix Magazine, 2003)
 - FFmpeg Documentation: `acompressor` filter
+- https://github.com/aim-qmul/4a2a

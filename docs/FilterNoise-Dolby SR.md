@@ -124,7 +124,6 @@ Unlike FFT-based approaches that can shift spectral centroid by 20-30%, the comp
 | `DolbySRExpansionDB` | float64 | 16–24 dB | 16 dB | Base expansion amount (adaptive) |
 | `DolbySRThresholdDB` | float64 | −50 to −40 dB | −50 dB | Expansion threshold (adaptive) |
 | `DolbySRBands` | []DolbySRBandConfig | 6 bands | Voice-protective | Per-band configuration |
-| `DolbySRMakeupGainDB` | float64 | - | 1.3 dB | Crossover compensation |
 
 ### Per-Band Configuration
 

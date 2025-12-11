@@ -1644,6 +1644,117 @@ func TestTuneDS201Gate(t *testing.T) {
 	})
 }
 
+func TestTuneLA2AMakeup_DolbySRCompensation(t *testing.T) {
+	// Tests that LA2A makeup adds 1.3 dB when DolbySR is enabled
+	// This compensates for Linkwitz-Riley crossover level loss in mcompand
+
+	// Baseline measurements: 10 LU gap gives 3.5 dB base makeup (10 × 0.35)
+	measurements := &AudioMeasurements{
+		InputI:  -26.0, // 10 LU gap to -16 target
+		InputTP: -8.0,  // Safe headroom
+	}
+
+	t.Run("DolbySR enabled adds 1.3 dB compensation", func(t *testing.T) {
+		config := DefaultFilterConfig()
+		config.DolbySREnabled = true
+		config.DS201GateEnabled = false // Isolate DolbySR compensation
+
+		tuneLA2AMakeup(config, measurements)
+
+		// Base makeup (3.5) + DolbySR compensation (1.3) = 4.8 dB
+		wantMakeup := 4.8
+		if math.Abs(config.LA2AMakeup-wantMakeup) > 0.1 {
+			t.Errorf("LA2AMakeup with DolbySR = %.2f dB, want ~%.1f dB", config.LA2AMakeup, wantMakeup)
+		}
+	})
+
+	t.Run("DolbySR disabled has no compensation", func(t *testing.T) {
+		config := DefaultFilterConfig()
+		config.DolbySREnabled = false
+		config.DS201GateEnabled = false // Isolate DolbySR compensation
+
+		tuneLA2AMakeup(config, measurements)
+
+		// Base makeup only (3.5 dB)
+		wantMakeup := 3.5
+		if math.Abs(config.LA2AMakeup-wantMakeup) > 0.1 {
+			t.Errorf("LA2AMakeup without DolbySR = %.2f dB, want ~%.1f dB", config.LA2AMakeup, wantMakeup)
+		}
+	})
+}
+
+func TestTuneLA2AMakeup_DS201GateCompensation(t *testing.T) {
+	// Tests that LA2A makeup adds gate compensation when DS201Gate is enabled
+	// This compensates for gate makeup that was previously applied in the gate filter
+
+	// Baseline measurements: 10 LU gap gives 3.5 dB base makeup (10 × 0.35)
+	measurements := &AudioMeasurements{
+		InputI:  -26.0, // 10 LU gap to -16 target
+		InputTP: -8.0,  // Safe headroom
+	}
+
+	t.Run("DS201Gate enabled adds makeup compensation", func(t *testing.T) {
+		config := DefaultFilterConfig()
+		config.DolbySREnabled = false // Isolate gate compensation
+		config.DS201GateEnabled = true
+		config.DS201GateGentleMode = false
+
+		tuneLA2AMakeup(config, measurements)
+
+		// Gate compensation: 10 LU × 0.25 = 2.5 dB
+		// Base makeup (3.5) + gate compensation (2.5) = 6.0 dB
+		wantMakeup := 6.0
+		if math.Abs(config.LA2AMakeup-wantMakeup) > 0.1 {
+			t.Errorf("LA2AMakeup with DS201Gate = %.2f dB, want ~%.1f dB", config.LA2AMakeup, wantMakeup)
+		}
+	})
+
+	t.Run("DS201Gate gentle mode has no makeup compensation", func(t *testing.T) {
+		config := DefaultFilterConfig()
+		config.DolbySREnabled = false // Isolate gate compensation
+		config.DS201GateEnabled = true
+		config.DS201GateGentleMode = true
+
+		tuneLA2AMakeup(config, measurements)
+
+		// Gentle mode: no gate makeup compensation
+		// Base makeup only (3.5 dB)
+		wantMakeup := 3.5
+		if math.Abs(config.LA2AMakeup-wantMakeup) > 0.1 {
+			t.Errorf("LA2AMakeup with DS201Gate gentle = %.2f dB, want ~%.1f dB", config.LA2AMakeup, wantMakeup)
+		}
+	})
+
+	t.Run("DS201Gate disabled has no compensation", func(t *testing.T) {
+		config := DefaultFilterConfig()
+		config.DolbySREnabled = false
+		config.DS201GateEnabled = false
+
+		tuneLA2AMakeup(config, measurements)
+
+		// Base makeup only (3.5 dB)
+		wantMakeup := 3.5
+		if math.Abs(config.LA2AMakeup-wantMakeup) > 0.1 {
+			t.Errorf("LA2AMakeup without DS201Gate = %.2f dB, want ~%.1f dB", config.LA2AMakeup, wantMakeup)
+		}
+	})
+
+	t.Run("Both DolbySR and DS201Gate enabled combines compensations", func(t *testing.T) {
+		config := DefaultFilterConfig()
+		config.DolbySREnabled = true
+		config.DS201GateEnabled = true
+		config.DS201GateGentleMode = false
+
+		tuneLA2AMakeup(config, measurements)
+
+		// Base (3.5) + DolbySR (1.3) + gate (2.5) = 7.3 dB
+		wantMakeup := 7.3
+		if math.Abs(config.LA2AMakeup-wantMakeup) > 0.1 {
+			t.Errorf("LA2AMakeup with both = %.2f dB, want ~%.1f dB", config.LA2AMakeup, wantMakeup)
+		}
+	})
+}
+
 // linearToDB converts linear amplitude to dB for test error messages
 func linearToDB(linear float64) float64 {
 	if linear <= 0 {
@@ -2659,12 +2770,12 @@ func TestTuneDolbySR_Disabled(t *testing.T) {
 }
 
 func TestBuildDolbySRFilter(t *testing.T) {
-	// Verify the filter builder produces valid mcompand + volume chain
+	// Verify the filter builder produces valid mcompand chain
+	// Note: Makeup gain is now applied in LA2A compressor, not DolbySR filter
 
 	config := newTestConfig()
 	config.DolbySREnabled = true
 	config.DolbySRExpansionDB = 13.0
-	config.DolbySRMakeupGainDB = 1.3
 	config.DolbySRBands = defaultDolbySRBands()
 
 	filter := config.buildDolbySRFilter()
@@ -2688,12 +2799,9 @@ func TestBuildDolbySRFilter(t *testing.T) {
 		t.Errorf("Filter missing FLAT curve point -75/-88\nGot: %s", filter)
 	}
 
-	// Verify makeup gain volume filter
-	if !containsString(filter, "volume=1.3dB") {
-		t.Errorf("Filter missing makeup gain volume=1.3dB\nGot: %s", filter)
-	}
-	if !containsString(filter, "precision=double") {
-		t.Errorf("Filter missing precision=double\nGot: %s", filter)
+	// Makeup gain is now in LA2A compressor, not here
+	if containsString(filter, "volume=") {
+		t.Errorf("Filter should not contain volume filter (makeup is in LA2A now)\nGot: %s", filter)
 	}
 }
 

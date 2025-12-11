@@ -1204,7 +1204,6 @@ func formatDolbySRFilter(f *os.File, cfg *processor.FilterChainConfig, m *proces
 	fmt.Fprintf(f, "%sDolby SR: Noise Reduction (6-band voice-protective expander)\n", prefix)
 	fmt.Fprintf(f, "        Expansion: %.0f dB (FLAT reduction curve)\n", cfg.DolbySRExpansionDB)
 	fmt.Fprintf(f, "        Threshold: %.0f dB\n", cfg.DolbySRThresholdDB)
-	fmt.Fprintf(f, "        Makeup gain: +%.1f dB\n", cfg.DolbySRMakeupGainDB)
 
 	// Show 6-band configuration
 	if len(cfg.DolbySRBands) == 6 {

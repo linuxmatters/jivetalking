@@ -1079,7 +1079,6 @@ func TestBuildDolbySRMcompandFilter(t *testing.T) {
 		config := newTestConfig()
 		config.DolbySREnabled = true
 		config.DolbySRExpansionDB = 13.0
-		config.DolbySRMakeupGainDB = 1.3
 		config.DolbySRBands = defaultDolbySRBands()
 
 		filter := config.buildDolbySRFilter()
@@ -1110,9 +1109,9 @@ func TestBuildDolbySRMcompandFilter(t *testing.T) {
 			t.Errorf("Filter missing FLAT curve point -75/-88\nGot: %s", filter)
 		}
 
-		// Must contain volume filter for makeup gain (workaround for mcompand bug)
-		if !strings.Contains(filter, "volume=1.3dB:precision=double") {
-			t.Errorf("Filter missing makeup gain volume filter\nGot: %s", filter)
+		// Makeup gain is now applied in LA2A compressor, not here
+		if strings.Contains(filter, "volume=") {
+			t.Errorf("Filter should not contain volume filter (makeup is in LA2A now)\nGot: %s", filter)
 		}
 	})
 
@@ -1134,7 +1133,6 @@ func TestBuildDolbySRMcompandFilter(t *testing.T) {
 			config.DolbySREnabled = true
 			config.DolbySRExpansionDB = exp
 			config.DolbySRThresholdDB = -50
-			config.DolbySRMakeupGainDB = 1.3
 			config.DolbySRBands = defaultDolbySRBands()
 
 			filter := config.buildDolbySRFilter()

@@ -44,11 +44,11 @@ Measures your audio's characteristics to drive adaptive processing:
 
 | Filter | Inspiration | What It Does |
 |--------|-------------|--------------|
-| **High-pass** | DS201 side-chain | Removes subsonic rumble (60–100 Hz, adaptive to voice) |
+| **High-pass** | DS201 side-chain | Removes subsonic rumble (50–60 Hz, adaptive to voice) |
 | **Low-pass** | DS201 side-chain | Removes ultrasonic content that triggers false processing |
 | **Noise reduction** | Dolby SR | 6-band voice-protective multiband expander with FLAT reduction curve |
-| **RNN denoise** | — | AI-based cleanup for complex noise patterns |
-| **Gate** | DS201 expander | Soft expansion (2:1–4:1) for natural inter-phrase cleanup |
+| **Gate** | DS201 expander | Soft expansion for natural inter-phrase cleanup |
+| **Declicker** | DC-1 | Autoregressive (AR) interpolation click/pop remover |
 | **Compressor** | LA-2A | Programme-dependent optical compression with ~10ms attack |
 | **De-esser** | — | Tames sibilance (adaptive intensity based on spectral rolloff) |
 | **Normalisation** | — | Two-stage loudness targeting to -16 LUFS |
