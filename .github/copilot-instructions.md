@@ -56,10 +56,10 @@ Key patterns from ffmpeg-statigo:
 
 **Filter chain order (intentional):**
 ```
-highpass → adeclick → dolby-sr-single → arnndn → agate → acompressor → deesser → speechnorm/dynaudnorm → alimiter
+highpass → adeclick → dolby-sr-single → arnndn → agate → acompressor → deesser → alimiter
 ```
 
-Each filter prepares audio for the next. Rumble removal before spectral analysis. Compression before de-essing (compression emphasises sibilance). Normalization last so it sees fully processed signal.
+Each filter prepares audio for the next. Rumble removal before spectral analysis. Compression before de-essing (compression emphasises sibilance). Limiter provides final brick-wall safety.
 
 ## Adaptive Processing Patterns
 

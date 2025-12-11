@@ -285,28 +285,13 @@ const (
 	// LA-2A Makeup Gain: LUFS-based gain staging (like DS201 gate)
 	// Rather than estimating gain reduction, use LUFS gap to target for
 	// consistent loudness alignment across the processing chain.
-	la2aMakeupLUFSScale       = 0.35 // Apply 35% of LUFS gap as makeup (more than gate's 25%)
-	la2aMakeupMinGapLUFS      = 6.0  // Only apply makeup if gap > 6 LU (lower threshold than gate)
-	la2aMakeupMaxDB           = 6.0  // dB maximum makeup (compressor can handle more than gate)
-	la2aMakeupTPHeadroom      = -2.0 // Skip makeup if true peak already > -2 dBTP
-	la2aMakeupMin             = 0.0  // dB minimum makeup (can be zero)
-	la2aMakeupMax             = 6.0  // dB maximum makeup (legacy, for clamp)
+	la2aMakeupLUFSScale           = 0.35 // Apply 35% of LUFS gap as makeup (more than gate's 25%)
+	la2aMakeupMinGapLUFS          = 6.0  // Only apply makeup if gap > 6 LU (lower threshold than gate)
+	la2aMakeupMaxDB               = 6.0  // dB maximum makeup (compressor can handle more than gate)
+	la2aMakeupTPHeadroom          = -2.0 // Skip makeup if true peak already > -2 dBTP
+	la2aMakeupMin                 = 0.0  // dB minimum makeup (can be zero)
+	la2aMakeupMax                 = 6.0  // dB maximum makeup (legacy, for clamp)
 	la2aMakeupDolbySRCompensation = 1.3  // dB - compensates for Linkwitz-Riley crossover level loss when DolbySR enabled
-
-	// Dynaudnorm fixed parameters
-	dynaudnormFrameLen   = 500  // ms - balanced frame length
-	dynaudnormFilterSize = 31   // Gaussian filter size
-	dynaudnormPeakValue  = 0.95 // 5% headroom
-	dynaudnormMaxGain    = 5.0  // Conservative max gain
-	dynaudnormTargetRMS  = 0.0  // Peak-based only
-	dynaudnormCompress   = 0.0  // No compression
-	dynaudnormThreshold  = 0.0  // Normalize all frames
-
-	// Speechnorm parameters
-	speechnormMaxExpansion       = 10.0  // Maximum 10x (20dB) expansion
-	speechnormExpansionThreshold = 8.0   // Expansion level triggering denoise
-	speechnormPeakTarget         = 0.95  // Headroom for limiter
-	speechnormSmoothingFast      = 0.001 // Fast response time
 
 	// Mains hum filter parameters
 	humEntropyThreshold   = 0.7  // Below this = tonal noise detected (hum/buzz)
@@ -545,8 +530,6 @@ func AdaptConfig(config *FilterChainConfig, measurements *AudioMeasurements) {
 	tuneDS201Gate(config, measurements)              // DS201-style soft expander gate
 	tuneDeesser(config, measurements)
 	tuneLA2ACompressor(config, measurements)
-	tuneDynaudnorm(config)
-	tuneSpeechnorm(config, measurements, lufsGap)
 
 	// Final safety checks
 	sanitizeConfig(config)
@@ -1471,58 +1454,6 @@ func calculateDS201GateDetection(silenceEntropy, silenceCrestDB float64) string 
 	return "rms"
 }
 
-// calculateDS201GateMakeup determines post-gate makeup gain based on LUFS gap.
-//
-// Rather than relying on later normalisation stages which can introduce artifacts,
-// this provides gentle gain recovery immediately after gating. The makeup is:
-// - A fraction of the LUFS gap to target (conservative approach)
-// - Only applied if the gap exceeds a minimum threshold
-// - Capped to avoid clipping (considers true peak headroom)
-// - Returned as linear gain (1.0 = unity, 2.0 = +6dB)
-//
-// This helps quiet recordings come up without the pumping/breathing artifacts
-// that dynamic normalisers can introduce.
-func calculateDS201GateMakeup(inputLUFS, inputTP, targetLUFS float64) float64 {
-	// Calculate LUFS gap to target
-	lufsGap := targetLUFS - inputLUFS
-	if lufsGap < 0 {
-		lufsGap = 0 // Audio is already louder than target
-	}
-
-	// Skip makeup if gap is small (audio is already close to target)
-	if lufsGap < ds201GateMakeupMinGapLUFS {
-		return 1.0
-	}
-
-	// Skip makeup if true peak is already high (no headroom)
-	if inputTP > ds201GateMakeupTPHeadroom {
-		return 1.0
-	}
-
-	// Calculate makeup as fraction of gap
-	makeupDB := lufsGap * ds201GateMakeupLUFSScale
-
-	// Cap to maximum to avoid clipping
-	if makeupDB > ds201GateMakeupMaxDB {
-		makeupDB = ds201GateMakeupMaxDB
-	}
-
-	// Also limit based on true peak headroom
-	// If TP is -5 dBTP, we have ~5 dB headroom before clipping at -0.3 dBTP
-	tpHeadroom := -0.3 - inputTP // How much room before target TP
-	if makeupDB > tpHeadroom {
-		makeupDB = tpHeadroom
-	}
-
-	// Don't apply negative makeup
-	if makeupDB < 0 {
-		return 1.0
-	}
-
-	// Convert dB to linear for agate's makeup parameter
-	return dbToLinear(makeupDB)
-}
-
 // tuneLA2ACompressor applies Teletronix LA-2A style optical compressor tuning.
 //
 // The Teletronix LA-2A is legendary for its gentle, program-dependent character:
@@ -1768,7 +1699,17 @@ func tuneLA2AMakeup(config *FilterChainConfig, measurements *AudioMeasurements) 
 			measurements.InputI,
 			measurements.InputTP,
 			config.TargetI,
-		)// calculateDS201GateMakeup determines post-gate makeup gain based on LUFS gap.
+		)
+		// Convert linear to dB (gate returns linear, LA2A uses dB)
+		if gateLinear > 1.0 {
+			makeup += linearToDb(gateLinear)
+		}
+	}
+
+	config.LA2AMakeup = makeup
+}
+
+// calculateDS201GateMakeup determines post-gate makeup gain based on LUFS gap.
 //
 // Rather than relying on later normalisation stages which can introduce artifacts,
 // this provides gentle gain recovery immediately after gating. The makeup is:
@@ -1819,14 +1760,6 @@ func calculateDS201GateMakeup(inputLUFS, inputTP, targetLUFS float64) float64 {
 	// Convert dB to linear for agate's makeup parameter
 	return dbToLinear(makeupDB)
 }
-		// Convert linear to dB (gate returns linear, LA2A uses dB)
-		if gateLinear > 1.0 {
-			makeup += linearToDb(gateLinear)
-		}
-	}
-
-	config.LA2AMakeup = makeup
-}
 
 // calculateLA2AMakeup determines post-compression makeup gain based on LUFS gap.
 //
@@ -1875,76 +1808,6 @@ func calculateLA2AMakeup(inputLUFS, inputTP, targetLUFS float64) float64 {
 	}
 
 	return makeupDB
-}
-
-// tuneDynaudnorm sets conservative fixed parameters for dynaudnorm.
-// Unlike other filters, dynaudnorm uses fixed values to prevent
-// distortion/clipping from overly aggressive adaptive tuning.
-func tuneDynaudnorm(config *FilterChainConfig) {
-	config.DynaudnormFrameLen = dynaudnormFrameLen
-	config.DynaudnormFilterSize = dynaudnormFilterSize
-	config.DynaudnormPeakValue = dynaudnormPeakValue
-	config.DynaudnormMaxGain = dynaudnormMaxGain
-	config.DynaudnormTargetRMS = dynaudnormTargetRMS
-	config.DynaudnormCompress = dynaudnormCompress
-	config.DynaudnormThreshold = dynaudnormThreshold
-	config.DynaudnormChannels = false    // Coupled channels
-	config.DynaudnormDCCorrect = false   // No DC correction
-	config.DynaudnormAltBoundary = false // Standard boundary mode
-}
-
-// tuneSpeechnorm adapts cycle-level normalization based on input LUFS.
-// Also enables RNN/NLM denoise for heavily uplifted audio.
-//
-// Key features:
-// - Expansion capped at 10x (20dB) for quality preservation
-// - RMS targeting for LUFS consistency
-// - Automatic denoise activation when expansion ≥8x
-func tuneSpeechnorm(config *FilterChainConfig, measurements *AudioMeasurements, lufsGap float64) {
-	if measurements.InputI == 0.0 {
-		return
-	}
-
-	// Calculate expansion factor from LUFS gap
-	expansion := math.Pow(10, lufsGap/20.0)
-
-	// Cap expansion for audio quality
-	// Very quiet sources accept higher output LUFS rather than degraded quality
-	expansion = clamp(expansion, 1.0, speechnormMaxExpansion)
-	config.SpeechnormExpansion = expansion
-
-	// Enable denoise for heavily uplifted audio
-	tuneSpeechnormDenoise(config, expansion)
-
-	// RMS targeting for LUFS consistency
-	// Rough conversion: LUFS ≈ -23 + 20*log10(RMS)
-	targetRMS := math.Pow(10, (config.TargetI+lufsRmsOffset)/20.0)
-	config.SpeechnormRMS = clamp(targetRMS, 0.0, 1.0)
-
-	// Fixed parameters for speech
-	config.SpeechnormThreshold = 0.0                 // Expand all audio
-	config.SpeechnormCompression = 1.0               // No compression (acompressor handled it)
-	config.SpeechnormPeak = speechnormPeakTarget     // Headroom for limiter
-	config.SpeechnormRaise = speechnormSmoothingFast // Fast response
-	config.SpeechnormFall = speechnormSmoothingFast  // Fast response
-}
-
-// tuneSpeechnormDenoise enables RNN denoise for heavily expanded audio.
-// Only takes effect if ArnnDnEnabled is already true (respects user config).
-// Note: This function is deprecated - tuneArnndn now handles all arnndn tuning.
-// Kept for backwards compatibility but the logic is now in tuneArnndn.
-func tuneSpeechnormDenoise(config *FilterChainConfig, expansion float64) {
-	// Respect user's intent: if filter is disabled, don't touch it
-	if !config.ArnnDnEnabled {
-		return
-	}
-
-	if expansion >= speechnormExpansionThreshold {
-		// Filter stays enabled - tuneArnndn handles mix calculation
-		// Just ensure it's enabled for heavily expanded audio
-	} else {
-		// Light expansion - let tuneArnndn decide based on noise floor
-	}
 }
 
 // sanitizeConfig ensures no NaN or Inf values remain after adaptive tuning

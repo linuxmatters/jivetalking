@@ -956,10 +956,6 @@ func formatFilter(f *os.File, filterID processor.FilterID, cfg *processor.Filter
 		formatLA2ACompressorFilter(f, cfg, m, prefix)
 	case processor.FilterDeesser:
 		formatDeesserFilter(f, cfg, m, prefix)
-	case processor.FilterSpeechnorm:
-		formatSpeechnormFilter(f, cfg, m, prefix)
-	case processor.FilterDynaudnorm:
-		formatDynaudnormFilter(f, cfg, prefix)
 	case processor.FilterAlimiter:
 		formatAlimiterFilter(f, cfg, prefix)
 	default:
@@ -1450,50 +1446,6 @@ func formatDeesserFilter(f *os.File, cfg *processor.FilterChainConfig, m *proces
 		fmt.Fprintf(f, "        Rationale: %s voice (centroid %.0f Hz, rolloff %.0f Hz)\n",
 			voiceType, m.SpectralCentroid, m.SpectralRolloff)
 	}
-}
-
-// formatSpeechnormFilter outputs speechnorm filter details
-func formatSpeechnormFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
-	if !cfg.SpeechnormEnabled {
-		fmt.Fprintf(f, "%sspeechnorm: DISABLED\n", prefix)
-		return
-	}
-
-	expansionDB := 20.0 * math.Log10(cfg.SpeechnormExpansion)
-	fmt.Fprintf(f, "%sspeechnorm: expansion %.1fx (%.1f dB), peak %.2f\n",
-		prefix, cfg.SpeechnormExpansion, expansionDB, cfg.SpeechnormPeak)
-
-	if cfg.SpeechnormRMS > 0 {
-		fmt.Fprintf(f, "        RMS target: %.3f\n", cfg.SpeechnormRMS)
-	}
-
-	fmt.Fprintf(f, "        Smoothing: raise %.3f, fall %.3f\n", cfg.SpeechnormRaise, cfg.SpeechnormFall)
-
-	// Show rationale
-	if m != nil && m.InputI != 0 {
-		lufsGap := cfg.TargetI - m.InputI
-		fmt.Fprintf(f, "        Rationale: input %.1f LUFS, gap %.1f dB to target %.1f LUFS\n",
-			m.InputI, lufsGap, cfg.TargetI)
-
-		// Warn if expansion was capped
-		if lufsGap > 20.0 {
-			expectedLUFS := m.InputI + expansionDB
-			fmt.Fprintf(f, "        Note: expansion capped at 10x (20 dB) for quality — expected output ~%.1f LUFS\n", expectedLUFS)
-		}
-	}
-}
-
-// formatDynaudnormFilter outputs dynaudnorm filter details
-func formatDynaudnormFilter(f *os.File, cfg *processor.FilterChainConfig, prefix string) {
-	if !cfg.DynaudnormEnabled {
-		fmt.Fprintf(f, "%sdynaudnorm: DISABLED\n", prefix)
-		return
-	}
-
-	fmt.Fprintf(f, "%sdynaudnorm: frame %dms, filter size %d\n",
-		prefix, cfg.DynaudnormFrameLen, cfg.DynaudnormFilterSize)
-	fmt.Fprintf(f, "        Peak: %.2f, max gain %.1fx\n", cfg.DynaudnormPeakValue, cfg.DynaudnormMaxGain)
-	fmt.Fprintln(f, "        Mode: conservative fixed parameters (prevents artifacts)")
 }
 
 // formatAlimiterFilter outputs alimiter filter details

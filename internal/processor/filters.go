@@ -43,8 +43,6 @@ const (
 	FilterArnndn         FilterID = "arnndn"
 	FilterLA2ACompressor FilterID = "la2a_compressor" // Teletronix LA-2A style optical compressor
 	FilterDeesser        FilterID = "deesser"
-	FilterSpeechnorm     FilterID = "speechnorm"
-	FilterDynaudnorm     FilterID = "dynaudnorm"
 	FilterAlimiter       FilterID = "alimiter"
 )
 
@@ -69,8 +67,6 @@ var Pass1FilterOrder = []FilterID{
 // - DS201Gate: soft expander for inter-speech cleanup (after denoising lowers floor)
 // - LA2ACompressor: LA-2A style optical compression evens dynamics before normalisation
 // - Deesser: after compression (which emphasises sibilance)
-// - Speechnorm: cycle-level normalisation for speech
-// - Dynaudnorm: frame-level normalisation for final consistency
 // - Alimiter: brick-wall safety net
 // - Analysis: measures output for comparison with Pass 1
 // - Resample: standardises output format (44.1kHz/16-bit/mono)
@@ -84,8 +80,6 @@ var Pass2FilterOrder = []FilterID{
 	FilterDC1Declick,
 	FilterLA2ACompressor,
 	FilterDeesser,
-	FilterSpeechnorm,
-	FilterDynaudnorm,
 	FilterAlimiter,
 	FilterAnalysis,
 	FilterResample,
@@ -293,30 +287,6 @@ type FilterChainConfig struct {
 	TargetTP  float64 // dBTP, true peak ceiling reference
 	TargetLRA float64 // LU, loudness range reference
 
-	// Dynamic Audio Normalizer (dynaudnorm) - primary normalization method
-	DynaudnormEnabled     bool    // Enable dynaudnorm filter
-	DynaudnormFrameLen    int     // Frame length in milliseconds (10-8000, default 500)
-	DynaudnormFilterSize  int     // Filter size for Gaussian filter (3-301, default 31)
-	DynaudnormPeakValue   float64 // Target peak value 0.0-1.0 (default 0.95)
-	DynaudnormMaxGain     float64 // Maximum gain factor (1.0-100.0, default 10.0)
-	DynaudnormTargetRMS   float64 // Target RMS 0.0-1.0 (default 0.0 = disabled)
-	DynaudnormCompress    float64 // Compression factor 0.0-30.0 (default 0.0 = disabled)
-	DynaudnormThreshold   float64 // Minimum magnitude to normalize 0.0-1.0 (default 0.0 = all frames)
-	DynaudnormChannels    bool    // Process channels independently (default false = coupled)
-	DynaudnormDCCorrect   bool    // Enable DC bias correction (default false)
-	DynaudnormAltBoundary bool    // Enable alternative boundary mode (default false)
-
-	// Speech Normalizer (speechnorm) - alternative normalization method
-	SpeechnormEnabled     bool    // Enable speechnorm filter
-	SpeechnormPeak        float64 // Target peak value 0.0-1.0 (default 0.95)
-	SpeechnormExpansion   float64 // Max expansion factor 1.0-50.0 (default 2.0)
-	SpeechnormCompression float64 // Max compression factor 1.0-50.0 (default 2.0)
-	SpeechnormThreshold   float64 // Threshold below which to stop normalization 0.0-1.0 (default 0.0)
-	SpeechnormRaise       float64 // Smoothing for peak rise 0.0-1.0 (default 0.001)
-	SpeechnormFall        float64 // Smoothing for peak fall 0.0-1.0 (default 0.001)
-	SpeechnormRMS         float64 // Target RMS value 0.0-1.0 (default 0.0 = disabled)
-	SpeechnormChannels    bool    // Process channels independently (default false = coupled)
-
 	// RNN Denoise (arnndn) - neural network noise reduction
 	// Positioned after afftdn to handle complex/dynamic noise that spectral subtraction misses
 	ArnnDnEnabled bool    // Enable RNN denoise
@@ -449,30 +419,6 @@ func DefaultFilterConfig() *FilterChainConfig {
 		TargetI:   -16.0, // Reference LUFS target (not enforced)
 		TargetTP:  -0.3,  // Reference true peak (not enforced, alimiter does real limiting at -1.5)
 		TargetLRA: 7.0,   // Reference loudness range (EBU R128 default)
-
-		// Dynamic Audio Normalizer - adaptive loudness normalization
-		DynaudnormEnabled:     false,
-		DynaudnormFrameLen:    500,   // 500ms frames (default, good for speech)
-		DynaudnormFilterSize:  31,    // Gaussian filter size (default, smooth transitions)
-		DynaudnormPeakValue:   0.95,  // Target peak 0.95 (default, leaves headroom)
-		DynaudnormMaxGain:     10.0,  // Maximum 10x gain (default, prevents over-amplification)
-		DynaudnormTargetRMS:   0.0,   // Disabled (default, use peak normalization only)
-		DynaudnormCompress:    0.0,   // No compression (default, preserve dynamics)
-		DynaudnormThreshold:   0.0,   // Normalize all frames (default)
-		DynaudnormChannels:    false, // Coupled channels (default, mono so no effect)
-		DynaudnormDCCorrect:   false, // No DC correction (default)
-		DynaudnormAltBoundary: false, // Standard boundary mode (default)
-
-		// Speech Normalizer - alternative cycle-level normalization
-		SpeechnormEnabled:     true,
-		SpeechnormPeak:        0.95,  // Target peak 0.95 (matches dynaudnorm)
-		SpeechnormExpansion:   3.0,   // Max 3x expansion (moderate, tames loud peaks)
-		SpeechnormCompression: 2.0,   // Max 2x compression (gentle, lifts quiet sections)
-		SpeechnormThreshold:   0.10,  // Threshold 0.10 (normalize above this level)
-		SpeechnormRaise:       0.001, // Fast rise smoothing (responsive to speech onsets)
-		SpeechnormFall:        0.001, // Fast fall smoothing (responsive to speech offsets)
-		SpeechnormRMS:         0.0,   // RMS targeting disabled by default (will be set adaptively)
-		SpeechnormChannels:    false, // Coupled channels (default, mono so no effect)
 
 		// RNN Denoise - neural network noise reduction
 		// Uses cb.rnnn model for speech denoising
@@ -923,48 +869,6 @@ func (cfg *FilterChainConfig) buildDeesserFilter() string {
 	)
 }
 
-// buildDynaudnormFilter builds the dynaudnorm (Dynamic Audio Normalizer) filter specification.
-// Provides adaptive local normalization with Gaussian smoothing.
-// Conservative settings prevent over-amplification while normalizing levels.
-func (cfg *FilterChainConfig) buildDynaudnormFilter() string {
-	if !cfg.DynaudnormEnabled {
-		return ""
-	}
-	return fmt.Sprintf(
-		"dynaudnorm=f=%d:g=%d:p=%.2f:m=%.1f:r=%.3f:t=%.6f:n=%d:c=%d:b=%d:s=%.1f",
-		cfg.DynaudnormFrameLen,
-		cfg.DynaudnormFilterSize,
-		cfg.DynaudnormPeakValue,
-		cfg.DynaudnormMaxGain,
-		cfg.DynaudnormTargetRMS,
-		cfg.DynaudnormThreshold,
-		boolToInt(cfg.DynaudnormChannels),
-		boolToInt(cfg.DynaudnormDCCorrect),
-		boolToInt(cfg.DynaudnormAltBoundary),
-		cfg.DynaudnormCompress,
-	)
-}
-
-// buildSpeechnormFilter builds the speechnorm (Speech Normalizer) filter specification.
-// Cycle-level normalization using zero-crossing half-cycles.
-// Fast, speech-optimized alternative to dynaudnorm's frame-based approach.
-func (cfg *FilterChainConfig) buildSpeechnormFilter() string {
-	if !cfg.SpeechnormEnabled {
-		return ""
-	}
-	return fmt.Sprintf(
-		"speechnorm=p=%.2f:e=%.1f:c=%.1f:t=%.2f:r=%.3f:f=%.3f:m=%.3f:l=%d",
-		cfg.SpeechnormPeak,
-		cfg.SpeechnormExpansion,
-		cfg.SpeechnormCompression,
-		cfg.SpeechnormThreshold,
-		cfg.SpeechnormRaise,
-		cfg.SpeechnormFall,
-		cfg.SpeechnormRMS,
-		boolToInt(cfg.SpeechnormChannels),
-	)
-}
-
 // buildArnnDnFilter builds the arnndn (RNN denoise) filter specification.
 // Neural network noise reduction for heavily uplifted audio.
 // Uses embedded conjoined-burgers model trained for recorded speech.
@@ -1019,9 +923,7 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 		FilterDS201Gate:      cfg.buildDS201GateFilter,
 		FilterLA2ACompressor: cfg.buildLA2ACompressorFilter,
 		FilterDeesser:        cfg.buildDeesserFilter,
-		FilterSpeechnorm:     cfg.buildSpeechnormFilter,
 		FilterArnndn:         cfg.buildArnnDnFilter,
-		FilterDynaudnorm:     cfg.buildDynaudnormFilter,
 		FilterAlimiter:       cfg.buildAlimiterFilter,
 	}
 

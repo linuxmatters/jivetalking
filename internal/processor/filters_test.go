@@ -30,8 +30,6 @@ func newTestConfig() *FilterChainConfig {
 		DS201GateEnabled:  false,
 		LA2AEnabled:       false,
 		DeessEnabled:      false,
-		DynaudnormEnabled: false,
-		SpeechnormEnabled: false,
 		ArnnDnEnabled:     false,
 		LimiterEnabled:    false,
 
@@ -65,18 +63,6 @@ func newTestConfig() *FilterChainConfig {
 		TargetI:            -16.0,
 		TargetTP:           -0.3,
 		TargetLRA:          7.0,
-
-		DynaudnormFrameLen:   500,
-		DynaudnormFilterSize: 31,
-		DynaudnormPeakValue:  0.95,
-		DynaudnormMaxGain:    10.0,
-
-		SpeechnormPeak:        0.95,
-		SpeechnormExpansion:   3.0,
-		SpeechnormCompression: 2.0,
-		SpeechnormThreshold:   0.10,
-		SpeechnormRaise:       0.001,
-		SpeechnormFall:        0.001,
 
 		ArnnDnMix: 0.8,
 
@@ -129,8 +115,6 @@ func TestBuildFilterSpec(t *testing.T) {
 		config.DS201GateEnabled = true
 		config.LA2AEnabled = true
 		config.DeessEnabled = true
-		config.SpeechnormEnabled = true
-		config.DynaudnormEnabled = true
 		config.LimiterEnabled = true
 		config.ResampleEnabled = true // Required for output format filters
 
@@ -145,8 +129,6 @@ func TestBuildFilterSpec(t *testing.T) {
 			{"agate=threshold=", "agate"},
 			{"acompressor=threshold=", "acompressor"},
 			{"deesser=i=", "deesser"},
-			{"speechnorm=", "speechnorm"},
-			{"dynaudnorm=", "dynaudnorm"},
 			{"alimiter=", "alimiter"},
 			{"aformat=sample_rates=44100", "aformat (output)"},
 		}
@@ -165,8 +147,6 @@ func TestBuildFilterSpec(t *testing.T) {
 		config.DS201GateEnabled = true
 		config.LA2AEnabled = true
 		config.DeessEnabled = true
-		config.SpeechnormEnabled = true
-		config.DynaudnormEnabled = true
 		config.LimiterEnabled = true
 
 		spec := config.BuildFilterSpec()
@@ -183,8 +163,6 @@ func TestBuildFilterSpec(t *testing.T) {
 		config.DS201GateEnabled = true
 		config.LA2AEnabled = true
 		config.DeessEnabled = true
-		config.SpeechnormEnabled = true
-		config.DynaudnormEnabled = true
 		config.LimiterEnabled = true
 
 		spec := config.BuildFilterSpec()
@@ -577,64 +555,6 @@ func TestBuildAlimiterFilter(t *testing.T) {
 	})
 }
 
-func TestBuildSpeechnormFilter(t *testing.T) {
-	t.Run("default speech normalization", func(t *testing.T) {
-		config := newTestConfig()
-		config.SpeechnormEnabled = true
-		config.SpeechnormPeak = 0.95
-		config.SpeechnormExpansion = 12.5
-
-		spec := config.buildSpeechnormFilter()
-
-		wantIn := []string{"speechnorm=p=0.95", "e=12.5"}
-
-		for _, want := range wantIn {
-			if !strings.Contains(spec, want) {
-				t.Errorf("buildSpeechnormFilter() = %q, want to contain %q", spec, want)
-			}
-		}
-	})
-
-	t.Run("disabled returns empty", func(t *testing.T) {
-		config := newTestConfig()
-		config.SpeechnormEnabled = false
-
-		spec := config.buildSpeechnormFilter()
-		if spec != "" {
-			t.Errorf("buildSpeechnormFilter() = %q, want empty when disabled", spec)
-		}
-	})
-}
-
-func TestBuildDynaudnormFilter(t *testing.T) {
-	t.Run("default dynaudnorm", func(t *testing.T) {
-		config := newTestConfig()
-		config.DynaudnormEnabled = true
-		config.DynaudnormFrameLen = 500
-		config.DynaudnormMaxGain = 10.0
-
-		spec := config.buildDynaudnormFilter()
-
-		wantIn := []string{"dynaudnorm=f=500", "m=10.0"}
-
-		for _, want := range wantIn {
-			if !strings.Contains(spec, want) {
-				t.Errorf("buildDynaudnormFilter() = %q, want to contain %q", spec, want)
-			}
-		}
-	})
-
-	t.Run("disabled returns empty", func(t *testing.T) {
-		config := newTestConfig()
-		config.DynaudnormEnabled = false
-
-		spec := config.buildDynaudnormFilter()
-		if spec != "" {
-			t.Errorf("buildDynaudnormFilter() = %q, want empty when disabled", spec)
-		}
-	})
-}
-
 func TestFilterOrderRespected(t *testing.T) {
 	config := newTestConfig()
 	// Enable filters that appear at start and end
@@ -945,8 +865,6 @@ func TestPass2FilterOrder(t *testing.T) {
 			FilterDS201Gate,
 			FilterLA2ACompressor,
 			FilterDeesser,
-			FilterSpeechnorm,
-			FilterDynaudnorm,
 			FilterAlimiter,
 			FilterAnalysis,
 			FilterResample,
