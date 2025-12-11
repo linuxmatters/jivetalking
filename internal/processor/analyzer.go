@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"time"
+	"unsafe"
 
 	ffmpeg "github.com/linuxmatters/ffmpeg-statigo"
 	"github.com/linuxmatters/jivetalking/internal/audio"
@@ -63,25 +65,11 @@ type SilenceCandidateMetrics struct {
 type IntervalSample struct {
 	Timestamp time.Duration `json:"timestamp"` // Start of this interval
 
-	// ─── astats amplitude metrics ───────────────────────────────────────────────
-	RMSLevel          float64 `json:"rms_level"`           // dBFS, RMS level for this window
-	PeakLevel         float64 `json:"peak_level"`          // dBFS, peak level for this window
-	RMSTrough         float64 `json:"rms_trough"`          // dBFS, minimum RMS (noise floor proxy)
-	RMSPeak           float64 `json:"rms_peak"`            // dBFS, maximum RMS
-	DynamicRange      float64 `json:"dynamic_range"`       // dB, peak-to-trough range
-	CrestFactor       float64 `json:"crest_factor"`        // dB, peak/RMS ratio (converted from linear)
-	FlatFactor        float64 `json:"flat_factor"`         // Flatness indicator (clipping detection)
-	DCOffset          float64 `json:"dc_offset"`           // DC offset value
-	ZeroCrossingsRate float64 `json:"zero_crossings_rate"` // Zero crossings per second
-	Entropy           float64 `json:"entropy"`             // Signal entropy (astats)
-	MinLevel          float64 `json:"min_level"`           // dBFS, minimum sample level (converted from linear)
-	MaxLevel          float64 `json:"max_level"`           // dBFS, maximum sample level (converted from linear)
-	MinDifference     float64 `json:"min_difference"`      // Minimum sample-to-sample difference
-	MaxDifference     float64 `json:"max_difference"`      // Maximum sample-to-sample difference (transients)
-	MeanDifference    float64 `json:"mean_difference"`     // Mean sample-to-sample difference
-	RMSDifference     float64 `json:"rms_difference"`      // RMS of sample-to-sample differences
+	// ─── Amplitude metrics (calculated per-interval from raw samples) ───────────
+	RMSLevel  float64 `json:"rms_level"`  // dBFS, RMS level calculated from raw frame samples
+	PeakLevel float64 `json:"peak_level"` // dBFS, peak level (max tracked per interval)
 
-	// ─── aspectralstats spectral metrics ────────────────────────────────────────
+	// ─── aspectralstats spectral metrics (valid per-window from FFmpeg) ─────────
 	SpectralMean     float64 `json:"spectral_mean"`     // Average magnitude
 	SpectralVariance float64 `json:"spectral_variance"` // Magnitude spread
 	SpectralCentroid float64 `json:"spectral_centroid"` // Hz - "brightness", speech 300-3000 Hz
@@ -96,13 +84,11 @@ type IntervalSample struct {
 	SpectralDecrease float64 `json:"spectral_decrease"` // High-frequency energy decay
 	SpectralRolloff  float64 `json:"spectral_rolloff"`  // Hz - frequency below which 85% energy lies
 
-	// ─── ebur128 loudness metrics ───────────────────────────────────────────────
-	MomentaryLUFS  float64 `json:"momentary_lufs"`  // LUFS - 400ms window loudness
-	ShortTermLUFS  float64 `json:"short_term_lufs"` // LUFS - 3s window loudness
-	IntegratedLUFS float64 `json:"integrated_lufs"` // LUFS - cumulative integrated loudness
-	LoudnessRange  float64 `json:"loudness_range"`  // LU - loudness range (LRA)
-	TruePeak       float64 `json:"true_peak"`       // dBTP - true peak level
-	SamplePeak     float64 `json:"sample_peak"`     // dBFS - sample peak level
+	// ─── ebur128 loudness metrics (windowed measurements) ───────────────────────
+	MomentaryLUFS float64 `json:"momentary_lufs"`  // LUFS - 400ms window loudness
+	ShortTermLUFS float64 `json:"short_term_lufs"` // LUFS - 3s window loudness
+	TruePeak      float64 `json:"true_peak"`       // dBTP - true peak level (max tracked)
+	SamplePeak    float64 `json:"sample_peak"`     // dBFS - sample peak level (max tracked)
 }
 
 // intervalAccumulator holds accumulated values for a 250ms interval window.
@@ -110,27 +96,16 @@ type IntervalSample struct {
 type intervalAccumulator struct {
 	frameCount int // Number of frames in this interval
 
-	// ─── astats accumulators ────────────────────────────────────────────────────
-	// RMS level: sum-of-squares for proper power averaging
-	rmsLinearSum float64 // Sum of linear power values (10^(dBFS/10))
+	// ─── Raw sample RMS accumulator (for accurate per-interval silence detection) ─
+	// These are calculated directly from frame samples, not from astats metadata,
+	// because astats with reset=0 provides cumulative stats, not per-interval.
+	rawSumSquares  float64 // Sum of squared sample values (normalized -1 to 1)
+	rawSampleCount int64   // Total sample count for this interval
 
-	peakMax              float64 // Maximum peak level (dBFS)
-	rmsTroughMin         float64 // Minimum RMS trough (dBFS)
-	rmsPeakMax           float64 // Maximum RMS peak (dBFS)
-	dynamicRangeSum      float64 // Sum for averaging
-	crestFactorSum       float64 // Sum for averaging
-	flatFactorSum        float64 // Sum for averaging
-	dcOffsetSum          float64 // Sum for averaging
-	zeroCrossingsRateSum float64 // Sum for averaging
-	entropySum           float64 // Sum for averaging (astats entropy)
-	minLevelMin          float64 // Minimum of min levels
-	maxLevelMax          float64 // Maximum of max levels
-	minDifferenceMin     float64 // Minimum difference
-	maxDifferenceMax     float64 // Maximum difference (transients)
-	meanDifferenceSum    float64 // Sum for averaging
-	rmsDifferenceSum     float64 // Sum for averaging
+	// ─── Peak tracking (max per interval) ───────────────────────────────────────
+	peakMax float64 // Maximum peak level (dBFS)
 
-	// ─── aspectralstats accumulators ────────────────────────────────────────────
+	// ─── aspectralstats accumulators (valid per-window from FFmpeg) ─────────────
 	spectralMeanSum     float64
 	spectralVarianceSum float64
 	spectralCentroidSum float64
@@ -145,36 +120,20 @@ type intervalAccumulator struct {
 	spectralDecreaseSum float64
 	spectralRolloffSum  float64
 
-	// ─── ebur128 accumulators ───────────────────────────────────────────────────
-	momentaryLUFSSum  float64
-	shortTermLUFSSum  float64
-	integratedLUFSSum float64
-	loudnessRangeSum  float64
-	truePeakMax       float64 // Maximum true peak
-	samplePeakMax     float64 // Maximum sample peak
+	// ─── ebur128 accumulators (windowed measurements) ───────────────────────────
+	momentaryLUFSSum float64
+	shortTermLUFSSum float64
+	truePeakMax      float64 // Maximum true peak
+	samplePeakMax    float64 // Maximum sample peak
 }
 
-// intervalFrameMetrics holds all per-frame metrics extracted from FFmpeg metadata.
+// intervalFrameMetrics holds per-frame metrics extracted from FFmpeg metadata.
+// Only includes metrics that are valid per-window (not cumulative astats).
 type intervalFrameMetrics struct {
-	// astats
-	RMSLevel          float64
-	PeakLevel         float64
-	RMSTrough         float64
-	RMSPeak           float64
-	DynamicRange      float64
-	CrestFactor       float64
-	FlatFactor        float64
-	DCOffset          float64
-	ZeroCrossingsRate float64
-	Entropy           float64
-	MinLevel          float64
-	MaxLevel          float64
-	MinDifference     float64
-	MaxDifference     float64
-	MeanDifference    float64
-	RMSDifference     float64
+	// Peak tracking (used for max tracking)
+	PeakLevel float64
 
-	// aspectralstats
+	// aspectralstats (valid per-window)
 	SpectralMean     float64
 	SpectralVariance float64
 	SpectralCentroid float64
@@ -189,29 +148,18 @@ type intervalFrameMetrics struct {
 	SpectralDecrease float64
 	SpectralRolloff  float64
 
-	// ebur128
-	MomentaryLUFS  float64
-	ShortTermLUFS  float64
-	IntegratedLUFS float64
-	LoudnessRange  float64
-	TruePeak       float64
-	SamplePeak     float64
+	// ebur128 (windowed measurements)
+	MomentaryLUFS float64
+	ShortTermLUFS float64
+	TruePeak      float64
+	SamplePeak    float64
 }
 
 // add accumulates a frame's metrics into the interval.
 func (a *intervalAccumulator) add(m intervalFrameMetrics) {
-	// RMS: convert from dBFS to linear power for proper averaging
-	if m.RMSLevel > -120 {
-		linearPower := math.Pow(10, m.RMSLevel/10)
-		a.rmsLinearSum += linearPower
-	}
-
 	// Peak levels: keep maximum
 	if a.frameCount == 0 || m.PeakLevel > a.peakMax {
 		a.peakMax = m.PeakLevel
-	}
-	if a.frameCount == 0 || m.RMSPeak > a.rmsPeakMax {
-		a.rmsPeakMax = m.RMSPeak
 	}
 	if a.frameCount == 0 || m.TruePeak > a.truePeakMax {
 		a.truePeakMax = m.TruePeak
@@ -219,35 +167,8 @@ func (a *intervalAccumulator) add(m intervalFrameMetrics) {
 	if a.frameCount == 0 || m.SamplePeak > a.samplePeakMax {
 		a.samplePeakMax = m.SamplePeak
 	}
-	if a.frameCount == 0 || m.MaxLevel > a.maxLevelMax {
-		a.maxLevelMax = m.MaxLevel
-	}
-	if a.frameCount == 0 || m.MaxDifference > a.maxDifferenceMax {
-		a.maxDifferenceMax = m.MaxDifference
-	}
 
-	// Trough/minimum levels: keep minimum (but avoid -inf)
-	if a.frameCount == 0 || (m.RMSTrough > -120 && m.RMSTrough < a.rmsTroughMin) {
-		a.rmsTroughMin = m.RMSTrough
-	}
-	if a.frameCount == 0 || (m.MinLevel != 0 && m.MinLevel < a.minLevelMin) {
-		a.minLevelMin = m.MinLevel
-	}
-	if a.frameCount == 0 || (m.MinDifference != 0 && m.MinDifference < a.minDifferenceMin) {
-		a.minDifferenceMin = m.MinDifference
-	}
-
-	// astats sums for averaging
-	a.dynamicRangeSum += m.DynamicRange
-	a.crestFactorSum += m.CrestFactor
-	a.flatFactorSum += m.FlatFactor
-	a.dcOffsetSum += m.DCOffset
-	a.zeroCrossingsRateSum += m.ZeroCrossingsRate
-	a.entropySum += m.Entropy
-	a.meanDifferenceSum += m.MeanDifference
-	a.rmsDifferenceSum += m.RMSDifference
-
-	// aspectralstats sums for averaging
+	// aspectralstats sums for averaging (valid per-window measurements)
 	a.spectralMeanSum += m.SpectralMean
 	a.spectralVarianceSum += m.SpectralVariance
 	a.spectralCentroidSum += m.SpectralCentroid
@@ -262,13 +183,61 @@ func (a *intervalAccumulator) add(m intervalFrameMetrics) {
 	a.spectralDecreaseSum += m.SpectralDecrease
 	a.spectralRolloffSum += m.SpectralRolloff
 
-	// ebur128 sums for averaging
+	// ebur128 sums for averaging (windowed measurements)
 	a.momentaryLUFSSum += m.MomentaryLUFS
 	a.shortTermLUFSSum += m.ShortTermLUFS
-	a.integratedLUFSSum += m.IntegratedLUFS
-	a.loudnessRangeSum += m.LoudnessRange
 
 	a.frameCount++
+}
+
+// addFrameRMS accumulates RMS from raw frame samples for accurate per-interval measurement.
+// This bypasses astats metadata (which is cumulative) to get true per-interval RMS.
+func (a *intervalAccumulator) addFrameRMS(frame *ffmpeg.AVFrame) {
+	if frame == nil || frame.NbSamples() == 0 {
+		return
+	}
+
+	sampleFmt := frame.Format()
+	nbSamples := frame.NbSamples()
+	nbChannels := frame.ChLayout().NbChannels()
+
+	dataPtr := frame.Data().Get(0)
+	if dataPtr == nil {
+		return
+	}
+
+	switch ffmpeg.AVSampleFormat(sampleFmt) {
+	case ffmpeg.AVSampleFmtS16, ffmpeg.AVSampleFmtS16P:
+		samples := unsafe.Slice((*int16)(dataPtr), int(nbSamples)*int(nbChannels))
+		for _, sample := range samples {
+			normalized := float64(sample) / 32768.0
+			a.rawSumSquares += normalized * normalized
+			a.rawSampleCount++
+		}
+
+	case ffmpeg.AVSampleFmtFlt, ffmpeg.AVSampleFmtFltp:
+		samples := unsafe.Slice((*float32)(dataPtr), int(nbSamples)*int(nbChannels))
+		for _, sample := range samples {
+			normalized := float64(sample)
+			a.rawSumSquares += normalized * normalized
+			a.rawSampleCount++
+		}
+
+	case ffmpeg.AVSampleFmtS32, ffmpeg.AVSampleFmtS32P:
+		samples := unsafe.Slice((*int32)(dataPtr), int(nbSamples)*int(nbChannels))
+		for _, sample := range samples {
+			normalized := float64(sample) / 2147483648.0
+			a.rawSumSquares += normalized * normalized
+			a.rawSampleCount++
+		}
+
+	case ffmpeg.AVSampleFmtDbl, ffmpeg.AVSampleFmtDblp:
+		samples := unsafe.Slice((*float64)(dataPtr), int(nbSamples)*int(nbChannels))
+		for _, sample := range samples {
+			a.rawSumSquares += sample * sample
+			a.rawSampleCount++
+		}
+	}
 }
 
 // finalize converts accumulated values to an IntervalSample.
@@ -276,39 +245,30 @@ func (a *intervalAccumulator) finalize(timestamp time.Duration) IntervalSample {
 	sample := IntervalSample{
 		Timestamp: timestamp,
 
-		// Min/max values (already computed)
-		PeakLevel:     a.peakMax,
-		RMSTrough:     a.rmsTroughMin,
-		RMSPeak:       a.rmsPeakMax,
-		MinLevel:      a.minLevelMin,
-		MaxLevel:      a.maxLevelMax,
-		MinDifference: a.minDifferenceMin,
-		MaxDifference: a.maxDifferenceMax,
-		TruePeak:      a.truePeakMax,
-		SamplePeak:    a.samplePeakMax,
+		// Max values (already computed)
+		PeakLevel:  a.peakMax,
+		TruePeak:   a.truePeakMax,
+		SamplePeak: a.samplePeakMax,
+	}
+
+	// RMS Level: Use raw sample calculation for accurate per-interval measurement
+	// This is calculated directly from frame samples, not from astats metadata,
+	// because astats with reset=0 provides cumulative stats, not per-interval.
+	if a.rawSampleCount > 0 {
+		rms := math.Sqrt(a.rawSumSquares / float64(a.rawSampleCount))
+		if rms < 0.00001 { // Equivalent to < -100 dB
+			sample.RMSLevel = -120.0
+		} else {
+			sample.RMSLevel = 20.0 * math.Log10(rms)
+		}
+	} else {
+		sample.RMSLevel = -120.0
 	}
 
 	if a.frameCount > 0 {
 		n := float64(a.frameCount)
 
-		// RMS: convert accumulated linear power back to dBFS
-		if a.rmsLinearSum > 0 {
-			sample.RMSLevel = 10 * math.Log10(a.rmsLinearSum/n)
-		} else {
-			sample.RMSLevel = -120.0
-		}
-
-		// astats averages
-		sample.DynamicRange = a.dynamicRangeSum / n
-		sample.CrestFactor = a.crestFactorSum / n
-		sample.FlatFactor = a.flatFactorSum / n
-		sample.DCOffset = a.dcOffsetSum / n
-		sample.ZeroCrossingsRate = a.zeroCrossingsRateSum / n
-		sample.Entropy = a.entropySum / n
-		sample.MeanDifference = a.meanDifferenceSum / n
-		sample.RMSDifference = a.rmsDifferenceSum / n
-
-		// aspectralstats averages
+		// aspectralstats averages (valid per-window measurements)
 		sample.SpectralMean = a.spectralMeanSum / n
 		sample.SpectralVariance = a.spectralVarianceSum / n
 		sample.SpectralCentroid = a.spectralCentroidSum / n
@@ -323,11 +283,9 @@ func (a *intervalAccumulator) finalize(timestamp time.Duration) IntervalSample {
 		sample.SpectralDecrease = a.spectralDecreaseSum / n
 		sample.SpectralRolloff = a.spectralRolloffSum / n
 
-		// ebur128 averages
+		// ebur128 averages (windowed measurements)
 		sample.MomentaryLUFS = a.momentaryLUFSSum / n
 		sample.ShortTermLUFS = a.shortTermLUFSSum / n
-		sample.IntegratedLUFS = a.integratedLUFSSum / n
-		sample.LoudnessRange = a.loudnessRangeSum / n
 	}
 
 	return sample
@@ -337,23 +295,12 @@ func (a *intervalAccumulator) finalize(timestamp time.Duration) IntervalSample {
 func (a *intervalAccumulator) reset() {
 	a.frameCount = 0
 
-	// astats
-	a.rmsLinearSum = 0
+	// Raw sample RMS
+	a.rawSumSquares = 0
+	a.rawSampleCount = 0
+
+	// Peak tracking
 	a.peakMax = -120.0
-	a.rmsTroughMin = 0
-	a.rmsPeakMax = -120.0
-	a.dynamicRangeSum = 0
-	a.crestFactorSum = 0
-	a.flatFactorSum = 0
-	a.dcOffsetSum = 0
-	a.zeroCrossingsRateSum = 0
-	a.entropySum = 0
-	a.minLevelMin = 0
-	a.maxLevelMax = 0
-	a.minDifferenceMin = 0
-	a.maxDifferenceMax = 0
-	a.meanDifferenceSum = 0
-	a.rmsDifferenceSum = 0
 
 	// aspectralstats
 	a.spectralMeanSum = 0
@@ -373,96 +320,249 @@ func (a *intervalAccumulator) reset() {
 	// ebur128
 	a.momentaryLUFSSum = 0
 	a.shortTermLUFSSum = 0
-	a.integratedLUFSSum = 0
-	a.loudnessRangeSum = 0
 	a.truePeakMax = -120.0
 	a.samplePeakMax = -120.0
 }
 
 // Silence detection constants for interval-based analysis
 const (
-	// intervalSilenceHeadroom is added to noise floor to determine silence threshold
-	intervalSilenceHeadroom = 6.0 // dB
-
 	// minimumSilenceIntervals is the minimum number of consecutive silent intervals
-	// for a region to be considered a valid silence candidate (250ms * 4 = 1s minimum)
-	minimumSilenceIntervals = 4
+	// for a region to be considered a valid silence candidate.
+	// Must match minimumSilenceDuration (8s) for profile extraction: 8s / 250ms = 32 intervals
+	minimumSilenceIntervals = 32
 
-	// spectralFlatnessThreshold: above this value indicates noise-like (not speech)
-	// Speech has structured harmonics (low flatness), noise is more uniform (high flatness)
-	spectralFlatnessThreshold = 0.3
-
-	// spectralCentroidMaxHz: silence/noise typically has lower frequency content than speech
-	// Voice energy is concentrated in 300-3000Hz range
-	spectralCentroidMaxHz = 1500.0
+	// excludeFirstSeconds: ignore candidates starting in this initial period
+	// (typically contains preamble before intentional room tone recording)
+	excludeFirstSeconds = 15.0
 )
 
-// findSilenceCandidatesFromIntervals identifies silence regions from interval samples.
-// Uses multi-metric discrimination: RMS level, spectral flatness, and spectral centroid.
-// Returns silence regions that meet minimum duration requirements.
-func findSilenceCandidatesFromIntervals(intervals []IntervalSample, noiseFloor float64) []SilenceRegion {
-	if len(intervals) == 0 {
-		return nil
-	}
-
-	// Adaptive threshold: noise floor + headroom
-	threshold := noiseFloor + intervalSilenceHeadroom
-
-	var candidates []SilenceRegion
-	var currentStart time.Duration
-	var silentIntervalCount int
-	inSilence := false
-
-	for i, interval := range intervals {
-		// Multi-metric silence discrimination:
-		// 1. RMS level below threshold (quiet)
-		// 2. Spectral flatness above threshold (noise-like, not speech harmonics)
-		// 3. Spectral centroid below threshold (low frequency content)
-		isSilent := interval.RMSLevel < threshold &&
-			interval.SpectralFlatness > spectralFlatnessThreshold &&
-			interval.SpectralCentroid < spectralCentroidMaxHz
-
-		if isSilent {
-			if !inSilence {
-				// Start of a new potential silence region
-				currentStart = interval.Timestamp
-				silentIntervalCount = 1
-				inSilence = true
-			} else {
-				silentIntervalCount++
-			}
-		} else if inSilence {
-			// End of silence region
-			if silentIntervalCount >= minimumSilenceIntervals {
-				// Calculate end time from last silent interval
-				lastSilentIdx := i - 1
-				if lastSilentIdx >= 0 && lastSilentIdx < len(intervals) {
-					endTime := intervals[lastSilentIdx].Timestamp + 250*time.Millisecond
-					duration := endTime - currentStart
-
-					candidates = append(candidates, SilenceRegion{
-						Start:    currentStart,
-						End:      endTime,
-						Duration: duration,
-					})
-				}
-			}
-			inSilence = false
-			silentIntervalCount = 0
+// roomToneScore calculates a 0-1 score indicating how likely an interval is room tone.
+// Room tone has characteristic spectral behaviour:
+// - Low SpectralFlux (stable, not changing)
+// - Relatively quiet (low RMS)
+// - More noise-like spectrum (higher flatness/entropy vs tonal speech)
+//
+// The score combines these factors with amplitude to identify room tone reliably.
+func roomToneScore(interval IntervalSample, rmsP50, fluxP50 float64) float64 {
+	// Amplitude component: quieter = more likely room tone
+	// Score 1.0 if at or below median, decreasing above
+	// Use a soft threshold: 6dB above median still gets partial credit
+	amplitudeScore := 1.0
+	if interval.RMSLevel > rmsP50 {
+		// Linear decay: 0dB above = 1.0, 6dB above = 0.0
+		amplitudeScore = 1.0 - (interval.RMSLevel-rmsP50)/6.0
+		if amplitudeScore < 0 {
+			amplitudeScore = 0
 		}
 	}
 
-	// Handle silence at end of file
-	if inSilence && silentIntervalCount >= minimumSilenceIntervals {
-		lastInterval := intervals[len(intervals)-1]
-		endTime := lastInterval.Timestamp + 250*time.Millisecond
-		duration := endTime - currentStart
+	// Flux component: room tone is stable (low flux)
+	// Score 1.0 if at or below median, decreasing above
+	fluxScore := 1.0
+	if fluxP50 > 0 && interval.SpectralFlux > fluxP50 {
+		// Exponential decay based on ratio above median
+		ratio := interval.SpectralFlux / fluxP50
+		if ratio > 1 {
+			// ratio 1 = 1.0, ratio 2 = 0.5, ratio 4 = 0.25
+			fluxScore = 1.0 / ratio
+		}
+	}
 
-		candidates = append(candidates, SilenceRegion{
-			Start:    currentStart,
-			End:      endTime,
-			Duration: duration,
-		})
+	// Combine scores: both must be reasonable for a good room tone score
+	// Weight amplitude more heavily since it's the primary discriminator
+	return 0.6*amplitudeScore + 0.4*fluxScore
+}
+
+// calculateSilenceThresholdFromIntervals derives the silence threshold from interval data.
+// Uses spectral analysis to identify room tone by its characteristic stability and quietness.
+//
+// Key insight: room tone detection should use behavioral characteristics, not just amplitude:
+// 1. Room tone is quieter than speech (but may overlap with quiet speech)
+// 2. Room tone has low spectral flux (stable, unchanging)
+// 3. Room tone has consistent spectral characteristics
+//
+// We compute a "room tone score" for each interval and use that to find the threshold.
+func calculateSilenceThresholdFromIntervals(intervals []IntervalSample, fallbackThreshold float64) float64 {
+	if len(intervals) < 10 {
+		return fallbackThreshold
+	}
+
+	// Only use the first 15% of intervals for threshold calculation
+	searchLimit := len(intervals) * 15 / 100
+	if searchLimit < 10 {
+		searchLimit = 10
+	}
+	searchIntervals := intervals[:searchLimit]
+
+	// Calculate medians for scoring reference
+	rmsLevels := make([]float64, len(searchIntervals))
+	fluxValues := make([]float64, len(searchIntervals))
+	for i, interval := range searchIntervals {
+		rmsLevels[i] = interval.RMSLevel
+		fluxValues[i] = interval.SpectralFlux
+	}
+	sort.Float64s(rmsLevels)
+	sort.Float64s(fluxValues)
+
+	rmsP50 := rmsLevels[len(rmsLevels)/2]
+	fluxP50 := fluxValues[len(fluxValues)/2]
+
+	// Score each interval for room tone likelihood
+	type scoredInterval struct {
+		idx   int
+		rms   float64
+		score float64
+	}
+	scored := make([]scoredInterval, len(searchIntervals))
+	for i, interval := range searchIntervals {
+		scored[i] = scoredInterval{
+			idx:   i,
+			rms:   interval.RMSLevel,
+			score: roomToneScore(interval, rmsP50, fluxP50),
+		}
+	}
+
+	// Sort by score descending to find high-confidence room tone intervals
+	sort.Slice(scored, func(i, j int) bool {
+		return scored[i].score > scored[j].score
+	})
+
+	// Take the top 20% of scored intervals as room tone candidates
+	// (or at least 8 intervals for statistical relevance)
+	candidateCount := len(scored) / 5
+	if candidateCount < 8 {
+		candidateCount = 8
+	}
+	if candidateCount > len(scored) {
+		candidateCount = len(scored)
+	}
+
+	// Threshold is the maximum RMS among high-confidence room tone intervals
+	// Add small headroom (1dB) to catch edge cases
+	maxRoomToneRMS := -120.0
+	for i := 0; i < candidateCount; i++ {
+		if scored[i].rms > maxRoomToneRMS {
+			maxRoomToneRMS = scored[i].rms
+		}
+	}
+
+	return maxRoomToneRMS + 1.0
+}
+
+// findSilenceCandidatesFromIntervals identifies silence regions from interval samples.
+// Uses a room tone score approach that considers both amplitude and spectral stability.
+//
+// Detection algorithm:
+// 1. Calculate reference values (medians) for room tone scoring
+// 2. Score each interval for "room tone likelihood"
+// 3. Use a score threshold (0.5) to identify room tone intervals
+// 4. Find consecutive runs that meet minimum duration (8 seconds)
+//
+// The RMS threshold parameter is used as a hard ceiling - intervals above it
+// cannot be silence regardless of spectral characteristics.
+// Candidates in the first 15 seconds are excluded (typically contains intro).
+func findSilenceCandidatesFromIntervals(intervals []IntervalSample, threshold float64, _ float64) []SilenceRegion {
+	if len(intervals) < minimumSilenceIntervals {
+		return nil
+	}
+
+	// Only search the first 15% of the recording
+	searchLimit := len(intervals) * 15 / 100
+	if searchLimit < minimumSilenceIntervals {
+		searchLimit = minimumSilenceIntervals
+	}
+	searchIntervals := intervals[:searchLimit]
+
+	// Calculate medians for room tone scoring
+	rmsLevels := make([]float64, len(searchIntervals))
+	fluxValues := make([]float64, len(searchIntervals))
+	for i, interval := range searchIntervals {
+		rmsLevels[i] = interval.RMSLevel
+		fluxValues[i] = interval.SpectralFlux
+	}
+	sort.Float64s(rmsLevels)
+	sort.Float64s(fluxValues)
+
+	rmsP50 := rmsLevels[len(rmsLevels)/2]
+	fluxP50 := fluxValues[len(fluxValues)/2]
+
+	// Tolerance: allow up to N consecutive intervals below score threshold without breaking
+	// This handles brief transitional moments in otherwise quiet regions
+	// 3 intervals = 750ms of tolerance
+	const interruptionTolerance = 3
+
+	// Room tone score threshold - intervals scoring above this are considered room tone
+	const roomToneScoreThreshold = 0.5
+
+	var candidates []SilenceRegion
+	var silenceStart time.Duration
+	var silentIntervalCount int
+	var interruptionCount int // consecutive intervals below score threshold
+	inSilence := false
+	excludeTime := time.Duration(excludeFirstSeconds * float64(time.Second))
+
+	for i := 0; i < searchLimit; i++ {
+		interval := intervals[i]
+
+		// Hard ceiling: anything above threshold cannot be room tone
+		// Plus check room tone score for more nuanced detection
+		score := roomToneScore(interval, rmsP50, fluxP50)
+		isSilent := interval.RMSLevel <= threshold && score >= roomToneScoreThreshold
+
+		if isSilent {
+			if !inSilence {
+				// Start of potential silence region
+				silenceStart = interval.Timestamp
+				silentIntervalCount = 1
+				interruptionCount = 0
+				inSilence = true
+			} else {
+				silentIntervalCount++
+				interruptionCount = 0 // reset interruption counter on silent interval
+			}
+		} else if inSilence {
+			// Not room tone - count as interruption
+			interruptionCount++
+
+			if interruptionCount > interruptionTolerance {
+				// Too many consecutive interruptions - end silence region
+				// Calculate end time from last silent interval (before interruptions started)
+				lastSilentIdx := i - interruptionCount
+				if silentIntervalCount >= minimumSilenceIntervals && lastSilentIdx >= 0 && lastSilentIdx < len(intervals) {
+					endTime := intervals[lastSilentIdx].Timestamp + 250*time.Millisecond
+					duration := endTime - silenceStart
+
+					// Only include if not in excluded first 15 seconds
+					if silenceStart >= excludeTime {
+						candidates = append(candidates, SilenceRegion{
+							Start:    silenceStart,
+							End:      endTime,
+							Duration: duration,
+						})
+					}
+				}
+				inSilence = false
+				silentIntervalCount = 0
+				interruptionCount = 0
+			}
+			// else: within tolerance, continue silence region
+		}
+	}
+
+	// Handle silence that extends to the search limit
+	if inSilence && silentIntervalCount >= minimumSilenceIntervals {
+		lastInterval := intervals[searchLimit-1]
+		endTime := lastInterval.Timestamp + 250*time.Millisecond
+		duration := endTime - silenceStart
+
+		// Only include if not in excluded first 15 seconds
+		if silenceStart >= excludeTime {
+			candidates = append(candidates, SilenceRegion{
+				Start:    silenceStart,
+				End:      endTime,
+				Duration: duration,
+			})
+		}
 	}
 
 	return candidates
@@ -629,43 +729,16 @@ func linearSampleToDBFS(sample float64) float64 {
 	return 20 * math.Log10(absVal)
 }
 
-// extractIntervalFrameMetrics extracts all metrics from a frame for interval accumulation.
-// Collects comprehensive measurements from astats, aspectralstats, and ebur128.
-// Applies unit conversions for metrics that FFmpeg reports in linear units.
+// extractIntervalFrameMetrics extracts per-frame metrics for interval accumulation.
+// Only collects metrics that are valid per-window (aspectralstats, ebur128 windowed).
+// Excludes astats which provides cumulative values, not per-interval.
 func extractIntervalFrameMetrics(metadata *ffmpeg.AVDictionary) intervalFrameMetrics {
 	var m intervalFrameMetrics
 
-	// astats metrics
-	m.RMSLevel, _ = getFloatMetadata(metadata, metaKeyRMSLevel)
+	// Peak level from astats (used for max tracking, which is valid per-interval)
 	m.PeakLevel, _ = getFloatMetadata(metadata, metaKeyPeakLevel)
-	m.RMSTrough, _ = getFloatMetadata(metadata, metaKeyRMSTrough)
-	m.RMSPeak, _ = getFloatMetadata(metadata, metaKeyRMSPeak)
-	m.DynamicRange, _ = getFloatMetadata(metadata, metaKeyDynamicRange)
 
-	// CrestFactor: FFmpeg reports as linear ratio (peak/RMS), convert to dB
-	if rawCrest, ok := getFloatMetadata(metadata, metaKeyCrestFactor); ok {
-		m.CrestFactor = linearRatioToDB(rawCrest)
-	}
-
-	m.FlatFactor, _ = getFloatMetadata(metadata, metaKeyFlatFactor)
-	m.DCOffset, _ = getFloatMetadata(metadata, metaKeyDCOffset)
-	m.ZeroCrossingsRate, _ = getFloatMetadata(metadata, metaKeyZeroCrossingsRate)
-	m.Entropy, _ = getFloatMetadata(metadata, metaKeyEntropy)
-
-	// MinLevel/MaxLevel: FFmpeg reports as linear sample values, convert to dBFS
-	if rawMin, ok := getFloatMetadata(metadata, metaKeyMinLevel); ok {
-		m.MinLevel = linearSampleToDBFS(rawMin)
-	}
-	if rawMax, ok := getFloatMetadata(metadata, metaKeyMaxLevel); ok {
-		m.MaxLevel = linearSampleToDBFS(rawMax)
-	}
-
-	m.MinDifference, _ = getFloatMetadata(metadata, metaKeyMinDifference)
-	m.MaxDifference, _ = getFloatMetadata(metadata, metaKeyMaxDifference)
-	m.MeanDifference, _ = getFloatMetadata(metadata, metaKeyMeanDifference)
-	m.RMSDifference, _ = getFloatMetadata(metadata, metaKeyRMSDifference)
-
-	// aspectralstats metrics
+	// aspectralstats metrics (valid per-window measurements)
 	m.SpectralMean, _ = getFloatMetadata(metadata, metaKeySpectralMean)
 	m.SpectralVariance, _ = getFloatMetadata(metadata, metaKeySpectralVariance)
 	m.SpectralCentroid, _ = getFloatMetadata(metadata, metaKeySpectralCentroid)
@@ -680,11 +753,9 @@ func extractIntervalFrameMetrics(metadata *ffmpeg.AVDictionary) intervalFrameMet
 	m.SpectralDecrease, _ = getFloatMetadata(metadata, metaKeySpectralDecrease)
 	m.SpectralRolloff, _ = getFloatMetadata(metadata, metaKeySpectralRolloff)
 
-	// ebur128 metrics - TruePeak and SamplePeak need linear-to-dB conversion
+	// ebur128 windowed measurements
 	m.MomentaryLUFS, _ = getFloatMetadata(metadata, metaKeyEbur128M)
 	m.ShortTermLUFS, _ = getFloatMetadata(metadata, metaKeyEbur128S)
-	m.IntegratedLUFS, _ = getFloatMetadata(metadata, metaKeyEbur128I)
-	m.LoudnessRange, _ = getFloatMetadata(metadata, metaKeyEbur128LRA)
 
 	// ebur128 peak values are linear ratios, convert to dB
 	if rawTP, ok := getFloatMetadata(metadata, metaKeyEbur128TruePeak); ok {
@@ -1592,9 +1663,9 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 	var intervalStartTime time.Duration
 	var lastFrameTime time.Duration // Track for end-of-file handling
 
-	// Get time base for PTS to time conversion
-	timeBase := reader.GetTimeBase()
-	timeBaseFloat := float64(timeBase.Num()) / float64(timeBase.Den())
+	// Track input frame time (before filter graph, which upsamples to 192kHz)
+	var inputSamplesProcessed int64
+	inputSampleRate := float64(reader.GetDecoderContext().SampleRate())
 
 	for {
 		frame, err := reader.ReadFrame()
@@ -1607,6 +1678,23 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 
 		// Calculate audio level from frame
 		currentLevel = calculateFrameLevel(frame)
+
+		// Calculate input frame time based on samples processed (before filter graph upsampling)
+		inputFrameTime := time.Duration(float64(inputSamplesProcessed) / inputSampleRate * float64(time.Second))
+		inputSamplesProcessed += int64(frame.NbSamples())
+		lastFrameTime = inputFrameTime
+
+		// Accumulate RMS from INPUT frame (before filter graph which upsamples to 192kHz)
+		// This gives accurate RMS values matching the original audio levels
+		intervalAcc.addFrameRMS(frame)
+
+		// Check if interval complete (250ms elapsed) based on input time
+		if inputFrameTime-intervalStartTime >= intervalDuration {
+			// Finalize and store completed interval
+			intervals = append(intervals, intervalAcc.finalize(intervalStartTime))
+			intervalStartTime = inputFrameTime
+			intervalAcc.reset()
+		}
 
 		// Send periodic progress updates based on frame count
 		if frameCount%updateInterval == 0 && progressCallback != nil && estimatedTotalFrames > 0 {
@@ -1635,29 +1723,6 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 			// Extract measurements from frame metadata (whole-file accumulators)
 			extractFrameMetadata(filteredFrame.Metadata(), acc)
 
-			// Calculate frame timestamp from PTS
-			pts := filteredFrame.Pts()
-			var frameTime time.Duration
-			if pts != ffmpeg.AVNoptsValue {
-				frameTime = time.Duration(float64(pts) * timeBaseFloat * float64(time.Second))
-			}
-			lastFrameTime = frameTime
-
-			// Extract per-frame metrics for interval accumulation
-			metadata := filteredFrame.Metadata()
-			frameMetrics := extractIntervalFrameMetrics(metadata)
-
-			// Accumulate into current interval
-			intervalAcc.add(frameMetrics)
-
-			// Check if interval complete (250ms elapsed)
-			if frameTime-intervalStartTime >= intervalDuration {
-				// Finalize and store completed interval
-				intervals = append(intervals, intervalAcc.finalize(intervalStartTime))
-				intervalStartTime = frameTime
-				intervalAcc.reset()
-			}
-
 			ffmpeg.AVFrameUnref(filteredFrame)
 		}
 	}
@@ -1679,33 +1744,15 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 		// Extract measurements from remaining frames
 		extractFrameMetadata(filteredFrame.Metadata(), acc)
 
-		// Calculate frame timestamp for interval accumulation
-		pts := filteredFrame.Pts()
-		var frameTime time.Duration
-		if pts != ffmpeg.AVNoptsValue {
-			frameTime = time.Duration(float64(pts) * timeBaseFloat * float64(time.Second))
-		}
-		lastFrameTime = frameTime
-
-		// Extract per-frame metrics for interval accumulation
-		metadata := filteredFrame.Metadata()
-		frameMetrics := extractIntervalFrameMetrics(metadata)
-
-		// Accumulate into current interval
-		intervalAcc.add(frameMetrics)
-
-		// Check if interval complete (250ms elapsed)
-		if frameTime-intervalStartTime >= intervalDuration {
-			intervals = append(intervals, intervalAcc.finalize(intervalStartTime))
-			intervalStartTime = frameTime
-			intervalAcc.reset()
-		}
-
 		ffmpeg.AVFrameUnref(filteredFrame)
 	}
 
-	// Note: We intentionally discard any partial interval at the end (per PLAN.md)
-	// as incomplete intervals would have unreliable metrics
+	// Finalize any remaining partial interval (if it has data)
+	if intervalAcc.rawSampleCount > 0 {
+		intervals = append(intervals, intervalAcc.finalize(intervalStartTime))
+	}
+
+	// Note: We intentionally discard partial intervals with no data
 	_ = lastFrameTime // Silence unused variable warning (used for debugging if needed)
 
 	// Free the filter graph
@@ -1829,9 +1876,12 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 	// Store 250ms interval samples for data-driven silence candidate detection
 	measurements.IntervalSamples = intervals
 
-	// Detect silence regions using interval-based analysis
-	// This replaces the FFmpeg silencedetect filter with multi-metric discrimination
-	measurements.SilenceRegions = findSilenceCandidatesFromIntervals(intervals, measurements.NoiseFloor)
+	// Detect silence regions using data-driven threshold from interval distribution
+	// Instead of arbitrary headroom, derive threshold from the actual RMS distribution:
+	// Silence intervals are statistical outliers at the low end of the distribution
+	silenceThreshold := calculateSilenceThresholdFromIntervals(intervals, adaptiveThreshold)
+	measurements.SilenceDetectLevel = silenceThreshold // Update with actual computed threshold
+	measurements.SilenceRegions = findSilenceCandidatesFromIntervals(intervals, silenceThreshold, 0)
 
 	// Extract noise profile from best silence region (if available)
 	// This provides precise noise floor measurement from actual silence in the recording
@@ -2002,15 +2052,17 @@ const (
 	spectralScoreWeight  = 0.5
 	durationScoreWeight  = 0.1
 
-	// Temporal bias (applied as multiplicative factor)
-	temporalBiasMax    = 0.3  // Up to 30% penalty for late regions (strongly prefer early)
+	// Minimum acceptable score for "first wins" selection
+	// Candidates below this threshold are skipped in favour of later candidates
+	// Set low (0.3) to only reject truly problematic candidates (crosstalk, etc.)
+	minAcceptableScore = 0.3
+
+	// Temporal bias constants (still used in scoring for logging, but not for selection)
+	temporalBiasMax    = 0.05 // Up to 5% penalty for late regions
 	temporalWindowSecs = 90.0 // Regions after 90s get maximum penalty
 
 	// Candidate selection cutoff
 	candidateCutoffPercent = 0.15 // Only consider silence in first 15% of recording
-
-	// Adaptive RMS threshold: reject candidates louder than noise floor + this headroom
-	candidateRMSHeadroom = 10.0 // dB above noise floor - candidates louder than this are likely crosstalk
 )
 
 // segmentLongSilenceRegion breaks a long silence region into overlapping segments.
@@ -2071,10 +2123,6 @@ func findBestSilenceRegion(filename string, regions []SilenceRegion, totalDurati
 	// Intentional room tone is always recorded near the start, not deep into the episode
 	cutoffTime := time.Duration(totalDuration * candidateCutoffPercent * float64(time.Second))
 
-	// Calculate adaptive RMS threshold: candidates louder than this are likely crosstalk
-	// Use noise floor + headroom as the maximum acceptable RMS for a silence candidate
-	rmsThreshold := noiseFloor + candidateRMSHeadroom
-
 	// Filter to candidates meeting duration and temporal criteria, then segment long regions.
 	// Long silence regions are broken into overlapping segments to find the cleanest subsection.
 	// This helps when intentional room tone is embedded within a longer quiet period.
@@ -2097,9 +2145,15 @@ func findBestSilenceRegion(filename string, regions []SilenceRegion, totalDurati
 		return result
 	}
 
-	// Measure and score each candidate (including segments from long regions)
-	var bestCandidate *SilenceRegion
+	// "Stop on regression" selection strategy
+	// Intentional room tone is always recorded near the start of the file.
+	// Track the best candidate seen so far, but stop searching when we see a score
+	// lower than the current best — that indicates we've passed the intentional room tone.
+	// Still measure ALL candidates for logging/debugging purposes.
+	var selectedCandidate *SilenceRegion
+	var selectedIdx int = -1
 	var bestScore float64 = -1
+	selectionComplete := false
 
 	for i := range candidates {
 		candidate := &candidates[i]
@@ -2111,29 +2165,36 @@ func findBestSilenceRegion(filename string, regions []SilenceRegion, totalDurati
 			continue
 		}
 
-		// Adaptive RMS filter: reject candidates significantly louder than noise floor
-		// These are likely crosstalk or other non-silence audio
-		if metrics.RMSLevel > rmsThreshold {
-			metrics.Score = 0.0 // Mark as rejected but still store for reporting
-			result.Candidates = append(result.Candidates, *metrics)
-			continue
-		}
-
-		// Score the candidate
+		// Score the candidate based on spectral characteristics
+		// Candidates were already validated by the data-driven interval threshold
 		score := scoreSilenceCandidate(metrics)
 		metrics.Score = score
 
 		// Store candidate metrics for reporting
 		result.Candidates = append(result.Candidates, *metrics)
 
-		// Track best scoring candidate
-		if score > bestScore {
-			bestScore = score
-			bestCandidate = candidate
+		// Selection logic: stop on first regression
+		if !selectionComplete && score >= minAcceptableScore {
+			if bestScore < 0 {
+				// First acceptable candidate
+				selectedCandidate = candidate
+				selectedIdx = len(result.Candidates) - 1
+				bestScore = score
+			} else if score > bestScore {
+				// Better than current best - update
+				selectedCandidate = candidate
+				selectedIdx = len(result.Candidates) - 1
+				bestScore = score
+			} else {
+				// Score regressed - stop searching, keep current best
+				selectionComplete = true
+			}
 		}
 	}
 
-	result.BestRegion = bestCandidate
+	result.BestRegion = selectedCandidate
+	_ = selectedIdx // Used for debugging if needed
+
 	return result
 }
 

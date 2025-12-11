@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -506,39 +507,85 @@ func GenerateReport(data ReportData) error {
 			}
 		}
 
-		// Interval sampling summary
+		// Interval sampling summary with RMSLevel distribution analysis
 		if len(m.IntervalSamples) > 0 {
 			fmt.Fprintln(f, "")
 			fmt.Fprintf(f, "Interval Samples:    %d × 250ms windows analysed\n", len(m.IntervalSamples))
+
+			// Calculate and display RMSLevel distribution for silence detection debugging
+			// RMSLevel = average level per interval (true silence is consistently quiet)
+			rmsValues := make([]float64, 0, len(m.IntervalSamples))
+			for _, interval := range m.IntervalSamples {
+				if interval.RMSLevel > -120 { // Exclude digital silence
+					rmsValues = append(rmsValues, interval.RMSLevel)
+				}
+			}
+			if len(rmsValues) >= 10 {
+				// Sort to get percentiles
+				sorted := make([]float64, len(rmsValues))
+				copy(sorted, rmsValues)
+				sort.Float64s(sorted)
+
+				fmt.Fprintf(f, "  RMSLevel Dist:     min %.1f, p10 %.1f, p25 %.1f, p50 %.1f, p75 %.1f, p90 %.1f, max %.1f dBFS\n",
+					sorted[0],
+					sorted[len(sorted)/10],
+					sorted[len(sorted)/4],
+					sorted[len(sorted)/2],
+					sorted[len(sorted)*3/4],
+					sorted[len(sorted)*9/10],
+					sorted[len(sorted)-1])
+
+				// Find largest gap for silence/speech boundary detection
+				var largestGap float64
+				var gapIndex int
+				for i := 1; i < len(sorted); i++ {
+					gap := sorted[i] - sorted[i-1]
+					if gap > largestGap {
+						largestGap = gap
+						gapIndex = i
+					}
+				}
+				if gapIndex > 0 && gapIndex < len(sorted) {
+					fmt.Fprintf(f, "  Largest Gap:       %.1f dB between %.1f and %.1f dBFS (%d intervals below)\n",
+						largestGap, sorted[gapIndex-1], sorted[gapIndex], gapIndex)
+				}
+			}
 		}
 
 		// Silence candidates (all evaluated candidates with scores)
 		if len(m.SilenceCandidates) > 0 {
 			fmt.Fprintf(f, "Silence Candidates:  %d evaluated\n", len(m.SilenceCandidates))
 			for i, c := range m.SilenceCandidates {
-				// Mark the selected candidate or rejection reason
-				status := ""
-				if m.NoiseProfile != nil && c.Region.Start == m.NoiseProfile.Start {
-					status = " [SELECTED]"
-				} else if c.Score == 0.0 {
-					status = " [REJECTED: too loud]"
+				// Check if this is the selected candidate
+				isSelected := m.NoiseProfile != nil && c.Region.Start == m.NoiseProfile.Start
+
+				if isSelected {
+					// Full details for selected candidate
+					fmt.Fprintf(f, "  Candidate %d:       %.1fs at %.1fs (score: %.3f) [SELECTED]\n",
+						i+1, c.Region.Duration.Seconds(), c.Region.Start.Seconds(), c.Score)
+					fmt.Fprintf(f, "    RMS Level:       %.1f dBFS\n", c.RMSLevel)
+					fmt.Fprintf(f, "    Peak Level:      %.1f dBFS\n", c.PeakLevel)
+					fmt.Fprintf(f, "    Crest Factor:    %.1f dB\n", c.CrestFactor)
+					fmt.Fprintf(f, "    Centroid:        %.0f Hz\n", c.SpectralCentroid)
+					fmt.Fprintf(f, "    Flatness:        %.3f\n", c.SpectralFlatness)
+					fmt.Fprintf(f, "    Kurtosis:        %.1f\n", c.SpectralKurtosis)
+					// Classify noise type based on entropy
+					noiseType := "broadband"
+					if c.Entropy < 0.7 {
+						noiseType = "tonal"
+					} else if c.Entropy < 0.9 {
+						noiseType = "mixed"
+					}
+					fmt.Fprintf(f, "    Entropy:         %.3f (%s)\n", c.Entropy, noiseType)
+				} else {
+					// Single line summary for rejected candidates
+					reason := ""
+					if c.Score == 0.0 {
+						reason = " — rejected: too loud"
+					}
+					fmt.Fprintf(f, "  Candidate %d:       %.1fs at %.1fs (score: %.3f, RMS %.1f dBFS)%s\n",
+						i+1, c.Region.Duration.Seconds(), c.Region.Start.Seconds(), c.Score, c.RMSLevel, reason)
 				}
-				fmt.Fprintf(f, "  Candidate %d:       %.1fs at %.1fs (score: %.3f)%s\n",
-					i+1, c.Region.Duration.Seconds(), c.Region.Start.Seconds(), c.Score, status)
-				fmt.Fprintf(f, "    RMS Level:       %.1f dBFS\n", c.RMSLevel)
-				fmt.Fprintf(f, "    Peak Level:      %.1f dBFS\n", c.PeakLevel)
-				fmt.Fprintf(f, "    Crest Factor:    %.1f dB\n", c.CrestFactor)
-				fmt.Fprintf(f, "    Centroid:        %.0f Hz\n", c.SpectralCentroid)
-				fmt.Fprintf(f, "    Flatness:        %.3f\n", c.SpectralFlatness)
-				fmt.Fprintf(f, "    Kurtosis:        %.1f\n", c.SpectralKurtosis)
-				// Classify noise type based on entropy
-				noiseType := "broadband"
-				if c.Entropy < 0.7 {
-					noiseType = "tonal"
-				} else if c.Entropy < 0.9 {
-					noiseType = "mixed"
-				}
-				fmt.Fprintf(f, "    Entropy:         %.3f (%s)\n", c.Entropy, noiseType)
 			}
 		} else if m.NoiseProfile != nil {
 			// Fallback: show selected profile if no candidates stored (shouldn't happen)
@@ -553,6 +600,10 @@ func GenerateReport(data ReportData) error {
 			r := m.SilenceRegions[0]
 			fmt.Fprintf(f, "Silence Detected:    %.1fs at %.1fs (no profile extracted)\n",
 				r.Duration.Seconds(), r.Start.Seconds())
+		} else {
+			// No silence candidates found at all
+			fmt.Fprintf(f, "Silence Candidates:  NONE FOUND\n")
+			fmt.Fprintf(f, "  No silence regions detected in audio. Noise profiling unavailable.\n")
 		}
 	}
 	fmt.Fprintf(f, "Sample Rate:         %d Hz\n", data.SampleRate)

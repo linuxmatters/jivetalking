@@ -545,6 +545,8 @@ func (cfg *FilterChainConfig) buildAnalysisFilter() string {
 	//   - Zero_crossings_rate: helps classify noise type
 	//   - Max_difference: detects impulsive sounds (clicks/pops)
 	// Note: reset=0 (default) allows astats to accumulate statistics across all frames
+	// for whole-file measurements. Per-interval RMS is calculated directly from frame
+	// samples in Go for accurate silence detection.
 	// aspectralstats: comprehensive spectral analysis for adaptive filter tuning
 	//   - centroid: spectral brightness (Hz) - informs highpass freq and de-esser
 	//   - spread: spectral bandwidth - voice fullness indicator
