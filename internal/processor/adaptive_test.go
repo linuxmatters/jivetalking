@@ -3,6 +3,7 @@ package processor
 import (
 	"math"
 	"testing"
+	"time"
 )
 
 func TestTuneDS201HighPass(t *testing.T) {
@@ -2395,7 +2396,6 @@ func TestClamp(t *testing.T) {
 	}
 }
 
-
 // =============================================================================
 // Dolby SR-Inspired Denoise Tests (mcompand multiband expander)
 // =============================================================================
@@ -2598,6 +2598,431 @@ func TestBuildDolbySRFilter_Disabled(t *testing.T) {
 	if filter != "" {
 		t.Errorf("buildDolbySRFilter should return empty when disabled, got: %s", filter)
 	}
+}
+
+func TestTuneDNS1500(t *testing.T) {
+	t.Run("disabled when no NoiseProfile", func(t *testing.T) {
+		config := newTestConfig()
+		measurements := &AudioMeasurements{
+			NoiseProfile: nil,
+			InputLRA:     10.0,
+		}
+
+		tuneDNS1500(config, measurements)
+
+		if config.DNS1500Enabled {
+			t.Error("DNS1500 should be disabled when NoiseProfile is nil")
+		}
+	})
+
+	t.Run("disabled when NoiseProfile has zero duration", func(t *testing.T) {
+		config := newTestConfig()
+		measurements := &AudioMeasurements{
+			NoiseProfile: &NoiseProfile{
+				Start:              0,
+				Duration:           0, // Zero duration = no valid silence
+				MeasuredNoiseFloor: -55.0,
+			},
+			InputLRA: 10.0,
+		}
+
+		tuneDNS1500(config, measurements)
+
+		if config.DNS1500Enabled {
+			t.Error("DNS1500 should be disabled when NoiseProfile.Duration is zero")
+		}
+	})
+
+	t.Run("enabled with valid NoiseProfile", func(t *testing.T) {
+		config := newTestConfig()
+		measurements := &AudioMeasurements{
+			NoiseProfile: &NoiseProfile{
+				Start:              2 * time.Second,
+				Duration:           500 * time.Millisecond,
+				MeasuredNoiseFloor: -55.0,
+				SpectralFlatness:   0.6,
+				Entropy:            0.5,
+			},
+			InputLRA: 10.0,
+		}
+
+		tuneDNS1500(config, measurements)
+
+		if !config.DNS1500Enabled {
+			t.Error("DNS1500 should be enabled with valid NoiseProfile")
+		}
+	})
+
+	t.Run("silence timing from NoiseProfile", func(t *testing.T) {
+		config := newTestConfig()
+		measurements := &AudioMeasurements{
+			NoiseProfile: &NoiseProfile{
+				Start:              3500 * time.Millisecond, // 3.5 seconds
+				Duration:           750 * time.Millisecond,  // 0.75 seconds
+				MeasuredNoiseFloor: -50.0,
+			},
+			InputLRA: 10.0,
+		}
+
+		tuneDNS1500(config, measurements)
+
+		if config.DNS1500SilenceStart != 3.5 {
+			t.Errorf("DNS1500SilenceStart = %.3f, want 3.500", config.DNS1500SilenceStart)
+		}
+		if config.DNS1500SilenceEnd != 4.25 {
+			t.Errorf("DNS1500SilenceEnd = %.3f, want 4.250", config.DNS1500SilenceEnd)
+		}
+	})
+
+	t.Run("noise reduction clamped to min", func(t *testing.T) {
+		config := newTestConfig()
+		// Clean source: MeasuredNoiseFloor = -68, target = -70 → gap = 2 dB
+		// Should be clamped to dns1500NRMin = 6.0
+		measurements := &AudioMeasurements{
+			NoiseProfile: &NoiseProfile{
+				Start:              1 * time.Second,
+				Duration:           500 * time.Millisecond,
+				MeasuredNoiseFloor: -68.0,
+			},
+			InputLRA: 10.0,
+		}
+
+		tuneDNS1500(config, measurements)
+
+		// dns1500NRMin = 6.0, noiseGap = -68 - (-70) = 2, clamped to 6
+		if config.DNS1500NoiseReduce != 6.0 {
+			t.Errorf("DNS1500NoiseReduce = %.1f, want 6.0 (clamped min)", config.DNS1500NoiseReduce)
+		}
+	})
+
+	t.Run("noise reduction clamped to max for clean source", func(t *testing.T) {
+		config := newTestConfig()
+		// Clean-ish source below noisy threshold: MeasuredNoiseFloor = -56, target = -70 → gap = 14 dB
+		// Below dns1500NoisySourceThreshold (-55), so uses normal dns1500NRMax = 30.0
+		// But gap is only 14 dB, so no clamping needed
+		measurements := &AudioMeasurements{
+			NoiseProfile: &NoiseProfile{
+				Start:              1 * time.Second,
+				Duration:           500 * time.Millisecond,
+				MeasuredNoiseFloor: -56.0,
+			},
+			InputLRA: 10.0,
+		}
+
+		tuneDNS1500(config, measurements)
+
+		// noiseGap = -56 - (-70) = 14, within [6, 30] range
+		if config.DNS1500NoiseReduce != 14.0 {
+			t.Errorf("DNS1500NoiseReduce = %.1f, want 14.0", config.DNS1500NoiseReduce)
+		}
+	})
+
+	t.Run("noisy source applies voice protection", func(t *testing.T) {
+		config := newTestConfig()
+		// Noisy source: MeasuredNoiseFloor = -48 dBFS (above -55 threshold)
+		// Voice protection: NR capped at 15, gain smooth min 15, headroom 8
+		measurements := &AudioMeasurements{
+			NoiseProfile: &NoiseProfile{
+				Start:              1 * time.Second,
+				Duration:           500 * time.Millisecond,
+				MeasuredNoiseFloor: -48.0, // Above -55, triggers voice protection
+				SpectralFlatness:   0.3,   // Low flatness normally = no smoothing
+				Entropy:            0.3,
+			},
+			InputLRA: 10.0,
+		}
+
+		tuneDNS1500(config, measurements)
+
+		// NR: gap = -48 - (-70) = 22, but capped at dns1500NRMaxNoisy = 15
+		if config.DNS1500NoiseReduce != 15.0 {
+			t.Errorf("DNS1500NoiseReduce = %.1f, want 15.0 (noisy source cap)", config.DNS1500NoiseReduce)
+		}
+
+		// Gain smooth: normally 0 for low flatness, but noisy source enforces min 15
+		if config.DNS1500GainSmooth < 15 {
+			t.Errorf("DNS1500GainSmooth = %d, want >= 15 (noisy source min)", config.DNS1500GainSmooth)
+		}
+
+		// Residual floor: noiseFloor (-48) + headroom (8) = -40
+		if config.DNS1500ResidFloor != -40.0 {
+			t.Errorf("DNS1500ResidFloor = %.1f, want -40.0 (noisy source headroom)", config.DNS1500ResidFloor)
+		}
+	})
+
+	t.Run("adaptivity based on InputLRA", func(t *testing.T) {
+		// dns1500LRAFastThresh = 6.0, dns1500LRASlowThresh = 15.0
+		// dns1500AdaptivityFast = 0.3, Moderate = 0.5, Slow = 0.7
+		tests := []struct {
+			name           string
+			inputLRA       float64
+			wantAdaptivity float64
+			desc           string
+		}{
+			{"low LRA - fast adaptation", 4.0, 0.3, "uniform material, faster adaptation safe"},
+			{"moderate LRA - moderate adaptation", 10.0, 0.5, "balanced material"},
+			{"high LRA - slow adaptation", 18.0, 0.7, "dynamic material, avoid pumping"},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				config := newTestConfig()
+				measurements := &AudioMeasurements{
+					NoiseProfile: &NoiseProfile{
+						Start:              1 * time.Second,
+						Duration:           500 * time.Millisecond,
+						MeasuredNoiseFloor: -55.0,
+					},
+					InputLRA: tt.inputLRA,
+				}
+
+				tuneDNS1500(config, measurements)
+
+				if config.DNS1500Adaptivity != tt.wantAdaptivity {
+					t.Errorf("DNS1500Adaptivity = %.2f, want %.2f [%s]",
+						config.DNS1500Adaptivity, tt.wantAdaptivity, tt.desc)
+				}
+			})
+		}
+	})
+
+	t.Run("gain smoothing from spectral flatness", func(t *testing.T) {
+		// dns1500FlatnessSmooth = 0.5, dns1500EntropySmooth = 0.7
+		// dns1500GainSmoothMin = 0, Moderate = 8, Max = 20
+		tests := []struct {
+			name          string
+			flatness      float64
+			entropy       float64
+			wantMinSmooth int
+			wantMaxSmooth int
+			desc          string
+		}{
+			{"tonal noise (low flatness)", 0.3, 0.4, 0, 0, "minimal smoothing for precision"},
+			{"broadband noise (high flatness)", 0.7, 0.5, 8, 20, "needs smoothing"},
+			{"high entropy triggers smoothing", 0.4, 0.8, 8, 20, "entropy threshold"},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				config := newTestConfig()
+				measurements := &AudioMeasurements{
+					NoiseProfile: &NoiseProfile{
+						Start:              1 * time.Second,
+						Duration:           500 * time.Millisecond,
+						MeasuredNoiseFloor: -55.0,
+						SpectralFlatness:   tt.flatness,
+						Entropy:            tt.entropy,
+					},
+					InputLRA: 10.0,
+				}
+
+				tuneDNS1500(config, measurements)
+
+				if config.DNS1500GainSmooth < tt.wantMinSmooth || config.DNS1500GainSmooth > tt.wantMaxSmooth {
+					t.Errorf("DNS1500GainSmooth = %d, want %d-%d [%s]",
+						config.DNS1500GainSmooth, tt.wantMinSmooth, tt.wantMaxSmooth, tt.desc)
+				}
+			})
+		}
+	})
+
+	t.Run("track noise always enabled", func(t *testing.T) {
+		config := newTestConfig()
+		config.DNS1500TrackNoise = false // Start disabled
+		measurements := &AudioMeasurements{
+			NoiseProfile: &NoiseProfile{
+				Start:              1 * time.Second,
+				Duration:           500 * time.Millisecond,
+				MeasuredNoiseFloor: -55.0,
+			},
+			InputLRA: 10.0,
+		}
+
+		tuneDNS1500(config, measurements)
+
+		if !config.DNS1500TrackNoise {
+			t.Error("DNS1500TrackNoise should always be enabled by tuneDNS1500")
+		}
+	})
+}
+
+func TestDNS1500DisablesDolbySR(t *testing.T) {
+	// When DNS-1500 is enabled (valid NoiseProfile), DolbySR should be disabled
+	// Note: Start with DolbySREnabled = false to test normal flow (not force mode)
+	config := DefaultFilterConfig()
+	config.DolbySREnabled = false // Ensure we're testing normal flow, not force mode
+	measurements := &AudioMeasurements{
+		NoiseProfile: &NoiseProfile{
+			Start:              1 * time.Second,
+			Duration:           500 * time.Millisecond,
+			MeasuredNoiseFloor: -55.0,
+			SpectralFlatness:   0.5,
+		},
+		InputI:    -20.0,
+		InputLRA:  10.0,
+		RMSTrough: -60.0,
+	}
+
+	AdaptConfig(config, measurements)
+
+	// DNS-1500 should be enabled (we have valid NoiseProfile)
+	if !config.DNS1500Enabled {
+		t.Fatal("DNS1500 should be enabled with valid NoiseProfile")
+	}
+
+	// DolbySR should be disabled when DNS-1500 is active
+	if config.DolbySREnabled {
+		t.Error("DolbySR should be disabled when DNS1500 is enabled")
+	}
+}
+
+func TestDNS1500FallbackToDolbySR(t *testing.T) {
+	// When DNS-1500 cannot be enabled (no silence detected), DolbySR should be used as fallback
+	config := DefaultFilterConfig()
+	measurements := &AudioMeasurements{
+		NoiseProfile: nil, // No silence detected
+		InputI:       -20.0,
+		InputLRA:     10.0,
+		RMSTrough:    -60.0,
+	}
+
+	AdaptConfig(config, measurements)
+
+	// DNS-1500 should be disabled (no NoiseProfile)
+	if config.DNS1500Enabled {
+		t.Error("DNS1500 should be disabled when NoiseProfile is nil")
+	}
+
+	// DolbySR should be enabled as fallback
+	if !config.DolbySREnabled {
+		t.Error("DolbySR should be enabled as fallback when DNS1500 is disabled")
+	}
+
+	// DolbySR should be tuned (have bands initialised)
+	if len(config.DolbySRBands) != 6 {
+		t.Errorf("DolbySR should have 6 bands, got %d", len(config.DolbySRBands))
+	}
+}
+
+func TestDolbySRForcedSkipsDNS1500(t *testing.T) {
+	// When DolbySR is pre-enabled before AdaptConfig, DNS-1500 should be skipped
+	// even if valid silence is detected
+	config := DefaultFilterConfig()
+	config.DolbySREnabled = true // Force DolbySR mode
+
+	measurements := &AudioMeasurements{
+		NoiseProfile: &NoiseProfile{
+			Start:              1 * time.Second,
+			Duration:           500 * time.Millisecond,
+			MeasuredNoiseFloor: -55.0,
+			SpectralFlatness:   0.5,
+		},
+		InputI:    -20.0,
+		InputLRA:  10.0,
+		RMSTrough: -60.0,
+	}
+
+	AdaptConfig(config, measurements)
+
+	// DNS-1500 should remain disabled (DolbySR was forced)
+	if config.DNS1500Enabled {
+		t.Error("DNS1500 should be disabled when DolbySR is forced on")
+	}
+
+	// DolbySR should remain enabled
+	if !config.DolbySREnabled {
+		t.Error("DolbySR should remain enabled when forced on")
+	}
+
+	// DolbySR should be tuned (have bands initialised)
+	if len(config.DolbySRBands) != 6 {
+		t.Errorf("DolbySR should have 6 bands, got %d", len(config.DolbySRBands))
+	}
+}
+
+func TestDS201GateCoordinatesWithDNS1500(t *testing.T) {
+	t.Run("noisy source gets more aggressive gate with DNS-1500", func(t *testing.T) {
+		// Simulate Mark's profile: noisy source with headphone bleed
+		// Noise floor -48.5 dBFS (above -55 threshold), peak -20 dBFS
+		config := DefaultFilterConfig()
+		config.DolbySREnabled = false // Allow DNS-1500 selection
+		measurements := &AudioMeasurements{
+			NoiseProfile: &NoiseProfile{
+				Start:              43 * time.Second,
+				Duration:           12 * time.Second,
+				MeasuredNoiseFloor: -48.5,
+				PeakLevel:          -20.0,
+				CrestFactor:        28.5,
+				Entropy:            0.102, // Tonal bleed
+				SpectralFlatness:   0.758,
+			},
+			InputI:     -30.0,
+			InputLRA:   16.0,
+			NoiseFloor: -48.5,
+			RMSTrough:  -86.7,
+		}
+
+		AdaptConfig(config, measurements)
+
+		// DNS-1500 should be enabled with voice protection (noisy source cap)
+		if !config.DNS1500Enabled {
+			t.Fatal("DNS1500 should be enabled")
+		}
+		if config.DNS1500NoiseReduce != 15.0 {
+			t.Errorf("DNS1500NoiseReduce = %.1f, want 15.0 (noisy source cap)", config.DNS1500NoiseReduce)
+		}
+
+		// Gate should have lower threshold than without DNS-1500 coordination
+		// Without coordination: threshold would be at peak (-20) + 3 = -17, clamped to -25 dB
+		// With coordination: estimatedPostNRPeak = -20 - 15 = -35, threshold = -35 + 6 = -29 dB
+		thresholdDB := linearToDB(config.DS201GateThreshold)
+		if thresholdDB > -28.0 {
+			t.Errorf("DS201GateThreshold = %.1f dB, want < -28 dB (post-NR coordination)", thresholdDB)
+		}
+
+		// Gate should have deeper range than default tonal (-16 dB)
+		// With DNS-1500 boost, should be around -22 dB
+		rangeDB := linearToDB(config.DS201GateRange)
+		if rangeDB > -20.0 {
+			t.Errorf("DS201GateRange = %.1f dB, want < -20 dB (DNS-1500 range boost)", rangeDB)
+		}
+	})
+
+	t.Run("clean source gate unchanged with DNS-1500", func(t *testing.T) {
+		// Clean source like Martin: noise floor -75 dBFS (below -55 threshold)
+		config := DefaultFilterConfig()
+		config.DolbySREnabled = false // Allow DNS-1500 selection
+		measurements := &AudioMeasurements{
+			NoiseProfile: &NoiseProfile{
+				Start:              37 * time.Second,
+				Duration:           12 * time.Second,
+				MeasuredNoiseFloor: -75.0,
+				PeakLevel:          -59.9,
+				CrestFactor:        15.1,
+				Entropy:            0.142,
+				SpectralFlatness:   0.611,
+			},
+			InputI:     -31.0,
+			InputLRA:   16.3,
+			NoiseFloor: -75.0,
+			RMSTrough:  -78.8,
+		}
+
+		AdaptConfig(config, measurements)
+
+		// DNS-1500 enabled but not noisy source, so no gate coordination boost
+		if !config.DNS1500Enabled {
+			t.Fatal("DNS1500 should be enabled")
+		}
+
+		// Gate range should be based on entropy (0.142 < 0.3 = tonal = -16 dB)
+		// No DNS-1500 boost because noise floor is below threshold
+		rangeDB := linearToDB(config.DS201GateRange)
+		// Should be around -16 dB for tonal, possibly with clean boost
+		if rangeDB < -24.0 {
+			t.Errorf("DS201GateRange = %.1f dB, unexpectedly deep for clean source", rangeDB)
+		}
+	})
 }
 
 // containsString checks if substr exists in s

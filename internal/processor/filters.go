@@ -34,8 +34,13 @@ const (
 	FilterDS201LowPass  FilterID = "ds201_lowpass"  // LP for ultrasonic rejection (adaptive)
 	FilterDS201Gate     FilterID = "ds201_gate"     // Soft expander inspired by DS201
 
+	// CEDAR DNS-1500-inspired noise reduction (Pass 2 only)
+	// Adaptive spectral denoising using learned noise profile from detected silence
+	FilterDNS1500 FilterID = "dns1500"
+
 	// Dolby SR-inspired noise reduction (Pass 2 only)
 	// 6-band multiband compander implementing SR philosophy: Least Treatment, transparency over depth
+	// Used as fallback when no silence region is detected for DNS-1500
 	FilterDolbySR FilterID = "dolbysr"
 
 	// Processing filters (Pass 2 only)
@@ -61,10 +66,11 @@ var Pass1FilterOrder = []FilterID{
 // - DS201HighPass: removes subsonic rumble before other filters (DS201-inspired side-chain)
 // - DS201Hum: removes mains hum (50/60Hz + harmonics) before other filters
 // - DS201LowPass: removes ultrasonic content that could trigger false gates (adaptive)
-// - DC1Declick: CEDAR DC-1 inspired declicker - removes clicks/pops before spectral processing
-// - DolbySR: denoising inspired by Dolby SR "Least Treatment" philosophy
+// - DNS1500: primary noise reduction using learned noise profile (requires detected silence)
+// - DolbySR: fallback noise reduction when no silence detected (profile-free expansion)
 // - Arnndn: AI-based denoising for complex/dynamic noise patterns
 // - DS201Gate: soft expander for inter-speech cleanup (after denoising lowers floor)
+// - DC1Declick: CEDAR DC-1 inspired declicker - removes clicks/pops
 // - LA2ACompressor: LA-2A style optical compression evens dynamics before normalisation
 // - Deesser: after compression (which emphasises sibilance)
 // - Alimiter: brick-wall safety net
@@ -74,6 +80,7 @@ var Pass2FilterOrder = []FilterID{
 	FilterDownmix,
 	FilterDS201HighPass,
 	FilterDS201LowPass,
+	FilterDNS1500,
 	FilterDolbySR,
 	FilterArnndn,
 	FilterDS201Gate,
@@ -244,9 +251,22 @@ type FilterChainConfig struct {
 	DC1DeclickMethod    string  // 'a' = overlap-add, 's' = overlap-save
 	DC1DeclickReason    string  // Why enabled/disabled (for logging)
 
+	// DNS-1500 Noise Reduction (afftdn with inline sampling)
+	// CEDAR DNS-1500-inspired adaptive spectral denoising using learned noise profile
+	DNS1500Enabled      bool    // Enable when silence detected (primary NR filter)
+	DNS1500NoiseReduce  float64 // nr: 0.01–97 dB noise reduction amount
+	DNS1500NoiseFloor   float64 // nf: -80 to -20 dB noise floor level
+	DNS1500TrackNoise   bool    // tn: Enable continuous noise tracking after learning
+	DNS1500Adaptivity   float64 // ad: 0–1, how fast gains adapt (higher = slower)
+	DNS1500GainSmooth   int     // gs: 0–50, spatial smoothing across frequency bins
+	DNS1500ResidFloor   float64 // rf: -80 to -20 dB residual floor level
+	DNS1500SilenceStart float64 // Timestamp (seconds) to start noise sampling
+	DNS1500SilenceEnd   float64 // Timestamp (seconds) to stop noise sampling
+
 	// Dolby SR Denoise - 6-band multiband compander inspired by "Least Treatment" philosophy
 	// Uses mcompand with FLAT reduction curve for artifact-free noise elimination
-	DolbySREnabled     bool                // Enable Dolby SR filter
+	// Used as fallback when DNS-1500 cannot be enabled (no silence detected)
+	DolbySREnabled     bool                // Enable Dolby SR filter (fallback when DNS-1500 disabled)
 	DolbySRExpansionDB float64             // Base expansion depth (12-16 dB, default: 13)
 	DolbySRThresholdDB float64             // Expansion threshold (-50 to -45 dB, adaptive based on trough)
 	DolbySRBands       []DolbySRBandConfig // 6-band voice-protective configuration
@@ -373,10 +393,23 @@ func DefaultFilterConfig() *FilterChainConfig {
 		DC1DeclickMethod:    "s",   // overlap-save (better quality)
 		DC1DeclickReason:    "",    // Set by tuneDC1Declick()
 
+		// DNS-1500 Noise Reduction - CEDAR DNS-1500-inspired adaptive spectral denoising
+		// Primary noise reduction filter; enabled by tuneDNS1500() when valid NoiseProfile exists
+		DNS1500Enabled:      false, // Enabled only when valid NoiseProfile exists
+		DNS1500NoiseReduce:  12.0,  // Overridden by tuneDNS1500()
+		DNS1500NoiseFloor:   -50.0, // Overridden: NoiseProfile.MeasuredNoiseFloor
+		DNS1500TrackNoise:   true,  // Always enabled for continuous adaptation
+		DNS1500Adaptivity:   0.5,   // Overridden: derived from InputLRA
+		DNS1500GainSmooth:   0,     // Overridden: derived from NoiseProfile.SpectralFlatness
+		DNS1500ResidFloor:   -38.0, // Overridden: relative to MeasuredNoiseFloor
+		DNS1500SilenceStart: 0.0,   // Overridden: NoiseProfile.Start
+		DNS1500SilenceEnd:   0.0,   // Overridden: NoiseProfile.Start + Duration
+
 		// Dolby SR-Inspired Denoise - 6-band multiband compander
 		// Implements SR philosophy: Least Treatment via FLAT reduction curve
 		// Uses mcompand with voice-protective band scaling
-		DolbySREnabled:     true,
+		// Fallback noise reduction when DNS-1500 cannot be enabled (no silence detected)
+		DolbySREnabled:     false,                     // Disabled by default; enabled as fallback by AdaptConfig()
 		DolbySRExpansionDB: DolbySRDefaultExpansionDB, // 13 dB (adaptive: 12-16 based on noise floor)
 		DolbySRThresholdDB: DolbySRDefaultThresholdDB, // -50 dB (adaptive: -50/-47/-45 based on trough)
 		DolbySRBands:       defaultDolbySRBands(),     // 6-band voice-protective configuration
@@ -806,6 +839,60 @@ func buildFlatReductionCurve(expansionDB, thresholdDB float64) string {
 	return fmt.Sprintf("-90/%.0f\\,-75/%.0f\\,%.0f/%.0f\\,-30/-30\\,0/0", out90, out75, thresholdDB, thresholdDB)
 }
 
+// buildDNS1500Filter builds the CEDAR DNS-1500-inspired noise reduction filter.
+// Uses FFmpeg's afftdn with inline noise learning via asendcmd during detected silence.
+// This is the primary noise reduction filter when valid silence timestamps are available.
+// Falls back to DolbySR (mcompand) when no suitable silence is detected.
+//
+// Filter graph structure:
+//
+//	asendcmd=c='start_time afftdn@dns1500 sn start; end_time afftdn@dns1500 sn stop',
+//	afftdn@dns1500=nr=X:nf=Y:tn=1:ad=Z:gs=W:rf=R
+//
+// The asendcmd filter sends commands at specific timestamps:
+//   - At silence start: triggers noise sampling start
+//   - At silence end: stops noise sampling and locks the learned profile
+//
+// afftdn parameters (all adaptive via tuneDNS1500):
+//   - nr: noise reduction amount (0.01-97 dB)
+//   - nf: noise floor level (-80 to -20 dB)
+//   - tn: track noise continuously (0/1)
+//   - ad: adaptivity rate (0-1, higher = slower adaptation)
+//   - gs: gain smoothing across frequency bins (0-50)
+//   - rf: residual floor level (-80 to -20 dB)
+func (cfg *FilterChainConfig) buildDNS1500Filter() string {
+	if !cfg.DNS1500Enabled {
+		return ""
+	}
+
+	// Silence timing comes from NoiseProfile (validated by tuneDNS1500)
+	silenceStart := cfg.DNS1500SilenceStart
+	silenceEnd := cfg.DNS1500SilenceEnd
+
+	// Build asendcmd command string
+	// Format: asendcmd=c='time1 target command arg; time2 target command arg'
+	// Note: timestamps are bare values; brackets are only for FLAGS like [enter]/[leave]
+	cmdSpec := fmt.Sprintf(
+		"asendcmd=c='%.3f afftdn@dns1500 sn start; %.3f afftdn@dns1500 sn stop'",
+		silenceStart,
+		silenceEnd,
+	)
+
+	// Build afftdn filter with instance name for asendcmd targeting
+	afftdnSpec := fmt.Sprintf(
+		"afftdn@dns1500=nr=%.1f:nf=%.1f:tn=%d:ad=%.2f:gs=%d:rf=%.1f",
+		cfg.DNS1500NoiseReduce,
+		cfg.DNS1500NoiseFloor,
+		boolToInt(cfg.DNS1500TrackNoise),
+		cfg.DNS1500Adaptivity,
+		cfg.DNS1500GainSmooth,
+		cfg.DNS1500ResidFloor,
+	)
+
+	// Return combined filter chain
+	return fmt.Sprintf("%s,%s", cmdSpec, afftdnSpec)
+}
+
 // buildDS201GateFilter builds the DS201-inspired gate filter specification.
 // Uses soft expander approach (2:1-4:1 ratio) rather than hard gate for natural speech.
 // Supports sub-millisecond attack (0.5ms+) for transient preservation.
@@ -919,6 +1006,7 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 		FilterDS201HighPass:  cfg.buildDS201HighpassFilter,
 		FilterDS201LowPass:   cfg.buildDS201LowPassFilter,
 		FilterDC1Declick:     cfg.buildDC1DeclickFilter,
+		FilterDNS1500:        cfg.buildDNS1500Filter,
 		FilterDolbySR:        cfg.buildDolbySRFilter,
 		FilterDS201Gate:      cfg.buildDS201GateFilter,
 		FilterLA2ACompressor: cfg.buildLA2ACompressorFilter,

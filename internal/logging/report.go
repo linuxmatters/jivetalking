@@ -946,6 +946,8 @@ func formatFilter(f *os.File, filterID processor.FilterID, cfg *processor.Filter
 		formatDS201LowPassFilter(f, cfg, m, prefix)
 	case processor.FilterDC1Declick:
 		formatDC1DeclickFilter(f, cfg, prefix)
+	case processor.FilterDNS1500:
+		formatDNS1500Filter(f, cfg, m, prefix)
 	case processor.FilterDolbySR:
 		formatDolbySRFilter(f, cfg, m, prefix)
 	case processor.FilterArnndn:
@@ -1185,6 +1187,61 @@ func formatDC1DeclickFilter(f *os.File, cfg *processor.FilterChainConfig, prefix
 	fmt.Fprintf(f, "        Method: %s\n", method)
 	if cfg.DC1DeclickReason != "" {
 		fmt.Fprintf(f, "        Reason: %s\n", cfg.DC1DeclickReason)
+	}
+}
+
+// formatDNS1500Filter outputs CEDAR DNS-1500-inspired noise reduction filter details
+// Uses afftdn with inline noise learning via asendcmd during detected silence
+func formatDNS1500Filter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
+	if !cfg.DNS1500Enabled {
+		if cfg.DolbySREnabled {
+			fmt.Fprintf(f, "%sDNS-1500: DISABLED (DolbySR forced on)\n", prefix)
+		} else {
+			fmt.Fprintf(f, "%sDNS-1500: DISABLED (no silence detected, using DolbySR fallback)\n", prefix)
+		}
+		return
+	}
+
+	// Header with key parameters
+	fmt.Fprintf(f, "%sDNS-1500: Noise Reduction (inline noise learning)\n", prefix)
+	fmt.Fprintf(f, "        Noise Reduction: %.1f dB\n", cfg.DNS1500NoiseReduce)
+	fmt.Fprintf(f, "        Noise Floor: %.1f dB\n", cfg.DNS1500NoiseFloor)
+	fmt.Fprintf(f, "        Track Noise: %v\n", cfg.DNS1500TrackNoise)
+	fmt.Fprintf(f, "        Adaptivity: %.2f\n", cfg.DNS1500Adaptivity)
+	fmt.Fprintf(f, "        Gain Smooth: %d\n", cfg.DNS1500GainSmooth)
+	fmt.Fprintf(f, "        Residual Floor: %.1f dB\n", cfg.DNS1500ResidFloor)
+	fmt.Fprintf(f, "        Silence Window: %.3fs – %.3fs\n", cfg.DNS1500SilenceStart, cfg.DNS1500SilenceEnd)
+
+	// Show adaptive rationale
+	if m != nil && m.NoiseProfile != nil {
+		np := m.NoiseProfile
+
+		// Noise character description
+		var noiseChar string
+		switch {
+		case np.SpectralFlatness > 0.6:
+			noiseChar = "broadband (hiss)"
+		case np.SpectralFlatness > 0.4:
+			noiseChar = "mixed"
+		default:
+			noiseChar = "tonal (hum/bleed)"
+		}
+
+		// LRA-based adaptivity description
+		var adaptivityDesc string
+		switch {
+		case m.InputLRA < 6.0:
+			adaptivityDesc = "fast (uniform material)"
+		case m.InputLRA > 15.0:
+			adaptivityDesc = "slow (dynamic material)"
+		default:
+			adaptivityDesc = "moderate"
+		}
+
+		fmt.Fprintf(f, "        Rationale: measured floor %.1f dBFS, %s noise → %.1f dB reduction\n",
+			np.MeasuredNoiseFloor, noiseChar, cfg.DNS1500NoiseReduce)
+		fmt.Fprintf(f, "        Adaptivity: LRA %.1f LU → %s adaptation\n", m.InputLRA, adaptivityDesc)
+		fmt.Fprintf(f, "        DNS-1500 philosophy: learn noise from silence, track continuously\n")
 	}
 }
 

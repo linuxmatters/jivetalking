@@ -105,6 +105,51 @@ const (
 	dc1CentroidFast  = 3000.0 // Hz - above: use shorter window
 	dc1CentroidSlow  = 1500.0 // Hz - below: consider longer window
 
+	// DNS-1500 adaptive tuning constants (CEDAR DNS-1500-inspired)
+	// Primary noise reduction filter using learned noise profile from detected silence
+
+	// Target noise floor after reduction (dBFS)
+	// This is the goal - we calculate reduction needed to reach it
+	dns1500TargetNoiseFloor = -70.0
+
+	// Noise reduction limits (dB)
+	dns1500NRMin = 6.0  // Minimum reduction (avoids artefacts on clean material)
+	dns1500NRMax = 30.0 // Maximum reduction (avoids hollow/underwater sound)
+
+	// Adaptivity tuning from InputLRA (loudness range)
+	// High LRA = dynamic material = slower adaptation to avoid pumping
+	// Low LRA = uniform material = faster adaptation is safe
+	dns1500AdaptivityFast     = 0.3  // Fast adaptation for uniform material
+	dns1500AdaptivityModerate = 0.5  // Default balanced
+	dns1500AdaptivitySlow     = 0.7  // Slow adaptation for dynamic material
+	dns1500LRAFastThresh      = 6.0  // LU - below: faster adaptation safe
+	dns1500LRASlowThresh      = 15.0 // LU - above: slower adaptation needed
+
+	// Gain smoothing tuning from noise character
+	// High flatness = broadband noise = needs smoothing to reduce musical artefacts
+	// Low flatness = tonal noise (hum) = less smoothing preserves precision
+	dns1500GainSmoothMin      = 0   // No smoothing for tonal noise
+	dns1500GainSmoothMax      = 20  // Heavy smoothing for broadband
+	dns1500GainSmoothModerate = 8   // Moderate smoothing baseline
+	dns1500FlatnessSmooth     = 0.5 // Above: broadband noise, needs smoothing
+	dns1500EntropySmooth      = 0.7 // Above: random noise, needs smoothing
+
+	// Residual floor headroom (dB above measured noise floor)
+	dns1500ResidualHeadroom = 12.0
+
+	// Voice protection for noisy sources
+	// When noise floor is high, limit NR aggressiveness to preserve speech
+	dns1500NoisySourceThreshold  = -55.0 // dBFS - above this, apply voice protection
+	dns1500NRMaxNoisy            = 15.0  // Max NR for noisy sources (vs 30 normal)
+	dns1500GainSmoothNoisy       = 15    // Higher smoothing for noisy sources
+	dns1500ResidualHeadroomNoisy = 8.0   // Less headroom = higher residual floor
+
+	// DS201 Gate coordination with DNS-1500
+	// When DNS-1500 is active, the gate sees post-NR audio, so we adjust threshold/range
+	// to account for the reduced noise floor after NR processing
+	ds201GateDNS1500RangeBoostDB  = -6.0 // Extra range when DNS-1500 reduces noise (more aggressive gating OK)
+	ds201GateDNS1500ThresholdDrop = 6.0  // dB - lower threshold by this much post-NR (noise peaks are gone)
+
 	// DS201 Gate tuning constants
 	// Threshold calculation: ensures sufficient gap above noise for effective soft expansion
 	ds201GateThresholdMinDB       = -50.0 // dB - minimum threshold (quiet speech floor)
@@ -525,9 +570,27 @@ func AdaptConfig(config *FilterChainConfig, measurements *AudioMeasurements) {
 	tuneDS201HighPass(config, measurements, lufsGap) // Composite: highpass + hum notch
 	tuneDS201LowPass(config, measurements)           // Ultrasonic rejection (adaptive)
 	tuneDC1Declick(config, measurements)             // CEDAR DC-1 inspired declicker
-	tuneDolbySR(config, measurements, lufsGap)       // Dolby SR-inspired denoise (uses afftdn internally)
-	tuneArnndn(config, measurements, lufsGap)        // RNN denoise (LUFS gap + noise floor based)
-	tuneDS201Gate(config, measurements)              // DS201-style soft expander gate
+
+	// Noise reduction: DNS-1500 primary, DolbySR fallback
+	// If DolbySR is pre-enabled (forced by caller), skip DNS-1500 entirely
+	if config.DolbySREnabled {
+		// DolbySR forced on - skip DNS-1500, just tune DolbySR
+		tuneDolbySR(config, measurements, lufsGap)
+	} else {
+		// Normal flow: try DNS-1500 first, fall back to DolbySR
+		tuneDNS1500(config, measurements)
+
+		if config.DNS1500Enabled {
+			config.DolbySREnabled = false
+		} else {
+			// Fall back to DolbySR when no silence detected for DNS-1500
+			config.DolbySREnabled = true
+			tuneDolbySR(config, measurements, lufsGap)
+		}
+	}
+
+	tuneArnndn(config, measurements, lufsGap) // RNN denoise (LUFS gap + noise floor based)
+	tuneDS201Gate(config, measurements)       // DS201-style soft expander gate
 	tuneDeesser(config, measurements)
 	tuneLA2ACompressor(config, measurements)
 
@@ -917,6 +980,110 @@ func tuneDC1Declick(config *FilterChainConfig, measurements *AudioMeasurements) 
 	}
 }
 
+// tuneDNS1500 adapts CEDAR DNS-1500-inspired noise reduction based on Pass 1 measurements.
+//
+// Enable decision:
+// - Requires valid NoiseProfile with silence region (duration > 0)
+// - If no silence detected, filter stays disabled → DolbySR fallback
+//
+// Noise reduction calculation:
+// - Target noise floor is dns1500TargetNoiseFloor (-70 dBFS)
+// - Reduction = MeasuredNoiseFloor - TargetNoiseFloor
+// - Clamped to [dns1500NRMin, dns1500NRMax] to avoid artefacts
+//
+// Adaptivity from InputLRA:
+// - Low LRA (< 6 LU): uniform material, fast adaptation safe
+// - High LRA (> 15 LU): dynamic material, slow adaptation to avoid pumping
+//
+// Gain smoothing from noise character:
+// - High SpectralFlatness: broadband noise → higher smoothing
+// - Low SpectralFlatness: tonal noise (hum) → lower smoothing
+func tuneDNS1500(config *FilterChainConfig, measurements *AudioMeasurements) {
+	// ─── Enable decision: require valid NoiseProfile ────────────────────────────
+	if measurements.NoiseProfile == nil || measurements.NoiseProfile.Duration == 0 {
+		config.DNS1500Enabled = false
+		return
+	}
+
+	config.DNS1500Enabled = true
+	np := measurements.NoiseProfile
+
+	// ─── Silence timing from NoiseProfile ───────────────────────────────────────
+	config.DNS1500SilenceStart = np.Start.Seconds()
+	config.DNS1500SilenceEnd = np.Start.Seconds() + np.Duration.Seconds()
+
+	// ─── Noise floor from measured value ────────────────────────────────────────
+	config.DNS1500NoiseFloor = clamp(np.MeasuredNoiseFloor, -80.0, -20.0)
+
+	// ─── Detect noisy source for voice protection ──────────────────────────────
+	// High noise floor indicates noisy recording environment - limit NR to protect vocals
+	isNoisySource := np.MeasuredNoiseFloor > dns1500NoisySourceThreshold
+
+	// ─── Noise reduction: gap between measured and target ───────────────────────
+	// Calculate how much reduction is needed to reach target noise floor
+	noiseGap := np.MeasuredNoiseFloor - dns1500TargetNoiseFloor
+
+	// Cap NR for noisy sources to prevent eating into vocals
+	maxNR := dns1500NRMax
+	if isNoisySource {
+		maxNR = dns1500NRMaxNoisy
+	}
+	config.DNS1500NoiseReduce = clamp(noiseGap, dns1500NRMin, maxNR)
+
+	// ─── Adaptivity from InputLRA (loudness range) ──────────────────────────────
+	// High LRA = dynamic material = slower adaptation to avoid pumping
+	// Low LRA = uniform material = faster adaptation is safe
+	switch {
+	case measurements.InputLRA < dns1500LRAFastThresh:
+		config.DNS1500Adaptivity = dns1500AdaptivityFast
+	case measurements.InputLRA > dns1500LRASlowThresh:
+		config.DNS1500Adaptivity = dns1500AdaptivitySlow
+	default:
+		config.DNS1500Adaptivity = dns1500AdaptivityModerate
+	}
+
+	// ─── Gain smoothing from noise character ────────────────────────────────────
+	// Use NoiseProfile spectral flatness if available, else overall measurement
+	flatness := np.SpectralFlatness
+	if flatness == 0 {
+		flatness = measurements.SpectralFlatness // Fallback to overall
+	}
+
+	// High flatness/entropy = broadband noise = needs smoothing
+	// Low flatness = tonal noise (hum) = less smoothing
+	if flatness > dns1500FlatnessSmooth || np.Entropy > dns1500EntropySmooth {
+		// Scale smoothing with flatness intensity
+		t := (flatness - dns1500FlatnessSmooth) / (1.0 - dns1500FlatnessSmooth)
+		config.DNS1500GainSmooth = int(lerp(
+			float64(dns1500GainSmoothModerate),
+			float64(dns1500GainSmoothMax),
+			clamp(t, 0, 1),
+		))
+	} else {
+		// Tonal noise: minimal smoothing for precision
+		config.DNS1500GainSmooth = dns1500GainSmoothMin
+	}
+
+	// Noisy sources get additional smoothing to prevent musical artefacts
+	if isNoisySource && config.DNS1500GainSmooth < dns1500GainSmoothNoisy {
+		config.DNS1500GainSmooth = dns1500GainSmoothNoisy
+	}
+
+	// ─── Residual floor relative to measured noise ──────────────────────────────
+	// Noisy sources use less headroom = higher residual floor = more voice preserved
+	headroom := dns1500ResidualHeadroom
+	if isNoisySource {
+		headroom = dns1500ResidualHeadroomNoisy
+	}
+	config.DNS1500ResidFloor = clamp(
+		np.MeasuredNoiseFloor+headroom,
+		-80.0, -20.0,
+	)
+
+	// ─── Track noise always enabled ─────────────────────────────────────────────
+	config.DNS1500TrackNoise = true
+}
+
 // tuneDolbySR adapts the Dolby SR-inspired 6-band mcompand expander based on measurements.
 //
 // Simplified strategy: threshold and expansion are tuned in lockstep based on RMS trough.
@@ -1199,10 +1366,38 @@ func tuneDS201Gate(config *FilterChainConfig, measurements *AudioMeasurements) {
 	)
 
 	// 5. Range: based on silence entropy and noise floor
-	config.DS201GateRange = calculateDS201GateRange(
-		silenceEntropy,
-		measurements.NoiseFloor,
-	)
+	rangeDB := calculateDS201GateRangeDB(silenceEntropy, measurements.NoiseFloor)
+
+	// ─── DNS-1500 coordination: adjust gate for post-NR noise characteristics ────
+	// When DNS-1500 is active on a noisy source, the gate sees post-NR audio.
+	// We can be more aggressive since DNS-1500 has already reduced the noise floor.
+	if config.DNS1500Enabled && measurements.NoiseProfile != nil {
+		np := measurements.NoiseProfile
+
+		// For noisy sources (floor > -55 dBFS), DNS-1500 caps NR at 15 dB
+		// The gate should account for this reduction in bleed/noise peaks
+		if np.MeasuredNoiseFloor > dns1500NoisySourceThreshold {
+			// Boost range (more negative = deeper gating)
+			// Post-NR, we can gate more aggressively without cutting into clean audio
+			rangeDB += ds201GateDNS1500RangeBoostDB
+
+			// Recalculate threshold for post-NR conditions
+			// The bleed peaks will be reduced by ~dns1500NRMaxNoisy dB
+			// So we can lower the threshold to catch the attenuated bleed
+			estimatedPostNRPeak := silencePeak - config.DNS1500NoiseReduce // Post-NR peak is lower (NR reduces it)
+			postNRThreshold := estimatedPostNRPeak + ds201GateDNS1500ThresholdDrop
+
+			// Convert to linear and use the lower (more aggressive) threshold
+			postNRThresholdLinear := dbToLinear(clamp(postNRThreshold, ds201GateThresholdMinDB, ds201GateThresholdMaxDB))
+			if postNRThresholdLinear < config.DS201GateThreshold {
+				config.DS201GateThreshold = postNRThresholdLinear
+			}
+		}
+	}
+
+	// Clamp range and convert to linear
+	rangeDB = clamp(rangeDB, float64(ds201GateRangeMinDB), float64(ds201GateRangeMaxDB))
+	config.DS201GateRange = dbToLinear(rangeDB)
 
 	// 6. Knee: based on spectral crest - soft knee for natural transitions
 	config.DS201GateKnee = calculateDS201GateKnee(measurements.SpectralCrest)
@@ -1398,10 +1593,11 @@ func calculateDS201GateRelease(spectralFlux, zcr, silenceEntropy, lra float64) f
 	return clamp(baseRelease, float64(ds201GateReleaseMin), float64(ds201GateReleaseMax))
 }
 
-// calculateDS201GateRange determines maximum attenuation depth based on noise character.
+// calculateDS201GateRangeDB determines maximum attenuation depth in dB based on noise character.
 // Tonal noise (bleed, hum) sounds worse when hard-gated - use gentler range.
 // Broadband noise can be gated more aggressively.
-func calculateDS201GateRange(silenceEntropy, noiseFloorDB float64) float64 {
+// Returns unclamped dB value for further adjustment by caller.
+func calculateDS201GateRangeDB(silenceEntropy, noiseFloorDB float64) float64 {
 	var rangeDB float64
 
 	switch {
@@ -1418,6 +1614,13 @@ func calculateDS201GateRange(silenceEntropy, noiseFloorDB float64) float64 {
 		rangeDB += ds201GateRangeCleanBoost // More negative = deeper
 	}
 
+	return rangeDB
+}
+
+// calculateDS201GateRange determines maximum attenuation depth based on noise character.
+// Wrapper that returns linear value for direct use in filter config.
+func calculateDS201GateRange(silenceEntropy, noiseFloorDB float64) float64 {
+	rangeDB := calculateDS201GateRangeDB(silenceEntropy, noiseFloorDB)
 	rangeDB = clamp(rangeDB, float64(ds201GateRangeMinDB), float64(ds201GateRangeMaxDB))
 
 	return dbToLinear(rangeDB)

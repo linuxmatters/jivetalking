@@ -107,23 +107,35 @@ install: build
 vhs: build
     @vhs ./jivetalking.tape
 
+# Get Mark's processed logs
+mark-logs:
+    @cat testdata/LMP-69-mark-processed.log
+
 # Process Mark
 mark: build
-    rm -f testdata/LMP-69-mark-processed.*
-    ./jivetalking --logs testdata/LMP-69-mark.flac
-    cat testdata/LMP-69-mark-processed.log
+    @rm -f testdata/LMP-69-mark-processed.*
+    @./jivetalking --logs testdata/LMP-69-mark.flac
+    @just mark-logs
+
+# Get Martin's processed logs
+martin-logs:
+    @cat testdata/LMP-69-martin-processed.log
 
 # Process Martin
 martin: build
-    rm -f testdata/LMP-69-martin-processed.*
-    ./jivetalking --logs testdata/LMP-69-martin.flac
-    cat testdata/LMP-69-martin-processed.log
+    @rm -f testdata/LMP-69-martin-processed.*
+    @./jivetalking --logs testdata/LMP-69-martin.flac
+    @just martin-logs
+
+# Get popey's processed logs
+popey-logs:
+    @cat testdata/LMP-69-popey-processed.log
 
 # Process popey
 popey: build
-    rm -f testdata/LMP-69-popey-processed.*
-    ./jivetalking --logs testdata/LMP-69-popey.flac
-    cat testdata/LMP-69-popey-processed.log
+    @rm -f testdata/LMP-69-popey-processed.*
+    @./jivetalking --logs testdata/LMP-69-popey.flac
+    @just popey-logs
 
 # Process all presenters
 presenters: mark martin popey

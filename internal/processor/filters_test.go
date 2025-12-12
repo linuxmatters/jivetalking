@@ -26,12 +26,23 @@ func newTestConfig() *FilterChainConfig {
 		// Processing filters (all disabled by default)
 		DS201HPEnabled:    false,
 		DC1DeclickEnabled: false,
+		DNS1500Enabled:    false,
 		DolbySREnabled:    false,
 		DS201GateEnabled:  false,
 		LA2AEnabled:       false,
 		DeessEnabled:      false,
 		ArnnDnEnabled:     false,
 		LimiterEnabled:    false,
+
+		// DNS-1500 defaults (used when filter is enabled)
+		DNS1500NoiseReduce:  12.0,
+		DNS1500NoiseFloor:   -50.0,
+		DNS1500TrackNoise:   true,
+		DNS1500Adaptivity:   0.5,
+		DNS1500GainSmooth:   0,
+		DNS1500ResidFloor:   -38.0,
+		DNS1500SilenceStart: 0.0,
+		DNS1500SilenceEnd:   0.0,
 
 		// Sensible defaults for parameters (used when filter is enabled)
 		DS201HPFreq:        80.0,
@@ -1066,6 +1077,110 @@ func TestBuildDolbySRMcompandFilter(t *testing.T) {
 			if !strings.Contains(filter, curve[:20]) { // Check first 20 chars of curve
 				t.Errorf("Filter missing expected curve prefix for %.0fdB\nExpected curve: %s\nGot filter: %s", exp, curve, filter)
 			}
+		}
+	})
+}
+
+func TestBuildDNS1500Filter(t *testing.T) {
+	t.Run("disabled returns empty", func(t *testing.T) {
+		config := newTestConfig()
+		config.DNS1500Enabled = false
+
+		filter := config.buildDNS1500Filter()
+
+		if filter != "" {
+			t.Errorf("buildDNS1500Filter should return empty when disabled, got: %s", filter)
+		}
+	})
+
+	t.Run("enabled returns asendcmd+afftdn chain", func(t *testing.T) {
+		config := newTestConfig()
+		config.DNS1500Enabled = true
+		config.DNS1500NoiseReduce = 12.0
+		config.DNS1500NoiseFloor = -55.0
+		config.DNS1500TrackNoise = true
+		config.DNS1500Adaptivity = 0.5
+		config.DNS1500GainSmooth = 8
+		config.DNS1500ResidFloor = -43.0
+		config.DNS1500SilenceStart = 1.5
+		config.DNS1500SilenceEnd = 2.0
+
+		filter := config.buildDNS1500Filter()
+
+		// Must not be empty
+		if filter == "" {
+			t.Fatal("buildDNS1500Filter returned empty string when enabled")
+		}
+
+		// Must contain asendcmd for noise learning triggers
+		if !strings.Contains(filter, "asendcmd=") {
+			t.Errorf("Filter missing asendcmd=\nGot: %s", filter)
+		}
+
+		// Must contain afftdn@dns1500 instance name
+		if !strings.Contains(filter, "afftdn@dns1500") {
+			t.Errorf("Filter missing afftdn@dns1500\nGot: %s", filter)
+		}
+
+		// Must contain sn start and sn stop commands
+		if !strings.Contains(filter, "sn start") {
+			t.Errorf("Filter missing 'sn start' command\nGot: %s", filter)
+		}
+		if !strings.Contains(filter, "sn stop") {
+			t.Errorf("Filter missing 'sn stop' command\nGot: %s", filter)
+		}
+
+		// Must contain timestamp values
+		if !strings.Contains(filter, "1.500") {
+			t.Errorf("Filter missing start timestamp 1.500\nGot: %s", filter)
+		}
+		if !strings.Contains(filter, "2.000") {
+			t.Errorf("Filter missing end timestamp 2.000\nGot: %s", filter)
+		}
+
+		// Must contain noise reduction amount
+		if !strings.Contains(filter, "nr=12.0") {
+			t.Errorf("Filter missing nr=12.0\nGot: %s", filter)
+		}
+
+		// Must contain track noise flag
+		if !strings.Contains(filter, "tn=1") {
+			t.Errorf("Filter missing tn=1 (track noise enabled)\nGot: %s", filter)
+		}
+
+		// Must contain adaptivity
+		if !strings.Contains(filter, "ad=0.50") {
+			t.Errorf("Filter missing ad=0.50\nGot: %s", filter)
+		}
+
+		// Must contain gain smoothing
+		if !strings.Contains(filter, "gs=8") {
+			t.Errorf("Filter missing gs=8\nGot: %s", filter)
+		}
+
+		// Must contain noise floor
+		if !strings.Contains(filter, "nf=-55.0") {
+			t.Errorf("Filter missing nf=-55.0\nGot: %s", filter)
+		}
+
+		// Must contain residual floor
+		if !strings.Contains(filter, "rf=-43.0") {
+			t.Errorf("Filter missing rf=-43.0\nGot: %s", filter)
+		}
+	})
+
+	t.Run("track noise disabled", func(t *testing.T) {
+		config := newTestConfig()
+		config.DNS1500Enabled = true
+		config.DNS1500TrackNoise = false
+		config.DNS1500SilenceStart = 1.0
+		config.DNS1500SilenceEnd = 1.5
+
+		filter := config.buildDNS1500Filter()
+
+		// Must contain tn=0 when track noise is disabled
+		if !strings.Contains(filter, "tn=0") {
+			t.Errorf("Filter should have tn=0 when TrackNoise=false\nGot: %s", filter)
 		}
 	})
 }
