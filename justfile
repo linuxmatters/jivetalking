@@ -92,10 +92,6 @@ clean:
 test: _check-submodule
     go test ./...
 
-# Run tests with all audio files
-test-all: _check-submodule
-    TEST_ALL_AUDIO=1 go test ./...
-
 # Install jivetalking to ~/.local/bin
 install: build
     @mkdir -p ~/.local/bin 2>/dev/null || true
@@ -111,6 +107,14 @@ vhs: build
 mark-logs:
     @cat testdata/LMP-69-mark-processed.log
 
+# Stash Mark's processed logs
+mark-log-stash:
+    @cp testdata/LMP-69-mark-processed.log testdata/LMP-69-mark-stashed.log
+
+# Get Mark's stashed logs
+mark-stashed-logs:
+    @cat testdata/LMP-69-mark-stashed.log
+
 # Process Mark
 mark: build
     @rm -f testdata/LMP-69-mark-processed.*
@@ -120,6 +124,14 @@ mark: build
 # Get Martin's processed logs
 martin-logs:
     @cat testdata/LMP-69-martin-processed.log
+
+# Get Martin's stashed logs
+martin-stashed-logs:
+    @cat testdata/LMP-69-martin-stashed.log
+
+# Stash Martin's processed logs
+martin-log-stash:
+    @cp testdata/LMP-69-martin-processed.log testdata/LMP-69-martin-stashed.log
 
 # Process Martin
 martin: build
@@ -131,6 +143,14 @@ martin: build
 popey-logs:
     @cat testdata/LMP-69-popey-processed.log
 
+# Get popey's stashed logs
+popey-stashed-logs:
+    @cat testdata/LMP-69-popey-stashed.log
+
+# Stash popey's processed logs
+popey-log-stash:
+    @cp testdata/LMP-69-popey-processed.log testdata/LMP-69-popey-stashed.log
+
 # Process popey
 popey: build
     @rm -f testdata/LMP-69-popey-processed.*
@@ -139,3 +159,12 @@ popey: build
 
 # Process all presenters
 presenters: mark martin popey
+
+# Show all presenters logs
+logs: mark-logs martin-logs popey-logs
+
+# Show all presenters stashed logs
+stahsed-logs: mark-stashed-logs martin-stashed-logs popey-stashed-logs
+
+# stash all presenters logs
+stash: mark-log-stash martin-log-stash popey-log-stash

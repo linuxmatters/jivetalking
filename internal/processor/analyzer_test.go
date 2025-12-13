@@ -1,117 +1,93 @@
 package processor
 
 import (
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 )
 
 func TestAnalyzeAudio(t *testing.T) {
-	// Find all audio files in testdata directory
-	testdataDir := "../../testdata"
-	entries, err := os.ReadDir(testdataDir)
-	if err != nil {
-		t.Skipf("Skipping: testdata directory not available: %v", err)
-	}
-
-	// Filter for unprocessed audio files (.flac, .wav, .mp3)
-	// Skip *-processed.* files as they're output files, not test inputs
-	var audioFiles []string
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		// Skip processed output files
-		if strings.Contains(name, "-processed") {
-			continue
-		}
-		ext := strings.ToLower(filepath.Ext(name))
-		if ext == ".flac" || ext == ".wav" || ext == ".mp3" {
-			audioFiles = append(audioFiles, filepath.Join(testdataDir, name))
-		}
-	}
-
-	if len(audioFiles) == 0 {
-		t.Skip("No audio files found in testdata directory")
-	}
-
-	// By default, only test the first file (faster CI/local iteration)
-	// Set TEST_ALL_AUDIO=1 to test all files
-	if os.Getenv("TEST_ALL_AUDIO") == "" && len(audioFiles) > 1 {
-		t.Logf("Testing 1 of %d files (set TEST_ALL_AUDIO=1 to test all)", len(audioFiles))
-		audioFiles = audioFiles[:1]
-	}
+	// Generate synthetic test audio: 5-second 440Hz tone at -23 LUFS with a 0.5s silence gap
+	// This provides known characteristics for validating the analyzer
+	testFile := generateTestAudio(t, TestAudioOptions{
+		DurationSecs: 5.0,
+		SampleRate:   44100,
+		ToneFreq:     440.0, // A4 note
+		ToneLevel:    -23.0, // Typical podcast raw level
+		NoiseLevel:   -60.0, // Light background noise
+		SilenceGap: struct {
+			Start    float64
+			Duration float64
+		}{
+			Start:    2.0, // Silence at 2 seconds
+			Duration: 0.5, // 0.5 second silence gap
+		},
+	})
+	defer cleanupTestAudio(t, testFile)
 
 	// Use test config with podcast standard targets
 	config := newTestConfig()
 	config.AnalysisEnabled = true
 
-	// Analyze each audio file
-	for i, filename := range audioFiles {
-		t.Run(filepath.Base(filename), func(t *testing.T) {
-			t.Logf("[%d/%d] Analyzing: %s", i+1, len(audioFiles), filepath.Base(filename))
-
-			// Progress callback to show analysis progress
-			lastPercent := -1
-			progressCallback := func(pass int, passName string, progress float64, level float64, m *AudioMeasurements) {
-				percent := int(progress * 100)
-				// Only log at 25% intervals to avoid spam
-				if percent >= lastPercent+25 {
-					t.Logf("  %s: %d%%", passName, percent)
-					lastPercent = percent
-				}
+	t.Run("synthetic_tone_with_silence", func(t *testing.T) {
+		// Progress callback to show analysis progress
+		lastPercent := -1
+		progressCallback := func(pass int, passName string, progress float64, level float64, m *AudioMeasurements) {
+			percent := int(progress * 100)
+			// Only log at 25% intervals to avoid spam
+			if percent >= lastPercent+25 {
+				t.Logf("  %s: %d%%", passName, percent)
+				lastPercent = percent
 			}
+		}
 
-			measurements, err := AnalyzeAudio(filename, config, progressCallback)
-			if err != nil {
-				t.Fatalf("AnalyzeAudio failed: %v", err)
-			}
+		measurements, err := AnalyzeAudio(testFile, config, progressCallback)
+		if err != nil {
+			t.Fatalf("AnalyzeAudio failed: %v", err)
+		}
 
-			if measurements == nil {
-				t.Fatal("measurements is nil")
-			}
+		if measurements == nil {
+			t.Fatal("measurements is nil")
+		}
 
-			// Log measurements
-			t.Logf("Input Loudness: %.2f LUFS", measurements.InputI)
-			t.Logf("Input True Peak: %.2f dBTP", measurements.InputTP)
-			t.Logf("Input Loudness Range: %.2f LU", measurements.InputLRA)
-			t.Logf("Input Threshold: %.2f dB", measurements.InputThresh)
-			t.Logf("Target Offset: %.2f dB", measurements.TargetOffset)
-			t.Logf("Noise Floor: %.2f dB", measurements.NoiseFloor)
-			t.Logf("Dynamic Range: %.2f dB", measurements.DynamicRange)
-			t.Logf("RMS Level: %.2f dB", measurements.RMSLevel)
-			t.Logf("Peak Level: %.2f dB", measurements.PeakLevel) // Sanity checks
-			if measurements.InputI > 0 || measurements.InputI < -100 {
-				t.Errorf("InputI out of reasonable range: %.2f", measurements.InputI)
-			}
+		// Log measurements
+		t.Logf("Input Loudness: %.2f LUFS", measurements.InputI)
+		t.Logf("Input True Peak: %.2f dBTP", measurements.InputTP)
+		t.Logf("Input Loudness Range: %.2f LU", measurements.InputLRA)
+		t.Logf("Input Threshold: %.2f dB", measurements.InputThresh)
+		t.Logf("Target Offset: %.2f dB", measurements.TargetOffset)
+		t.Logf("Noise Floor: %.2f dB", measurements.NoiseFloor)
+		t.Logf("Dynamic Range: %.2f dB", measurements.DynamicRange)
+		t.Logf("RMS Level: %.2f dB", measurements.RMSLevel)
+		t.Logf("Peak Level: %.2f dB", measurements.PeakLevel)
 
-			// True peak can exceed 0 dBFS due to inter-sample peaks in hot recordings
-			// Allow up to +3 dBTP which is typical for unprocessed podcast audio
-			if measurements.InputTP > 3 || measurements.InputTP < -100 {
-				t.Errorf("InputTP out of reasonable range: %.2f", measurements.InputTP)
-			}
+		// Sanity checks for synthetic audio with known characteristics
+		// Input level should be close to -23 LUFS (our tone level)
+		if measurements.InputI > -20 || measurements.InputI < -30 {
+			t.Errorf("InputI out of expected range for -23dBFS tone: %.2f", measurements.InputI)
+		}
 
-			if measurements.InputLRA < 0 || measurements.InputLRA > 50 {
-				t.Errorf("InputLRA out of reasonable range: %.2f", measurements.InputLRA)
-			}
+		// True peak should be close to tone level (sine wave peak = RMS + 3dB)
+		if measurements.InputTP > 0 || measurements.InputTP < -30 {
+			t.Errorf("InputTP out of reasonable range: %.2f", measurements.InputTP)
+		}
 
-			// NoiseFloor is derived from RMS_trough - can be very low for clean audio
-			// -20dB would indicate extremely noisy recording
-			// -120dB is silence floor (below audible range)
-			if measurements.NoiseFloor > -20 || measurements.NoiseFloor < -120 {
-				t.Errorf("NoiseFloor out of reasonable range: %.2f", measurements.NoiseFloor)
-			}
+		// LRA should be low for a steady tone with brief silence (< 10 LU)
+		if measurements.InputLRA < 0 || measurements.InputLRA > 15 {
+			t.Errorf("InputLRA out of expected range for steady tone: %.2f", measurements.InputLRA)
+		}
 
-			// The offset should bring us close to target
-			expectedOutput := measurements.InputI + measurements.TargetOffset
-			if expectedOutput < config.TargetI-2 || expectedOutput > config.TargetI+2 {
-				t.Logf("Warning: Target offset might not achieve target (expected ~%.1f, got %.2f)",
-					config.TargetI, expectedOutput)
-			}
-		})
-	}
+		// NoiseFloor should detect the silence gap or low noise floor
+		// With -60dB noise and 0.5s silence, floor should be well below -40dB
+		if measurements.NoiseFloor > -35 || measurements.NoiseFloor < -120 {
+			t.Errorf("NoiseFloor out of reasonable range: %.2f", measurements.NoiseFloor)
+		}
+
+		// The offset should bring us close to target (-16 LUFS)
+		expectedOutput := measurements.InputI + measurements.TargetOffset
+		if expectedOutput < config.TargetI-2 || expectedOutput > config.TargetI+2 {
+			t.Logf("Warning: Target offset might not achieve target (expected ~%.1f, got %.2f)",
+				config.TargetI, expectedOutput)
+		}
+	})
 }
 
 func TestCalculateAdaptiveGateThreshold(t *testing.T) {

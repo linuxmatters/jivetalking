@@ -2,19 +2,28 @@ package processor
 
 import (
 	"os"
-	"path/filepath"
 	"testing"
 )
 
 // TestProcessAudio tests the complete two-pass processing pipeline
 func TestProcessAudio(t *testing.T) {
-	// Use a test file from testdata
-	testFile := filepath.Join("..", "..", "testdata", "LMP-69-martin.flac")
-
-	// Check if test file exists
-	if _, err := os.Stat(testFile); os.IsNotExist(err) {
-		t.Skipf("Test file not found: %s", testFile)
-	}
+	// Generate synthetic test audio: 3-second 440Hz tone at -23 LUFS
+	// Short duration for fast test execution
+	testFile := generateTestAudio(t, TestAudioOptions{
+		DurationSecs: 3.0,
+		SampleRate:   44100,
+		ToneFreq:     440.0, // A4 note
+		ToneLevel:    -23.0, // Typical podcast raw level
+		NoiseLevel:   -55.0, // Moderate background noise
+		SilenceGap: struct {
+			Start    float64
+			Duration float64
+		}{
+			Start:    1.0, // Brief silence at 1 second
+			Duration: 0.3, // 300ms silence gap for noise profiling
+		},
+	})
+	defer cleanupTestAudio(t, testFile)
 
 	// Create isolated test config with minimal filters for integration test
 	// This ensures the test doesn't break when application defaults change
@@ -39,15 +48,27 @@ func TestProcessAudio(t *testing.T) {
 	}
 
 	// Verify output file was created
-	outputFile := filepath.Join("..", "..", "testdata", "LMP-69-martin-processed.flac")
-	if _, err := os.Stat(outputFile); os.IsNotExist(err) {
-		t.Fatalf("Output file not created: %s", outputFile)
+	if result.OutputPath == "" {
+		t.Fatal("ProcessAudio returned empty output path")
 	}
 
-	// Clean up output file
-	defer os.Remove(outputFile)
+	if _, err := os.Stat(result.OutputPath); os.IsNotExist(err) {
+		t.Fatalf("Output file not created: %s", result.OutputPath)
+	}
 
-	t.Logf("Successfully processed audio file")
+	// Clean up output file (cleanupTestAudio handles this but be explicit)
+	defer os.Remove(result.OutputPath)
+
+	// Verify measurements are populated
+	if result.Measurements == nil {
+		t.Error("ProcessAudio returned nil measurements")
+	}
+
+	// Log results
+	t.Logf("Input LUFS: %.2f", result.InputLUFS)
+	t.Logf("Output LUFS: %.2f", result.OutputLUFS)
+	t.Logf("Noise Floor: %.2f", result.NoiseFloor)
+	t.Logf("Output: %s", result.OutputPath)
 }
 
 // TestFilterChainBuilder tests the filter specification generation

@@ -35,8 +35,7 @@ Setup from scratch: `just setup` (initialises submodule, downloads static FFmpeg
 |---------|---------|
 | `just setup` | Initialise submodule, download ffmpeg-statigo library |
 | `just build` | Build binary with version info |
-| `just test` | Run tests (requires testdata audio files) |
-| `just test-all` | Run tests with TEST_ALL_AUDIO=1 for full coverage |
+| `just test` | Run tests |
 
 ## FFmpeg Integration
 
