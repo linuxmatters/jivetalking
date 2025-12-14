@@ -1078,18 +1078,9 @@ func extractFrameMetadata(metadata *ffmpeg.AVDictionary, acc *metadataAccumulato
 // AudioMeasurements contains the measurements from Pass 1 analysis.
 // Uses ebur128 (LUFS/LRA), astats (dynamic range/noise floor), and aspectralstats (spectral analysis).
 // Silence detection is performed in Go using 250ms interval sampling for improved accuracy.
-type AudioMeasurements struct {
-	InputI       float64 `json:"input_i"`       // Integrated loudness (LUFS)
-	InputTP      float64 `json:"input_tp"`      // True peak (dBTP)
-	InputLRA     float64 `json:"input_lra"`     // Loudness range (LU)
-	InputThresh  float64 `json:"input_thresh"`  // Threshold level
-	TargetOffset float64 `json:"target_offset"` // Offset for normalization
-	NoiseFloor   float64 `json:"noise_floor"`   // Measured noise floor from astats (dBFS)
-
-	// Pre-scan adaptive silence detection thresholds
-	PreScanNoiseFloor  float64 `json:"prescan_noise_floor"`  // Noise floor estimated from first 15% of audio (dBFS)
-	SilenceDetectLevel float64 `json:"silence_detect_level"` // Adaptive silencedetect threshold used (dBFS)
-
+// BaseMeasurements contains fields shared between input (Pass 1) and output (Pass 2) measurements.
+// Embedded in both AudioMeasurements and OutputMeasurements to avoid duplication.
+type BaseMeasurements struct {
 	// Spectral analysis from aspectralstats (all measurements averaged across frames)
 	SpectralMean     float64 `json:"spectral_mean"`     // Mean spectral magnitude
 	SpectralVariance float64 `json:"spectral_variance"` // Spectral magnitude variance
@@ -1105,20 +1096,20 @@ type AudioMeasurements struct {
 	SpectralDecrease float64 `json:"spectral_decrease"` // Average spectral decrease
 	SpectralRolloff  float64 `json:"spectral_rolloff"`  // Spectral rolloff (Hz) - HF energy dropoff point
 
-	// Time-domain statistics from astats for adaptive processing
+	// Time-domain statistics from astats
 	DynamicRange float64 `json:"dynamic_range"` // Measured dynamic range (dB)
 	RMSLevel     float64 `json:"rms_level"`     // Overall RMS level (dBFS)
 	PeakLevel    float64 `json:"peak_level"`    // Overall peak level (dBFS)
-	RMSTrough    float64 `json:"rms_trough"`    // RMS level of quietest segments - best noise floor indicator (dBFS)
+	RMSTrough    float64 `json:"rms_trough"`    // RMS level of quietest segments (dBFS)
 	RMSPeak      float64 `json:"rms_peak"`      // RMS level of loudest segments (dBFS)
 
-	// Additional astats measurements for adaptive processing
-	DCOffset          float64 `json:"dc_offset"`           // Mean amplitude displacement from zero (needs dcshift if significant)
-	FlatFactor        float64 `json:"flat_factor"`         // Consecutive samples at peak (indicates clipping/limiting)
+	// Additional astats measurements
+	DCOffset          float64 `json:"dc_offset"`           // Mean amplitude displacement from zero
+	FlatFactor        float64 `json:"flat_factor"`         // Consecutive samples at peak (clipping indicator)
 	CrestFactor       float64 `json:"crest_factor"`        // Peak-to-RMS ratio in dB (converted from linear)
 	ZeroCrossingsRate float64 `json:"zero_crossings_rate"` // Zero crossing rate (low=bass, high=noise/sibilance)
 	ZeroCrossings     float64 `json:"zero_crossings"`      // Total zero crossings
-	MaxDifference     float64 `json:"max_difference"`      // Largest sample-to-sample change (indicates clicks/pops)
+	MaxDifference     float64 `json:"max_difference"`      // Largest sample-to-sample change (clicks/pops indicator)
 	MinDifference     float64 `json:"min_difference"`      // Smallest sample-to-sample change
 	MeanDifference    float64 `json:"mean_difference"`     // Average sample-to-sample change
 	RMSDifference     float64 `json:"rms_difference"`      // RMS of sample-to-sample changes
@@ -1127,13 +1118,33 @@ type AudioMeasurements struct {
 	MaxLevel          float64 `json:"max_level"`           // dBFS, maximum sample level (converted from linear)
 	AstatsNoiseFloor  float64 `json:"astats_noise_floor"`  // FFmpeg astats noise floor estimate (dBFS)
 	NoiseFloorCount   float64 `json:"noise_floor_count"`   // Number of samples in noise floor measurement
-	BitDepth          float64 `json:"bit_depth"`           // Effective bit depth of audio
+	BitDepth          float64 `json:"bit_depth"`           // Effective bit depth
 	NumberOfSamples   float64 `json:"number_of_samples"`   // Total samples processed
 
-	// ebur128 momentary/short-term loudness (useful for interval analysis)
+	// ebur128 momentary/short-term loudness
 	MomentaryLoudness float64 `json:"momentary_loudness"`  // Momentary loudness (400ms window, LUFS)
 	ShortTermLoudness float64 `json:"short_term_loudness"` // Short-term loudness (3s window, LUFS)
 	SamplePeak        float64 `json:"sample_peak"`         // Sample peak (dBFS)
+}
+
+// AudioMeasurements contains the measurements from Pass 1 analysis.
+// Uses ebur128 (LUFS/LRA), astats (dynamic range/noise floor), and aspectralstats (spectral analysis).
+// Silence detection is performed in Go using 250ms interval sampling for improved accuracy.
+type AudioMeasurements struct {
+	// Embed shared measurement fields
+	BaseMeasurements
+
+	// Input-specific loudness measurements from ebur128
+	InputI       float64 `json:"input_i"`       // Integrated loudness (LUFS)
+	InputTP      float64 `json:"input_tp"`      // True peak (dBTP)
+	InputLRA     float64 `json:"input_lra"`     // Loudness range (LU)
+	InputThresh  float64 `json:"input_thresh"`  // Threshold level
+	TargetOffset float64 `json:"target_offset"` // Offset for normalization
+	NoiseFloor   float64 `json:"noise_floor"`   // Measured noise floor from astats (dBFS)
+
+	// Pre-scan adaptive silence detection thresholds
+	PreScanNoiseFloor  float64 `json:"prescan_noise_floor"`  // Noise floor estimated from first 15% of audio (dBFS)
+	SilenceDetectLevel float64 `json:"silence_detect_level"` // Adaptive silencedetect threshold used (dBFS)
 
 	// Silence detection results (derived from interval sampling)
 	SilenceRegions []SilenceRegion `json:"silence_regions,omitempty"` // Detected silence regions
@@ -1164,58 +1175,16 @@ type SilenceAnalysis struct {
 }
 
 // OutputMeasurements contains the measurements from Pass 2 output analysis.
-// Mirrors AudioMeasurements but for processed audio, enabling direct comparison.
+// Uses BaseMeasurements for comparison with AudioMeasurements.
 // Does not include silence detection or noise profile fields (those are input-only).
 type OutputMeasurements struct {
-	// Loudness measurements from ebur128
+	// Embed shared measurement fields
+	BaseMeasurements
+
+	// Output-specific loudness measurements from ebur128
 	OutputI   float64 `json:"output_i"`   // Integrated loudness (LUFS)
 	OutputTP  float64 `json:"output_tp"`  // True peak (dBTP)
 	OutputLRA float64 `json:"output_lra"` // Loudness range (LU)
-
-	// Spectral analysis from aspectralstats (all measurements averaged across frames)
-	SpectralMean     float64 `json:"spectral_mean"`     // Mean spectral magnitude
-	SpectralVariance float64 `json:"spectral_variance"` // Spectral magnitude variance
-	SpectralCentroid float64 `json:"spectral_centroid"` // Spectral centroid (Hz) - where energy is concentrated
-	SpectralSpread   float64 `json:"spectral_spread"`   // Spectral spread (Hz) - bandwidth/fullness indicator
-	SpectralSkewness float64 `json:"spectral_skewness"` // Spectral asymmetry - positive=bright, negative=dark
-	SpectralKurtosis float64 `json:"spectral_kurtosis"` // Spectral peakiness - tonal vs broadband content
-	SpectralEntropy  float64 `json:"spectral_entropy"`  // Spectral randomness (0-1) - noise classification
-	SpectralFlatness float64 `json:"spectral_flatness"` // Noise vs tonal ratio (0-1) - low=tonal, high=noisy
-	SpectralCrest    float64 `json:"spectral_crest"`    // Spectral peak-to-RMS - transient indicator
-	SpectralFlux     float64 `json:"spectral_flux"`     // Frame-to-frame spectral change
-	SpectralSlope    float64 `json:"spectral_slope"`    // Spectral tilt - negative=more bass
-	SpectralDecrease float64 `json:"spectral_decrease"` // Average spectral decrease
-	SpectralRolloff  float64 `json:"spectral_rolloff"`  // Spectral rolloff (Hz) - HF energy dropoff point
-
-	// Time-domain statistics from astats
-	DynamicRange float64 `json:"dynamic_range"` // Measured dynamic range (dB)
-	RMSLevel     float64 `json:"rms_level"`     // Overall RMS level (dBFS)
-	PeakLevel    float64 `json:"peak_level"`    // Overall peak level (dBFS)
-	RMSTrough    float64 `json:"rms_trough"`    // RMS level of quietest segments (dBFS)
-	RMSPeak      float64 `json:"rms_peak"`      // RMS level of loudest segments (dBFS)
-
-	// Additional astats measurements
-	DCOffset          float64 `json:"dc_offset"`           // Mean amplitude displacement from zero
-	FlatFactor        float64 `json:"flat_factor"`         // Consecutive samples at peak (clipping indicator)
-	CrestFactor       float64 `json:"crest_factor"`        // Peak-to-RMS ratio in dB (converted from linear)
-	ZeroCrossingsRate float64 `json:"zero_crossings_rate"` // Zero crossing rate
-	ZeroCrossings     float64 `json:"zero_crossings"`      // Total zero crossings
-	MaxDifference     float64 `json:"max_difference"`      // Largest sample-to-sample change
-	MinDifference     float64 `json:"min_difference"`      // Smallest sample-to-sample change
-	MeanDifference    float64 `json:"mean_difference"`     // Average sample-to-sample change
-	RMSDifference     float64 `json:"rms_difference"`      // RMS of sample-to-sample changes
-	Entropy           float64 `json:"entropy"`             // Signal randomness
-	MinLevel          float64 `json:"min_level"`           // dBFS, minimum sample level (converted from linear)
-	MaxLevel          float64 `json:"max_level"`           // dBFS, maximum sample level (converted from linear)
-	AstatsNoiseFloor  float64 `json:"astats_noise_floor"`  // FFmpeg astats noise floor estimate (dBFS)
-	NoiseFloorCount   float64 `json:"noise_floor_count"`   // Number of samples in noise floor measurement
-	BitDepth          float64 `json:"bit_depth"`           // Effective bit depth
-	NumberOfSamples   float64 `json:"number_of_samples"`   // Total samples processed
-
-	// ebur128 momentary/short-term loudness
-	MomentaryLoudness float64 `json:"momentary_loudness"`  // Momentary loudness (400ms window, LUFS)
-	ShortTermLoudness float64 `json:"short_term_loudness"` // Short-term loudness (3s window, LUFS)
-	SamplePeak        float64 `json:"sample_peak"`         // Sample peak (dBFS)
 
 	// Silence region analysis (same region as Pass 1, for noise reduction comparison)
 	SilenceSample *SilenceAnalysis `json:"silence_sample,omitempty"` // Measurements from same silence region
@@ -1409,36 +1378,39 @@ func finalizeOutputMeasurements(acc *outputMetadataAccumulators) *OutputMeasurem
 	}
 
 	m := &OutputMeasurements{
-		// ebur128 loudness measurements
-		OutputI:           acc.ebur128OutputI,
-		OutputTP:          acc.ebur128OutputTP,
-		OutputLRA:         acc.ebur128OutputLRA,
-		MomentaryLoudness: acc.ebur128OutputM,
-		ShortTermLoudness: acc.ebur128OutputS,
-		SamplePeak:        acc.ebur128OutputSP,
+		BaseMeasurements: BaseMeasurements{
+			// ebur128 momentary/short-term loudness
+			MomentaryLoudness: acc.ebur128OutputM,
+			ShortTermLoudness: acc.ebur128OutputS,
+			SamplePeak:        acc.ebur128OutputSP,
 
-		// astats time-domain measurements
-		DynamicRange:      acc.astatsDynamicRange,
-		RMSLevel:          acc.astatsRMSLevel,
-		PeakLevel:         acc.astatsPeakLevel,
-		RMSTrough:         acc.astatsRMSTrough,
-		RMSPeak:           acc.astatsRMSPeak,
-		DCOffset:          acc.astatsDCOffset,
-		FlatFactor:        acc.astatsFlatFactor,
-		CrestFactor:       acc.astatsCrestFactor,
-		ZeroCrossingsRate: acc.astatsZeroCrossingsRate,
-		ZeroCrossings:     acc.astatsZeroCrossings,
-		MaxDifference:     acc.astatsMaxDifference,
-		MinDifference:     acc.astatsMinDifference,
-		MeanDifference:    acc.astatsMeanDifference,
-		RMSDifference:     acc.astatsRMSDifference,
-		Entropy:           acc.astatsEntropy,
-		MinLevel:          acc.astatsMinLevel,
-		MaxLevel:          acc.astatsMaxLevel,
-		AstatsNoiseFloor:  acc.astatsNoiseFloor,
-		NoiseFloorCount:   acc.astatsNoiseFloorCount,
-		BitDepth:          acc.astatsBitDepth,
-		NumberOfSamples:   acc.astatsNumberOfSamples,
+			// astats time-domain measurements
+			DynamicRange:      acc.astatsDynamicRange,
+			RMSLevel:          acc.astatsRMSLevel,
+			PeakLevel:         acc.astatsPeakLevel,
+			RMSTrough:         acc.astatsRMSTrough,
+			RMSPeak:           acc.astatsRMSPeak,
+			DCOffset:          acc.astatsDCOffset,
+			FlatFactor:        acc.astatsFlatFactor,
+			CrestFactor:       acc.astatsCrestFactor,
+			ZeroCrossingsRate: acc.astatsZeroCrossingsRate,
+			ZeroCrossings:     acc.astatsZeroCrossings,
+			MaxDifference:     acc.astatsMaxDifference,
+			MinDifference:     acc.astatsMinDifference,
+			MeanDifference:    acc.astatsMeanDifference,
+			RMSDifference:     acc.astatsRMSDifference,
+			Entropy:           acc.astatsEntropy,
+			MinLevel:          acc.astatsMinLevel,
+			MaxLevel:          acc.astatsMaxLevel,
+			AstatsNoiseFloor:  acc.astatsNoiseFloor,
+			NoiseFloorCount:   acc.astatsNoiseFloorCount,
+			BitDepth:          acc.astatsBitDepth,
+			NumberOfSamples:   acc.astatsNumberOfSamples,
+		},
+		// Output-specific loudness measurements
+		OutputI:   acc.ebur128OutputI,
+		OutputTP:  acc.ebur128OutputTP,
+		OutputLRA: acc.ebur128OutputLRA,
 	}
 
 	// Calculate average spectral statistics from aspectralstats

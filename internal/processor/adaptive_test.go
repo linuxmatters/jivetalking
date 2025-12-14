@@ -256,10 +256,12 @@ func TestTuneDS201HighPass(t *testing.T) {
 			// Start with highpass enabled to test tuning behavior
 			config.DS201HPEnabled = true
 			measurements := &AudioMeasurements{
-				SpectralCentroid: tt.centroid,
-				SpectralDecrease: tt.spectralDecrease,
-				SpectralSkewness: tt.spectralSkewness,
-				NoiseProfile:     tt.noiseProfile,
+				BaseMeasurements: BaseMeasurements{
+					SpectralCentroid: tt.centroid,
+					SpectralDecrease: tt.spectralDecrease,
+					SpectralSkewness: tt.spectralSkewness,
+				},
+				NoiseProfile: tt.noiseProfile,
 			}
 
 			// Execute (lufsGap is no longer used for highpass tuning)
@@ -373,10 +375,12 @@ func TestDetectContentType(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := &AudioMeasurements{
-				SpectralKurtosis: tt.kurtosis,
-				SpectralFlatness: tt.flatness,
-				SpectralFlux:     tt.flux,
-				SpectralCrest:    tt.crest,
+				BaseMeasurements: BaseMeasurements{
+					SpectralKurtosis: tt.kurtosis,
+					SpectralFlatness: tt.flatness,
+					SpectralFlux:     tt.flux,
+					SpectralCrest:    tt.crest,
+				},
 			}
 
 			got := detectContentType(m)
@@ -560,14 +564,16 @@ func TestTuneDS201LowPass(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			config := newTestConfig()
 			m := &AudioMeasurements{
-				SpectralKurtosis:  tt.kurtosis,
-				SpectralFlatness:  tt.flatness,
-				SpectralFlux:      tt.flux,
-				SpectralCrest:     tt.crest,
-				SpectralRolloff:   tt.rolloff,
-				SpectralCentroid:  tt.centroid,
-				SpectralSlope:     tt.slope,
-				ZeroCrossingsRate: tt.zcr,
+				BaseMeasurements: BaseMeasurements{
+					SpectralKurtosis:  tt.kurtosis,
+					SpectralFlatness:  tt.flatness,
+					SpectralFlux:      tt.flux,
+					SpectralCrest:     tt.crest,
+					SpectralRolloff:   tt.rolloff,
+					SpectralCentroid:  tt.centroid,
+					SpectralSlope:     tt.slope,
+					ZeroCrossingsRate: tt.zcr,
+				},
 			}
 
 			tuneDS201LowPass(config, m)
@@ -785,8 +791,10 @@ func TestTuneDeesser(t *testing.T) {
 			// Start with deesser disabled - tuneDeesser should set intensity based on spectral data
 			config.DeessIntensity = 0.0
 			measurements := &AudioMeasurements{
-				SpectralCentroid: tt.centroid,
-				SpectralRolloff:  tt.rolloff,
+				BaseMeasurements: BaseMeasurements{
+					SpectralCentroid: tt.centroid,
+					SpectralRolloff:  tt.rolloff,
+				},
 			}
 
 			// Execute
@@ -957,11 +965,13 @@ func TestTuneDC1Declick(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			config := DefaultFilterConfig()
 			measurements := &AudioMeasurements{
-				MaxDifference:    tt.maxDiffRatio * 32768.0, // Scale to sample units
-				SpectralCrest:    tt.crest,
-				SpectralFlatness: tt.flatness,
-				DynamicRange:     tt.dynamicRange,
-				SpectralCentroid: tt.centroid,
+				BaseMeasurements: BaseMeasurements{
+					MaxDifference:    tt.maxDiffRatio * 32768.0, // Scale to sample units
+					SpectralCrest:    tt.crest,
+					SpectralFlatness: tt.flatness,
+					DynamicRange:     tt.dynamicRange,
+					SpectralCentroid: tt.centroid,
+				},
 			}
 
 			tuneDC1Declick(config, measurements)
@@ -1147,9 +1157,11 @@ func TestTuneDS201Gate(t *testing.T) {
 			t.Run(tt.name, func(t *testing.T) {
 				config := newTestConfig()
 				measurements := &AudioMeasurements{
-					NoiseFloor:    -55.0,
-					MaxDifference: tt.maxDiff,
-					SpectralFlux:  tt.spectralFlux,
+					BaseMeasurements: BaseMeasurements{
+						MaxDifference: tt.maxDiff,
+						SpectralFlux:  tt.spectralFlux,
+					},
+					NoiseFloor: -55.0,
 				}
 
 				tuneDS201Gate(config, measurements)
@@ -1335,9 +1347,11 @@ func TestTuneDS201Gate(t *testing.T) {
 			t.Run(tt.name, func(t *testing.T) {
 				config := newTestConfig()
 				measurements := &AudioMeasurements{
-					NoiseFloor:   -55.0,
-					SpectralFlux: 0.02, // Moderate flux (uses ds201GateReleaseMod)
-					InputLRA:     15.0, // Above LRA threshold (10 LU) to avoid LRA-based extension
+					BaseMeasurements: BaseMeasurements{
+						SpectralFlux: 0.02, // Moderate flux (uses ds201GateReleaseMod)
+					},
+					NoiseFloor: -55.0,
+					InputLRA:   15.0, // Above LRA threshold (10 LU) to avoid LRA-based extension
 					NoiseProfile: &NoiseProfile{
 						PeakLevel:   -50.0,
 						CrestFactor: 15.0,
@@ -1407,9 +1421,11 @@ func TestTuneDS201Gate(t *testing.T) {
 			t.Run(tt.name, func(t *testing.T) {
 				config := newTestConfig()
 				measurements := &AudioMeasurements{
-					NoiseFloor:   -55.0,
-					SpectralFlux: 0.02, // Moderate flux
-					InputLRA:     tt.lra,
+					BaseMeasurements: BaseMeasurements{
+						SpectralFlux: 0.02, // Moderate flux
+					},
+					NoiseFloor: -55.0,
+					InputLRA:   tt.lra,
 					NoiseProfile: &NoiseProfile{
 						PeakLevel:   -50.0,
 						CrestFactor: 15.0,
@@ -2473,7 +2489,9 @@ func TestTuneDolbySR_ExpansionSelection(t *testing.T) {
 			config := newTestConfig()
 			config.DolbySREnabled = true
 			measurements := &AudioMeasurements{
-				RMSTrough: tt.rmsTrough,
+				BaseMeasurements: BaseMeasurements{
+					RMSTrough: tt.rmsTrough,
+				},
 			}
 
 			tuneDolbySR(config, measurements, 10.0) // LUFS gap ignored by new implementation
@@ -2495,7 +2513,9 @@ func TestTuneDolbySR_BandInitialisation(t *testing.T) {
 	config := newTestConfig()
 	config.DolbySREnabled = true
 	measurements := &AudioMeasurements{
-		RMSTrough: -75.0, // Clean source
+		BaseMeasurements: BaseMeasurements{
+			RMSTrough: -75.0, // Clean source
+		},
 	}
 
 	tuneDolbySR(config, measurements, 10.0)
@@ -2536,7 +2556,9 @@ func TestTuneDolbySR_Disabled(t *testing.T) {
 	config.DolbySRExpansionDB = 0 // Should remain unchanged
 
 	measurements := &AudioMeasurements{
-		RMSTrough: -50.0, // Noisy source
+		BaseMeasurements: BaseMeasurements{
+			RMSTrough: -50.0, // Noisy source
+		},
 	}
 
 	tuneDolbySR(config, measurements, 15.0)
@@ -2852,15 +2874,17 @@ func TestDNS1500DisablesDolbySR(t *testing.T) {
 	config := DefaultFilterConfig()
 	config.DolbySREnabled = false // Ensure we're testing normal flow, not force mode
 	measurements := &AudioMeasurements{
+		BaseMeasurements: BaseMeasurements{
+			RMSTrough: -60.0,
+		},
 		NoiseProfile: &NoiseProfile{
 			Start:              1 * time.Second,
 			Duration:           500 * time.Millisecond,
 			MeasuredNoiseFloor: -55.0,
 			SpectralFlatness:   0.5,
 		},
-		InputI:    -20.0,
-		InputLRA:  10.0,
-		RMSTrough: -60.0,
+		InputI:   -20.0,
+		InputLRA: 10.0,
 	}
 
 	AdaptConfig(config, measurements)
@@ -2880,10 +2904,12 @@ func TestDNS1500FallbackToDolbySR(t *testing.T) {
 	// When DNS-1500 cannot be enabled (no silence detected), DolbySR should be used as fallback
 	config := DefaultFilterConfig()
 	measurements := &AudioMeasurements{
+		BaseMeasurements: BaseMeasurements{
+			RMSTrough: -60.0,
+		},
 		NoiseProfile: nil, // No silence detected
 		InputI:       -20.0,
 		InputLRA:     10.0,
-		RMSTrough:    -60.0,
 	}
 
 	AdaptConfig(config, measurements)
@@ -2911,15 +2937,17 @@ func TestDolbySRForcedSkipsDNS1500(t *testing.T) {
 	config.DolbySREnabled = true // Force DolbySR mode
 
 	measurements := &AudioMeasurements{
+		BaseMeasurements: BaseMeasurements{
+			RMSTrough: -60.0,
+		},
 		NoiseProfile: &NoiseProfile{
 			Start:              1 * time.Second,
 			Duration:           500 * time.Millisecond,
 			MeasuredNoiseFloor: -55.0,
 			SpectralFlatness:   0.5,
 		},
-		InputI:    -20.0,
-		InputLRA:  10.0,
-		RMSTrough: -60.0,
+		InputI:   -20.0,
+		InputLRA: 10.0,
 	}
 
 	AdaptConfig(config, measurements)
@@ -2947,6 +2975,9 @@ func TestDS201GateCoordinatesWithDNS1500(t *testing.T) {
 		config := DefaultFilterConfig()
 		config.DolbySREnabled = false // Allow DNS-1500 selection
 		measurements := &AudioMeasurements{
+			BaseMeasurements: BaseMeasurements{
+				RMSTrough: -86.7,
+			},
 			NoiseProfile: &NoiseProfile{
 				Start:              43 * time.Second,
 				Duration:           12 * time.Second,
@@ -2959,7 +2990,6 @@ func TestDS201GateCoordinatesWithDNS1500(t *testing.T) {
 			InputI:     -30.0,
 			InputLRA:   16.0,
 			NoiseFloor: -48.5,
-			RMSTrough:  -86.7,
 		}
 
 		AdaptConfig(config, measurements)
@@ -2993,6 +3023,9 @@ func TestDS201GateCoordinatesWithDNS1500(t *testing.T) {
 		config := DefaultFilterConfig()
 		config.DolbySREnabled = false // Allow DNS-1500 selection
 		measurements := &AudioMeasurements{
+			BaseMeasurements: BaseMeasurements{
+				RMSTrough: -78.8,
+			},
 			NoiseProfile: &NoiseProfile{
 				Start:              37 * time.Second,
 				Duration:           12 * time.Second,
@@ -3005,7 +3038,6 @@ func TestDS201GateCoordinatesWithDNS1500(t *testing.T) {
 			InputI:     -31.0,
 			InputLRA:   16.3,
 			NoiseFloor: -75.0,
-			RMSTrough:  -78.8,
 		}
 
 		AdaptConfig(config, measurements)
