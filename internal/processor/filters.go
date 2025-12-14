@@ -495,15 +495,15 @@ func DefaultFilterConfig() *FilterChainConfig {
 	}
 }
 
-// dbToLinear converts decibel value to linear amplitude
-// Used for converting dB parameters to FFmpeg's linear format
-func dbToLinear(db float64) float64 {
+// DbToLinear converts decibel value to linear amplitude.
+// Used for converting dB parameters to FFmpeg's linear format.
+func DbToLinear(db float64) float64 {
 	return math.Pow(10, db/20.0)
 }
 
-// linearToDb converts linear amplitude to decibel value
-// Inverse of dbToLinear
-func linearToDb(linear float64) float64 {
+// LinearToDb converts linear amplitude to decibel value.
+// Inverse of DbToLinear.
+func LinearToDb(linear float64) float64 {
 	if linear <= 0 {
 		return -120.0 // Practical floor for audio
 	}
@@ -920,11 +920,11 @@ func (cfg *FilterChainConfig) buildLA2ACompressorFilter() string {
 	return fmt.Sprintf(
 		"acompressor=threshold=%.6f:ratio=%.1f:attack=%.0f:release=%.0f:"+
 			"makeup=%.2f:knee=%.1f:detection=rms:mix=%.2f",
-		dbToLinear(cfg.LA2AThreshold),
+		DbToLinear(cfg.LA2AThreshold),
 		cfg.LA2ARatio,
 		cfg.LA2AAttack,
 		cfg.LA2ARelease,
-		dbToLinear(cfg.LA2AMakeup),
+		DbToLinear(cfg.LA2AMakeup),
 		cfg.LA2AKnee,
 		cfg.LA2AMix,
 	)

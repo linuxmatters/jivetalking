@@ -14,14 +14,6 @@ import (
 	"github.com/linuxmatters/jivetalking/internal/processor"
 )
 
-// linearToDb converts linear amplitude to decibels
-func linearToDb(linear float64) float64 {
-	if linear <= 0 {
-		return -100.0 // Effectively -infinity
-	}
-	return 20.0 * math.Log10(linear)
-}
-
 // ============================================================================
 // Spectral Characteristic Interpretation Functions
 // ============================================================================
@@ -1441,8 +1433,8 @@ func formatDS201GateFilter(f *os.File, cfg *processor.FilterChainConfig, m *proc
 		return
 	}
 
-	thresholdDB := linearToDb(cfg.DS201GateThreshold)
-	rangeDB := linearToDb(cfg.DS201GateRange)
+	thresholdDB := processor.LinearToDb(cfg.DS201GateThreshold)
+	rangeDB := processor.LinearToDb(cfg.DS201GateRange)
 
 	detection := cfg.DS201GateDetection
 	if detection == "" {
@@ -1461,7 +1453,7 @@ func formatDS201GateFilter(f *os.File, cfg *processor.FilterChainConfig, m *proc
 
 	// Show makeup gain if applied (> 1.0 linear = 0 dB)
 	if cfg.DS201GateMakeup > 1.01 { // Small tolerance for floating point
-		makeupDB := linearToDb(cfg.DS201GateMakeup)
+		makeupDB := processor.LinearToDb(cfg.DS201GateMakeup)
 		fmt.Fprintf(f, "        Makeup: +%.1f dB (LUFS gap recovery)\n", makeupDB)
 	}
 
@@ -1578,7 +1570,7 @@ func formatAlimiterFilter(f *os.File, cfg *processor.FilterChainConfig, prefix s
 		return
 	}
 
-	ceilingDB := linearToDb(cfg.LimiterCeiling)
+	ceilingDB := processor.LinearToDb(cfg.LimiterCeiling)
 	fmt.Fprintf(f, "%salimiter: ceiling %.1f dBFS\n", prefix, ceilingDB)
 	fmt.Fprintf(f, "        Timing: attack %.0fms, release %.0fms\n", cfg.LimiterAttack, cfg.LimiterRelease)
 	fmt.Fprintln(f, "        Mode: brick-wall safety limiter")

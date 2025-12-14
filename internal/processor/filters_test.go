@@ -616,10 +616,10 @@ func TestDbToLinear(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := dbToLinear(tt.db)
+			got := DbToLinear(tt.db)
 			diff := math.Abs(got - tt.wantLinear)
 			if diff > tt.tolerance {
-				t.Errorf("dbToLinear(%.1f) = %.6f, want %.6f (±%.6f)",
+				t.Errorf("DbToLinear(%.1f) = %.6f, want %.6f (±%.6f)",
 					tt.db, got, tt.wantLinear, tt.tolerance)
 			}
 		})
@@ -633,10 +633,10 @@ func TestDbToLinearFormula(t *testing.T) {
 
 	for _, db := range testCases {
 		t.Run(fmt.Sprintf("%.0fdB", db), func(t *testing.T) {
-			got := dbToLinear(db)
+			got := DbToLinear(db)
 			want := math.Pow(10, db/20.0)
 			if math.Abs(got-want) > 0.0000001 {
-				t.Errorf("dbToLinear(%.1f) = %.10f, want %.10f (exact formula)", db, got, want)
+				t.Errorf("DbToLinear(%.1f) = %.10f, want %.10f (exact formula)", db, got, want)
 			}
 		})
 	}

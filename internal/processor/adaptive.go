@@ -1388,7 +1388,7 @@ func tuneDS201Gate(config *FilterChainConfig, measurements *AudioMeasurements) {
 			postNRThreshold := estimatedPostNRPeak + ds201GateDNS1500ThresholdDrop
 
 			// Convert to linear and use the lower (more aggressive) threshold
-			postNRThresholdLinear := dbToLinear(clamp(postNRThreshold, ds201GateThresholdMinDB, ds201GateThresholdMaxDB))
+			postNRThresholdLinear := DbToLinear(clamp(postNRThreshold, ds201GateThresholdMinDB, ds201GateThresholdMaxDB))
 			if postNRThresholdLinear < config.DS201GateThreshold {
 				config.DS201GateThreshold = postNRThresholdLinear
 			}
@@ -1397,7 +1397,7 @@ func tuneDS201Gate(config *FilterChainConfig, measurements *AudioMeasurements) {
 
 	// Clamp range and convert to linear
 	rangeDB = clamp(rangeDB, float64(ds201GateRangeMinDB), float64(ds201GateRangeMaxDB))
-	config.DS201GateRange = dbToLinear(rangeDB)
+	config.DS201GateRange = DbToLinear(rangeDB)
 
 	// 6. Knee: based on spectral crest - soft knee for natural transitions
 	config.DS201GateKnee = calculateDS201GateKnee(measurements.SpectralCrest)
@@ -1472,7 +1472,7 @@ func calculateDS201GateThreshold(noiseFloorDB, silencePeakDB, silenceCrestDB, ra
 	// Safety limits - protect quiet speech while ensuring gate can still work
 	thresholdDB = clamp(thresholdDB, ds201GateThresholdMinDB, ds201GateThresholdMaxDB)
 
-	return dbToLinear(thresholdDB)
+	return DbToLinear(thresholdDB)
 }
 
 // calculateDS201GateRatio determines ratio based on LRA (loudness range).
@@ -1896,7 +1896,7 @@ func tuneLA2AMakeup(config *FilterChainConfig, measurements *AudioMeasurements) 
 		)
 		// Convert linear to dB (gate returns linear, LA2A uses dB)
 		if gateLinear > 1.0 {
-			makeup += linearToDb(gateLinear)
+			makeup += LinearToDb(gateLinear)
 		}
 	}
 
@@ -1952,7 +1952,7 @@ func calculateDS201GateMakeup(inputLUFS, inputTP, targetLUFS float64) float64 {
 	}
 
 	// Convert dB to linear for agate's makeup parameter
-	return dbToLinear(makeupDB)
+	return DbToLinear(makeupDB)
 }
 
 // calculateLA2AMakeup determines post-compression makeup gain based on LUFS gap.
