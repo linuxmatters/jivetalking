@@ -1494,7 +1494,7 @@ func preScanNoiseFloor(filename string) (float64, error) {
 
 	// Create a simple filter graph with just downmix and astats
 	// We need mono for consistent measurements, and astats for noise floor detection
-	filterSpec := "pan=mono|c0=0.5*c0+0.5*c1,astats=metadata=1:measure_overall=Noise_floor+RMS_level+RMS_trough+Peak_level:measure_perchannel=0"
+	filterSpec := "aformat=channel_layouts=mono,astats=metadata=1:measure_overall=Noise_floor+RMS_level+RMS_trough+Peak_level:measure_perchannel=0"
 
 	filterGraph, bufferSrcCtx, bufferSinkCtx, err := setupFilterGraph(
 		reader.GetDecoderContext(),
