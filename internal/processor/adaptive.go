@@ -1617,15 +1617,6 @@ func calculateDS201GateRangeDB(silenceEntropy, noiseFloorDB float64) float64 {
 	return rangeDB
 }
 
-// calculateDS201GateRange determines maximum attenuation depth based on noise character.
-// Wrapper that returns linear value for direct use in filter config.
-func calculateDS201GateRange(silenceEntropy, noiseFloorDB float64) float64 {
-	rangeDB := calculateDS201GateRangeDB(silenceEntropy, noiseFloorDB)
-	rangeDB = clamp(rangeDB, float64(ds201GateRangeMinDB), float64(ds201GateRangeMaxDB))
-
-	return dbToLinear(rangeDB)
-}
-
 // calculateDS201GateKnee determines knee softness based on spectral crest.
 // Dynamic content with prominent peaks benefits from softer knee.
 func calculateDS201GateKnee(spectralCrest float64) float64 {
