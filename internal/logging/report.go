@@ -257,6 +257,109 @@ func formatSpectralValue(value float64, decimals int) string {
 	return fmt.Sprintf(format, value)
 }
 
+// =============================================================================
+// Report Section Formatting Helpers
+// =============================================================================
+
+// writeSection writes a section header with title and dashed underline.
+// The underline length matches the title length.
+func writeSection(f *os.File, title string) {
+	fmt.Fprintln(f, title)
+	fmt.Fprintln(f, strings.Repeat("-", len(title)))
+}
+
+// spectralMetrics holds spectral measurement values for formatting.
+// Used to deduplicate spectral metric output between input and output sections.
+type spectralMetrics struct {
+	Mean     float64
+	Variance float64
+	Centroid float64
+	Spread   float64
+	Skewness float64
+	Kurtosis float64
+	Entropy  float64
+	Flatness float64
+	Crest    float64
+	Flux     float64
+	Slope    float64
+	Decrease float64
+	Rolloff  float64
+}
+
+// writeSpectralMetrics writes all 13 spectral metrics with interpretations.
+// If compare is non-nil, includes comparison with input values.
+func writeSpectralMetrics(f *os.File, m spectralMetrics, compare *spectralMetrics) {
+	if compare == nil {
+		// Input format: value — interpretation
+		fmt.Fprintf(f, "Spectral Mean:       %s (avg magnitude)\n", formatSpectralValue(m.Mean, 6))
+		fmt.Fprintf(f, "Spectral Variance:   %s (magnitude spread)\n", formatSpectralValue(m.Variance, 6))
+		fmt.Fprintf(f, "Spectral Centroid:   %.0f Hz — %s\n", m.Centroid, interpretCentroid(m.Centroid))
+		fmt.Fprintf(f, "Spectral Spread:     %.0f Hz — %s\n", m.Spread, interpretSpread(m.Spread))
+		fmt.Fprintf(f, "Spectral Skewness:   %.3f — %s\n", m.Skewness, interpretSkewness(m.Skewness))
+		fmt.Fprintf(f, "Spectral Kurtosis:   %.3f — %s\n", m.Kurtosis, interpretKurtosis(m.Kurtosis))
+		fmt.Fprintf(f, "Spectral Entropy:    %s — %s\n", formatSpectralValue(m.Entropy, 6), interpretEntropy(m.Entropy))
+		fmt.Fprintf(f, "Spectral Flatness:   %s — %s\n", formatSpectralValue(m.Flatness, 6), interpretFlatness(m.Flatness))
+		fmt.Fprintf(f, "Spectral Crest:      %.3f — %s\n", m.Crest, interpretCrest(m.Crest))
+		fmt.Fprintf(f, "Spectral Flux:       %s — %s\n", formatSpectralValue(m.Flux, 6), interpretFlux(m.Flux))
+		fmt.Fprintf(f, "Spectral Slope:      %s — %s\n", formatSpectralValue(m.Slope, 9), interpretSlope(m.Slope))
+		fmt.Fprintf(f, "Spectral Decrease:   %s — %s\n", formatSpectralValue(m.Decrease, 6), interpretDecrease(m.Decrease))
+		fmt.Fprintf(f, "Spectral Rolloff:    %.0f Hz — %s\n", m.Rolloff, interpretRolloff(m.Rolloff))
+	} else {
+		// Output format: value — interpretation (was X)
+		fmt.Fprintf(f, "Spectral Mean:       %s %s\n", formatSpectralValue(m.Mean, 6), formatComparisonSpectral(m.Mean, compare.Mean, 6))
+		fmt.Fprintf(f, "Spectral Variance:   %s %s\n", formatSpectralValue(m.Variance, 6), formatComparisonSpectral(m.Variance, compare.Variance, 6))
+		fmt.Fprintf(f, "Spectral Centroid:   %.0f Hz — %s %s\n", m.Centroid, interpretCentroid(m.Centroid), formatComparison(m.Centroid, compare.Centroid, "Hz", 0))
+		fmt.Fprintf(f, "Spectral Spread:     %.0f Hz — %s %s\n", m.Spread, interpretSpread(m.Spread), formatComparison(m.Spread, compare.Spread, "Hz", 0))
+		fmt.Fprintf(f, "Spectral Skewness:   %.3f — %s %s\n", m.Skewness, interpretSkewness(m.Skewness), formatComparisonNoUnit(m.Skewness, compare.Skewness, 3))
+		fmt.Fprintf(f, "Spectral Kurtosis:   %.3f — %s %s\n", m.Kurtosis, interpretKurtosis(m.Kurtosis), formatComparisonNoUnit(m.Kurtosis, compare.Kurtosis, 3))
+		fmt.Fprintf(f, "Spectral Entropy:    %s — %s %s\n", formatSpectralValue(m.Entropy, 6), interpretEntropy(m.Entropy), formatComparisonSpectral(m.Entropy, compare.Entropy, 6))
+		fmt.Fprintf(f, "Spectral Flatness:   %s — %s %s\n", formatSpectralValue(m.Flatness, 6), interpretFlatness(m.Flatness), formatComparisonNoUnit(m.Flatness, compare.Flatness, 6))
+		fmt.Fprintf(f, "Spectral Crest:      %.3f — %s %s\n", m.Crest, interpretCrest(m.Crest), formatComparisonNoUnit(m.Crest, compare.Crest, 3))
+		fmt.Fprintf(f, "Spectral Flux:       %s — %s %s\n", formatSpectralValue(m.Flux, 6), interpretFlux(m.Flux), formatComparisonSpectral(m.Flux, compare.Flux, 6))
+		fmt.Fprintf(f, "Spectral Slope:      %s — %s %s\n", formatSpectralValue(m.Slope, 9), interpretSlope(m.Slope), formatComparisonSpectral(m.Slope, compare.Slope, 9))
+		fmt.Fprintf(f, "Spectral Decrease:   %s — %s %s\n", formatSpectralValue(m.Decrease, 6), interpretDecrease(m.Decrease), formatComparisonSpectral(m.Decrease, compare.Decrease, 6))
+		fmt.Fprintf(f, "Spectral Rolloff:    %.0f Hz — %s %s\n", m.Rolloff, interpretRolloff(m.Rolloff), formatComparison(m.Rolloff, compare.Rolloff, "Hz", 0))
+	}
+}
+
+// spectralFromMeasurements extracts spectral metrics from AudioMeasurements.
+func spectralFromMeasurements(m *processor.AudioMeasurements) spectralMetrics {
+	return spectralMetrics{
+		Mean:     m.SpectralMean,
+		Variance: m.SpectralVariance,
+		Centroid: m.SpectralCentroid,
+		Spread:   m.SpectralSpread,
+		Skewness: m.SpectralSkewness,
+		Kurtosis: m.SpectralKurtosis,
+		Entropy:  m.SpectralEntropy,
+		Flatness: m.SpectralFlatness,
+		Crest:    m.SpectralCrest,
+		Flux:     m.SpectralFlux,
+		Slope:    m.SpectralSlope,
+		Decrease: m.SpectralDecrease,
+		Rolloff:  m.SpectralRolloff,
+	}
+}
+
+// spectralFromOutputMeasurements extracts spectral metrics from OutputMeasurements.
+func spectralFromOutputMeasurements(m *processor.OutputMeasurements) spectralMetrics {
+	return spectralMetrics{
+		Mean:     m.SpectralMean,
+		Variance: m.SpectralVariance,
+		Centroid: m.SpectralCentroid,
+		Spread:   m.SpectralSpread,
+		Skewness: m.SpectralSkewness,
+		Kurtosis: m.SpectralKurtosis,
+		Entropy:  m.SpectralEntropy,
+		Flatness: m.SpectralFlatness,
+		Crest:    m.SpectralCrest,
+		Flux:     m.SpectralFlux,
+		Slope:    m.SpectralSlope,
+		Decrease: m.SpectralDecrease,
+		Rolloff:  m.SpectralRolloff,
+	}
+}
+
 // formatComparison returns "(unchanged)" if values match within tolerance, otherwise "(was X unit)"
 func formatComparison(output, input float64, unit string, decimals int) string {
 	// Use tolerance based on decimal places shown
@@ -406,8 +509,7 @@ func GenerateReport(data ReportData) error {
 	fmt.Fprintln(f, "")
 
 	// Pass 1: Input Analysis
-	fmt.Fprintln(f, "Pass 1: Input Analysis")
-	fmt.Fprintln(f, "----------------------")
+	writeSection(f, "Pass 1: Input Analysis")
 	if data.Result != nil && data.Result.Measurements != nil {
 		m := data.Result.Measurements
 		// Loudness measurements from ebur128
@@ -446,19 +548,7 @@ func GenerateReport(data ReportData) error {
 		}
 
 		// Spectral analysis (aspectralstats measurements) with characteristic interpretations
-		fmt.Fprintf(f, "Spectral Mean:       %s (avg magnitude)\n", formatSpectralValue(m.SpectralMean, 6))
-		fmt.Fprintf(f, "Spectral Variance:   %s (magnitude spread)\n", formatSpectralValue(m.SpectralVariance, 6))
-		fmt.Fprintf(f, "Spectral Centroid:   %.0f Hz — %s\n", m.SpectralCentroid, interpretCentroid(m.SpectralCentroid))
-		fmt.Fprintf(f, "Spectral Spread:     %.0f Hz — %s\n", m.SpectralSpread, interpretSpread(m.SpectralSpread))
-		fmt.Fprintf(f, "Spectral Skewness:   %.3f — %s\n", m.SpectralSkewness, interpretSkewness(m.SpectralSkewness))
-		fmt.Fprintf(f, "Spectral Kurtosis:   %.3f — %s\n", m.SpectralKurtosis, interpretKurtosis(m.SpectralKurtosis))
-		fmt.Fprintf(f, "Spectral Entropy:    %s — %s\n", formatSpectralValue(m.SpectralEntropy, 6), interpretEntropy(m.SpectralEntropy))
-		fmt.Fprintf(f, "Spectral Flatness:   %s — %s\n", formatSpectralValue(m.SpectralFlatness, 6), interpretFlatness(m.SpectralFlatness))
-		fmt.Fprintf(f, "Spectral Crest:      %.3f — %s\n", m.SpectralCrest, interpretCrest(m.SpectralCrest))
-		fmt.Fprintf(f, "Spectral Flux:       %s — %s\n", formatSpectralValue(m.SpectralFlux, 6), interpretFlux(m.SpectralFlux))
-		fmt.Fprintf(f, "Spectral Slope:      %s — %s\n", formatSpectralValue(m.SpectralSlope, 9), interpretSlope(m.SpectralSlope))
-		fmt.Fprintf(f, "Spectral Decrease:   %s — %s\n", formatSpectralValue(m.SpectralDecrease, 6), interpretDecrease(m.SpectralDecrease))
-		fmt.Fprintf(f, "Spectral Rolloff:    %.0f Hz — %s\n", m.SpectralRolloff, interpretRolloff(m.SpectralRolloff))
+		writeSpectralMetrics(f, spectralFromMeasurements(m), nil)
 
 		// Signal quality and audio characteristics
 		fmt.Fprintln(f, "")
@@ -617,8 +707,7 @@ func GenerateReport(data ReportData) error {
 	}
 
 	// Pass 2: Output Analysis
-	fmt.Fprintln(f, "Pass 2: Output Analysis")
-	fmt.Fprintln(f, "-----------------------")
+	writeSection(f, "Pass 2: Output Analysis")
 	if data.Result != nil {
 		fmt.Fprintf(f, "Output File:         %s\n", filepath.Base(data.OutputPath))
 
@@ -660,19 +749,8 @@ func GenerateReport(data ReportData) error {
 				}
 
 				// Spectral analysis (aspectralstats measurements) with characteristic interpretations
-				fmt.Fprintf(f, "Spectral Mean:       %s %s\n", formatSpectralValue(om.SpectralMean, 6), formatComparisonSpectral(om.SpectralMean, m.SpectralMean, 6))
-				fmt.Fprintf(f, "Spectral Variance:   %s %s\n", formatSpectralValue(om.SpectralVariance, 6), formatComparisonSpectral(om.SpectralVariance, m.SpectralVariance, 6))
-				fmt.Fprintf(f, "Spectral Centroid:   %.0f Hz — %s %s\n", om.SpectralCentroid, interpretCentroid(om.SpectralCentroid), formatComparison(om.SpectralCentroid, m.SpectralCentroid, "Hz", 0))
-				fmt.Fprintf(f, "Spectral Spread:     %.0f Hz — %s %s\n", om.SpectralSpread, interpretSpread(om.SpectralSpread), formatComparison(om.SpectralSpread, m.SpectralSpread, "Hz", 0))
-				fmt.Fprintf(f, "Spectral Skewness:   %.3f — %s %s\n", om.SpectralSkewness, interpretSkewness(om.SpectralSkewness), formatComparisonNoUnit(om.SpectralSkewness, m.SpectralSkewness, 3))
-				fmt.Fprintf(f, "Spectral Kurtosis:   %.3f — %s %s\n", om.SpectralKurtosis, interpretKurtosis(om.SpectralKurtosis), formatComparisonNoUnit(om.SpectralKurtosis, m.SpectralKurtosis, 3))
-				fmt.Fprintf(f, "Spectral Entropy:    %s — %s %s\n", formatSpectralValue(om.SpectralEntropy, 6), interpretEntropy(om.SpectralEntropy), formatComparisonSpectral(om.SpectralEntropy, m.SpectralEntropy, 6))
-				fmt.Fprintf(f, "Spectral Flatness:   %s — %s %s\n", formatSpectralValue(om.SpectralFlatness, 6), interpretFlatness(om.SpectralFlatness), formatComparisonNoUnit(om.SpectralFlatness, m.SpectralFlatness, 6))
-				fmt.Fprintf(f, "Spectral Crest:      %.3f — %s %s\n", om.SpectralCrest, interpretCrest(om.SpectralCrest), formatComparisonNoUnit(om.SpectralCrest, m.SpectralCrest, 3))
-				fmt.Fprintf(f, "Spectral Flux:       %s — %s %s\n", formatSpectralValue(om.SpectralFlux, 6), interpretFlux(om.SpectralFlux), formatComparisonSpectral(om.SpectralFlux, m.SpectralFlux, 6))
-				fmt.Fprintf(f, "Spectral Slope:      %s — %s %s\n", formatSpectralValue(om.SpectralSlope, 9), interpretSlope(om.SpectralSlope), formatComparisonSpectral(om.SpectralSlope, m.SpectralSlope, 9))
-				fmt.Fprintf(f, "Spectral Decrease:   %s — %s %s\n", formatSpectralValue(om.SpectralDecrease, 6), interpretDecrease(om.SpectralDecrease), formatComparisonSpectral(om.SpectralDecrease, m.SpectralDecrease, 6))
-				fmt.Fprintf(f, "Spectral Rolloff:    %.0f Hz — %s %s\n", om.SpectralRolloff, interpretRolloff(om.SpectralRolloff), formatComparison(om.SpectralRolloff, m.SpectralRolloff, "Hz", 0))
+				inputSpectral := spectralFromMeasurements(m)
+				writeSpectralMetrics(f, spectralFromOutputMeasurements(om), &inputSpectral)
 
 				// Signal quality comparison
 				fmt.Fprintln(f, "")
@@ -778,19 +856,7 @@ func GenerateReport(data ReportData) error {
 				}
 
 				// Spectral analysis (aspectralstats measurements) with characteristic interpretations
-				fmt.Fprintf(f, "Spectral Mean:       %s (avg magnitude)\n", formatSpectralValue(om.SpectralMean, 6))
-				fmt.Fprintf(f, "Spectral Variance:   %s (magnitude spread)\n", formatSpectralValue(om.SpectralVariance, 6))
-				fmt.Fprintf(f, "Spectral Centroid:   %.0f Hz — %s\n", om.SpectralCentroid, interpretCentroid(om.SpectralCentroid))
-				fmt.Fprintf(f, "Spectral Spread:     %.0f Hz — %s\n", om.SpectralSpread, interpretSpread(om.SpectralSpread))
-				fmt.Fprintf(f, "Spectral Skewness:   %.3f — %s\n", om.SpectralSkewness, interpretSkewness(om.SpectralSkewness))
-				fmt.Fprintf(f, "Spectral Kurtosis:   %.3f — %s\n", om.SpectralKurtosis, interpretKurtosis(om.SpectralKurtosis))
-				fmt.Fprintf(f, "Spectral Entropy:    %s — %s\n", formatSpectralValue(om.SpectralEntropy, 6), interpretEntropy(om.SpectralEntropy))
-				fmt.Fprintf(f, "Spectral Flatness:   %s — %s\n", formatSpectralValue(om.SpectralFlatness, 6), interpretFlatness(om.SpectralFlatness))
-				fmt.Fprintf(f, "Spectral Crest:      %.3f — %s\n", om.SpectralCrest, interpretCrest(om.SpectralCrest))
-				fmt.Fprintf(f, "Spectral Flux:       %s — %s\n", formatSpectralValue(om.SpectralFlux, 6), interpretFlux(om.SpectralFlux))
-				fmt.Fprintf(f, "Spectral Slope:      %s — %s\n", formatSpectralValue(om.SpectralSlope, 9), interpretSlope(om.SpectralSlope))
-				fmt.Fprintf(f, "Spectral Decrease:   %s — %s\n", formatSpectralValue(om.SpectralDecrease, 6), interpretDecrease(om.SpectralDecrease))
-				fmt.Fprintf(f, "Spectral Rolloff:    %.0f Hz — %s\n", om.SpectralRolloff, interpretRolloff(om.SpectralRolloff))
+				writeSpectralMetrics(f, spectralFromOutputMeasurements(om), nil)
 			}
 			if om.ZeroCrossingsRate > 0 {
 				if m != nil && m.ZeroCrossingsRate > 0 {
