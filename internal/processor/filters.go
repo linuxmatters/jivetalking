@@ -139,6 +139,29 @@ var (
 	modelCacheMutex sync.Mutex
 )
 
+// filterBuilderFunc is a function that builds a filter spec from config.
+// Returns the FFmpeg filter specification string, or empty string if disabled.
+type filterBuilderFunc func(*FilterChainConfig) string
+
+// filterBuilders maps FilterID to its builder function.
+// This registry centralises filter spec generation and avoids per-call map allocation.
+var filterBuilders = map[FilterID]filterBuilderFunc{
+	FilterDownmix:        (*FilterChainConfig).buildDownmixFilter,
+	FilterAnalysis:       (*FilterChainConfig).buildAnalysisFilter,
+	FilterSilenceDetect:  (*FilterChainConfig).buildSilenceDetectFilter,
+	FilterResample:       (*FilterChainConfig).buildResampleFilter,
+	FilterDS201HighPass:  (*FilterChainConfig).buildDS201HighpassFilter,
+	FilterDS201LowPass:   (*FilterChainConfig).buildDS201LowPassFilter,
+	FilterDC1Declick:     (*FilterChainConfig).buildDC1DeclickFilter,
+	FilterDNS1500:        (*FilterChainConfig).buildDNS1500Filter,
+	FilterDolbySR:        (*FilterChainConfig).buildDolbySRFilter,
+	FilterDS201Gate:      (*FilterChainConfig).buildDS201GateFilter,
+	FilterLA2ACompressor: (*FilterChainConfig).buildLA2ACompressorFilter,
+	FilterDeesser:        (*FilterChainConfig).buildDeesserFilter,
+	FilterArnndn:         (*FilterChainConfig).buildArnnDnFilter,
+	FilterAlimiter:       (*FilterChainConfig).buildAlimiterFilter,
+}
+
 // getRNNModelPath returns the path to the cached RNN model file.
 // On first call, it extracts the embedded model to ~/.cache/jivetalking/cb.rnnn
 // Subsequent calls return the cached path. Thread-safe.
@@ -574,40 +597,6 @@ func (cfg *FilterChainConfig) buildResampleFilter() string {
 		cfg.ResampleSampleRate, cfg.ResampleFormat, cfg.ResampleFrameSize)
 }
 
-// buildDownmixReport returns the report entry for the downmix filter.
-func (cfg *FilterChainConfig) buildDownmixReport() string {
-	if !cfg.DownmixEnabled {
-		return ""
-	}
-	return "Downmix: stereo → mono (FFmpeg builtin)"
-}
-
-// buildAnalysisReport returns the report entry for the analysis filter.
-func (cfg *FilterChainConfig) buildAnalysisReport() string {
-	if !cfg.AnalysisEnabled {
-		return ""
-	}
-	return "Analysis: collect audio measurements (ebur128 + astats + aspectralstats)"
-}
-
-// buildSilenceDetectReport returns the report entry for the silence detection filter.
-func (cfg *FilterChainConfig) buildSilenceDetectReport() string {
-	if !cfg.SilenceDetectEnabled {
-		return ""
-	}
-	return fmt.Sprintf("SilenceDetect: threshold %.0fdB, min duration %.2fs",
-		cfg.SilenceDetectLevel, cfg.SilenceDetectDuration)
-}
-
-// buildResampleReport returns the report entry for the resample filter.
-func (cfg *FilterChainConfig) buildResampleReport() string {
-	if !cfg.ResampleEnabled {
-		return ""
-	}
-	return fmt.Sprintf("Resample: %dHz %s mono, %d samples/frame",
-		cfg.ResampleSampleRate, cfg.ResampleFormat, cfg.ResampleFrameSize)
-}
-
 // buildDS201HighpassFilter builds the DS201-inspired composite high-pass filter.
 // This is a frequency-conscious filter chain that combines:
 // 1. High-pass filter - removes subsonic rumble (HVAC, handling noise, etc.)
@@ -996,25 +985,8 @@ func (cfg *FilterChainConfig) buildAlimiterFilter() string {
 // BuildFilterSpec builds the FFmpeg filter specification string for Pass 2 processing.
 // Filter order is determined by cfg.FilterOrder (or DefaultFilterOrder if empty).
 // Each filter checks its Enabled flag and returns empty string if disabled.
+// Uses the package-level filterBuilders registry for filter spec generation.
 func (cfg *FilterChainConfig) BuildFilterSpec() string {
-	// Map FilterID to builder method
-	builders := map[FilterID]func() string{
-		FilterDownmix:        cfg.buildDownmixFilter,
-		FilterAnalysis:       cfg.buildAnalysisFilter,
-		FilterSilenceDetect:  cfg.buildSilenceDetectFilter,
-		FilterResample:       cfg.buildResampleFilter,
-		FilterDS201HighPass:  cfg.buildDS201HighpassFilter,
-		FilterDS201LowPass:   cfg.buildDS201LowPassFilter,
-		FilterDC1Declick:     cfg.buildDC1DeclickFilter,
-		FilterDNS1500:        cfg.buildDNS1500Filter,
-		FilterDolbySR:        cfg.buildDolbySRFilter,
-		FilterDS201Gate:      cfg.buildDS201GateFilter,
-		FilterLA2ACompressor: cfg.buildLA2ACompressorFilter,
-		FilterDeesser:        cfg.buildDeesserFilter,
-		FilterArnndn:         cfg.buildArnnDnFilter,
-		FilterAlimiter:       cfg.buildAlimiterFilter,
-	}
-
 	// Use configured order or default
 	order := cfg.FilterOrder
 	if len(order) == 0 {
@@ -1024,23 +996,14 @@ func (cfg *FilterChainConfig) BuildFilterSpec() string {
 	// Build filters in specified order, skipping disabled/empty
 	var filters []string
 	for _, id := range order {
-		if builder, ok := builders[id]; ok {
-			if spec := builder(); spec != "" {
+		if builder, ok := filterBuilders[id]; ok {
+			if spec := builder(cfg); spec != "" {
 				filters = append(filters, spec)
 			}
 		}
 	}
 
-	// Join with commas
-	filterChain := ""
-	for i, f := range filters {
-		if i > 0 {
-			filterChain += ","
-		}
-		filterChain += f
-	}
-
-	return filterChain
+	return strings.Join(filters, ",")
 }
 
 // CreateProcessingFilterGraph creates an AVFilterGraph for complete audio processing
