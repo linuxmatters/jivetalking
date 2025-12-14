@@ -16,6 +16,7 @@ const (
 	StatusQueued FileStatus = iota
 	StatusAnalyzing
 	StatusProcessing
+	StatusNormalising
 	StatusComplete
 	StatusError
 )
@@ -27,7 +28,7 @@ type FileProgress struct {
 	Status     FileStatus
 
 	// Phase tracking
-	CurrentPass int // 1 or 2
+	CurrentPass int // 1, 2, or 3
 	PassName    string
 
 	// Progress tracking (percentage-based)
@@ -186,10 +187,13 @@ func updateFileProgress(fp FileProgress, msg ProgressMsg) FileProgress {
 	}
 
 	// Update status based on pass
-	if msg.Pass == 1 {
+	switch msg.Pass {
+	case 1:
 		fp.Status = StatusAnalyzing
-	} else if msg.Pass == 2 {
+	case 2:
 		fp.Status = StatusProcessing
+	case 3:
+		fp.Status = StatusNormalising
 	}
 
 	return fp

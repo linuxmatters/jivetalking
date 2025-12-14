@@ -654,7 +654,7 @@ func AdaptConfig(config *FilterChainConfig, measurements *AudioMeasurements) {
 	tuneDS201Gate(config, measurements)       // DS201-style soft expander gate
 	tuneDeesser(config, measurements)
 	tuneLA2ACompressor(config, measurements)
-	tuneUREI1176Limiter(config, measurements) // 1176-inspired safety limiter
+	// tuneUREI1176Limiter removed - 1176 moved to Pass 3, tuned from OutputMeasurements
 
 	// Final safety checks
 	sanitizeConfig(config)

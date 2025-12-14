@@ -5,15 +5,16 @@ import (
 	"testing"
 )
 
-// TestProcessAudio tests the complete two-pass processing pipeline
+// TestProcessAudio tests the complete three-pass processing pipeline
 func TestProcessAudio(t *testing.T) {
-	// Generate synthetic test audio: 3-second 440Hz tone at -23 LUFS
+	// Generate synthetic test audio: 3-second 440Hz tone at -18 LUFS
+	// (needs to be loud enough for normalisation to be within ±12 dB of -16 LUFS)
 	// Short duration for fast test execution
 	testFile := generateTestAudio(t, TestAudioOptions{
 		DurationSecs: 3.0,
 		SampleRate:   44100,
 		ToneFreq:     440.0, // A4 note
-		ToneLevel:    -23.0, // Typical podcast raw level
+		ToneLevel:    -18.0, // Near broadcast level (-16 LUFS target)
 		NoiseLevel:   -55.0, // Moderate background noise
 		SilenceGap: struct {
 			Start    float64

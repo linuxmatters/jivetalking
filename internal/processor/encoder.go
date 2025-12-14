@@ -209,7 +209,13 @@ func (e *Encoder) receivePackets() error {
 }
 
 // Close closes the encoder and output file
+// Safe to call multiple times - subsequent calls are no-ops.
 func (e *Encoder) Close() error {
+	// Guard against double-close
+	if e.fmtCtx == nil {
+		return nil
+	}
+
 	// Write trailer
 	if _, err := ffmpeg.AVWriteTrailer(e.fmtCtx); err != nil {
 		return fmt.Errorf("failed to write trailer: %w", err)
@@ -230,6 +236,7 @@ func (e *Encoder) Close() error {
 	}
 
 	ffmpeg.AVFormatFreeContext(e.fmtCtx)
+	e.fmtCtx = nil // Mark as closed
 
 	return nil
 }

@@ -31,7 +31,7 @@ func renderHeader(m Model) string {
 	title := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("#A40000")).
-		Render("Jivetalking 🕺 - Podcast Audio Preprocessor")
+		Render("Jivetalking 🕺")
 
 	subtitle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#888888")).
@@ -59,16 +59,16 @@ func renderFileEntry(file FileProgress, index int, currentIndex int) string {
 
 	switch file.Status {
 	case StatusComplete:
-		// ✓ completed file with summary
-		icon := lipgloss.NewStyle().Foreground(lipgloss.Color("#00AA00")).Render("✓")
+		// 🗸 completed file with summary
+		icon := lipgloss.NewStyle().Foreground(lipgloss.Color("#00AA00")).Render("🗸")
 		delta := file.OutputLUFS - file.InputLUFS
 		summary := fmt.Sprintf("Input: %.1f LUFS | Output: %.1f LUFS | Δ %+.1f dB",
 			file.InputLUFS, file.OutputLUFS, delta)
 		return fmt.Sprintf(" %s %s → %s\n   %s", icon, fileName, filepath.Base(file.OutputPath), summary)
 
-	case StatusAnalyzing, StatusProcessing:
-		// ⚙ active file with detailed progress
-		icon := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFA500")).Render("⚙")
+	case StatusAnalyzing, StatusProcessing, StatusNormalising:
+		// 🞽 active file with detailed progress
+		icon := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFA500")).Render("🞽")
 		return fmt.Sprintf(" %s %s → %s\n%s",
 			icon, fileName, generateOutputName(fileName),
 			renderFileDetails(file))
@@ -79,8 +79,8 @@ func renderFileEntry(file FileProgress, index int, currentIndex int) string {
 		return fmt.Sprintf(" %s %s\n   Error: %v", icon, fileName, file.Error)
 
 	default:
-		// ○ queued file
-		icon := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")).Render("○")
+		// ⧗ queued file
+		icon := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")).Render("⧗")
 		return fmt.Sprintf(" %s %s\n   Queued...", icon, fileName)
 	}
 }
@@ -95,11 +95,18 @@ func renderFileDetails(file FileProgress) string {
 	var content strings.Builder
 
 	// Pass indicator
-	passName := "Analyzing Audio"
-	if file.CurrentPass == 2 {
+	var passName string
+	switch file.CurrentPass {
+	case 1:
+		passName = "Analysing Audio"
+	case 2:
 		passName = "Processing Audio"
+	case 3:
+		passName = "Normalising Audio"
+	default:
+		passName = "Processing"
 	}
-	content.WriteString(fmt.Sprintf("Pass %d/2: %s\n", file.CurrentPass, passName))
+	content.WriteString(fmt.Sprintf("Pass %d/3: %s\n", file.CurrentPass, passName))
 
 	// Progress bar
 	content.WriteString(renderProgressBar(file.Progress, 40))
@@ -111,7 +118,7 @@ func renderFileDetails(file FileProgress) string {
 	if file.Progress > 0 {
 		remaining = (elapsed / file.Progress) - elapsed
 	}
-	content.WriteString(fmt.Sprintf("⏱  Elapsed: %.1fs | Remaining: ~%.1fs\n", elapsed, remaining))
+	content.WriteString(fmt.Sprintf("✇ Elapsed: %.1fs | Remaining: ~%.1fs\n", elapsed, remaining))
 
 	// Audio level visualization
 	if file.CurrentLevel != 0 {
@@ -138,7 +145,7 @@ func renderAudioLevelMeter(currentLevel, peakLevel float64) string {
 	var b strings.Builder
 
 	// Display current and peak levels
-	b.WriteString(fmt.Sprintf("🎙 Audio Level: %.1f dB | Peak: %.1f dB\n", currentLevel, peakLevel))
+	b.WriteString(fmt.Sprintf("🕪 Audio Level: %.1f dB | Peak: %.1f dB\n", currentLevel, peakLevel))
 
 	// Create visual meter
 	// dB range: -60 dB (silence) to 0 dB (maximum)

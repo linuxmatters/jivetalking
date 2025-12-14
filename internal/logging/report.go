@@ -473,6 +473,7 @@ type ReportData struct {
 	EndTime      time.Time
 	Pass1Time    time.Duration
 	Pass2Time    time.Duration
+	Pass3Time    time.Duration // Normalisation pass (may be 0 if skipped)
 	Result       *processor.ProcessingResult
 	SampleRate   int
 	Channels     int
@@ -926,11 +927,22 @@ func GenerateReport(data ReportData) error {
 	}
 	fmt.Fprintln(f, "")
 
+	// Pass 3: Normalisation
+	if data.Result != nil && data.Result.Config != nil {
+		formatNormalisationResult(f, data.Result.NormResult, data.Result.Config)
+		fmt.Fprintln(f, "")
+	}
+
 	// Processing Time
 	fmt.Fprintln(f, "Processing Time")
 	fmt.Fprintln(f, "---------------")
 	fmt.Fprintf(f, "Pass 1 (Analysis):   %s\n", formatDuration(data.Pass1Time))
 	fmt.Fprintf(f, "Pass 2 (Processing): %s\n", formatDuration(data.Pass2Time))
+	if data.Pass3Time > 0 {
+		fmt.Fprintf(f, "Pass 3 (Normalise):  %s\n", formatDuration(data.Pass3Time))
+	} else if data.Result != nil && data.Result.NormResult != nil && data.Result.NormResult.Skipped {
+		fmt.Fprintln(f, "Pass 3 (Normalise):  skipped")
+	}
 	totalTime := data.EndTime.Sub(data.StartTime)
 	fmt.Fprintf(f, "Total Time:          %s\n", formatDuration(totalTime))
 
@@ -942,6 +954,45 @@ func GenerateReport(data ReportData) error {
 	fmt.Fprintln(f, "")
 
 	return nil
+}
+
+// formatNormalisationResult outputs the Pass 3 normalisation details
+func formatNormalisationResult(f *os.File, result *processor.NormalisationResult, config *processor.FilterChainConfig) {
+	writeSection(f, "Pass 3: Normalisation")
+
+	if result == nil {
+		fmt.Fprintln(f, "Status: NOT RUN (no output measurements)")
+		return
+	}
+
+	if result.Skipped {
+		fmt.Fprintf(f, "Status: SKIPPED (already within ±%.1f LU of target)\n", config.NormTolerance)
+		fmt.Fprintf(f, "Measured: %.1f LUFS (target: %.1f LUFS)\n", result.InputLUFS, config.NormTargetI)
+		return
+	}
+
+	fmt.Fprintln(f, "Status: APPLIED")
+	fmt.Fprintf(f, "Pre-normalisation:  %.1f LUFS\n", result.InputLUFS)
+	fmt.Fprintf(f, "Gain applied:       %+.1f dB\n", result.GainApplied)
+	fmt.Fprintf(f, "Post-normalisation: %.1f LUFS\n", result.OutputLUFS)
+	fmt.Fprintf(f, "Target:             %.1f LUFS (±%.1f LU tolerance)\n", config.NormTargetI, config.NormTolerance)
+
+	if result.WithinTarget {
+		fmt.Fprintln(f, "Result: ✓ Within target tolerance")
+	} else {
+		deviation := math.Abs(result.OutputLUFS - config.NormTargetI)
+		fmt.Fprintf(f, "Result: ⚠ Outside tolerance (deviation: %.2f LU)\n", deviation)
+	}
+
+	// Show UREI 1176 limiter parameters if enabled
+	if config.UREI1176Enabled {
+		fmt.Fprintln(f, "")
+		fmt.Fprintln(f, "UREI 1176 Limiter (tuned from Pass 2 output):")
+		fmt.Fprintf(f, "  Attack:    %.1f ms\n", config.UREI1176Attack)
+		fmt.Fprintf(f, "  Release:   %.0f ms\n", config.UREI1176Release)
+		fmt.Fprintf(f, "  Ceiling:   %.1f dBTP\n", config.UREI1176Ceiling)
+		fmt.Fprintf(f, "  ASC Level: %.2f\n", config.UREI1176ASCLevel)
+	}
 }
 
 // formatDuration formats a duration in a human-readable way

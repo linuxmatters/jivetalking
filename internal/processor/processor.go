@@ -61,8 +61,17 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 		progressCallback(2, "Processing", 1.0, 0.0, measurements)
 	}
 
+	// Pass 3: Normalisation (gain adjustment + peak limiting)
+	var normResult *NormalisationResult
+	if outputMeasurements != nil {
+		normResult, err = ApplyNormalisation(outputPath, config, outputMeasurements, progressCallback)
+		if err != nil {
+			return nil, fmt.Errorf("Pass 3 failed: %w", err)
+		}
+	}
+
 	// Measure silence region in output file (same region as Pass 1) for noise comparison
-	// This is done after processing so we can analyse the actual output file
+	// NOTE: This is done AFTER normalisation so we measure the final output
 	if outputMeasurements != nil && measurements.NoiseProfile != nil {
 		silenceRegion := SilenceRegion{
 			Start:    measurements.NoiseProfile.Start,
@@ -78,15 +87,18 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 	result := &ProcessingResult{
 		OutputPath:         outputPath,
 		InputLUFS:          measurements.InputI,
-		OutputLUFS:         0.0, // Will be populated from OutputMeasurements if available
+		OutputLUFS:         0.0, // Will be set to final value below
 		NoiseFloor:         measurements.NoiseFloor,
 		Measurements:       measurements,
 		Config:             config, // Include config for logging adaptive parameters
 		OutputMeasurements: outputMeasurements,
+		NormResult:         normResult,
 	}
 
-	// Populate OutputLUFS from measurements if available
-	if outputMeasurements != nil {
+	// Set OutputLUFS to final value (after normalisation if applied)
+	if normResult != nil && !normResult.Skipped {
+		result.OutputLUFS = normResult.OutputLUFS
+	} else if outputMeasurements != nil {
 		result.OutputLUFS = outputMeasurements.OutputI
 	}
 
@@ -97,13 +109,16 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 type ProcessingResult struct {
 	OutputPath   string
 	InputLUFS    float64
-	OutputLUFS   float64
+	OutputLUFS   float64 // Final output loudness (after normalisation if applied)
 	NoiseFloor   float64
 	Measurements *AudioMeasurements
 	Config       *FilterChainConfig // Contains adaptive parameters used
 
 	// Output analysis (populated when OutputAnalysisEnabled is true)
-	OutputMeasurements *OutputMeasurements // Pass 2 output measurements for comparison with Pass 1
+	OutputMeasurements *OutputMeasurements // Pass 2 output measurements (pre-normalisation)
+
+	// Normalisation result (Pass 3)
+	NormResult *NormalisationResult // nil if normalisation disabled or skipped
 }
 
 // processWithFilters performs the actual audio processing with the complete filter chain.

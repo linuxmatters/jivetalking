@@ -64,7 +64,6 @@ var Pass1FilterOrder = []FilterID{
 // Order rationale:
 // - Downmix first: ensures all downstream filters work with mono
 // - DS201HighPass: removes subsonic rumble before other filters (DS201-inspired side-chain)
-// - DS201Hum: removes mains hum (50/60Hz + harmonics) before other filters
 // - DS201LowPass: removes ultrasonic content that could trigger false gates (adaptive)
 // - DNS1500: primary noise reduction using learned noise profile (requires detected silence)
 // - DolbySR: fallback noise reduction when no silence detected (profile-free expansion)
@@ -73,9 +72,8 @@ var Pass1FilterOrder = []FilterID{
 // - DC1Declick: CEDAR DC-1 inspired declicker - removes clicks/pops
 // - LA2ACompressor: LA-2A style optical compression evens dynamics before normalisation
 // - Deesser: after compression (which emphasises sibilance)
-// - UREI1176: 1176-inspired safety limiter (adaptive attack/release/ASC)
-// - Analysis: measures output for comparison with Pass 1
-// - Resample: standardises output format (44.1kHz/16-bit/mono)
+// - Analysis: measures output for comparison with Pass 1 (ebur128 upsamples to 192kHz/f64)
+// - Resample: standardises output format (44.1kHz/16-bit/mono) - MUST be last
 var Pass2FilterOrder = []FilterID{
 	FilterDownmix,
 	FilterDS201HighPass,
@@ -87,7 +85,7 @@ var Pass2FilterOrder = []FilterID{
 	FilterDC1Declick,
 	FilterLA2ACompressor,
 	FilterDeesser,
-	FilterUREI1176,
+	// FilterUREI1176 moved to Pass 3 for peak protection after gain normalisation
 	FilterAnalysis,
 	FilterResample,
 }
@@ -118,6 +116,22 @@ const (
 	// DolbySRDefaultThresholdDB is the default expansion threshold.
 	// -50 dB is the baseline for clean sources; adapted to -45/-40 for noisier sources.
 	DolbySRDefaultThresholdDB = -50.0
+)
+
+// =============================================================================
+// Normalisation Constants (Pass 3)
+// =============================================================================
+
+// Normalisation target and tolerance for Pass 3 gain adjustment
+const (
+	// NormTargetLUFS is the podcast loudness standard.
+	// -15 LUFS provides headroom while remaining broadcast-compliant.
+	// (Industry standard is -16 LUFS, but -15 reduces limiter workload)
+	NormTargetLUFS = -15.0
+
+	// NormToleranceLU is the acceptable deviation from target.
+	// ±0.5 LU is industry standard for loudness compliance.
+	NormToleranceLU = 0.5
 )
 
 // defaultDolbySRBands returns the validated 6-band voice-protective configuration.
@@ -357,6 +371,12 @@ type FilterChainConfig struct {
 	// Output Analysis - enables astats/ebur128/aspectralstats at end of Pass 2 filter chain
 	// When enabled, measurements are extracted from processed audio for comparison with Pass 1
 	OutputAnalysisEnabled bool
+
+	// Normalisation (Pass 3) - pure gain adjustment to hit target LUFS
+	// No dynamic processing—just clean linear gain + UREI 1176 peak protection
+	NormTargetI   float64 // Target integrated loudness (LUFS)
+	NormGainDB    float64 // Calculated gain adjustment (dB) - set during Pass 3
+	NormTolerance float64 // Acceptable deviation (LU)
 }
 
 // DefaultFilterConfig returns the scientifically-tuned default filter configuration
@@ -502,6 +522,11 @@ func DefaultFilterConfig() *FilterChainConfig {
 		FilterOrder: DefaultFilterOrder,
 
 		Measurements: nil, // Will be set after Pass 1
+
+		// Normalisation target for Pass 3
+		NormTargetI:   NormTargetLUFS,  // -15 LUFS
+		NormGainDB:    0.0,             // Calculated in Pass 3
+		NormTolerance: NormToleranceLU, // ±0.5 LU
 	}
 }
 
@@ -983,14 +1008,24 @@ func (cfg *FilterChainConfig) buildUREI1176Filter() string {
 	// Convert ceiling from dBTP to linear (0.0-1.0)
 	ceiling := math.Pow(10, cfg.UREI1176Ceiling/20.0)
 
+	// Default input/output levels to unity if not set (0.0 would mute audio)
+	inputLevel := cfg.UREI1176InputLevel
+	if inputLevel == 0.0 {
+		inputLevel = 1.0
+	}
+	outputLevel := cfg.UREI1176OutputLevel
+	if outputLevel == 0.0 {
+		outputLevel = 1.0
+	}
+
 	// Build filter with adaptive parameters
 	spec := fmt.Sprintf(
 		"alimiter=limit=%.6f:attack=%.1f:release=%.1f:level_in=%.4f:level_out=%.4f:level=0:latency=1",
 		ceiling,
 		cfg.UREI1176Attack,
 		cfg.UREI1176Release,
-		cfg.UREI1176InputLevel,
-		cfg.UREI1176OutputLevel,
+		inputLevel,
+		outputLevel,
 	)
 
 	// Add ASC parameters

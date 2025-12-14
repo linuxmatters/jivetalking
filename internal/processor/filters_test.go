@@ -85,6 +85,10 @@ func newTestConfig() *FilterChainConfig {
 		UREI1176InputLevel:  1.0,
 		UREI1176OutputLevel: 1.0,
 
+		// Normalisation defaults (Pass 3)
+		NormTargetI:   NormTargetLUFS,  // -15 LUFS
+		NormTolerance: NormToleranceLU, // ±0.5 LU
+
 		FilterOrder: DefaultFilterOrder,
 	}
 }
@@ -144,7 +148,7 @@ func TestBuildFilterSpec(t *testing.T) {
 			{"agate=threshold=", "agate"},
 			{"acompressor=threshold=", "acompressor"},
 			{"deesser=i=", "deesser"},
-			{"alimiter=", "alimiter"},
+			// alimiter (UREI1176) moved to Pass 3 for peak protection after gain normalisation
 			{"aformat=sample_rates=44100", "aformat (output)"},
 		}
 
@@ -582,7 +586,7 @@ func TestFilterOrderRespected(t *testing.T) {
 	// Enable filters that appear at start and end
 	config.DS201HPEnabled = true
 	config.DS201GateEnabled = true
-	config.UREI1176Enabled = true
+	// UREI1176 moved to Pass 3 for peak protection after gain normalisation
 	config.DeessEnabled = true
 	config.DeessIntensity = 0.5
 	config.ResampleEnabled = true // Required for aformat output filter
@@ -593,18 +597,19 @@ func TestFilterOrderRespected(t *testing.T) {
 	// Find positions of key filters
 	highpassPos := strings.Index(spec, "highpass=")
 	gatePos := strings.Index(spec, "agate=")
-	limiterPos := strings.Index(spec, "alimiter=")
+	deesserPos := strings.Index(spec, "deesser=")
 	aformatPos := strings.Index(spec, "aformat=sample_rates=")
 
-	// Verify order: highpass < gate < limiter < aformat
+	// Verify order: highpass < gate < deesser < aformat
+	// Note: alimiter (UREI1176) is now in Pass 3, not Pass 2
 	if highpassPos >= gatePos {
 		t.Errorf("highpass (pos %d) should come before agate (pos %d)", highpassPos, gatePos)
 	}
-	if gatePos >= limiterPos {
-		t.Errorf("agate (pos %d) should come before alimiter (pos %d)", gatePos, limiterPos)
+	if gatePos >= deesserPos {
+		t.Errorf("agate (pos %d) should come before deesser (pos %d)", gatePos, deesserPos)
 	}
-	if limiterPos >= aformatPos {
-		t.Errorf("alimiter (pos %d) should come before aformat (pos %d)", limiterPos, aformatPos)
+	if deesserPos >= aformatPos {
+		t.Errorf("deesser (pos %d) should come before aformat (pos %d)", deesserPos, aformatPos)
 	}
 }
 
@@ -878,6 +883,7 @@ func TestPass2FilterOrder(t *testing.T) {
 	})
 
 	t.Run("includes all processing filters", func(t *testing.T) {
+		// Note: FilterUREI1176 moved to Pass 3 for peak protection after gain normalisation
 		requiredFilters := []FilterID{
 			FilterDownmix,
 			FilterDS201HighPass, // Composite: includes hum notch filters
@@ -887,7 +893,7 @@ func TestPass2FilterOrder(t *testing.T) {
 			FilterDS201Gate,
 			FilterLA2ACompressor,
 			FilterDeesser,
-			FilterUREI1176,
+			// FilterUREI1176 moved to Pass 3
 			FilterAnalysis,
 			FilterResample,
 		}
@@ -904,19 +910,12 @@ func TestPass2FilterOrder(t *testing.T) {
 		}
 	})
 
-	t.Run("UREI1176 comes before Analysis", func(t *testing.T) {
-		var urei1176Idx, analysisIdx int
-		for i, id := range Pass2FilterOrder {
+	t.Run("UREI1176 not in Pass2FilterOrder", func(t *testing.T) {
+		// UREI1176 has been moved to Pass 3 for peak protection after gain normalisation
+		for _, id := range Pass2FilterOrder {
 			if id == FilterUREI1176 {
-				urei1176Idx = i
+				t.Errorf("FilterUREI1176 should not be in Pass2FilterOrder (moved to Pass 3)")
 			}
-			if id == FilterAnalysis {
-				analysisIdx = i
-			}
-		}
-		if urei1176Idx >= analysisIdx {
-			t.Errorf("FilterUREI1176 (idx %d) should come before FilterAnalysis (idx %d)",
-				urei1176Idx, analysisIdx)
 		}
 	})
 }
