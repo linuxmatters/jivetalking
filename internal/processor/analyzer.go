@@ -188,11 +188,12 @@ func (a *intervalAccumulator) add(m intervalFrameMetrics) {
 	a.frameCount++
 }
 
-// addFrameRMS accumulates RMS from raw frame samples for accurate per-interval measurement.
-// This bypasses astats metadata (which is cumulative) to get true per-interval RMS.
-func (a *intervalAccumulator) addFrameRMS(frame *ffmpeg.AVFrame) {
+// frameSumSquares calculates the sum of squared sample values and sample count from an audio frame.
+// Handles S16, FLT, S32, and DBL sample formats, normalizing to [-1.0, 1.0] range.
+// Returns sumSquares, sampleCount, and ok (false if format is unsupported or frame is invalid).
+func frameSumSquares(frame *ffmpeg.AVFrame) (sumSquares float64, sampleCount int64, ok bool) {
 	if frame == nil || frame.NbSamples() == 0 {
-		return
+		return 0, 0, false
 	}
 
 	sampleFmt := frame.Format()
@@ -201,7 +202,7 @@ func (a *intervalAccumulator) addFrameRMS(frame *ffmpeg.AVFrame) {
 
 	dataPtr := frame.Data().Get(0)
 	if dataPtr == nil {
-		return
+		return 0, 0, false
 	}
 
 	switch ffmpeg.AVSampleFormat(sampleFmt) {
@@ -209,32 +210,48 @@ func (a *intervalAccumulator) addFrameRMS(frame *ffmpeg.AVFrame) {
 		samples := unsafe.Slice((*int16)(dataPtr), int(nbSamples)*int(nbChannels))
 		for _, sample := range samples {
 			normalized := float64(sample) / 32768.0
-			a.rawSumSquares += normalized * normalized
-			a.rawSampleCount++
+			sumSquares += normalized * normalized
+			sampleCount++
 		}
+		return sumSquares, sampleCount, true
 
 	case ffmpeg.AVSampleFmtFlt, ffmpeg.AVSampleFmtFltp:
 		samples := unsafe.Slice((*float32)(dataPtr), int(nbSamples)*int(nbChannels))
 		for _, sample := range samples {
 			normalized := float64(sample)
-			a.rawSumSquares += normalized * normalized
-			a.rawSampleCount++
+			sumSquares += normalized * normalized
+			sampleCount++
 		}
+		return sumSquares, sampleCount, true
 
 	case ffmpeg.AVSampleFmtS32, ffmpeg.AVSampleFmtS32P:
 		samples := unsafe.Slice((*int32)(dataPtr), int(nbSamples)*int(nbChannels))
 		for _, sample := range samples {
 			normalized := float64(sample) / 2147483648.0
-			a.rawSumSquares += normalized * normalized
-			a.rawSampleCount++
+			sumSquares += normalized * normalized
+			sampleCount++
 		}
+		return sumSquares, sampleCount, true
 
 	case ffmpeg.AVSampleFmtDbl, ffmpeg.AVSampleFmtDblp:
 		samples := unsafe.Slice((*float64)(dataPtr), int(nbSamples)*int(nbChannels))
 		for _, sample := range samples {
-			a.rawSumSquares += sample * sample
-			a.rawSampleCount++
+			sumSquares += sample * sample
+			sampleCount++
 		}
+		return sumSquares, sampleCount, true
+
+	default:
+		return 0, 0, false
+	}
+}
+
+// addFrameRMS accumulates RMS from raw frame samples for accurate per-interval measurement.
+// This bypasses astats metadata (which is cumulative) to get true per-interval RMS.
+func (a *intervalAccumulator) addFrameRMS(frame *ffmpeg.AVFrame) {
+	if ss, count, ok := frameSumSquares(frame); ok {
+		a.rawSumSquares += ss
+		a.rawSampleCount += count
 	}
 }
 

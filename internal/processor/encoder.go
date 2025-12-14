@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"unsafe"
 
 	ffmpeg "github.com/linuxmatters/ffmpeg-statigo"
 	"github.com/linuxmatters/jivetalking/internal/audio"
@@ -238,61 +237,12 @@ func (e *Encoder) Close() error {
 // calculateFrameLevel calculates the RMS (Root Mean Square) level of an audio frame in dB
 // This provides accurate audio level measurement for VU meter display
 func calculateFrameLevel(frame *ffmpeg.AVFrame) float64 {
-	if frame == nil || frame.NbSamples() == 0 {
-		return -60.0 // Silence threshold
+	sumSquares, sampleCount, ok := frameSumSquares(frame)
+	if !ok {
+		return -30.0 // Unsupported format
 	}
-
-	// Get sample format to know how to interpret the data
-	sampleFmt := frame.Format()
-	nbSamples := frame.NbSamples()
-	nbChannels := frame.ChLayout().NbChannels()
-
-	// Get pointer to audio data (first plane for packed formats, or first channel for planar)
-	dataPtr := frame.Data().Get(0)
-	if dataPtr == nil {
-		return -60.0
-	}
-
-	// Calculate RMS based on sample format
-	// Most common formats: S16 (signed 16-bit) and FLT (32-bit float)
-	var sumSquares float64
-	var sampleCount int64
-
-	switch ffmpeg.AVSampleFormat(sampleFmt) {
-	case ffmpeg.AVSampleFmtS16, ffmpeg.AVSampleFmtS16P:
-		// 16-bit signed integer samples
-		samples := unsafe.Slice((*int16)(dataPtr), int(nbSamples)*int(nbChannels))
-		for _, sample := range samples {
-			normalized := float64(sample) / 32768.0 // Normalize to -1.0 to 1.0
-			sumSquares += normalized * normalized
-			sampleCount++
-		}
-
-	case ffmpeg.AVSampleFmtFlt, ffmpeg.AVSampleFmtFltp:
-		// 32-bit float samples (already normalized to -1.0 to 1.0)
-		samples := unsafe.Slice((*float32)(dataPtr), int(nbSamples)*int(nbChannels))
-		for _, sample := range samples {
-			normalized := float64(sample)
-			sumSquares += normalized * normalized
-			sampleCount++
-		}
-
-	case ffmpeg.AVSampleFmtS32, ffmpeg.AVSampleFmtS32P:
-		// 32-bit signed integer samples
-		samples := unsafe.Slice((*int32)(dataPtr), int(nbSamples)*int(nbChannels))
-		for _, sample := range samples {
-			normalized := float64(sample) / 2147483648.0 // Normalize to -1.0 to 1.0
-			sumSquares += normalized * normalized
-			sampleCount++
-		}
-
-	default:
-		// Unsupported format, return neutral value
-		return -30.0
-	}
-
 	if sampleCount == 0 {
-		return -60.0
+		return -60.0 // Silence threshold
 	}
 
 	// Calculate RMS (Root Mean Square)
