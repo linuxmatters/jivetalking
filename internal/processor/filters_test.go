@@ -32,7 +32,7 @@ func newTestConfig() *FilterChainConfig {
 		LA2AEnabled:       false,
 		DeessEnabled:      false,
 		ArnnDnEnabled:     false,
-		LimiterEnabled:    false,
+		UREI1176Enabled:   false,
 
 		// DNS-1500 defaults (used when filter is enabled)
 		DNS1500NoiseReduce:  12.0,
@@ -77,9 +77,13 @@ func newTestConfig() *FilterChainConfig {
 
 		ArnnDnMix: 0.8,
 
-		LimiterCeiling: 0.84,
-		LimiterAttack:  5.0,
-		LimiterRelease: 50.0,
+		UREI1176Ceiling:     -1.0,
+		UREI1176Attack:      0.8,
+		UREI1176Release:     150.0,
+		UREI1176ASC:         true,
+		UREI1176ASCLevel:    0.5,
+		UREI1176InputLevel:  1.0,
+		UREI1176OutputLevel: 1.0,
 
 		FilterOrder: DefaultFilterOrder,
 	}
@@ -126,7 +130,7 @@ func TestBuildFilterSpec(t *testing.T) {
 		config.DS201GateEnabled = true
 		config.LA2AEnabled = true
 		config.DeessEnabled = true
-		config.LimiterEnabled = true
+		config.UREI1176Enabled = true
 		config.ResampleEnabled = true // Required for output format filters
 
 		spec := config.BuildFilterSpec()
@@ -158,7 +162,7 @@ func TestBuildFilterSpec(t *testing.T) {
 		config.DS201GateEnabled = true
 		config.LA2AEnabled = true
 		config.DeessEnabled = true
-		config.LimiterEnabled = true
+		config.UREI1176Enabled = true
 
 		spec := config.BuildFilterSpec()
 
@@ -174,7 +178,7 @@ func TestBuildFilterSpec(t *testing.T) {
 		config.DS201GateEnabled = true
 		config.LA2AEnabled = true
 		config.DeessEnabled = true
-		config.LimiterEnabled = true
+		config.UREI1176Enabled = true
 
 		spec := config.BuildFilterSpec()
 
@@ -522,46 +526,53 @@ func TestBuildDeesserFilter(t *testing.T) {
 	}
 }
 
-func TestBuildAlimiterFilter(t *testing.T) {
+func TestBuildUREI1176Filter(t *testing.T) {
 	t.Run("typical podcast limiter", func(t *testing.T) {
 		config := newTestConfig()
-		config.LimiterEnabled = true
-		config.LimiterCeiling = 0.98 // -0.17dBFS
+		config.UREI1176Enabled = true
+		config.UREI1176Ceiling = -1.0
+		config.UREI1176Attack = 0.8
+		config.UREI1176Release = 150.0
+		config.UREI1176ASC = true
+		config.UREI1176ASCLevel = 0.5
 
-		spec := config.buildAlimiterFilter()
+		spec := config.buildUREI1176Filter()
 
 		wantIn := []string{
 			"alimiter=",
-			"limit=0.98",
-			"asc=1", // ASC enabled for smooth limiting
+			"limit=",      // dBTP ceiling converted to linear
+			"attack=0.8",  // attack in ms
+			"release=150", // release in ms
+			"asc=1",       // ASC enabled for program-dependent release
+			"asc_level=0.5",
 		}
 
 		for _, want := range wantIn {
 			if !strings.Contains(spec, want) {
-				t.Errorf("buildAlimiterFilter() = %q, want to contain %q", spec, want)
+				t.Errorf("buildUREI1176Filter() = %q, want to contain %q", spec, want)
 			}
 		}
 	})
 
-	t.Run("conservative ceiling", func(t *testing.T) {
+	t.Run("ASC disabled", func(t *testing.T) {
 		config := newTestConfig()
-		config.LimiterEnabled = true
-		config.LimiterCeiling = 0.95
+		config.UREI1176Enabled = true
+		config.UREI1176ASC = false
 
-		spec := config.buildAlimiterFilter()
+		spec := config.buildUREI1176Filter()
 
-		if !strings.Contains(spec, "limit=0.95") {
-			t.Errorf("buildAlimiterFilter() = %q, want to contain limit=0.95", spec)
+		if !strings.Contains(spec, "asc=0") {
+			t.Errorf("buildUREI1176Filter() = %q, want to contain asc=0", spec)
 		}
 	})
 
 	t.Run("disabled returns empty", func(t *testing.T) {
 		config := newTestConfig()
-		config.LimiterEnabled = false
+		config.UREI1176Enabled = false
 
-		spec := config.buildAlimiterFilter()
+		spec := config.buildUREI1176Filter()
 		if spec != "" {
-			t.Errorf("buildAlimiterFilter() = %q, want empty when disabled", spec)
+			t.Errorf("buildUREI1176Filter() = %q, want empty when disabled", spec)
 		}
 	})
 }
@@ -571,7 +582,7 @@ func TestFilterOrderRespected(t *testing.T) {
 	// Enable filters that appear at start and end
 	config.DS201HPEnabled = true
 	config.DS201GateEnabled = true
-	config.LimiterEnabled = true
+	config.UREI1176Enabled = true
 	config.DeessEnabled = true
 	config.DeessIntensity = 0.5
 	config.ResampleEnabled = true // Required for aformat output filter
@@ -876,7 +887,7 @@ func TestPass2FilterOrder(t *testing.T) {
 			FilterDS201Gate,
 			FilterLA2ACompressor,
 			FilterDeesser,
-			FilterAlimiter,
+			FilterUREI1176,
 			FilterAnalysis,
 			FilterResample,
 		}
@@ -893,19 +904,19 @@ func TestPass2FilterOrder(t *testing.T) {
 		}
 	})
 
-	t.Run("Alimiter comes before Analysis", func(t *testing.T) {
-		var alimiterIdx, analysisIdx int
+	t.Run("UREI1176 comes before Analysis", func(t *testing.T) {
+		var urei1176Idx, analysisIdx int
 		for i, id := range Pass2FilterOrder {
-			if id == FilterAlimiter {
-				alimiterIdx = i
+			if id == FilterUREI1176 {
+				urei1176Idx = i
 			}
 			if id == FilterAnalysis {
 				analysisIdx = i
 			}
 		}
-		if alimiterIdx >= analysisIdx {
-			t.Errorf("FilterAlimiter (idx %d) should come before FilterAnalysis (idx %d)",
-				alimiterIdx, analysisIdx)
+		if urei1176Idx >= analysisIdx {
+			t.Errorf("FilterUREI1176 (idx %d) should come before FilterAnalysis (idx %d)",
+				urei1176Idx, analysisIdx)
 		}
 	})
 }

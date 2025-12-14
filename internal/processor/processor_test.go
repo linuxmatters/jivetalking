@@ -31,8 +31,8 @@ func TestProcessAudio(t *testing.T) {
 	config.DownmixEnabled = true
 	config.AnalysisEnabled = true
 	config.ResampleEnabled = true
-	config.DS201HPEnabled = true // Basic processing
-	config.LimiterEnabled = true // Safety limiter
+	config.DS201HPEnabled = true  // Basic processing
+	config.UREI1176Enabled = true // UREI 1176-style limiter
 
 	// Process the audio with a no-op progress callback
 	result, err := ProcessAudio(testFile, config, func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements) {
@@ -100,7 +100,7 @@ func TestFilterChainBuilder(t *testing.T) {
 
 	// Enable additional filters for Pass 2 test
 	config.DS201HPEnabled = true
-	config.LimiterEnabled = true
+	config.UREI1176Enabled = true
 
 	filterSpec = config.BuildFilterSpec()
 	t.Logf("Pass 2 filter spec: %s", filterSpec)

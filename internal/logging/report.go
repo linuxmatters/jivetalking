@@ -1016,8 +1016,8 @@ func formatFilter(f *os.File, filterID processor.FilterID, cfg *processor.Filter
 		formatLA2ACompressorFilter(f, cfg, m, prefix)
 	case processor.FilterDeesser:
 		formatDeesserFilter(f, cfg, m, prefix)
-	case processor.FilterAlimiter:
-		formatAlimiterFilter(f, cfg, prefix)
+	case processor.FilterUREI1176:
+		formatUREI1176Filter(f, cfg, m, prefix)
 	default:
 		fmt.Fprintf(f, "%s%s: (unknown filter)\n", prefix, filterID)
 	}
@@ -1563,17 +1563,69 @@ func formatDeesserFilter(f *os.File, cfg *processor.FilterChainConfig, m *proces
 	}
 }
 
-// formatAlimiterFilter outputs alimiter filter details
-func formatAlimiterFilter(f *os.File, cfg *processor.FilterChainConfig, prefix string) {
-	if !cfg.LimiterEnabled {
-		fmt.Fprintf(f, "%salimiter: DISABLED\n", prefix)
+// formatUREI1176Filter outputs UREI 1176-inspired limiter filter details with rationale
+func formatUREI1176Filter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
+	if !cfg.UREI1176Enabled {
+		fmt.Fprintf(f, "%sUREI 1176 limiter: DISABLED\n", prefix)
 		return
 	}
 
-	ceilingDB := processor.LinearToDb(cfg.LimiterCeiling)
-	fmt.Fprintf(f, "%salimiter: ceiling %.1f dBFS\n", prefix, ceilingDB)
-	fmt.Fprintf(f, "        Timing: attack %.0fms, release %.0fms\n", cfg.LimiterAttack, cfg.LimiterRelease)
-	fmt.Fprintln(f, "        Mode: brick-wall safety limiter")
+	// Header with ceiling
+	fmt.Fprintf(f, "%sUREI 1176 limiter: ceiling %.1f dBTP\n", prefix, cfg.UREI1176Ceiling)
+
+	// Timing with classification
+	attackClass := classifyUREI1176Attack(cfg.UREI1176Attack)
+	releaseClass := classifyUREI1176Release(cfg.UREI1176Release)
+	fmt.Fprintf(f, "        Timing: attack %.1fms (%s), release %.0fms (%s)\n",
+		cfg.UREI1176Attack, attackClass, cfg.UREI1176Release, releaseClass)
+
+	// ASC mode
+	if cfg.UREI1176ASC {
+		fmt.Fprintf(f, "        ASC: enabled (level %.2f) — program-dependent release\n", cfg.UREI1176ASCLevel)
+	} else {
+		fmt.Fprintln(f, "        ASC: disabled — direct limiting")
+	}
+
+	// Gain staging (only show if not unity)
+	if cfg.UREI1176InputLevel != 1.0 || cfg.UREI1176OutputLevel != 1.0 {
+		inputDB := processor.LinearToDb(cfg.UREI1176InputLevel)
+		outputDB := processor.LinearToDb(cfg.UREI1176OutputLevel)
+		fmt.Fprintf(f, "        Gain: input %.1f dB, output %.1f dB\n", inputDB, outputDB)
+	}
+
+	// Rationale from measurements
+	if m != nil {
+		// Normalize MaxDifference to percentage (from sample units 0-32768)
+		maxDiffPct := (m.MaxDifference / 32768.0) * 100
+		fmt.Fprintf(f, "        Rationale: MaxDiff %.1f%%, Crest %.1f dB, DR %.1f dB, Flux %.4f\n",
+			maxDiffPct, m.SpectralCrest, m.DynamicRange, m.SpectralFlux)
+	}
+}
+
+// classifyUREI1176Attack returns a human-readable attack classification
+func classifyUREI1176Attack(attack float64) string {
+	switch {
+	case attack <= 0.1:
+		return "extreme transients"
+	case attack <= 0.5:
+		return "sharp consonants"
+	case attack <= 0.8:
+		return "normal speech"
+	default:
+		return "soft delivery"
+	}
+}
+
+// classifyUREI1176Release returns a human-readable release classification
+func classifyUREI1176Release(release float64) string {
+	switch {
+	case release >= 200:
+		return "expressive"
+	case release <= 100:
+		return "controlled"
+	default:
+		return "standard"
+	}
 }
 
 // formatDownmixFilter outputs downmix filter details

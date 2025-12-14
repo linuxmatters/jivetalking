@@ -29,7 +29,7 @@ That's it. No configuration, no knobs to tweak, no audio knowledge required.
 
 ## The Filter Chain
 
-Jivetalking's processing pipeline draws inspiration from legendary studio hardware: the **Drawmer DS201** noise gate, **CEDAR DNS-1500** and **DolbySR** dialogue noise suppressors, and **Teletronix LA-2A** optical compressor. Each filter in the chain prepares the audio for the next.
+Jivetalking's processing pipeline draws inspiration from legendary studio hardware: the **Drawmer DS201** noise gate, **CEDAR DNS-1500** and **DolbySR** dialogue noise suppressors, **Teletronix LA-2A** optical compressor, and **UREI 1176** limiter. Each filter in the chain prepares the audio for the next.
 
 ### Pass 1: Analysis
 
@@ -145,3 +145,4 @@ internal/
 - [Noise Removal: Dolby SR](docs/FilterNoise-Dolby%20SR.md) — 6-band multiband expander fallback
 - [Declick: CEDAR DC-1](docs/FilterDeclick-CEDAR%20DC-1.md) — Autoregressive declicker
 - [Compressor: LA-2A](docs/FilterCompressor-Teletronix%20LA-2A.md) — Programme-dependent optical compression
+- [Limiter: UREI 1176](docs/FilterLimiter-UREI1176.md) — adaptive peak limiter

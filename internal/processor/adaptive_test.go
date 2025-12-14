@@ -3070,3 +3070,247 @@ func containsSubstring(s, substr string) bool {
 	}
 	return false
 }
+
+// =============================================================================
+// UREI 1176-Inspired Limiter Tuning Tests
+// =============================================================================
+
+func TestTuneUREI1176Attack(t *testing.T) {
+	// NOTE: MaxDifference from astats is in sample units (0-32768 for 16-bit audio)
+	// The tuning function normalizes it internally by dividing by 32768
+	// Test values here are provided as ratios (0-1) and scaled to sample units
+	tests := []struct {
+		name          string
+		maxDiffRatio  float64 // 0-1 ratio, will be scaled by 32768 for MaxDifference
+		spectralCrest float64 // dB
+		wantAttack    float64 // ms
+	}{
+		// Extreme transients via MaxDifference
+		{
+			name:          "extreme MaxDiff triggers fastest attack",
+			maxDiffRatio:  0.30, // > 0.25 threshold
+			spectralCrest: 20.0,
+			wantAttack:    0.1, // u1176AttackExtreme
+		},
+		// Extreme transients via SpectralCrest
+		{
+			name:          "extreme SpectralCrest triggers fastest attack",
+			maxDiffRatio:  0.05,
+			spectralCrest: 55.0, // > 50 threshold
+			wantAttack:    0.1,  // u1176AttackExtreme
+		},
+		// Sharp transients via MaxDifference
+		{
+			name:          "sharp MaxDiff triggers fast attack",
+			maxDiffRatio:  0.20, // > 0.15 threshold
+			spectralCrest: 20.0,
+			wantAttack:    0.5, // u1176AttackSharp
+		},
+		// Sharp transients via SpectralCrest
+		{
+			name:          "sharp SpectralCrest triggers fast attack",
+			maxDiffRatio:  0.05,
+			spectralCrest: 40.0, // > 35 threshold
+			wantAttack:    0.5,  // u1176AttackSharp
+		},
+		// Normal transients
+		{
+			name:          "normal MaxDiff triggers normal attack",
+			maxDiffRatio:  0.10, // > 0.08 threshold
+			spectralCrest: 20.0,
+			wantAttack:    0.8, // u1176AttackNormal
+		},
+		// Soft delivery
+		{
+			name:          "low MaxDiff triggers gentle attack",
+			maxDiffRatio:  0.05, // < 0.08 threshold
+			spectralCrest: 20.0,
+			wantAttack:    1.0, // u1176AttackGentle
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := DefaultFilterConfig()
+			m := &AudioMeasurements{
+				BaseMeasurements: BaseMeasurements{
+					MaxDifference: tt.maxDiffRatio * 32768.0, // Scale to sample units
+					SpectralCrest: tt.spectralCrest,
+				},
+			}
+
+			tuneUREI1176Attack(config, m)
+
+			if config.UREI1176Attack != tt.wantAttack {
+				t.Errorf("UREI1176Attack = %.1f, want %.1f", config.UREI1176Attack, tt.wantAttack)
+			}
+		})
+	}
+}
+
+func TestTuneUREI1176Release(t *testing.T) {
+	tests := []struct {
+		name         string
+		spectralFlux float64 // 0-1 range
+		inputLRA     float64 // LU (loudness units)
+		dynamicRange float64 // dB
+		wantRelease  float64 // ms
+	}{
+		// Expressive delivery - high flux + wide LRA
+		{
+			name:         "high flux + wide LRA = expressive release",
+			spectralFlux: 0.04, // > 0.03 (u1176FluxDynamic)
+			inputLRA:     18.0, // > 15 (u1176LRAWide)
+			dynamicRange: 25.0,
+			wantRelease:  200.0, // u1176ReleaseExpressive
+		},
+		// Controlled delivery - low flux + narrow LRA
+		{
+			name:         "low flux + narrow LRA = controlled release",
+			spectralFlux: 0.005, // < 0.01 (u1176FluxStatic)
+			inputLRA:     8.0,   // < 10 (u1176LRANarrow)
+			dynamicRange: 15.0,
+			wantRelease:  100.0, // u1176ReleaseControlled
+		},
+		// Standard delivery - moderate flux and LRA
+		{
+			name:         "moderate flux and LRA = standard release",
+			spectralFlux: 0.02, // between thresholds
+			inputLRA:     12.0, // between thresholds
+			dynamicRange: 25.0,
+			wantRelease:  150.0, // u1176ReleaseStandard
+		},
+		// DR boost - very wide dynamic range adds 50ms
+		{
+			name:         "very wide DR adds release boost",
+			spectralFlux: 0.04,  // expressive base
+			inputLRA:     18.0,  // expressive base
+			dynamicRange: 40.0,  // > 35 (u1176DRWide) triggers boost
+			wantRelease:  250.0, // 200 + 50
+		},
+		// DR boost with standard base
+		{
+			name:         "DR boost with standard base",
+			spectralFlux: 0.02,  // standard base
+			inputLRA:     12.0,  // standard base
+			dynamicRange: 40.0,  // > 35 triggers boost
+			wantRelease:  200.0, // 150 + 50
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := DefaultFilterConfig()
+			m := &AudioMeasurements{
+				BaseMeasurements: BaseMeasurements{
+					SpectralFlux: tt.spectralFlux,
+					DynamicRange: tt.dynamicRange,
+				},
+				InputLRA: tt.inputLRA,
+			}
+
+			tuneUREI1176Release(config, m)
+
+			if config.UREI1176Release != tt.wantRelease {
+				t.Errorf("UREI1176Release = %.0f, want %.0f", config.UREI1176Release, tt.wantRelease)
+			}
+		})
+	}
+}
+
+func TestTuneUREI1176ASC(t *testing.T) {
+	tests := []struct {
+		name          string
+		dynamicRange  float64 // dB
+		spectralCrest float64 // dB
+		noiseFloor    float64 // dBFS
+		wantASC       bool
+		wantASCLevel  float64 // 0-1
+	}{
+		// Wide DR enables dynamic ASC
+		{
+			name:          "wide DR enables dynamic ASC",
+			dynamicRange:  35.0, // > 30 (u1176DREnableASC)
+			spectralCrest: 20.0,
+			noiseFloor:    -60.0, // clean
+			wantASC:       true,
+			wantASCLevel:  0.7, // u1176ASCDynamic
+		},
+		// High crest enables dynamic ASC
+		{
+			name:          "high crest enables dynamic ASC",
+			dynamicRange:  25.0,
+			spectralCrest: 45.0, // > 40 (u1176CrestEnableASC)
+			noiseFloor:    -60.0,
+			wantASC:       true,
+			wantASCLevel:  0.7, // u1176ASCDynamic
+		},
+		// Moderate DR enables moderate ASC
+		{
+			name:          "moderate DR enables moderate ASC",
+			dynamicRange:  25.0, // > 20 (u1176DRModerateASC)
+			spectralCrest: 20.0,
+			noiseFloor:    -60.0,
+			wantASC:       true,
+			wantASCLevel:  0.5, // u1176ASCModerate
+		},
+		// Narrow DR disables ASC
+		{
+			name:          "narrow DR disables ASC",
+			dynamicRange:  15.0, // < 20 (below u1176DRModerateASC)
+			spectralCrest: 20.0,
+			noiseFloor:    -60.0,
+			wantASC:       false,
+			wantASCLevel:  0,
+		},
+		// Noisy recording boosts ASC level
+		{
+			name:          "noisy recording boosts ASC",
+			dynamicRange:  35.0, // dynamic base
+			spectralCrest: 20.0,
+			noiseFloor:    -45.0, // > -50 (u1176NoiseFloorASC) triggers boost
+			wantASC:       true,
+			wantASCLevel:  0.9, // 0.7 + 0.2 (u1176ASCNoisyBoost)
+		},
+		// Noisy with moderate base
+		{
+			name:          "noisy with moderate base",
+			dynamicRange:  25.0, // moderate base
+			spectralCrest: 20.0,
+			noiseFloor:    -45.0, // triggers boost
+			wantASC:       true,
+			wantASCLevel:  0.7, // 0.5 + 0.2
+		},
+		// Very noisy caps at 1.0
+		{
+			name:          "ASC level capped at 1.0",
+			dynamicRange:  35.0,
+			spectralCrest: 45.0,  // both triggers hit = 0.7
+			noiseFloor:    -40.0, // very noisy, +0.2 boost would give 0.9, not capped in this case
+			wantASC:       true,
+			wantASCLevel:  0.9, // 0.7 + 0.2
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := DefaultFilterConfig()
+			m := &AudioMeasurements{
+				BaseMeasurements: BaseMeasurements{
+					DynamicRange:  tt.dynamicRange,
+					SpectralCrest: tt.spectralCrest,
+				},
+				NoiseFloor: tt.noiseFloor,
+			}
+
+			tuneUREI1176ASC(config, m)
+
+			if config.UREI1176ASC != tt.wantASC {
+				t.Errorf("UREI1176ASC = %v, want %v", config.UREI1176ASC, tt.wantASC)
+			}
+			if math.Abs(config.UREI1176ASCLevel-tt.wantASCLevel) > 0.01 {
+				t.Errorf("UREI1176ASCLevel = %.2f, want %.2f", config.UREI1176ASCLevel, tt.wantASCLevel)
+			}
+		})
+	}
+}

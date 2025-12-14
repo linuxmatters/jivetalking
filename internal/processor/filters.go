@@ -48,7 +48,7 @@ const (
 	FilterArnndn         FilterID = "arnndn"
 	FilterLA2ACompressor FilterID = "la2a_compressor" // Teletronix LA-2A style optical compressor
 	FilterDeesser        FilterID = "deesser"
-	FilterAlimiter       FilterID = "alimiter"
+	FilterUREI1176       FilterID = "urei1176_limiter" // UREI 1176-inspired safety limiter
 )
 
 // Pass1FilterOrder defines the filter chain for analysis pass.
@@ -73,7 +73,7 @@ var Pass1FilterOrder = []FilterID{
 // - DC1Declick: CEDAR DC-1 inspired declicker - removes clicks/pops
 // - LA2ACompressor: LA-2A style optical compression evens dynamics before normalisation
 // - Deesser: after compression (which emphasises sibilance)
-// - Alimiter: brick-wall safety net
+// - UREI1176: 1176-inspired safety limiter (adaptive attack/release/ASC)
 // - Analysis: measures output for comparison with Pass 1
 // - Resample: standardises output format (44.1kHz/16-bit/mono)
 var Pass2FilterOrder = []FilterID{
@@ -87,7 +87,7 @@ var Pass2FilterOrder = []FilterID{
 	FilterDC1Declick,
 	FilterLA2ACompressor,
 	FilterDeesser,
-	FilterAlimiter,
+	FilterUREI1176,
 	FilterAnalysis,
 	FilterResample,
 }
@@ -159,7 +159,7 @@ var filterBuilders = map[FilterID]filterBuilderFunc{
 	FilterLA2ACompressor: (*FilterChainConfig).buildLA2ACompressorFilter,
 	FilterDeesser:        (*FilterChainConfig).buildDeesserFilter,
 	FilterArnndn:         (*FilterChainConfig).buildArnnDnFilter,
-	FilterAlimiter:       (*FilterChainConfig).buildAlimiterFilter,
+	FilterUREI1176:       (*FilterChainConfig).buildUREI1176Filter,
 }
 
 // getRNNModelPath returns the path to the cached RNN model file.
@@ -335,11 +335,17 @@ type FilterChainConfig struct {
 	ArnnDnEnabled bool    // Enable RNN denoise
 	ArnnDnMix     float64 // Mix amount -1.0 to 1.0 (1.0 = full filtering, negative = keep noise)
 
-	// True Peak Limiter (alimiter) - brick-wall safety net
-	LimiterEnabled bool    // Enable alimiter filter
-	LimiterCeiling float64 // 0.0625-1.0, peak ceiling (0.98 = -0.17dBFS)
-	LimiterAttack  float64 // ms, attack time
-	LimiterRelease float64 // ms, release time
+	// UREI 1176-Inspired Limiter - final brick-wall safety net
+	// Attack/release adapt based on transient and dynamics measurements
+	// ASC provides program-dependent release approximation
+	UREI1176Enabled     bool    // Enable 1176-inspired limiter
+	UREI1176Ceiling     float64 // dBTP - peak ceiling (-1.0 = podcast standard)
+	UREI1176Attack      float64 // ms - attack time (0.1-1.0)
+	UREI1176Release     float64 // ms - release time (100-200)
+	UREI1176ASC         bool    // Enable Auto Soft Clipping (program-dependent release)
+	UREI1176ASCLevel    float64 // 0.0-1.0 - ASC release influence
+	UREI1176InputLevel  float64 // Linear - input gain (default 1.0)
+	UREI1176OutputLevel float64 // Linear - output gain (default 1.0)
 
 	// Filter chain order - controls the sequence of filters in the processing chain
 	// Use DefaultFilterOrder or customise for experimentation
@@ -482,11 +488,15 @@ func DefaultFilterConfig() *FilterChainConfig {
 		ArnnDnEnabled: false,
 		ArnnDnMix:     0.35, // Initial mix (will be tuned adaptively based on measurements)
 
-		// Limiter - brick-wall safety net with soft knee (via ASC)
-		LimiterEnabled: false,
-		LimiterCeiling: 0.84, // -1.5dBTP (actual limiting target)
-		LimiterAttack:  5.0,  // 5ms lookahead for smooth limiting
-		LimiterRelease: 50.0, // 50ms release for natural sound
+		// UREI 1176-Inspired Limiter - enabled by default as final safety net
+		UREI1176Enabled:     true,
+		UREI1176Ceiling:     -1.0,  // -1.0 dBTP (podcast standard)
+		UREI1176Attack:      0.8,   // 0.8ms default (normal speech)
+		UREI1176Release:     150.0, // 150ms default (standard)
+		UREI1176ASC:         true,
+		UREI1176ASCLevel:    0.5, // Moderate ASC
+		UREI1176InputLevel:  1.0, // Unity input
+		UREI1176OutputLevel: 1.0, // Unity output
 
 		// Filter chain order - use default order
 		FilterOrder: DefaultFilterOrder,
@@ -961,25 +971,36 @@ func (cfg *FilterChainConfig) buildArnnDnFilter() string {
 	return fmt.Sprintf("arnndn=m=%s:mix=%.2f", modelPath, cfg.ArnnDnMix)
 }
 
-// buildAlimiterFilter builds the alimiter (true peak limiter) filter specification.
-// Brick-wall safety net using lookahead and ASC for smooth, musical limiting.
-func (cfg *FilterChainConfig) buildAlimiterFilter() string {
-	if !cfg.LimiterEnabled {
+// buildUREI1176Filter builds the UREI 1176-inspired limiter filter specification.
+// Uses FFmpeg's alimiter with adaptive attack/release and ASC for program-dependent
+// release approximation. The 1176's FET character and harmonic enhancement cannot
+// be replicated, but we capture its timing behaviour for musical peak protection.
+func (cfg *FilterChainConfig) buildUREI1176Filter() string {
+	if !cfg.UREI1176Enabled {
 		return ""
 	}
-	return fmt.Sprintf(
-		"alimiter=level_in=%.2f:level_out=%.2f:limit=%.2f:"+
-			"attack=%.0f:release=%.0f:asc=%d:asc_level=%.1f:level=%d:latency=%d",
-		1.0, // No input gain adjustment
-		1.0, // No output gain adjustment
-		cfg.LimiterCeiling,
-		cfg.LimiterAttack,
-		cfg.LimiterRelease,
-		1,   // Enable ASC
-		0.5, // Moderate ASC influence
-		0,   // Disable auto-level normalization
-		1,   // Enable latency compensation
+
+	// Convert ceiling from dBTP to linear (0.0-1.0)
+	ceiling := math.Pow(10, cfg.UREI1176Ceiling/20.0)
+
+	// Build filter with adaptive parameters
+	spec := fmt.Sprintf(
+		"alimiter=limit=%.6f:attack=%.1f:release=%.1f:level_in=%.4f:level_out=%.4f:level=0:latency=1",
+		ceiling,
+		cfg.UREI1176Attack,
+		cfg.UREI1176Release,
+		cfg.UREI1176InputLevel,
+		cfg.UREI1176OutputLevel,
 	)
+
+	// Add ASC parameters
+	if cfg.UREI1176ASC {
+		spec += fmt.Sprintf(":asc=1:asc_level=%.2f", cfg.UREI1176ASCLevel)
+	} else {
+		spec += ":asc=0"
+	}
+
+	return spec
 }
 
 // BuildFilterSpec builds the FFmpeg filter specification string for Pass 2 processing.
