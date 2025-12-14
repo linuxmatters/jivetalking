@@ -332,6 +332,39 @@ const (
 	// excludeFirstSeconds: ignore candidates starting in this initial period
 	// (typically contains preamble before intentional room tone recording)
 	excludeFirstSeconds = 15.0
+
+	// roomToneAmplitudeDecayDB is the dB range above median where amplitude score decays from 1.0 to 0.0.
+	// 6dB above median = score of 0.0.
+	roomToneAmplitudeDecayDB = 6.0
+
+	// roomToneAmplitudeWeight is the weighting factor for amplitude in room tone scoring.
+	// Amplitude is weighted more heavily (0.6) since it's the primary discriminator.
+	roomToneAmplitudeWeight = 0.6
+
+	// roomToneFluxWeight is the weighting factor for spectral flux in room tone scoring.
+	roomToneFluxWeight = 0.4
+
+	// silenceThresholdMinIntervals is the minimum number of intervals required for threshold calculation.
+	silenceThresholdMinIntervals = 10
+
+	// silenceSearchPercent is the percentage of recording to search for silence candidates (15%).
+	silenceSearchPercent = 15
+
+	// roomToneCandidatePercent is the percentage of top-scored intervals to use as room tone candidates (20%).
+	roomToneCandidatePercent = 5 // divisor: len/5 = 20%
+
+	// roomToneCandidateMinCount is the minimum number of room tone candidate intervals.
+	roomToneCandidateMinCount = 8
+
+	// silenceThresholdHeadroomDB is additional dB added to the detected room tone level for headroom.
+	silenceThresholdHeadroomDB = 1.0
+
+	// interruptionToleranceIntervals is the number of consecutive non-silent intervals allowed
+	// within a silence region without breaking it. 3 intervals = 750ms tolerance.
+	interruptionToleranceIntervals = 3
+
+	// roomToneScoreThreshold is the minimum score (0-1) for an interval to be considered room tone.
+	roomToneScoreThreshold = 0.5
 )
 
 // roomToneScore calculates a 0-1 score indicating how likely an interval is room tone.
@@ -344,11 +377,10 @@ const (
 func roomToneScore(interval IntervalSample, rmsP50, fluxP50 float64) float64 {
 	// Amplitude component: quieter = more likely room tone
 	// Score 1.0 if at or below median, decreasing above
-	// Use a soft threshold: 6dB above median still gets partial credit
 	amplitudeScore := 1.0
 	if interval.RMSLevel > rmsP50 {
-		// Linear decay: 0dB above = 1.0, 6dB above = 0.0
-		amplitudeScore = 1.0 - (interval.RMSLevel-rmsP50)/6.0
+		// Linear decay: 0dB above = 1.0, roomToneAmplitudeDecayDB above = 0.0
+		amplitudeScore = 1.0 - (interval.RMSLevel-rmsP50)/roomToneAmplitudeDecayDB
 		if amplitudeScore < 0 {
 			amplitudeScore = 0
 		}
@@ -367,8 +399,7 @@ func roomToneScore(interval IntervalSample, rmsP50, fluxP50 float64) float64 {
 	}
 
 	// Combine scores: both must be reasonable for a good room tone score
-	// Weight amplitude more heavily since it's the primary discriminator
-	return 0.6*amplitudeScore + 0.4*fluxScore
+	return roomToneAmplitudeWeight*amplitudeScore + roomToneFluxWeight*fluxScore
 }
 
 // calculateSilenceThresholdFromIntervals derives the silence threshold from interval data.
@@ -381,14 +412,14 @@ func roomToneScore(interval IntervalSample, rmsP50, fluxP50 float64) float64 {
 //
 // We compute a "room tone score" for each interval and use that to find the threshold.
 func calculateSilenceThresholdFromIntervals(intervals []IntervalSample, fallbackThreshold float64) float64 {
-	if len(intervals) < 10 {
+	if len(intervals) < silenceThresholdMinIntervals {
 		return fallbackThreshold
 	}
 
-	// Only use the first 15% of intervals for threshold calculation
-	searchLimit := len(intervals) * 15 / 100
-	if searchLimit < 10 {
-		searchLimit = 10
+	// Only use the first silenceSearchPercent% of intervals for threshold calculation
+	searchLimit := len(intervals) * silenceSearchPercent / 100
+	if searchLimit < silenceThresholdMinIntervals {
+		searchLimit = silenceThresholdMinIntervals
 	}
 	searchIntervals := intervals[:searchLimit]
 
@@ -426,17 +457,17 @@ func calculateSilenceThresholdFromIntervals(intervals []IntervalSample, fallback
 	})
 
 	// Take the top 20% of scored intervals as room tone candidates
-	// (or at least 8 intervals for statistical relevance)
-	candidateCount := len(scored) / 5
-	if candidateCount < 8 {
-		candidateCount = 8
+	// (or at least roomToneCandidateMinCount intervals for statistical relevance)
+	candidateCount := len(scored) / roomToneCandidatePercent
+	if candidateCount < roomToneCandidateMinCount {
+		candidateCount = roomToneCandidateMinCount
 	}
 	if candidateCount > len(scored) {
 		candidateCount = len(scored)
 	}
 
 	// Threshold is the maximum RMS among high-confidence room tone intervals
-	// Add small headroom (1dB) to catch edge cases
+	// Add small headroom to catch edge cases
 	maxRoomToneRMS := -120.0
 	for i := 0; i < candidateCount; i++ {
 		if scored[i].rms > maxRoomToneRMS {
@@ -444,7 +475,7 @@ func calculateSilenceThresholdFromIntervals(intervals []IntervalSample, fallback
 		}
 	}
 
-	return maxRoomToneRMS + 1.0
+	return maxRoomToneRMS + silenceThresholdHeadroomDB
 }
 
 // findSilenceCandidatesFromIntervals identifies silence regions from interval samples.
@@ -464,8 +495,8 @@ func findSilenceCandidatesFromIntervals(intervals []IntervalSample, threshold fl
 		return nil
 	}
 
-	// Only search the first 15% of the recording
-	searchLimit := len(intervals) * 15 / 100
+	// Only search the first silenceSearchPercent% of the recording
+	searchLimit := len(intervals) * silenceSearchPercent / 100
 	if searchLimit < minimumSilenceIntervals {
 		searchLimit = minimumSilenceIntervals
 	}
@@ -483,14 +514,6 @@ func findSilenceCandidatesFromIntervals(intervals []IntervalSample, threshold fl
 
 	rmsP50 := rmsLevels[len(rmsLevels)/2]
 	fluxP50 := fluxValues[len(fluxValues)/2]
-
-	// Tolerance: allow up to N consecutive intervals below score threshold without breaking
-	// This handles brief transitional moments in otherwise quiet regions
-	// 3 intervals = 750ms of tolerance
-	const interruptionTolerance = 3
-
-	// Room tone score threshold - intervals scoring above this are considered room tone
-	const roomToneScoreThreshold = 0.5
 
 	var candidates []SilenceRegion
 	var silenceStart time.Duration
@@ -522,7 +545,7 @@ func findSilenceCandidatesFromIntervals(intervals []IntervalSample, threshold fl
 			// Not room tone - count as interruption
 			interruptionCount++
 
-			if interruptionCount > interruptionTolerance {
+			if interruptionCount > interruptionToleranceIntervals {
 				// Too many consecutive interruptions - end silence region
 				// Calculate end time from last silent interval (before interruptions started)
 				lastSilentIdx := i - interruptionCount
