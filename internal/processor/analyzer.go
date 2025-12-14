@@ -727,6 +727,86 @@ func linearSampleToDBFS(sample float64) float64 {
 	return 20 * math.Log10(absVal)
 }
 
+// spectralMetrics holds the 13 aspectralstats measurements extracted from FFmpeg metadata.
+// These metrics characterise the frequency content of audio frames.
+type spectralMetrics struct {
+	Mean     float64 // Average spectral power
+	Variance float64 // Spectral variance
+	Centroid float64 // Spectral centroid (Hz) - where energy is concentrated
+	Spread   float64 // Spectral spread (Hz) - bandwidth/fullness indicator
+	Skewness float64 // Spectral asymmetry - positive=bright, negative=dark
+	Kurtosis float64 // Spectral peakiness - tonal vs broadband content
+	Entropy  float64 // Spectral randomness (0-1) - noise classification
+	Flatness float64 // Noise vs tonal ratio (0-1) - low=tonal, high=noisy
+	Crest    float64 // Spectral peak-to-RMS - transient indicator
+	Flux     float64 // Frame-to-frame spectral change
+	Slope    float64 // Spectral tilt - negative=more bass
+	Decrease float64 // Average spectral decrease
+	Rolloff  float64 // Spectral rolloff (Hz) - HF energy dropoff point
+	Found    bool    // True if any spectral metric was extracted
+}
+
+// extractSpectralMetrics extracts all 13 aspectralstats measurements from FFmpeg metadata.
+// Returns a spectralMetrics struct with Found=true if at least one metric was extracted.
+func extractSpectralMetrics(metadata *ffmpeg.AVDictionary) spectralMetrics {
+	var m spectralMetrics
+
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralMean); ok {
+		m.Mean = value
+		m.Found = true
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralVariance); ok {
+		m.Variance = value
+		m.Found = true
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralCentroid); ok {
+		m.Centroid = value
+		m.Found = true
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralSpread); ok {
+		m.Spread = value
+		m.Found = true
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralSkewness); ok {
+		m.Skewness = value
+		m.Found = true
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralKurtosis); ok {
+		m.Kurtosis = value
+		m.Found = true
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralEntropy); ok {
+		m.Entropy = value
+		m.Found = true
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralFlatness); ok {
+		m.Flatness = value
+		m.Found = true
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralCrest); ok {
+		m.Crest = value
+		m.Found = true
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralFlux); ok {
+		m.Flux = value
+		m.Found = true
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralSlope); ok {
+		m.Slope = value
+		m.Found = true
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralDecrease); ok {
+		m.Decrease = value
+		m.Found = true
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeySpectralRolloff); ok {
+		m.Rolloff = value
+		m.Found = true
+	}
+
+	return m
+}
+
 // extractIntervalFrameMetrics extracts per-frame metrics for interval accumulation.
 // Only collects metrics that are valid per-window (aspectralstats, ebur128 windowed).
 // Excludes astats which provides cumulative values, not per-interval.
@@ -737,19 +817,20 @@ func extractIntervalFrameMetrics(metadata *ffmpeg.AVDictionary) intervalFrameMet
 	m.PeakLevel, _ = getFloatMetadata(metadata, metaKeyPeakLevel)
 
 	// aspectralstats metrics (valid per-window measurements)
-	m.SpectralMean, _ = getFloatMetadata(metadata, metaKeySpectralMean)
-	m.SpectralVariance, _ = getFloatMetadata(metadata, metaKeySpectralVariance)
-	m.SpectralCentroid, _ = getFloatMetadata(metadata, metaKeySpectralCentroid)
-	m.SpectralSpread, _ = getFloatMetadata(metadata, metaKeySpectralSpread)
-	m.SpectralSkewness, _ = getFloatMetadata(metadata, metaKeySpectralSkewness)
-	m.SpectralKurtosis, _ = getFloatMetadata(metadata, metaKeySpectralKurtosis)
-	m.SpectralEntropy, _ = getFloatMetadata(metadata, metaKeySpectralEntropy)
-	m.SpectralFlatness, _ = getFloatMetadata(metadata, metaKeySpectralFlatness)
-	m.SpectralCrest, _ = getFloatMetadata(metadata, metaKeySpectralCrest)
-	m.SpectralFlux, _ = getFloatMetadata(metadata, metaKeySpectralFlux)
-	m.SpectralSlope, _ = getFloatMetadata(metadata, metaKeySpectralSlope)
-	m.SpectralDecrease, _ = getFloatMetadata(metadata, metaKeySpectralDecrease)
-	m.SpectralRolloff, _ = getFloatMetadata(metadata, metaKeySpectralRolloff)
+	spectral := extractSpectralMetrics(metadata)
+	m.SpectralMean = spectral.Mean
+	m.SpectralVariance = spectral.Variance
+	m.SpectralCentroid = spectral.Centroid
+	m.SpectralSpread = spectral.Spread
+	m.SpectralSkewness = spectral.Skewness
+	m.SpectralKurtosis = spectral.Kurtosis
+	m.SpectralEntropy = spectral.Entropy
+	m.SpectralFlatness = spectral.Flatness
+	m.SpectralCrest = spectral.Crest
+	m.SpectralFlux = spectral.Flux
+	m.SpectralSlope = spectral.Slope
+	m.SpectralDecrease = spectral.Decrease
+	m.SpectralRolloff = spectral.Rolloff
 
 	// ebur128 windowed measurements
 	m.MomentaryLUFS, _ = getFloatMetadata(metadata, metaKeyEbur128M)
@@ -776,45 +857,22 @@ func extractFrameMetadata(metadata *ffmpeg.AVDictionary, acc *metadataAccumulato
 
 	// Extract all aspectralstats measurements (averaged across frames)
 	// For mono audio, spectral stats are under channel .1
-	if value, ok := getFloatMetadata(metadata, metaKeySpectralMean); ok {
-		acc.spectralMeanSum += value
+	spectral := extractSpectralMetrics(metadata)
+	if spectral.Found {
+		acc.spectralMeanSum += spectral.Mean
+		acc.spectralVarianceSum += spectral.Variance
+		acc.spectralCentroidSum += spectral.Centroid
+		acc.spectralSpreadSum += spectral.Spread
+		acc.spectralSkewnessSum += spectral.Skewness
+		acc.spectralKurtosisSum += spectral.Kurtosis
+		acc.spectralEntropySum += spectral.Entropy
+		acc.spectralFlatnessSum += spectral.Flatness
+		acc.spectralCrestSum += spectral.Crest
+		acc.spectralFluxSum += spectral.Flux
+		acc.spectralSlopeSum += spectral.Slope
+		acc.spectralDecreaseSum += spectral.Decrease
+		acc.spectralRolloffSum += spectral.Rolloff
 		acc.spectralFrameCount++
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeySpectralVariance); ok {
-		acc.spectralVarianceSum += value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeySpectralCentroid); ok {
-		acc.spectralCentroidSum += value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeySpectralSpread); ok {
-		acc.spectralSpreadSum += value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeySpectralSkewness); ok {
-		acc.spectralSkewnessSum += value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeySpectralKurtosis); ok {
-		acc.spectralKurtosisSum += value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeySpectralEntropy); ok {
-		acc.spectralEntropySum += value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeySpectralFlatness); ok {
-		acc.spectralFlatnessSum += value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeySpectralCrest); ok {
-		acc.spectralCrestSum += value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeySpectralFlux); ok {
-		acc.spectralFluxSum += value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeySpectralSlope); ok {
-		acc.spectralSlopeSum += value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeySpectralDecrease); ok {
-		acc.spectralDecreaseSum += value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeySpectralRolloff); ok {
-		acc.spectralRolloffSum += value
 	}
 
 	// Extract astats measurements (cumulative, so we keep the latest)
@@ -1225,45 +1283,22 @@ func extractOutputFrameMetadata(metadata *ffmpeg.AVDictionary, acc *outputMetada
 	}
 
 	// Extract all aspectralstats measurements (averaged across frames)
-	if value, ok := getFloatMetadata(metadata, metaKeySpectralMean); ok {
-		acc.spectralMeanSum += value
+	spectral := extractSpectralMetrics(metadata)
+	if spectral.Found {
+		acc.spectralMeanSum += spectral.Mean
+		acc.spectralVarianceSum += spectral.Variance
+		acc.spectralCentroidSum += spectral.Centroid
+		acc.spectralSpreadSum += spectral.Spread
+		acc.spectralSkewnessSum += spectral.Skewness
+		acc.spectralKurtosisSum += spectral.Kurtosis
+		acc.spectralEntropySum += spectral.Entropy
+		acc.spectralFlatnessSum += spectral.Flatness
+		acc.spectralCrestSum += spectral.Crest
+		acc.spectralFluxSum += spectral.Flux
+		acc.spectralSlopeSum += spectral.Slope
+		acc.spectralDecreaseSum += spectral.Decrease
+		acc.spectralRolloffSum += spectral.Rolloff
 		acc.spectralFrameCount++
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeySpectralVariance); ok {
-		acc.spectralVarianceSum += value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeySpectralCentroid); ok {
-		acc.spectralCentroidSum += value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeySpectralSpread); ok {
-		acc.spectralSpreadSum += value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeySpectralSkewness); ok {
-		acc.spectralSkewnessSum += value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeySpectralKurtosis); ok {
-		acc.spectralKurtosisSum += value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeySpectralEntropy); ok {
-		acc.spectralEntropySum += value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeySpectralFlatness); ok {
-		acc.spectralFlatnessSum += value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeySpectralCrest); ok {
-		acc.spectralCrestSum += value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeySpectralFlux); ok {
-		acc.spectralFluxSum += value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeySpectralSlope); ok {
-		acc.spectralSlopeSum += value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeySpectralDecrease); ok {
-		acc.spectralDecreaseSum += value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeySpectralRolloff); ok {
-		acc.spectralRolloffSum += value
 	}
 
 	// Extract astats measurements (cumulative, so we keep the latest)
