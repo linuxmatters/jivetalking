@@ -628,7 +628,9 @@ var (
 // metadataAccumulators holds all accumulator variables for frame metadata extraction.
 // Spectral stats (centroid, rolloff) are averaged across all frames.
 // astats and ebur128 values are cumulative, so we keep the latest.
-type metadataAccumulators struct {
+// baseMetadataAccumulators contains fields shared between input (Pass 1) and output (Pass 2) accumulators.
+// Embedded in both metadataAccumulators and outputMetadataAccumulators to avoid duplication.
+type baseMetadataAccumulators struct {
 	// Spectral statistics from aspectralstats (averaged across frames)
 	spectralMeanSum     float64
 	spectralVarianceSum float64
@@ -668,6 +670,13 @@ type metadataAccumulators struct {
 	astatsBitDepth          float64
 	astatsNumberOfSamples   float64
 	astatsFound             bool
+}
+
+// metadataAccumulators holds accumulator variables for Pass 1 frame metadata extraction.
+// Uses baseMetadataAccumulators for spectral and astats fields shared with output analysis.
+type metadataAccumulators struct {
+	// Embed shared spectral and astats fields
+	baseMetadataAccumulators
 
 	// ebur128 measurements (cumulative - we keep latest values)
 	ebur128InputI   float64
@@ -1192,46 +1201,11 @@ type OutputMeasurements struct {
 
 // outputMetadataAccumulators holds accumulator variables for Pass 2 output measurement extraction.
 // Mirrors metadataAccumulators but without silence detection fields.
+// outputMetadataAccumulators holds accumulator variables for Pass 2 output measurement extraction.
+// Uses baseMetadataAccumulators for spectral and astats fields shared with input analysis.
 type outputMetadataAccumulators struct {
-	// Spectral statistics from aspectralstats (averaged across frames)
-	spectralMeanSum     float64
-	spectralVarianceSum float64
-	spectralCentroidSum float64
-	spectralSpreadSum   float64
-	spectralSkewnessSum float64
-	spectralKurtosisSum float64
-	spectralEntropySum  float64
-	spectralFlatnessSum float64
-	spectralCrestSum    float64
-	spectralFluxSum     float64
-	spectralSlopeSum    float64
-	spectralDecreaseSum float64
-	spectralRolloffSum  float64
-	spectralFrameCount  int
-
-	// astats measurements (cumulative - we keep latest values)
-	astatsDynamicRange      float64
-	astatsRMSLevel          float64
-	astatsPeakLevel         float64
-	astatsRMSTrough         float64
-	astatsRMSPeak           float64
-	astatsDCOffset          float64
-	astatsFlatFactor        float64
-	astatsCrestFactor       float64
-	astatsZeroCrossingsRate float64
-	astatsZeroCrossings     float64
-	astatsMaxDifference     float64
-	astatsMinDifference     float64
-	astatsMeanDifference    float64
-	astatsRMSDifference     float64
-	astatsEntropy           float64
-	astatsMinLevel          float64
-	astatsMaxLevel          float64
-	astatsNoiseFloor        float64
-	astatsNoiseFloorCount   float64
-	astatsBitDepth          float64
-	astatsNumberOfSamples   float64
-	astatsFound             bool
+	// Embed shared spectral and astats fields
+	baseMetadataAccumulators
 
 	// ebur128 measurements (cumulative - we keep latest values)
 	ebur128OutputI   float64
