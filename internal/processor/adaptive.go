@@ -359,10 +359,10 @@ const (
 
 	// RNN denoise (arnndn) parameters
 	// Mix baseline by noise floor severity (conservative approach)
-	arnnDnMixNoisy    = 0.7  // Noise floor > -50 dBFS: noisy source, aggressive cleaning
-	arnnDnMixModerate = 0.5  // Noise floor -50 to -65 dBFS: moderate noise
-	arnnDnMixClean    = 0.35 // Noise floor -65 to -75 dBFS: fairly clean
-	arnnDnMixVClean   = 0.25 // Noise floor < -75 dBFS: very clean, gentle touch only
+	arnnDnMixNoisy    = 0.8   // Noise floor > -50 dBFS: noisy source, aggressive cleaning
+	arnnDnMixModerate = 0.775 // Noise floor -50 to -65 dBFS: moderate noise
+	arnnDnMixClean    = 0.75  // Noise floor -65 to -75 dBFS: fairly clean
+	arnnDnMixVClean   = 0.725 // Noise floor < -75 dBFS: very clean, gentle touch only
 
 	// Enable/disable thresholds
 	arnnDnDisableNoiseFloor = -80.0 // dBFS - extremely clean source, disable entirely
@@ -377,15 +377,15 @@ const (
 	arnnDnSilenceEntThreshold  = 0.5  // Above: random noise, RNN handles well, increase mix
 
 	// Mix adjustment amounts
-	arnnDnKurtosisAdjust = -0.1  // Reduce mix for peaked harmonics
-	arnnDnMaxDiffAdjust  = -0.1  // Reduce mix for sharp transients
+	arnnDnKurtosisAdjust = -0.05 // Reduce mix for peaked harmonics
+	arnnDnMaxDiffAdjust  = -0.05 // Reduce mix for sharp transients
 	arnnDnLRAAdjust      = -0.05 // Reduce mix for wide dynamics
-	arnnDnFlatnessAdjust = 0.1   // Increase mix for broadband noise
-	arnnDnEntropyAdjust  = 0.1   // Increase mix for random noise
+	arnnDnFlatnessAdjust = 0.05  // Increase mix for broadband noise
+	arnnDnEntropyAdjust  = 0.05  // Increase mix for random noise
 
 	// Mix limits
-	arnnDnMixMin = 0.1 // Minimum mix (below this, filter has negligible effect)
-	arnnDnMixMax = 0.8 // Maximum mix (above risks artifacts)
+	arnnDnMixMin = 0.5  // Minimum mix (below this, filter has negligible effect)
+	arnnDnMixMax = 0.85 // Maximum mix (above risks artifacts)
 
 	// ==========================================================================
 	// UREI 1176-Inspired Limiter Parameters

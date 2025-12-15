@@ -13,8 +13,33 @@ import (
 	ffmpeg "github.com/linuxmatters/ffmpeg-statigo"
 )
 
+//go:embed models/bd.rnnn
+var rnnModelBD []byte
+
 //go:embed models/cb.rnnn
-var rnnModelData []byte
+var rnnModelCB []byte
+
+//go:embed models/sh.rnnn
+var rnnModelSH []byte
+
+// RNNModel identifies which embedded RNN model to use for arnndn
+type RNNModel string
+
+const (
+	// RNNModelBD - Beguiling Drafter model (default)
+	// Voice in a reasonable recording environment. Fans, AC, computers, etc.
+	RNNModelBD RNNModel = "bd"
+	// RNNModelCB - Conjoined Burgers model
+	// General use in a reasonable recording environment. Fans, AC, computers, etc.
+	RNNModelCB RNNModel = "cb"
+	// RNNModelSH - Stationary Highpass model
+	// Speech in a reasonable recording environment. Fans, AC, computers, etc.
+	// Note that "speech" means speech, not other human sounds; laughter, coughing, etc are not included.
+	RNNModelSH RNNModel = "sh"
+)
+
+// DefaultRNNModel is the default model used for arnndn denoising
+const DefaultRNNModel = RNNModelBD
 
 // FilterID identifies a filter in the processing chain
 type FilterID string
@@ -149,8 +174,8 @@ func defaultDolbySRBands() []DolbySRBandConfig {
 }
 
 var (
-	cachedModelPath string
-	modelCacheMutex sync.Mutex
+	cachedModelPaths = make(map[RNNModel]string)
+	modelCacheMutex  sync.Mutex
 )
 
 // filterBuilderFunc is a function that builds a filter spec from config.
@@ -166,26 +191,43 @@ var filterBuilders = map[FilterID]filterBuilderFunc{
 	FilterResample:       (*FilterChainConfig).buildResampleFilter,
 	FilterDS201HighPass:  (*FilterChainConfig).buildDS201HighpassFilter,
 	FilterDS201LowPass:   (*FilterChainConfig).buildDS201LowPassFilter,
-	FilterDC1Declick:     (*FilterChainConfig).buildDC1DeclickFilter,
+	FilterArnndn:         (*FilterChainConfig).buildArnnDnFilter,
 	FilterDNS1500:        (*FilterChainConfig).buildDNS1500Filter,
 	FilterDolbySR:        (*FilterChainConfig).buildDolbySRFilter,
 	FilterDS201Gate:      (*FilterChainConfig).buildDS201GateFilter,
+	FilterDC1Declick:     (*FilterChainConfig).buildDC1DeclickFilter,
 	FilterLA2ACompressor: (*FilterChainConfig).buildLA2ACompressorFilter,
 	FilterDeesser:        (*FilterChainConfig).buildDeesserFilter,
-	FilterArnndn:         (*FilterChainConfig).buildArnnDnFilter,
 	FilterUREI1176:       (*FilterChainConfig).buildUREI1176Filter,
 }
 
-// getRNNModelPath returns the path to the cached RNN model file.
-// On first call, it extracts the embedded model to ~/.cache/jivetalking/cb.rnnn
+// getRNNModelPath returns the path to the cached RNN model file for the specified model.
+// On first call for each model, it extracts the embedded model to ~/.cache/jivetalking/<model>.rnnn
 // Subsequent calls return the cached path. Thread-safe.
-func getRNNModelPath() (string, error) {
+func getRNNModelPath(model RNNModel) (string, error) {
 	modelCacheMutex.Lock()
 	defer modelCacheMutex.Unlock()
 
 	// Return cached path if already extracted
-	if cachedModelPath != "" {
-		return cachedModelPath, nil
+	if path, ok := cachedModelPaths[model]; ok {
+		return path, nil
+	}
+
+	// Get model data based on selection
+	var modelData []byte
+	var modelFilename string
+	switch model {
+	case RNNModelBD:
+		modelData = rnnModelBD
+		modelFilename = "bd.rnnn"
+	case RNNModelCB:
+		modelData = rnnModelCB
+		modelFilename = "cb.rnnn"
+	case RNNModelSH:
+		modelData = rnnModelSH
+		modelFilename = "sh.rnnn"
+	default:
+		return "", fmt.Errorf("unknown RNN model: %s", model)
 	}
 
 	// Get user cache directory (works on Linux and macOS)
@@ -201,22 +243,22 @@ func getRNNModelPath() (string, error) {
 	}
 
 	// Model file path
-	modelPath := filepath.Join(jiveCacheDir, "cb.rnnn")
+	modelPath := filepath.Join(jiveCacheDir, modelFilename)
 
 	// Check if model already exists
 	if _, err := os.Stat(modelPath); err == nil {
 		// Model already cached
-		cachedModelPath = modelPath
-		return cachedModelPath, nil
+		cachedModelPaths[model] = modelPath
+		return modelPath, nil
 	}
 
 	// Write embedded model to cache
-	if err := os.WriteFile(modelPath, rnnModelData, 0644); err != nil {
+	if err := os.WriteFile(modelPath, modelData, 0644); err != nil {
 		return "", fmt.Errorf("failed to write model file: %w", err)
 	}
 
-	cachedModelPath = modelPath
-	return cachedModelPath, nil
+	cachedModelPaths[model] = modelPath
+	return modelPath, nil
 }
 
 // FilterChainConfig holds configuration for the audio processing filter chain
@@ -346,8 +388,9 @@ type FilterChainConfig struct {
 
 	// RNN Denoise (arnndn) - neural network noise reduction
 	// Positioned after afftdn to handle complex/dynamic noise that spectral subtraction misses
-	ArnnDnEnabled bool    // Enable RNN denoise
-	ArnnDnMix     float64 // Mix amount -1.0 to 1.0 (1.0 = full filtering, negative = keep noise)
+	ArnnDnEnabled bool     // Enable RNN denoise
+	ArnnDnModel   RNNModel // Which RNN model to use (bd, cb, sh)
+	ArnnDnMix     float64  // Mix amount -1.0 to 1.0 (1.0 = full filtering, negative = keep noise)
 
 	// UREI 1176-Inspired Limiter - final brick-wall safety net
 	// Attack/release adapt based on transient and dynamics measurements
@@ -503,10 +546,11 @@ func DefaultFilterConfig() *FilterChainConfig {
 		TargetLRA: 7.0,   // Reference loudness range (EBU R128 default)
 
 		// RNN Denoise - neural network noise reduction
-		// Uses cb.rnnn model for speech denoising
+		// Uses specified RNN model for speech denoising
 		// Enabled by default but tuneArnndn may disable for very clean sources
 		ArnnDnEnabled: false,
-		ArnnDnMix:     0.35, // Initial mix (will be tuned adaptively based on measurements)
+		ArnnDnModel:   DefaultRNNModel, // Use cb.rnnn (Conjoined Burgers) by default
+		ArnnDnMix:     0.7,             // Initial mix (will be tuned adaptively based on measurements)
 
 		// UREI 1176-Inspired Limiter - enabled by default as final safety net
 		UREI1176Enabled:     true,
@@ -982,12 +1026,19 @@ func (cfg *FilterChainConfig) buildDeesserFilter() string {
 
 // buildArnnDnFilter builds the arnndn (RNN denoise) filter specification.
 // Neural network noise reduction for heavily uplifted audio.
-// Uses embedded conjoined-burgers model trained for recorded speech.
+// Uses embedded RNN model (bd, cb, or sh) trained for recorded speech.
 func (cfg *FilterChainConfig) buildArnnDnFilter() string {
 	if !cfg.ArnnDnEnabled {
 		return ""
 	}
-	modelPath, err := getRNNModelPath()
+
+	// Use default model if not specified
+	model := cfg.ArnnDnModel
+	if model == "" {
+		model = DefaultRNNModel
+	}
+
+	modelPath, err := getRNNModelPath(model)
 	if err != nil {
 		// Gracefully degrade if model unavailable
 		return ""
