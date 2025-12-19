@@ -50,10 +50,10 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 	config.Pass = 2
 	config.FilterOrder = Pass2FilterOrder
 
-	// Track output measurements from Pass 2
-	var outputMeasurements *OutputMeasurements
+	// Track output measurements from Pass 2 (filtered but not yet normalised)
+	var filteredMeasurements *OutputMeasurements
 
-	if err := processWithFilters(inputPath, outputPath, config, progressCallback, measurements, &outputMeasurements); err != nil {
+	if err := processWithFilters(inputPath, outputPath, config, progressCallback, measurements, &filteredMeasurements); err != nil {
 		return nil, fmt.Errorf("Pass 2 failed: %w", err)
 	}
 
@@ -61,10 +61,10 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 		progressCallback(2, "Processing", 1.0, 0.0, measurements)
 	}
 
-	// Pass 3: Normalisation (gain adjustment + peak limiting)
+	// Pass 3/4: Normalisation (measurement + loudnorm application)
 	var normResult *NormalisationResult
-	if outputMeasurements != nil {
-		normResult, err = ApplyNormalisation(outputPath, config, outputMeasurements, progressCallback)
+	if filteredMeasurements != nil {
+		normResult, err = ApplyNormalisation(outputPath, config, filteredMeasurements, progressCallback)
 		if err != nil {
 			return nil, fmt.Errorf("Pass 3 failed: %w", err)
 		}
@@ -72,34 +72,34 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 
 	// Measure silence region in output file (same region as Pass 1) for noise comparison
 	// NOTE: This is done AFTER normalisation so we measure the final output
-	if outputMeasurements != nil && measurements.NoiseProfile != nil {
+	if filteredMeasurements != nil && measurements.NoiseProfile != nil {
 		silenceRegion := SilenceRegion{
 			Start:    measurements.NoiseProfile.Start,
 			Duration: measurements.NoiseProfile.Duration,
 		}
 		if silenceAnalysis, err := MeasureOutputSilenceRegion(outputPath, silenceRegion); err == nil {
-			outputMeasurements.SilenceSample = silenceAnalysis
+			filteredMeasurements.SilenceSample = silenceAnalysis
 		}
 		// Non-fatal if measurement fails - we still have the other output measurements
 	}
 
 	// Return the processing result with output measurements for comparison
 	result := &ProcessingResult{
-		OutputPath:         outputPath,
-		InputLUFS:          measurements.InputI,
-		OutputLUFS:         0.0, // Will be set to final value below
-		NoiseFloor:         measurements.NoiseFloor,
-		Measurements:       measurements,
-		Config:             config, // Include config for logging adaptive parameters
-		OutputMeasurements: outputMeasurements,
-		NormResult:         normResult,
+		OutputPath:           outputPath,
+		InputLUFS:            measurements.InputI,
+		OutputLUFS:           0.0, // Will be set to final value below
+		NoiseFloor:           measurements.NoiseFloor,
+		Measurements:         measurements,
+		Config:               config, // Include config for logging adaptive parameters
+		FilteredMeasurements: filteredMeasurements,
+		NormResult:           normResult,
 	}
 
 	// Set OutputLUFS to final value (after normalisation if applied)
 	if normResult != nil && !normResult.Skipped {
 		result.OutputLUFS = normResult.OutputLUFS
-	} else if outputMeasurements != nil {
-		result.OutputLUFS = outputMeasurements.OutputI
+	} else if filteredMeasurements != nil {
+		result.OutputLUFS = filteredMeasurements.OutputI
 	}
 
 	return result, nil
@@ -114,10 +114,12 @@ type ProcessingResult struct {
 	Measurements *AudioMeasurements
 	Config       *FilterChainConfig // Contains adaptive parameters used
 
-	// Output analysis (populated when OutputAnalysisEnabled is true)
-	OutputMeasurements *OutputMeasurements // Pass 2 output measurements (pre-normalisation)
+	// Pass 2 output analysis (populated when OutputAnalysisEnabled is true)
+	// Contains measurements after filter chain but before normalisation
+	FilteredMeasurements *OutputMeasurements
 
-	// Normalisation result (Pass 3)
+	// Normalisation result (Pass 3/4)
+	// NormResult.FinalMeasurements contains measurements after normalisation
 	NormResult *NormalisationResult // nil if normalisation disabled or skipped
 }
 

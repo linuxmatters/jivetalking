@@ -239,16 +239,6 @@ func interpretSlope(slope float64) string {
 	}
 }
 
-// formatSpectralValue formats small values using scientific notation when appropriate
-func formatSpectralValue(value float64, decimals int) string {
-	// Use scientific notation for very small values
-	if value != 0 && math.Abs(value) < 0.0001 {
-		return fmt.Sprintf("%.2e", value)
-	}
-	format := fmt.Sprintf("%%.%df", decimals)
-	return fmt.Sprintf(format, value)
-}
-
 // =============================================================================
 // Report Section Formatting Helpers
 // =============================================================================
@@ -258,211 +248,6 @@ func formatSpectralValue(value float64, decimals int) string {
 func writeSection(f *os.File, title string) {
 	fmt.Fprintln(f, title)
 	fmt.Fprintln(f, strings.Repeat("-", len(title)))
-}
-
-// spectralMetrics holds spectral measurement values for formatting.
-// Used to deduplicate spectral metric output between input and output sections.
-type spectralMetrics struct {
-	Mean     float64
-	Variance float64
-	Centroid float64
-	Spread   float64
-	Skewness float64
-	Kurtosis float64
-	Entropy  float64
-	Flatness float64
-	Crest    float64
-	Flux     float64
-	Slope    float64
-	Decrease float64
-	Rolloff  float64
-}
-
-// writeSpectralMetrics writes all 13 spectral metrics with interpretations.
-// If compare is non-nil, includes comparison with input values.
-func writeSpectralMetrics(f *os.File, m spectralMetrics, compare *spectralMetrics) {
-	if compare == nil {
-		// Input format: value — interpretation
-		fmt.Fprintf(f, "Spectral Mean:       %s (avg magnitude)\n", formatSpectralValue(m.Mean, 6))
-		fmt.Fprintf(f, "Spectral Variance:   %s (magnitude spread)\n", formatSpectralValue(m.Variance, 6))
-		fmt.Fprintf(f, "Spectral Centroid:   %.0f Hz — %s\n", m.Centroid, interpretCentroid(m.Centroid))
-		fmt.Fprintf(f, "Spectral Spread:     %.0f Hz — %s\n", m.Spread, interpretSpread(m.Spread))
-		fmt.Fprintf(f, "Spectral Skewness:   %.3f — %s\n", m.Skewness, interpretSkewness(m.Skewness))
-		fmt.Fprintf(f, "Spectral Kurtosis:   %.3f — %s\n", m.Kurtosis, interpretKurtosis(m.Kurtosis))
-		fmt.Fprintf(f, "Spectral Entropy:    %s — %s\n", formatSpectralValue(m.Entropy, 6), interpretEntropy(m.Entropy))
-		fmt.Fprintf(f, "Spectral Flatness:   %s — %s\n", formatSpectralValue(m.Flatness, 6), interpretFlatness(m.Flatness))
-		fmt.Fprintf(f, "Spectral Crest:      %.3f — %s\n", m.Crest, interpretCrest(m.Crest))
-		fmt.Fprintf(f, "Spectral Flux:       %s — %s\n", formatSpectralValue(m.Flux, 6), interpretFlux(m.Flux))
-		fmt.Fprintf(f, "Spectral Slope:      %s — %s\n", formatSpectralValue(m.Slope, 9), interpretSlope(m.Slope))
-		fmt.Fprintf(f, "Spectral Decrease:   %s — %s\n", formatSpectralValue(m.Decrease, 6), interpretDecrease(m.Decrease))
-		fmt.Fprintf(f, "Spectral Rolloff:    %.0f Hz — %s\n", m.Rolloff, interpretRolloff(m.Rolloff))
-	} else {
-		// Output format: value — interpretation (was X)
-		fmt.Fprintf(f, "Spectral Mean:       %s %s\n", formatSpectralValue(m.Mean, 6), formatComparisonSpectral(m.Mean, compare.Mean, 6))
-		fmt.Fprintf(f, "Spectral Variance:   %s %s\n", formatSpectralValue(m.Variance, 6), formatComparisonSpectral(m.Variance, compare.Variance, 6))
-		fmt.Fprintf(f, "Spectral Centroid:   %.0f Hz — %s %s\n", m.Centroid, interpretCentroid(m.Centroid), formatComparison(m.Centroid, compare.Centroid, "Hz", 0))
-		fmt.Fprintf(f, "Spectral Spread:     %.0f Hz — %s %s\n", m.Spread, interpretSpread(m.Spread), formatComparison(m.Spread, compare.Spread, "Hz", 0))
-		fmt.Fprintf(f, "Spectral Skewness:   %.3f — %s %s\n", m.Skewness, interpretSkewness(m.Skewness), formatComparisonNoUnit(m.Skewness, compare.Skewness, 3))
-		fmt.Fprintf(f, "Spectral Kurtosis:   %.3f — %s %s\n", m.Kurtosis, interpretKurtosis(m.Kurtosis), formatComparisonNoUnit(m.Kurtosis, compare.Kurtosis, 3))
-		fmt.Fprintf(f, "Spectral Entropy:    %s — %s %s\n", formatSpectralValue(m.Entropy, 6), interpretEntropy(m.Entropy), formatComparisonSpectral(m.Entropy, compare.Entropy, 6))
-		fmt.Fprintf(f, "Spectral Flatness:   %s — %s %s\n", formatSpectralValue(m.Flatness, 6), interpretFlatness(m.Flatness), formatComparisonNoUnit(m.Flatness, compare.Flatness, 6))
-		fmt.Fprintf(f, "Spectral Crest:      %.3f — %s %s\n", m.Crest, interpretCrest(m.Crest), formatComparisonNoUnit(m.Crest, compare.Crest, 3))
-		fmt.Fprintf(f, "Spectral Flux:       %s — %s %s\n", formatSpectralValue(m.Flux, 6), interpretFlux(m.Flux), formatComparisonSpectral(m.Flux, compare.Flux, 6))
-		fmt.Fprintf(f, "Spectral Slope:      %s — %s %s\n", formatSpectralValue(m.Slope, 9), interpretSlope(m.Slope), formatComparisonSpectral(m.Slope, compare.Slope, 9))
-		fmt.Fprintf(f, "Spectral Decrease:   %s — %s %s\n", formatSpectralValue(m.Decrease, 6), interpretDecrease(m.Decrease), formatComparisonSpectral(m.Decrease, compare.Decrease, 6))
-		fmt.Fprintf(f, "Spectral Rolloff:    %.0f Hz — %s %s\n", m.Rolloff, interpretRolloff(m.Rolloff), formatComparison(m.Rolloff, compare.Rolloff, "Hz", 0))
-	}
-}
-
-// spectralFromMeasurements extracts spectral metrics from AudioMeasurements.
-func spectralFromMeasurements(m *processor.AudioMeasurements) spectralMetrics {
-	return spectralMetrics{
-		Mean:     m.SpectralMean,
-		Variance: m.SpectralVariance,
-		Centroid: m.SpectralCentroid,
-		Spread:   m.SpectralSpread,
-		Skewness: m.SpectralSkewness,
-		Kurtosis: m.SpectralKurtosis,
-		Entropy:  m.SpectralEntropy,
-		Flatness: m.SpectralFlatness,
-		Crest:    m.SpectralCrest,
-		Flux:     m.SpectralFlux,
-		Slope:    m.SpectralSlope,
-		Decrease: m.SpectralDecrease,
-		Rolloff:  m.SpectralRolloff,
-	}
-}
-
-// spectralFromOutputMeasurements extracts spectral metrics from OutputMeasurements.
-func spectralFromOutputMeasurements(m *processor.OutputMeasurements) spectralMetrics {
-	return spectralMetrics{
-		Mean:     m.SpectralMean,
-		Variance: m.SpectralVariance,
-		Centroid: m.SpectralCentroid,
-		Spread:   m.SpectralSpread,
-		Skewness: m.SpectralSkewness,
-		Kurtosis: m.SpectralKurtosis,
-		Entropy:  m.SpectralEntropy,
-		Flatness: m.SpectralFlatness,
-		Crest:    m.SpectralCrest,
-		Flux:     m.SpectralFlux,
-		Slope:    m.SpectralSlope,
-		Decrease: m.SpectralDecrease,
-		Rolloff:  m.SpectralRolloff,
-	}
-}
-
-// formatComparison returns "(unchanged)" if values match within tolerance, otherwise "(was X unit)"
-func formatComparison(output, input float64, unit string, decimals int) string {
-	// Use tolerance based on decimal places shown
-	tolerance := math.Pow(10, -float64(decimals)) * 0.5
-	if math.Abs(output-input) < tolerance {
-		return "(unchanged)"
-	}
-	format := fmt.Sprintf("(was %%.%df %s)", decimals, unit)
-	return fmt.Sprintf(format, input)
-}
-
-// formatComparisonNoUnit returns "(unchanged)" if values match within tolerance, otherwise "(was X)"
-func formatComparisonNoUnit(output, input float64, decimals int) string {
-	tolerance := math.Pow(10, -float64(decimals)) * 0.5
-	if math.Abs(output-input) < tolerance {
-		return "(unchanged)"
-	}
-	format := fmt.Sprintf("(was %%.%df)", decimals)
-	return fmt.Sprintf(format, input)
-}
-
-// formatComparisonSpectral returns "(unchanged)" if values match, otherwise "(was X)" using scientific notation for small values
-func formatComparisonSpectral(output, input float64, decimals int) string {
-	tolerance := math.Pow(10, -float64(decimals)) * 0.5
-	if math.Abs(output-input) < tolerance {
-		return "(unchanged)"
-	}
-	return fmt.Sprintf("(was %s)", formatSpectralValue(input, decimals))
-}
-
-// maxRealisticDynamicRange is the theoretical maximum for 24-bit audio (~144 dB).
-// Values above this indicate measurement artifacts (e.g., near-digital-silence after denoising).
-const maxRealisticDynamicRange = 144.0
-
-// formatDynamicRange clamps dynamic range to a realistic maximum.
-// FFmpeg's astats calculates dynamic range as Peak_level - Noise_floor.
-// After aggressive denoising, the noise floor can drop to near digital silence,
-// producing unrealistic values (300+ dB). We clamp to 144 dB (24-bit theoretical max)
-// and add a note indicating the measurement is limited by digital precision.
-func formatDynamicRange(value float64) string {
-	if value > maxRealisticDynamicRange {
-		return fmt.Sprintf("%.1f dB (clamped — digital silence floor)", maxRealisticDynamicRange)
-	}
-	return fmt.Sprintf("%.1f dB", value)
-}
-
-// formatDynamicRangeComparison formats dynamic range with comparison to input value
-func formatDynamicRangeComparison(output, input float64) string {
-	outputClamped := output
-	if outputClamped > maxRealisticDynamicRange {
-		outputClamped = maxRealisticDynamicRange
-	}
-
-	result := fmt.Sprintf("%.1f dB", outputClamped)
-
-	// Add clamping note
-	if output > maxRealisticDynamicRange {
-		result += " (clamped)"
-	}
-
-	// Add comparison
-	tolerance := 0.5
-	if math.Abs(outputClamped-input) < tolerance {
-		result += " (unchanged)"
-	} else {
-		result += fmt.Sprintf(" (was %.1f dB)", input)
-	}
-
-	return result
-}
-
-// maxRealisticCrestFactor is the upper bound for realistic audio crest factor.
-// Typical speech: 10-25 dB. Values >40 dB indicate measurement across near-silence
-// (peak/tiny-RMS = huge ratio). We clamp to 40 dB and note the anomaly.
-const maxRealisticCrestFactor = 40.0
-
-// formatCrestFactor clamps crest factor to a realistic maximum.
-// Very high values (>40 dB) indicate FFmpeg astats measured across audio segments
-// with near-silence periods, causing peak/RMS to be extremely large.
-func formatCrestFactor(value float64) string {
-	if value > maxRealisticCrestFactor {
-		return fmt.Sprintf(">%.0f dB (measured %.1f dB — includes near-silence)", maxRealisticCrestFactor, value)
-	}
-	return fmt.Sprintf("%.1f dB", value)
-}
-
-// formatCrestFactorComparison formats crest factor with comparison to input value
-func formatCrestFactorComparison(output, input float64) string {
-	result := formatCrestFactor(output)
-
-	// Clamp both for comparison
-	outputClamped := output
-	if outputClamped > maxRealisticCrestFactor {
-		outputClamped = maxRealisticCrestFactor
-	}
-	inputClamped := input
-	if inputClamped > maxRealisticCrestFactor {
-		inputClamped = maxRealisticCrestFactor
-	}
-
-	// Add comparison (using clamped values for "unchanged" check)
-	tolerance := 0.5
-	if math.Abs(outputClamped-inputClamped) < tolerance {
-		result += " (unchanged)"
-	} else if input > maxRealisticCrestFactor {
-		result += fmt.Sprintf(" (was >%.0f dB)", maxRealisticCrestFactor)
-	} else {
-		result += fmt.Sprintf(" (was %.1f dB)", input)
-	}
-
-	return result
 }
 
 // ReportData contains all the information needed to generate an analysis report
@@ -481,8 +266,17 @@ type ReportData struct {
 	DurationSecs float64 // Duration in seconds
 }
 
-// GenerateReport creates a detailed analysis report and saves it alongside the output file
+// GenerateReport creates a detailed analysis report and saves it alongside the output file.
 // The report filename will be <output>-processed.log
+//
+// Report structure (Phase 3 restructure):
+// 1. Header - file info and timestamp
+// 2. Processing Summary - pass timings
+// 3. Filter Chain Applied - adaptive parameters
+// 4. Loudness Measurements - three-column table (Input/Filtered/Final)
+// 5. Spectral Characteristics - four-column table with interpretations
+// 6. Noise Floor Analysis - three-column table
+// 7. Diagnostic sections - detailed debug info
 func GenerateReport(data ReportData) error {
 	// Generate report filename: presenter1-processed.flac → presenter1-processed.log
 	logPath := strings.TrimSuffix(data.OutputPath, filepath.Ext(data.OutputPath)) + ".log"
@@ -494,469 +288,49 @@ func GenerateReport(data ReportData) error {
 	}
 	defer f.Close()
 
-	// Write report content
-	fmt.Fprintln(f, "Jivetalking Analysis Report")
-	fmt.Fprintln(f, "============================")
-	fmt.Fprintf(f, "File: %s\n", filepath.Base(data.InputPath))
-	fmt.Fprintf(f, "Processed: %s\n", data.EndTime.Format("2006-01-02 15:04:05 MST"))
-	fmt.Fprintf(f, "Duration: %s\n", formatDuration(time.Duration(data.DurationSecs*float64(time.Second))))
-	fmt.Fprintln(f, "")
+	// === Main Report Sections (consolidated tables) ===
 
-	// Pass 1: Input Analysis
-	writeSection(f, "Pass 1: Input Analysis")
-	if data.Result != nil && data.Result.Measurements != nil {
-		m := data.Result.Measurements
-		// Loudness measurements from ebur128
-		fmt.Fprintf(f, "Integrated Loudness: %.1f LUFS\n", m.InputI)
-		fmt.Fprintf(f, "Momentary Loudness:  %.1f LUFS (400ms window)\n", m.MomentaryLoudness)
-		fmt.Fprintf(f, "Short-term Loudness: %.1f LUFS (3s window)\n", m.ShortTermLoudness)
-		fmt.Fprintf(f, "True Peak:           %.1f dBTP\n", m.InputTP)
-		fmt.Fprintf(f, "Sample Peak:         %.1f dBFS\n", m.SamplePeak)
-		fmt.Fprintf(f, "Loudness Range:      %.1f LU\n", m.InputLRA)
+	// Header
+	writeReportHeader(f, data)
 
-		// Noise floor measurements
-		fmt.Fprintf(f, "Noise Floor:         %.1f dB (derived)\n", m.NoiseFloor)
-		if m.AstatsNoiseFloor != 0 && !math.IsInf(m.AstatsNoiseFloor, -1) {
-			fmt.Fprintf(f, "FFmpeg Noise Floor:  %.1f dB (astats)\n", m.AstatsNoiseFloor)
-		}
-		// Show adaptive silence detection threshold if different from default
-		if m.SilenceDetectLevel != 0 && m.SilenceDetectLevel != -50.0 {
-			fmt.Fprintf(f, "Silence Threshold:   %.1f dB (adaptive from %.1f dB pre-scan)\n",
-				m.SilenceDetectLevel, m.PreScanNoiseFloor)
-		}
+	// Processing Summary (timings)
+	writeProcessingSummary(f, data)
 
-		// Dynamic range and level statistics
-		fmt.Fprintf(f, "Dynamic Range:       %s\n", formatDynamicRange(m.DynamicRange))
-		fmt.Fprintf(f, "RMS Level:           %.1f dBFS\n", m.RMSLevel)
-		fmt.Fprintf(f, "RMS Peak:            %.1f dBFS (loudest segments)\n", m.RMSPeak)
-		fmt.Fprintf(f, "RMS Trough:          %.1f dBFS (quietest segments)\n", m.RMSTrough)
-		fmt.Fprintf(f, "Peak Level:          %.1f dBFS\n", m.PeakLevel)
-		if m.MinLevel != 0 {
-			fmt.Fprintf(f, "Min Level:           %.1f dBFS\n", m.MinLevel)
-		}
-		if m.MaxLevel != 0 {
-			fmt.Fprintf(f, "Max Level:           %.1f dBFS\n", m.MaxLevel)
-		}
-		if m.CrestFactor > 0 {
-			fmt.Fprintf(f, "Crest Factor:        %s (peak-to-RMS)\n", formatCrestFactor(m.CrestFactor))
-		}
-
-		// Spectral analysis (aspectralstats measurements) with characteristic interpretations
-		writeSpectralMetrics(f, spectralFromMeasurements(m), nil)
-
-		// Signal quality and audio characteristics
-		fmt.Fprintln(f, "")
-		fmt.Fprintln(f, "Signal Quality:")
-		if m.BitDepth > 0 {
-			fmt.Fprintf(f, "  Effective Bit Depth: %.1f bits\n", m.BitDepth)
-		}
-		if m.NumberOfSamples > 0 {
-			fmt.Fprintf(f, "  Total Samples:       %.0f\n", m.NumberOfSamples)
-		}
-		if m.DCOffset != 0 {
-			fmt.Fprintf(f, "  DC Offset:           %.6f\n", m.DCOffset)
-		}
-		if m.FlatFactor > 0 {
-			fmt.Fprintf(f, "  Flat Factor:         %.1f (clipping indicator)\n", m.FlatFactor)
-		}
-		if m.Entropy > 0 {
-			fmt.Fprintf(f, "  Signal Entropy:      %.3f (randomness)\n", m.Entropy)
-		}
-		if m.ZeroCrossingsRate > 0 {
-			fmt.Fprintf(f, "  Zero Crossings Rate: %.4f\n", m.ZeroCrossingsRate)
-		}
-		if m.ZeroCrossings > 0 {
-			fmt.Fprintf(f, "  Zero Crossings:      %.0f total\n", m.ZeroCrossings)
-		}
-
-		// Sample-to-sample change metrics (transient/click indicators)
-		if m.MaxDifference > 0 || m.MeanDifference > 0 {
-			fmt.Fprintln(f, "")
-			fmt.Fprintln(f, "Sample Variation (transient indicators):")
-			if m.MaxDifference > 0 {
-				maxDiffPercent := (m.MaxDifference / 32768.0) * 100.0
-				fmt.Fprintf(f, "  Max Difference:      %.1f%% FS\n", maxDiffPercent)
-			}
-			if m.MinDifference > 0 {
-				minDiffPercent := (m.MinDifference / 32768.0) * 100.0
-				fmt.Fprintf(f, "  Min Difference:      %.4f%% FS\n", minDiffPercent)
-			}
-			if m.MeanDifference > 0 {
-				meanDiffPercent := (m.MeanDifference / 32768.0) * 100.0
-				fmt.Fprintf(f, "  Mean Difference:     %.4f%% FS\n", meanDiffPercent)
-			}
-			if m.RMSDifference > 0 {
-				rmsDiffPercent := (m.RMSDifference / 32768.0) * 100.0
-				fmt.Fprintf(f, "  RMS Difference:      %.4f%% FS\n", rmsDiffPercent)
-			}
-		}
-
-		// Interval sampling summary with RMSLevel distribution analysis
-		if len(m.IntervalSamples) > 0 {
-			fmt.Fprintln(f, "")
-			fmt.Fprintf(f, "Interval Samples:    %d × 250ms windows analysed\n", len(m.IntervalSamples))
-
-			// Calculate and display RMSLevel distribution for silence detection debugging
-			// RMSLevel = average level per interval (true silence is consistently quiet)
-			rmsValues := make([]float64, 0, len(m.IntervalSamples))
-			for _, interval := range m.IntervalSamples {
-				if interval.RMSLevel > -120 { // Exclude digital silence
-					rmsValues = append(rmsValues, interval.RMSLevel)
-				}
-			}
-			if len(rmsValues) >= 10 {
-				// Sort to get percentiles
-				sorted := make([]float64, len(rmsValues))
-				copy(sorted, rmsValues)
-				sort.Float64s(sorted)
-
-				fmt.Fprintf(f, "  RMSLevel Dist:     min %.1f, p10 %.1f, p25 %.1f, p50 %.1f, p75 %.1f, p90 %.1f, max %.1f dBFS\n",
-					sorted[0],
-					sorted[len(sorted)/10],
-					sorted[len(sorted)/4],
-					sorted[len(sorted)/2],
-					sorted[len(sorted)*3/4],
-					sorted[len(sorted)*9/10],
-					sorted[len(sorted)-1])
-
-				// Find largest gap for silence/speech boundary detection
-				var largestGap float64
-				var gapIndex int
-				for i := 1; i < len(sorted); i++ {
-					gap := sorted[i] - sorted[i-1]
-					if gap > largestGap {
-						largestGap = gap
-						gapIndex = i
-					}
-				}
-				if gapIndex > 0 && gapIndex < len(sorted) {
-					fmt.Fprintf(f, "  Largest Gap:       %.1f dB between %.1f and %.1f dBFS (%d intervals below)\n",
-						largestGap, sorted[gapIndex-1], sorted[gapIndex], gapIndex)
-				}
-			}
-		}
-
-		// Silence candidates (all evaluated candidates with scores)
-		if len(m.SilenceCandidates) > 0 {
-			fmt.Fprintf(f, "Silence Candidates:  %d evaluated\n", len(m.SilenceCandidates))
-			for i, c := range m.SilenceCandidates {
-				// Check if this is the selected candidate
-				isSelected := m.NoiseProfile != nil && c.Region.Start == m.NoiseProfile.Start
-
-				if isSelected {
-					// Full details for selected candidate
-					fmt.Fprintf(f, "  Candidate %d:       %.1fs at %.1fs (score: %.3f) [SELECTED]\n",
-						i+1, c.Region.Duration.Seconds(), c.Region.Start.Seconds(), c.Score)
-					fmt.Fprintf(f, "    RMS Level:       %.1f dBFS\n", c.RMSLevel)
-					fmt.Fprintf(f, "    Peak Level:      %.1f dBFS\n", c.PeakLevel)
-					fmt.Fprintf(f, "    Crest Factor:    %.1f dB\n", c.CrestFactor)
-					fmt.Fprintf(f, "    Centroid:        %.0f Hz\n", c.SpectralCentroid)
-					fmt.Fprintf(f, "    Flatness:        %.3f\n", c.SpectralFlatness)
-					fmt.Fprintf(f, "    Kurtosis:        %.1f\n", c.SpectralKurtosis)
-					// Classify noise type based on entropy
-					noiseType := "broadband"
-					if c.Entropy < 0.7 {
-						noiseType = "tonal"
-					} else if c.Entropy < 0.9 {
-						noiseType = "mixed"
-					}
-					fmt.Fprintf(f, "    Entropy:         %.3f (%s)\n", c.Entropy, noiseType)
-				} else {
-					// Single line summary for rejected candidates
-					reason := ""
-					if c.Score == 0.0 {
-						reason = " — rejected: too loud"
-					}
-					fmt.Fprintf(f, "  Candidate %d:       %.1fs at %.1fs (score: %.3f, RMS %.1f dBFS)%s\n",
-						i+1, c.Region.Duration.Seconds(), c.Region.Start.Seconds(), c.Score, c.RMSLevel, reason)
-				}
-			}
-		} else if m.NoiseProfile != nil {
-			// Fallback: show selected profile if no candidates stored (shouldn't happen)
-			fmt.Fprintf(f, "Silence Sample:      %.1fs at %.1fs\n",
-				m.NoiseProfile.Duration.Seconds(),
-				m.NoiseProfile.Start.Seconds())
-			fmt.Fprintf(f, "  Noise Floor:       %.1f dBFS (RMS)\n", m.NoiseProfile.MeasuredNoiseFloor)
-			fmt.Fprintf(f, "  Peak Level:        %.1f dBFS\n", m.NoiseProfile.PeakLevel)
-			fmt.Fprintf(f, "  Crest Factor:      %.1f dB\n", m.NoiseProfile.CrestFactor)
-		} else if len(m.SilenceRegions) > 0 {
-			// Show first silence region even if profile extraction failed
-			r := m.SilenceRegions[0]
-			fmt.Fprintf(f, "Silence Detected:    %.1fs at %.1fs (no profile extracted)\n",
-				r.Duration.Seconds(), r.Start.Seconds())
-		} else {
-			// No silence candidates found at all
-			fmt.Fprintf(f, "Silence Candidates:  NONE FOUND\n")
-			fmt.Fprintf(f, "  No silence regions detected in audio. Noise profiling unavailable.\n")
-		}
-	}
-	fmt.Fprintf(f, "Sample Rate:         %d Hz\n", data.SampleRate)
-	fmt.Fprintf(f, "Channels:            %d (%s)\n", data.Channels, channelName(data.Channels))
-	fmt.Fprintln(f, "")
-
-	// Pass 2: Filter Chain (in processing order)
-	if data.Result != nil && data.Result.Config != nil {
-		formatFilterChain(f, data.Result.Config, data.Result.Measurements)
-		fmt.Fprintln(f, "")
-	}
-
-	// Pass 2: Output Analysis
-	writeSection(f, "Pass 2: Output Analysis")
+	// Prepare measurements for use in multiple sections
+	var inputMeasurements *processor.AudioMeasurements
+	var filteredMeasurements *processor.OutputMeasurements
+	var finalMeasurements *processor.OutputMeasurements
 	if data.Result != nil {
-		fmt.Fprintf(f, "Output File:         %s\n", filepath.Base(data.OutputPath))
-
-		if data.Result.OutputMeasurements != nil {
-			om := data.Result.OutputMeasurements
-			m := data.Result.Measurements // Input measurements for comparison
-
-			if m != nil {
-				// Loudness measurements from ebur128
-				fmt.Fprintf(f, "Integrated Loudness: %.1f LUFS %s\n", om.OutputI, formatComparison(om.OutputI, m.InputI, "LUFS", 1))
-				fmt.Fprintf(f, "Momentary Loudness:  %.1f LUFS %s\n", om.MomentaryLoudness, formatComparison(om.MomentaryLoudness, m.MomentaryLoudness, "LUFS", 1))
-				fmt.Fprintf(f, "Short-term Loudness: %.1f LUFS %s\n", om.ShortTermLoudness, formatComparison(om.ShortTermLoudness, m.ShortTermLoudness, "LUFS", 1))
-				fmt.Fprintf(f, "True Peak:           %.1f dBTP %s\n", om.OutputTP, formatComparison(om.OutputTP, m.InputTP, "dBTP", 1))
-				fmt.Fprintf(f, "Sample Peak:         %.1f dBFS %s\n", om.SamplePeak, formatComparison(om.SamplePeak, m.SamplePeak, "dBFS", 1))
-				fmt.Fprintf(f, "Loudness Range:      %.1f LU %s\n", om.OutputLRA, formatComparison(om.OutputLRA, m.InputLRA, "LU", 1))
-				fmt.Fprintf(f, "Gating Threshold:    %.1f LUFS (for loudnorm)\n", om.OutputThresh)
-				fmt.Fprintf(f, "Target Offset:       %+.2f dB (calculated)\n", om.TargetOffset)
-
-				// Noise floor comparison
-				if om.AstatsNoiseFloor != 0 && !math.IsInf(om.AstatsNoiseFloor, -1) {
-					fmt.Fprintf(f, "FFmpeg Noise Floor:  %.1f dB %s\n", om.AstatsNoiseFloor, formatComparison(om.AstatsNoiseFloor, m.AstatsNoiseFloor, "dB", 1))
-				}
-				if om.NoiseFloorCount != 0 {
-					fmt.Fprintf(f, "Noise Floor Count:   %.0f samples %s\n", om.NoiseFloorCount, formatComparisonNoUnit(om.NoiseFloorCount, m.NoiseFloorCount, 0))
-				}
-
-				// Dynamic range and level statistics
-				fmt.Fprintf(f, "Dynamic Range:       %s\n", formatDynamicRangeComparison(om.DynamicRange, m.DynamicRange))
-				fmt.Fprintf(f, "RMS Level:           %.1f dBFS %s\n", om.RMSLevel, formatComparison(om.RMSLevel, m.RMSLevel, "dBFS", 1))
-				fmt.Fprintf(f, "RMS Peak:            %.1f dBFS %s\n", om.RMSPeak, formatComparison(om.RMSPeak, m.RMSPeak, "dBFS", 1))
-				fmt.Fprintf(f, "RMS Trough:          %.1f dBFS %s\n", om.RMSTrough, formatComparison(om.RMSTrough, m.RMSTrough, "dBFS", 1))
-				fmt.Fprintf(f, "Peak Level:          %.1f dBFS %s\n", om.PeakLevel, formatComparison(om.PeakLevel, m.PeakLevel, "dBFS", 1))
-				if om.MinLevel != 0 {
-					fmt.Fprintf(f, "Min Level:           %.1f dBFS %s\n", om.MinLevel, formatComparison(om.MinLevel, m.MinLevel, "dBFS", 1))
-				}
-				if om.MaxLevel != 0 {
-					fmt.Fprintf(f, "Max Level:           %.1f dBFS %s\n", om.MaxLevel, formatComparison(om.MaxLevel, m.MaxLevel, "dBFS", 1))
-				}
-				if om.CrestFactor > 0 {
-					fmt.Fprintf(f, "Crest Factor:        %s\n", formatCrestFactorComparison(om.CrestFactor, m.CrestFactor))
-				}
-
-				// Spectral analysis (aspectralstats measurements) with characteristic interpretations
-				inputSpectral := spectralFromMeasurements(m)
-				writeSpectralMetrics(f, spectralFromOutputMeasurements(om), &inputSpectral)
-
-				// Signal quality comparison
-				fmt.Fprintln(f, "")
-				fmt.Fprintln(f, "Signal Quality:")
-				if om.BitDepth > 0 {
-					fmt.Fprintf(f, "  Effective Bit Depth: %.1f bits %s\n", om.BitDepth, formatComparisonNoUnit(om.BitDepth, m.BitDepth, 1))
-				}
-				if om.NumberOfSamples > 0 {
-					fmt.Fprintf(f, "  Total Samples:       %.0f\n", om.NumberOfSamples)
-				}
-				if om.DCOffset != 0 || m.DCOffset != 0 {
-					fmt.Fprintf(f, "  DC Offset:           %.6f %s\n", om.DCOffset, formatComparisonNoUnit(om.DCOffset, m.DCOffset, 6))
-				}
-				if om.FlatFactor > 0 || m.FlatFactor > 0 {
-					fmt.Fprintf(f, "  Flat Factor:         %.1f %s\n", om.FlatFactor, formatComparisonNoUnit(om.FlatFactor, m.FlatFactor, 1))
-				}
-				if om.Entropy > 0 {
-					fmt.Fprintf(f, "  Signal Entropy:      %.3f %s\n", om.Entropy, formatComparisonNoUnit(om.Entropy, m.Entropy, 3))
-				}
-				if om.ZeroCrossingsRate > 0 {
-					fmt.Fprintf(f, "  Zero Crossings Rate: %.4f %s\n", om.ZeroCrossingsRate, formatComparisonNoUnit(om.ZeroCrossingsRate, m.ZeroCrossingsRate, 4))
-				}
-				if om.ZeroCrossings > 0 {
-					fmt.Fprintf(f, "  Zero Crossings:      %.0f total\n", om.ZeroCrossings)
-				}
-
-				// Sample variation comparison
-				if om.MaxDifference > 0 || m.MaxDifference > 0 {
-					fmt.Fprintln(f, "")
-					fmt.Fprintln(f, "Sample Variation:")
-					if om.MaxDifference > 0 {
-						maxDiffPercent := (om.MaxDifference / 32768.0) * 100.0
-						inputMaxDiffPercent := (m.MaxDifference / 32768.0) * 100.0
-						fmt.Fprintf(f, "  Max Difference:      %.1f%% FS %s\n", maxDiffPercent, formatComparison(maxDiffPercent, inputMaxDiffPercent, "%%", 1))
-					}
-					if om.MinDifference > 0 {
-						minDiffPercent := (om.MinDifference / 32768.0) * 100.0
-						inputMinDiffPercent := (m.MinDifference / 32768.0) * 100.0
-						fmt.Fprintf(f, "  Min Difference:      %.4f%% FS %s\n", minDiffPercent, formatComparison(minDiffPercent, inputMinDiffPercent, "%%", 4))
-					}
-					if om.MeanDifference > 0 {
-						meanDiffPercent := (om.MeanDifference / 32768.0) * 100.0
-						inputMeanDiffPercent := (m.MeanDifference / 32768.0) * 100.0
-						fmt.Fprintf(f, "  Mean Difference:     %.4f%% FS %s\n", meanDiffPercent, formatComparison(meanDiffPercent, inputMeanDiffPercent, "%%", 4))
-					}
-					if om.RMSDifference > 0 {
-						rmsDiffPercent := (om.RMSDifference / 32768.0) * 100.0
-						inputRMSDiffPercent := (m.RMSDifference / 32768.0) * 100.0
-						fmt.Fprintf(f, "  RMS Difference:      %.4f%% FS %s\n", rmsDiffPercent, formatComparison(rmsDiffPercent, inputRMSDiffPercent, "%%", 4))
-					}
-				}
-			} else {
-				fmt.Fprintf(f, "Integrated Loudness: %.1f LUFS\n", om.OutputI)
-				fmt.Fprintf(f, "True Peak:           %.1f dBTP\n", om.OutputTP)
-				fmt.Fprintf(f, "Loudness Range:      %.1f LU\n", om.OutputLRA)
-				fmt.Fprintf(f, "Dynamic Range:       %s\n", formatDynamicRange(om.DynamicRange))
-				fmt.Fprintf(f, "RMS Level:           %.1f dBFS\n", om.RMSLevel)
-				fmt.Fprintf(f, "Peak Level:          %.1f dBFS\n", om.PeakLevel)
-
-				// Additional astats measurements
-				if om.RMSTrough != 0 {
-					fmt.Fprintf(f, "RMS Trough:          %.1f dBFS\n", om.RMSTrough)
-				}
-				if om.RMSPeak != 0 {
-					fmt.Fprintf(f, "RMS Peak:            %.1f dBFS\n", om.RMSPeak)
-				}
-				if om.CrestFactor != 0 {
-					fmt.Fprintf(f, "Crest Factor:        %s\n", formatCrestFactor(om.CrestFactor))
-				}
-				if om.Entropy != 0 {
-					fmt.Fprintf(f, "Signal Entropy:      %.3f\n", om.Entropy)
-				}
-				if om.MinLevel != 0 {
-					minLevelPercent := (om.MinLevel / 32768.0) * 100.0
-					fmt.Fprintf(f, "Min Level:           %.4f%% FS\n", minLevelPercent)
-				}
-				if om.MaxLevel != 0 {
-					maxLevelPercent := (om.MaxLevel / 32768.0) * 100.0
-					fmt.Fprintf(f, "Max Level:           %.4f%% FS\n", maxLevelPercent)
-				}
-				if om.AstatsNoiseFloor != 0 {
-					fmt.Fprintf(f, "Astats Noise Floor:  %.1f dBFS\n", om.AstatsNoiseFloor)
-				}
-				if om.NoiseFloorCount != 0 {
-					fmt.Fprintf(f, "Noise Floor Count:   %.0f samples\n", om.NoiseFloorCount)
-				}
-				if om.BitDepth != 0 {
-					fmt.Fprintf(f, "Bit Depth:           %.1f bits\n", om.BitDepth)
-				}
-				if om.NumberOfSamples != 0 {
-					fmt.Fprintf(f, "Sample Count:        %.0f\n", om.NumberOfSamples)
-				}
-
-				// Additional ebur128 momentary/short-term
-				if om.MomentaryLoudness != 0 {
-					fmt.Fprintf(f, "Momentary Loudness:  %.1f LUFS\n", om.MomentaryLoudness)
-				}
-				if om.ShortTermLoudness != 0 {
-					fmt.Fprintf(f, "Short-term Loudness: %.1f LUFS\n", om.ShortTermLoudness)
-				}
-				if om.SamplePeak != 0 {
-					fmt.Fprintf(f, "Sample Peak:         %.1f dBFS\n", om.SamplePeak)
-				}
-
-				// Spectral analysis (aspectralstats measurements) with characteristic interpretations
-				writeSpectralMetrics(f, spectralFromOutputMeasurements(om), nil)
-			}
-			if om.ZeroCrossingsRate > 0 {
-				if m != nil && m.ZeroCrossingsRate > 0 {
-					fmt.Fprintf(f, "Zero Crossings Rate: %.4f %s\n", om.ZeroCrossingsRate, formatComparisonNoUnit(om.ZeroCrossingsRate, m.ZeroCrossingsRate, 4))
-				} else {
-					fmt.Fprintf(f, "Zero Crossings Rate: %.4f\n", om.ZeroCrossingsRate)
-				}
-			}
-			if om.MaxDifference > 0 {
-				maxDiffPercent := (om.MaxDifference / 32768.0) * 100.0
-				if m != nil && m.MaxDifference > 0 {
-					inputMaxDiffPercent := (m.MaxDifference / 32768.0) * 100.0
-					fmt.Fprintf(f, "Max Difference:      %.1f%% FS %s\n", maxDiffPercent, formatComparison(maxDiffPercent, inputMaxDiffPercent, "%% FS", 1))
-				} else {
-					fmt.Fprintf(f, "Max Difference:      %.1f%% FS (transient indicator)\n", maxDiffPercent)
-				}
-			}
-
-			// Show silence sample comparison (same region as Pass 1)
-			if om.SilenceSample != nil && data.Result.Measurements != nil && data.Result.Measurements.NoiseProfile != nil {
-				ss := om.SilenceSample
-				np := data.Result.Measurements.NoiseProfile
-				fmt.Fprintf(f, "Silence Sample:      %.1fs at %.1fs\n", ss.Duration.Seconds(), ss.Start.Seconds())
-
-				// Noise Floor with delta if changed
-				if math.Abs(ss.NoiseFloor-np.MeasuredNoiseFloor) < 0.05 {
-					fmt.Fprintf(f, "  Noise Floor:       %.1f dBFS (unchanged)\n", ss.NoiseFloor)
-				} else {
-					fmt.Fprintf(f, "  Noise Floor:       %.1f dBFS (was %.1f dBFS, %+.1f dB)\n",
-						ss.NoiseFloor, np.MeasuredNoiseFloor, ss.NoiseFloor-np.MeasuredNoiseFloor)
-				}
-
-				// Peak Level with delta if changed
-				if math.Abs(ss.PeakLevel-np.PeakLevel) < 0.05 {
-					fmt.Fprintf(f, "  Peak Level:        %.1f dBFS (unchanged)\n", ss.PeakLevel)
-				} else {
-					fmt.Fprintf(f, "  Peak Level:        %.1f dBFS (was %.1f dBFS, %+.1f dB)\n",
-						ss.PeakLevel, np.PeakLevel, ss.PeakLevel-np.PeakLevel)
-				}
-
-				// Crest Factor
-				if math.Abs(ss.CrestFactor-np.CrestFactor) < 0.05 {
-					fmt.Fprintf(f, "  Crest Factor:      %.1f dB (unchanged)\n", ss.CrestFactor)
-				} else {
-					fmt.Fprintf(f, "  Crest Factor:      %.1f dB %s\n", ss.CrestFactor, formatComparison(ss.CrestFactor, np.CrestFactor, "dB", 1))
-				}
-
-				if ss.Entropy > 0 {
-					// Classify noise type based on entropy
-					noiseType := "broadband (hiss)"
-					if ss.Entropy < 0.7 {
-						noiseType = "tonal (hum/buzz)"
-					} else if ss.Entropy < 0.9 {
-						noiseType = "mixed"
-					}
-					// Show with comparison to input
-					inputNoiseType := "broadband (hiss)"
-					if np.Entropy < 0.7 {
-						inputNoiseType = "tonal (hum/buzz)"
-					} else if np.Entropy < 0.9 {
-						inputNoiseType = "mixed"
-					}
-					if noiseType == inputNoiseType && math.Abs(ss.Entropy-np.Entropy) < 0.0005 {
-						fmt.Fprintf(f, "  Noise Character:   %s (unchanged)\n", noiseType)
-					} else if noiseType == inputNoiseType {
-						fmt.Fprintf(f, "  Noise Character:   %s (entropy %.3f, was %.3f)\n", noiseType, ss.Entropy, np.Entropy)
-					} else {
-						fmt.Fprintf(f, "  Noise Character:   %s (was %s)\n", noiseType, inputNoiseType)
-					}
-				}
-			}
-		} else {
-			fmt.Fprintln(f, "Note: Output measurements not available")
-		}
+		inputMeasurements = data.Result.Measurements
+		filteredMeasurements = data.Result.FilteredMeasurements
+		finalMeasurements = getFinalMeasurements(data.Result)
 	}
-	fmt.Fprintln(f, "")
 
-	// Pass 3: Normalisation
+	// Silence Detection (analysis that informs filter chain decisions)
+	writeDiagnosticSilence(f, inputMeasurements)
+
+	// Filter Chain Applied
 	if data.Result != nil && data.Result.Config != nil {
-		formatNormalisationResult(f, data.Result.NormResult, data.Result.Config)
-		fmt.Fprintln(f, "")
+		writeFilterChainApplied(f, data.Result.Config, data.Result.Measurements)
 	}
 
-	// Processing Time
-	fmt.Fprintln(f, "Processing Time")
-	fmt.Fprintln(f, "---------------")
-	fmt.Fprintf(f, "Pass 1 (Analysis):    %s\n", formatDuration(data.Pass1Time))
-	fmt.Fprintf(f, "Pass 2 (Processing):  %s\n", formatDuration(data.Pass2Time))
-	if data.Pass3Time > 0 || data.Pass4Time > 0 {
-		fmt.Fprintf(f, "Pass 3 (Measuring):   %s\n", formatDuration(data.Pass3Time))
-		fmt.Fprintf(f, "Pass 4 (Normalising): %s\n", formatDuration(data.Pass4Time))
-	} else if data.Result != nil && data.Result.NormResult != nil && data.Result.NormResult.Skipped {
-		fmt.Fprintln(f, "Pass 3 (Measuring):   skipped")
-		fmt.Fprintln(f, "Pass 4 (Normalising): skipped")
+	// Loudnorm (follows filter chain as it's the final processing stage)
+	if data.Result != nil && data.Result.Config != nil {
+		writeDiagnosticLoudnorm(f, data.Result.NormResult, data.Result.Config)
 	}
-	totalTime := data.EndTime.Sub(data.StartTime)
-	fmt.Fprintf(f, "Total Time:           %s\n", formatDuration(totalTime))
 
-	if data.DurationSecs > 0 {
-		audioDuration := time.Duration(data.DurationSecs * float64(time.Second))
-		rtf := float64(audioDuration) / float64(totalTime)
-		fmt.Fprintf(f, "Real-time Factor:    %.0fx\n", rtf)
+	// Loudness Measurements Table (Input → Filtered → Final)
+	writeLoudnessTable(f, inputMeasurements, filteredMeasurements, finalMeasurements)
+
+	// Spectral Characteristics Table (Input → Filtered → Final → Interpretation)
+	writeSpectralTable(f, inputMeasurements, filteredMeasurements, finalMeasurements)
+
+	// Noise Floor Analysis Table
+	var inputNoise *processor.NoiseProfile
+	if inputMeasurements != nil {
+		inputNoise = inputMeasurements.NoiseProfile
 	}
-	fmt.Fprintln(f, "")
+	writeNoiseFloorTable(f, inputNoise, getFilteredNoise(data.Result), getFinalNoise(data.Result))
 
 	return nil
 }
@@ -1771,4 +1145,687 @@ func formatResampleFilter(f *os.File, cfg *processor.FilterChainConfig, prefix s
 	}
 	fmt.Fprintf(f, "%sresample: %d Hz %s mono, %d samples/frame\n",
 		prefix, cfg.ResampleSampleRate, cfg.ResampleFormat, cfg.ResampleFrameSize)
+}
+
+// =============================================================================
+// Tabular Report Section Writers (Phase 3 restructure)
+// =============================================================================
+
+// writeReportHeader outputs the report header with file info and timestamp.
+func writeReportHeader(f *os.File, data ReportData) {
+	fmt.Fprintln(f, "Jivetalking Analysis Report")
+	fmt.Fprintln(f, "============================")
+	fmt.Fprintf(f, "File: %s\n", filepath.Base(data.InputPath))
+	fmt.Fprintf(f, "Processed: %s\n", data.EndTime.Format("2006-01-02 15:04:05 MST"))
+	fmt.Fprintf(f, "Duration: %s\n", formatDuration(time.Duration(data.DurationSecs*float64(time.Second))))
+	fmt.Fprintln(f, "")
+}
+
+// writeProcessingSummary outputs the processing time summary for all passes.
+func writeProcessingSummary(f *os.File, data ReportData) {
+	writeSection(f, "Processing Summary")
+
+	fmt.Fprintf(f, "Pass 1 (Analysis):    %s\n", formatDuration(data.Pass1Time))
+	fmt.Fprintf(f, "Pass 2 (Processing):  %s\n", formatDuration(data.Pass2Time))
+
+	if data.Pass3Time > 0 || data.Pass4Time > 0 {
+		fmt.Fprintf(f, "Pass 3 (Measuring):   %s\n", formatDuration(data.Pass3Time))
+		fmt.Fprintf(f, "Pass 4 (Normalising): %s\n", formatDuration(data.Pass4Time))
+	} else if data.Result != nil && data.Result.NormResult != nil && data.Result.NormResult.Skipped {
+		fmt.Fprintln(f, "Pass 3 (Measuring):   skipped")
+		fmt.Fprintln(f, "Pass 4 (Normalising): skipped")
+	}
+
+	totalTime := data.EndTime.Sub(data.StartTime)
+	fmt.Fprintf(f, "Total:                %s", formatDuration(totalTime))
+
+	if data.DurationSecs > 0 {
+		audioDuration := time.Duration(data.DurationSecs * float64(time.Second))
+		rtf := float64(audioDuration) / float64(totalTime)
+		fmt.Fprintf(f, " (%.0fx real-time)", rtf)
+	}
+	fmt.Fprintln(f, "")
+	fmt.Fprintln(f, "")
+}
+
+// writeFilterChainApplied outputs the filter chain section.
+func writeFilterChainApplied(f *os.File, config *processor.FilterChainConfig, measurements *processor.AudioMeasurements) {
+	formatFilterChain(f, config, measurements)
+	fmt.Fprintln(f, "")
+}
+
+// writeLoudnessTable outputs a three-column comparison table for loudness metrics.
+// Columns: Input (Pass 1), Filtered (Pass 2), Final (Pass 4)
+func writeLoudnessTable(f *os.File, input *processor.AudioMeasurements, filtered *processor.OutputMeasurements, final *processor.OutputMeasurements) {
+	writeSection(f, "Loudness Measurements")
+
+	table := NewMetricTable()
+
+	// Integrated Loudness
+	inputI := math.NaN()
+	filteredI := math.NaN()
+	finalI := math.NaN()
+	if input != nil {
+		inputI = input.InputI
+	}
+	if filtered != nil {
+		filteredI = filtered.OutputI
+	}
+	if final != nil {
+		finalI = final.OutputI
+	}
+	table.AddMetricRow("Integrated Loudness", inputI, filteredI, finalI, 1, "LUFS", "")
+
+	// True Peak
+	inputTP := math.NaN()
+	filteredTP := math.NaN()
+	finalTP := math.NaN()
+	if input != nil {
+		inputTP = input.InputTP
+	}
+	if filtered != nil {
+		filteredTP = filtered.OutputTP
+	}
+	if final != nil {
+		finalTP = final.OutputTP
+	}
+	table.AddMetricRow("True Peak", inputTP, filteredTP, finalTP, 1, "dBTP", "")
+
+	// Loudness Range
+	inputLRA := math.NaN()
+	filteredLRA := math.NaN()
+	finalLRA := math.NaN()
+	if input != nil {
+		inputLRA = input.InputLRA
+	}
+	if filtered != nil {
+		filteredLRA = filtered.OutputLRA
+	}
+	if final != nil {
+		finalLRA = final.OutputLRA
+	}
+	table.AddMetricRow("Loudness Range", inputLRA, filteredLRA, finalLRA, 1, "LU", "")
+
+	// Sample Peak
+	inputSP := math.NaN()
+	filteredSP := math.NaN()
+	finalSP := math.NaN()
+	if input != nil {
+		inputSP = input.SamplePeak
+	}
+	if filtered != nil {
+		filteredSP = filtered.SamplePeak
+	}
+	if final != nil {
+		finalSP = final.SamplePeak
+	}
+	table.AddMetricRow("Sample Peak", inputSP, filteredSP, finalSP, 1, "dBFS", "")
+
+	// Momentary Loudness
+	inputML := math.NaN()
+	filteredML := math.NaN()
+	finalML := math.NaN()
+	if input != nil {
+		inputML = input.MomentaryLoudness
+	}
+	if filtered != nil {
+		filteredML = filtered.MomentaryLoudness
+	}
+	if final != nil {
+		finalML = final.MomentaryLoudness
+	}
+	table.AddMetricRow("Momentary Loudness", inputML, filteredML, finalML, 1, "LUFS", "")
+
+	// Short-term Loudness
+	inputSTL := math.NaN()
+	filteredSTL := math.NaN()
+	finalSTL := math.NaN()
+	if input != nil {
+		inputSTL = input.ShortTermLoudness
+	}
+	if filtered != nil {
+		filteredSTL = filtered.ShortTermLoudness
+	}
+	if final != nil {
+		finalSTL = final.ShortTermLoudness
+	}
+	table.AddMetricRow("Short-term Loudness", inputSTL, filteredSTL, finalSTL, 1, "LUFS", "")
+
+	fmt.Fprint(f, table.String())
+	fmt.Fprintln(f, "")
+}
+
+// writeSpectralTable outputs a four-column comparison table for spectral metrics.
+// Columns: Input (Pass 1), Filtered (Pass 2), Final (Pass 4), Interpretation (based on Final)
+func writeSpectralTable(f *os.File, input *processor.AudioMeasurements, filtered *processor.OutputMeasurements, final *processor.OutputMeasurements) {
+	writeSection(f, "Spectral Characteristics")
+
+	// Create a custom table with interpretation column
+	table := &MetricTable{
+		Headers: []string{"Input", "Filtered", "Final"},
+		Rows:    make([]MetricRow, 0),
+	}
+
+	// Helper to get spectral value from appropriate source (prefer final, then filtered, then input)
+	getSpectralForInterp := func(inputVal, filteredVal, finalVal float64) float64 {
+		if final != nil && !math.IsNaN(finalVal) {
+			return finalVal
+		}
+		if filtered != nil && !math.IsNaN(filteredVal) {
+			return filteredVal
+		}
+		return inputVal
+	}
+
+	// Spectral Mean (no interpretation - just a magnitude)
+	inputMean := math.NaN()
+	filteredMean := math.NaN()
+	finalMean := math.NaN()
+	if input != nil {
+		inputMean = input.SpectralMean
+	}
+	if filtered != nil {
+		filteredMean = filtered.SpectralMean
+	}
+	if final != nil {
+		finalMean = final.SpectralMean
+	}
+	table.AddRow("Spectral Mean",
+		[]string{formatMetric(inputMean, 6), formatMetric(filteredMean, 6), formatMetric(finalMean, 6)},
+		"", "")
+
+	// Spectral Variance (no interpretation)
+	inputVar := math.NaN()
+	filteredVar := math.NaN()
+	finalVar := math.NaN()
+	if input != nil {
+		inputVar = input.SpectralVariance
+	}
+	if filtered != nil {
+		filteredVar = filtered.SpectralVariance
+	}
+	if final != nil {
+		finalVar = final.SpectralVariance
+	}
+	table.AddRow("Spectral Variance",
+		[]string{formatMetric(inputVar, 6), formatMetric(filteredVar, 6), formatMetric(finalVar, 6)},
+		"", "")
+
+	// Centroid
+	inputCentroid := math.NaN()
+	filteredCentroid := math.NaN()
+	finalCentroid := math.NaN()
+	if input != nil {
+		inputCentroid = input.SpectralCentroid
+	}
+	if filtered != nil {
+		filteredCentroid = filtered.SpectralCentroid
+	}
+	if final != nil {
+		finalCentroid = final.SpectralCentroid
+	}
+	interp := interpretCentroid(getSpectralForInterp(inputCentroid, filteredCentroid, finalCentroid))
+	table.AddRow("Centroid",
+		[]string{formatMetric(inputCentroid, 0), formatMetric(filteredCentroid, 0), formatMetric(finalCentroid, 0)},
+		"Hz", interp)
+
+	// Spread
+	inputSpread := math.NaN()
+	filteredSpread := math.NaN()
+	finalSpread := math.NaN()
+	if input != nil {
+		inputSpread = input.SpectralSpread
+	}
+	if filtered != nil {
+		filteredSpread = filtered.SpectralSpread
+	}
+	if final != nil {
+		finalSpread = final.SpectralSpread
+	}
+	interp = interpretSpread(getSpectralForInterp(inputSpread, filteredSpread, finalSpread))
+	table.AddRow("Spread",
+		[]string{formatMetric(inputSpread, 0), formatMetric(filteredSpread, 0), formatMetric(finalSpread, 0)},
+		"Hz", interp)
+
+	// Skewness
+	inputSkew := math.NaN()
+	filteredSkew := math.NaN()
+	finalSkew := math.NaN()
+	if input != nil {
+		inputSkew = input.SpectralSkewness
+	}
+	if filtered != nil {
+		filteredSkew = filtered.SpectralSkewness
+	}
+	if final != nil {
+		finalSkew = final.SpectralSkewness
+	}
+	interp = interpretSkewness(getSpectralForInterp(inputSkew, filteredSkew, finalSkew))
+	table.AddRow("Skewness",
+		[]string{formatMetric(inputSkew, 3), formatMetric(filteredSkew, 3), formatMetric(finalSkew, 3)},
+		"", interp)
+
+	// Kurtosis
+	inputKurt := math.NaN()
+	filteredKurt := math.NaN()
+	finalKurt := math.NaN()
+	if input != nil {
+		inputKurt = input.SpectralKurtosis
+	}
+	if filtered != nil {
+		filteredKurt = filtered.SpectralKurtosis
+	}
+	if final != nil {
+		finalKurt = final.SpectralKurtosis
+	}
+	interp = interpretKurtosis(getSpectralForInterp(inputKurt, filteredKurt, finalKurt))
+	table.AddRow("Kurtosis",
+		[]string{formatMetric(inputKurt, 3), formatMetric(filteredKurt, 3), formatMetric(finalKurt, 3)},
+		"", interp)
+
+	// Entropy
+	inputEntropy := math.NaN()
+	filteredEntropy := math.NaN()
+	finalEntropy := math.NaN()
+	if input != nil {
+		inputEntropy = input.SpectralEntropy
+	}
+	if filtered != nil {
+		filteredEntropy = filtered.SpectralEntropy
+	}
+	if final != nil {
+		finalEntropy = final.SpectralEntropy
+	}
+	interp = interpretEntropy(getSpectralForInterp(inputEntropy, filteredEntropy, finalEntropy))
+	table.AddRow("Entropy",
+		[]string{formatMetric(inputEntropy, 6), formatMetric(filteredEntropy, 6), formatMetric(finalEntropy, 6)},
+		"", interp)
+
+	// Flatness
+	inputFlat := math.NaN()
+	filteredFlat := math.NaN()
+	finalFlat := math.NaN()
+	if input != nil {
+		inputFlat = input.SpectralFlatness
+	}
+	if filtered != nil {
+		filteredFlat = filtered.SpectralFlatness
+	}
+	if final != nil {
+		finalFlat = final.SpectralFlatness
+	}
+	interp = interpretFlatness(getSpectralForInterp(inputFlat, filteredFlat, finalFlat))
+	table.AddRow("Flatness",
+		[]string{formatMetric(inputFlat, 6), formatMetric(filteredFlat, 6), formatMetric(finalFlat, 6)},
+		"", interp)
+
+	// Crest
+	inputCrest := math.NaN()
+	filteredCrest := math.NaN()
+	finalCrest := math.NaN()
+	if input != nil {
+		inputCrest = input.SpectralCrest
+	}
+	if filtered != nil {
+		filteredCrest = filtered.SpectralCrest
+	}
+	if final != nil {
+		finalCrest = final.SpectralCrest
+	}
+	interp = interpretCrest(getSpectralForInterp(inputCrest, filteredCrest, finalCrest))
+	table.AddRow("Crest",
+		[]string{formatMetric(inputCrest, 3), formatMetric(filteredCrest, 3), formatMetric(finalCrest, 3)},
+		"", interp)
+
+	// Flux
+	inputFlux := math.NaN()
+	filteredFlux := math.NaN()
+	finalFlux := math.NaN()
+	if input != nil {
+		inputFlux = input.SpectralFlux
+	}
+	if filtered != nil {
+		filteredFlux = filtered.SpectralFlux
+	}
+	if final != nil {
+		finalFlux = final.SpectralFlux
+	}
+	interp = interpretFlux(getSpectralForInterp(inputFlux, filteredFlux, finalFlux))
+	table.AddRow("Flux",
+		[]string{formatMetric(inputFlux, 6), formatMetric(filteredFlux, 6), formatMetric(finalFlux, 6)},
+		"", interp)
+
+	// Slope
+	inputSlope := math.NaN()
+	filteredSlope := math.NaN()
+	finalSlope := math.NaN()
+	if input != nil {
+		inputSlope = input.SpectralSlope
+	}
+	if filtered != nil {
+		filteredSlope = filtered.SpectralSlope
+	}
+	if final != nil {
+		finalSlope = final.SpectralSlope
+	}
+	interp = interpretSlope(getSpectralForInterp(inputSlope, filteredSlope, finalSlope))
+	table.AddRow("Slope",
+		[]string{formatMetric(inputSlope, 9), formatMetric(filteredSlope, 9), formatMetric(finalSlope, 9)},
+		"", interp)
+
+	// Decrease
+	inputDecrease := math.NaN()
+	filteredDecrease := math.NaN()
+	finalDecrease := math.NaN()
+	if input != nil {
+		inputDecrease = input.SpectralDecrease
+	}
+	if filtered != nil {
+		filteredDecrease = filtered.SpectralDecrease
+	}
+	if final != nil {
+		finalDecrease = final.SpectralDecrease
+	}
+	interp = interpretDecrease(getSpectralForInterp(inputDecrease, filteredDecrease, finalDecrease))
+	table.AddRow("Decrease",
+		[]string{formatMetric(inputDecrease, 6), formatMetric(filteredDecrease, 6), formatMetric(finalDecrease, 6)},
+		"", interp)
+
+	// Rolloff
+	inputRolloff := math.NaN()
+	filteredRolloff := math.NaN()
+	finalRolloff := math.NaN()
+	if input != nil {
+		inputRolloff = input.SpectralRolloff
+	}
+	if filtered != nil {
+		filteredRolloff = filtered.SpectralRolloff
+	}
+	if final != nil {
+		finalRolloff = final.SpectralRolloff
+	}
+	interp = interpretRolloff(getSpectralForInterp(inputRolloff, filteredRolloff, finalRolloff))
+	table.AddRow("Rolloff",
+		[]string{formatMetric(inputRolloff, 0), formatMetric(filteredRolloff, 0), formatMetric(finalRolloff, 0)},
+		"Hz", interp)
+
+	fmt.Fprint(f, table.String())
+	fmt.Fprintln(f, "")
+}
+
+// writeNoiseFloorTable outputs a three-column comparison table for noise floor metrics.
+// Columns: Input (Pass 1 NoiseProfile), Filtered (Pass 2 SilenceSample), Final (Pass 4 SilenceSample)
+func writeNoiseFloorTable(f *os.File, inputNoise *processor.NoiseProfile, filteredNoise *processor.SilenceAnalysis, finalNoise *processor.SilenceAnalysis) {
+	writeSection(f, "Noise Floor Analysis")
+
+	// Skip if no input noise profile
+	if inputNoise == nil {
+		fmt.Fprintln(f, "No silence detected in input — noise profiling unavailable")
+		fmt.Fprintln(f, "")
+		return
+	}
+
+	table := NewMetricTable()
+
+	// RMS Level (noise floor)
+	inputRMS := inputNoise.MeasuredNoiseFloor
+	filteredRMS := math.NaN()
+	finalRMS := math.NaN()
+	if filteredNoise != nil {
+		filteredRMS = filteredNoise.NoiseFloor
+	}
+	if finalNoise != nil {
+		finalRMS = finalNoise.NoiseFloor
+	}
+	table.AddMetricRow("RMS Level", inputRMS, filteredRMS, finalRMS, 1, "dBFS", "")
+
+	// Peak Level
+	inputPeak := inputNoise.PeakLevel
+	filteredPeak := math.NaN()
+	finalPeak := math.NaN()
+	if filteredNoise != nil {
+		filteredPeak = filteredNoise.PeakLevel
+	}
+	if finalNoise != nil {
+		finalPeak = finalNoise.PeakLevel
+	}
+	table.AddMetricRow("Peak Level", inputPeak, filteredPeak, finalPeak, 1, "dBFS", "")
+
+	// Crest Factor
+	inputCrest := inputNoise.CrestFactor
+	filteredCrest := math.NaN()
+	finalCrest := math.NaN()
+	if filteredNoise != nil {
+		filteredCrest = filteredNoise.CrestFactor
+	}
+	if finalNoise != nil {
+		finalCrest = finalNoise.CrestFactor
+	}
+	table.AddMetricRow("Crest Factor", inputCrest, filteredCrest, finalCrest, 1, "dB", "")
+
+	// Entropy
+	inputEntropy := inputNoise.Entropy
+	filteredEntropy := math.NaN()
+	finalEntropy := math.NaN()
+	if filteredNoise != nil {
+		filteredEntropy = filteredNoise.Entropy
+	}
+	if finalNoise != nil {
+		finalEntropy = finalNoise.Entropy
+	}
+	table.AddMetricRow("Entropy", inputEntropy, filteredEntropy, finalEntropy, 3, "", "")
+
+	// Character (interpretation row) - based on entropy
+	getNoiseCharacter := func(entropy float64) string {
+		if math.IsNaN(entropy) {
+			return MissingValue
+		}
+		if entropy < 0.7 {
+			return "tonal"
+		} else if entropy < 0.9 {
+			return "mixed"
+		}
+		return "broadband"
+	}
+	inputChar := getNoiseCharacter(inputEntropy)
+	filteredChar := getNoiseCharacter(filteredEntropy)
+	finalChar := getNoiseCharacter(finalEntropy)
+	table.AddRow("Character", []string{inputChar, filteredChar, finalChar}, "", "")
+
+	fmt.Fprint(f, table.String())
+	fmt.Fprintln(f, "")
+}
+
+// writeDiagnosticSilence outputs detailed silence detection diagnostics.
+func writeDiagnosticSilence(f *os.File, measurements *processor.AudioMeasurements) {
+	if measurements == nil {
+		return
+	}
+
+	writeSection(f, "Diagnostic: Silence Detection")
+
+	// Show adaptive silence detection threshold if different from default
+	if measurements.SilenceDetectLevel != 0 && measurements.SilenceDetectLevel != -50.0 {
+		fmt.Fprintf(f, "Silence Threshold:   %.1f dB (adaptive from %.1f dB pre-scan)\n",
+			measurements.SilenceDetectLevel, measurements.PreScanNoiseFloor)
+	}
+
+	// Interval sampling summary with RMSLevel distribution analysis
+	if len(measurements.IntervalSamples) > 0 {
+		fmt.Fprintf(f, "Interval Samples:    %d × 250ms windows analysed\n", len(measurements.IntervalSamples))
+
+		// Calculate and display RMSLevel distribution for silence detection debugging
+		rmsValues := make([]float64, 0, len(measurements.IntervalSamples))
+		for _, interval := range measurements.IntervalSamples {
+			if interval.RMSLevel > -120 { // Exclude digital silence
+				rmsValues = append(rmsValues, interval.RMSLevel)
+			}
+		}
+		if len(rmsValues) >= 10 {
+			sorted := make([]float64, len(rmsValues))
+			copy(sorted, rmsValues)
+			sort.Float64s(sorted)
+
+			fmt.Fprintf(f, "  RMSLevel Dist:     min %.1f, p10 %.1f, p25 %.1f, p50 %.1f, p75 %.1f, p90 %.1f, max %.1f dBFS\n",
+				sorted[0],
+				sorted[len(sorted)/10],
+				sorted[len(sorted)/4],
+				sorted[len(sorted)/2],
+				sorted[len(sorted)*3/4],
+				sorted[len(sorted)*9/10],
+				sorted[len(sorted)-1])
+
+			// Find largest gap for silence/speech boundary detection
+			var largestGap float64
+			var gapIndex int
+			for i := 1; i < len(sorted); i++ {
+				gap := sorted[i] - sorted[i-1]
+				if gap > largestGap {
+					largestGap = gap
+					gapIndex = i
+				}
+			}
+			if gapIndex > 0 && gapIndex < len(sorted) {
+				fmt.Fprintf(f, "  Largest Gap:       %.1f dB between %.1f and %.1f dBFS (%d intervals below)\n",
+					largestGap, sorted[gapIndex-1], sorted[gapIndex], gapIndex)
+			}
+		}
+	}
+
+	// Silence candidates (all evaluated candidates with scores)
+	if len(measurements.SilenceCandidates) > 0 {
+		fmt.Fprintf(f, "Silence Candidates:  %d evaluated\n", len(measurements.SilenceCandidates))
+		for i, c := range measurements.SilenceCandidates {
+			isSelected := measurements.NoiseProfile != nil && c.Region.Start == measurements.NoiseProfile.Start
+
+			if isSelected {
+				fmt.Fprintf(f, "  Candidate %d:       %.1fs at %.1fs (score: %.3f) [SELECTED]\n",
+					i+1, c.Region.Duration.Seconds(), c.Region.Start.Seconds(), c.Score)
+				fmt.Fprintf(f, "    RMS Level:       %.1f dBFS\n", c.RMSLevel)
+				fmt.Fprintf(f, "    Peak Level:      %.1f dBFS\n", c.PeakLevel)
+				fmt.Fprintf(f, "    Crest Factor:    %.1f dB\n", c.CrestFactor)
+				fmt.Fprintf(f, "    Centroid:        %.0f Hz\n", c.SpectralCentroid)
+				fmt.Fprintf(f, "    Flatness:        %.3f\n", c.SpectralFlatness)
+				fmt.Fprintf(f, "    Kurtosis:        %.1f\n", c.SpectralKurtosis)
+				noiseType := "broadband"
+				if c.Entropy < 0.7 {
+					noiseType = "tonal"
+				} else if c.Entropy < 0.9 {
+					noiseType = "mixed"
+				}
+				fmt.Fprintf(f, "    Entropy:         %.3f (%s)\n", c.Entropy, noiseType)
+			} else {
+				reason := ""
+				if c.Score == 0.0 {
+					reason = " — rejected: too loud"
+				}
+				fmt.Fprintf(f, "  Candidate %d:       %.1fs at %.1fs (score: %.3f, RMS %.1f dBFS)%s\n",
+					i+1, c.Region.Duration.Seconds(), c.Region.Start.Seconds(), c.Score, c.RMSLevel, reason)
+			}
+		}
+	} else if measurements.NoiseProfile != nil {
+		fmt.Fprintf(f, "Silence Sample:      %.1fs at %.1fs\n",
+			measurements.NoiseProfile.Duration.Seconds(),
+			measurements.NoiseProfile.Start.Seconds())
+		fmt.Fprintf(f, "  Noise Floor:       %.1f dBFS (RMS)\n", measurements.NoiseProfile.MeasuredNoiseFloor)
+		fmt.Fprintf(f, "  Peak Level:        %.1f dBFS\n", measurements.NoiseProfile.PeakLevel)
+		fmt.Fprintf(f, "  Crest Factor:      %.1f dB\n", measurements.NoiseProfile.CrestFactor)
+	} else if len(measurements.SilenceRegions) > 0 {
+		r := measurements.SilenceRegions[0]
+		fmt.Fprintf(f, "Silence Detected:    %.1fs at %.1fs (no profile extracted)\n",
+			r.Duration.Seconds(), r.Start.Seconds())
+	} else {
+		fmt.Fprintf(f, "Silence Candidates:  NONE FOUND\n")
+		fmt.Fprintf(f, "  No silence regions detected in audio. Noise profiling unavailable.\n")
+	}
+
+	fmt.Fprintln(f, "")
+}
+
+// writeDiagnosticLoudnorm outputs detailed loudnorm normalisation diagnostics.
+func writeDiagnosticLoudnorm(f *os.File, result *processor.NormalisationResult, config *processor.FilterChainConfig) {
+	if result == nil || !config.LoudnormEnabled {
+		return
+	}
+
+	writeSection(f, "Diagnostic: Loudnorm")
+
+	if result.Skipped {
+		fmt.Fprintln(f, "Status: SKIPPED (already within target)")
+		fmt.Fprintln(f, "")
+		return
+	}
+
+	fmt.Fprintln(f, "Loudnorm configuration:")
+	if result.LinearModeForced {
+		fmt.Fprintf(f, "  Target I:   %.1f LUFS (adjusted from %.1f to preserve linear mode)\n",
+			result.EffectiveTargetI, result.RequestedTargetI)
+	} else {
+		fmt.Fprintf(f, "  Target I:   %.1f LUFS\n", config.LoudnormTargetI)
+	}
+	fmt.Fprintf(f, "  Target TP:  %.1f dBTP\n", config.LoudnormTargetTP)
+	fmt.Fprintf(f, "  Target LRA: %.1f LU\n", config.LoudnormTargetLRA)
+	fmt.Fprintf(f, "  Mode:       %s\n", loudnormModeString(config.LoudnormLinear))
+	fmt.Fprintf(f, "  Dual mono:  %v\n", config.LoudnormDualMono)
+	fmt.Fprintf(f, "  Gain:       %+.2f dB\n", result.GainApplied)
+
+	// Display loudnorm filter's unique diagnostic info (I/TP/LRA values are in Loudness table)
+	if result.LoudnormStats != nil {
+		stats := result.LoudnormStats
+		fmt.Fprintln(f, "")
+		fmt.Fprintln(f, "FFmpeg diagnostics:")
+		fmt.Fprintf(f, "  Input Thresh:    %s LUFS\n", stats.InputThresh)
+		fmt.Fprintf(f, "  Output Thresh:   %s LUFS\n", stats.OutputThresh)
+		fmt.Fprintf(f, "  Norm Type:       %s\n", stats.NormalizationType)
+		fmt.Fprintf(f, "  Target Offset:   %s dB\n", stats.TargetOffset)
+	}
+
+	fmt.Fprintln(f, "")
+	effectiveDeviation := math.Abs(result.OutputLUFS - result.EffectiveTargetI)
+	if result.WithinTarget {
+		if result.LinearModeForced {
+			requestedDeviation := math.Abs(result.OutputLUFS - result.RequestedTargetI)
+			fmt.Fprintf(f, "Result: ✓ Linear mode preserved (%.2f LU from effective target, %.2f LU from requested)\n",
+				effectiveDeviation, requestedDeviation)
+		} else {
+			fmt.Fprintf(f, "Result: ✓ Within target (deviation: %.2f LU)\n", effectiveDeviation)
+		}
+	} else {
+		fmt.Fprintf(f, "Result: ⚠ Outside tolerance (deviation: %.2f LU)\n", effectiveDeviation)
+	}
+
+	fmt.Fprintln(f, "")
+}
+
+// writeDiagnosticAdaptive outputs detailed adaptive parameter diagnostics.
+// This section is filled by the existing formatFilterChain function.
+// For now, we just write a header - the actual content comes from writeFilterChainApplied.
+func writeDiagnosticAdaptive(f *os.File, config *processor.FilterChainConfig, measurements *processor.AudioMeasurements) {
+	// The filter chain section already contains adaptive rationale for each filter.
+	// This function is a placeholder for additional adaptive debugging if needed.
+	// Currently, all adaptive info is in writeFilterChainApplied.
+}
+
+// getFinalMeasurements safely extracts final measurements from the result.
+func getFinalMeasurements(result *processor.ProcessingResult) *processor.OutputMeasurements {
+	if result == nil || result.NormResult == nil {
+		return nil
+	}
+	return result.NormResult.FinalMeasurements
+}
+
+// getFilteredNoise safely extracts filtered noise profile from the result.
+func getFilteredNoise(result *processor.ProcessingResult) *processor.SilenceAnalysis {
+	if result == nil || result.FilteredMeasurements == nil {
+		return nil
+	}
+	return result.FilteredMeasurements.SilenceSample
+}
+
+// getFinalNoise safely extracts final noise profile from the result.
+func getFinalNoise(result *processor.ProcessingResult) *processor.SilenceAnalysis {
+	if result == nil || result.NormResult == nil || result.NormResult.FinalMeasurements == nil {
+		return nil
+	}
+	return result.NormResult.FinalMeasurements.SilenceSample
 }

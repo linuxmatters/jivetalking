@@ -283,6 +283,11 @@ type NormalisationResult struct {
 	RequestedTargetI float64        // The target I that was requested (from config)
 	EffectiveTargetI float64        // The target I actually used (may be lower to ensure linear mode)
 	LinearModeForced bool           // True if target was adjusted to force linear mode
+
+	// FinalMeasurements contains full analysis after normalisation (Pass 4)
+	// Includes spectral characteristics, amplitude stats, and loudness measurements
+	// for comparison with Pass 1 input and Pass 2 filtered measurements
+	FinalMeasurements *OutputMeasurements
 }
 
 // ApplyNormalisation performs Pass 3: EBU R128 dynamic loudness normalisation.
@@ -359,8 +364,8 @@ func ApplyNormalisation(
 	effectiveConfig := *config
 	effectiveConfig.LoudnormTargetI = effectiveTargetI
 
-	// Pass 3b: Apply loudnorm with linear=true and the measurements
-	finalLUFS, finalTP, loudnormStats, err := applyLoudnormAndMeasure(inputPath, &effectiveConfig, measurement, progressCallback)
+	// Pass 4: Apply loudnorm with linear=true and the measurements
+	finalLUFS, finalTP, finalMeasurements, loudnormStats, err := applyLoudnormAndMeasure(inputPath, &effectiveConfig, measurement, progressCallback)
 	if err != nil {
 		return nil, fmt.Errorf("loudnorm application failed: %w", err)
 	}
@@ -375,35 +380,36 @@ func ApplyNormalisation(
 	withinTarget := finalDeviation <= 0.5
 
 	return &NormalisationResult{
-		InputLUFS:        measurement.InputI,
-		InputTP:          measurement.InputTP,
-		OutputLUFS:       finalLUFS,
-		OutputTP:         finalTP,
-		GainApplied:      offset,
-		WithinTarget:     withinTarget,
-		Skipped:          false,
-		LoudnormStats:    loudnormStats,
-		RequestedTargetI: config.LoudnormTargetI,
-		EffectiveTargetI: effectiveTargetI,
-		LinearModeForced: !linearPossible,
+		InputLUFS:         measurement.InputI,
+		InputTP:           measurement.InputTP,
+		OutputLUFS:        finalLUFS,
+		OutputTP:          finalTP,
+		GainApplied:       offset,
+		WithinTarget:      withinTarget,
+		Skipped:           false,
+		LoudnormStats:     loudnormStats,
+		RequestedTargetI:  config.LoudnormTargetI,
+		EffectiveTargetI:  effectiveTargetI,
+		LinearModeForced:  !linearPossible,
+		FinalMeasurements: finalMeasurements,
 	}, nil
 }
 
 // applyLoudnormAndMeasure applies loudnorm's second pass to the audio file and measures the result.
 // Uses in-place processing: reads input, applies loudnorm, writes to temp file, renames.
 //
-// Filter chain: loudnorm (second pass with linear=true) → ebur128 (validation)
+// Filter chain: loudnorm → astats → aspectralstats → ebur128 → resample
 //
 // This is the second pass of loudnorm's two-pass workflow. The first pass
 // measurements come from measureWithLoudnorm() (stored in LoudnormMeasurement).
 //
-// Returns the measured integrated loudness, true peak, and loudnorm diagnostic stats.
+// Returns the measured integrated loudness, true peak, full output measurements, and loudnorm diagnostic stats.
 func applyLoudnormAndMeasure(
 	inputPath string,
 	config *FilterChainConfig,
 	measurement *LoudnormMeasurement,
 	progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements),
-) (float64, float64, *LoudnormStats, error) {
+) (float64, float64, *OutputMeasurements, *LoudnormStats, error) {
 	// Start capturing loudnorm's JSON output for diagnostics
 	startLoudnormCapture()
 
@@ -416,7 +422,7 @@ func applyLoudnormAndMeasure(
 	// Open input file
 	reader, metadata, err := audio.OpenAudioFile(inputPath)
 	if err != nil {
-		return 0.0, 0.0, getLoudnormStats(), fmt.Errorf("failed to open input: %w", err)
+		return 0.0, 0.0, nil, getLoudnormStats(), fmt.Errorf("failed to open input: %w", err)
 	}
 	defer reader.Close()
 
@@ -437,7 +443,7 @@ func applyLoudnormAndMeasure(
 		filterSpec,
 	)
 	if err != nil {
-		return 0.0, 0.0, getLoudnormStats(), fmt.Errorf("failed to create filter graph: %w", err)
+		return 0.0, 0.0, nil, getLoudnormStats(), fmt.Errorf("failed to create filter graph: %w", err)
 	}
 	// Note: We free the filter graph explicitly before getting stats, not via defer.
 	// loudnorm outputs its JSON when the filter graph is freed.
@@ -446,7 +452,7 @@ func applyLoudnormAndMeasure(
 	encoder, err := createOutputEncoder(tempPath, metadata, bufferSinkCtx)
 	if err != nil {
 		ffmpeg.AVFilterGraphFree(&filterGraph)
-		return 0.0, 0.0, getLoudnormStats(), fmt.Errorf("failed to create encoder: %w", err)
+		return 0.0, 0.0, nil, getLoudnormStats(), fmt.Errorf("failed to create encoder: %w", err)
 	}
 	defer encoder.Close()
 
@@ -487,7 +493,7 @@ func applyLoudnormAndMeasure(
 				ffmpeg.AVFrameUnref(filteredFrame)
 				ffmpeg.AVFrameFree(&filteredFrame)
 				ffmpeg.AVFilterGraphFree(&filterGraph)
-				return 0.0, 0.0, getLoudnormStats(), fmt.Errorf("encoding failed: %w", err)
+				return 0.0, 0.0, nil, getLoudnormStats(), fmt.Errorf("encoding failed: %w", err)
 			}
 
 			framesProcessed++
@@ -518,7 +524,7 @@ func applyLoudnormAndMeasure(
 				ffmpeg.AVFrameUnref(filteredFrame)
 				ffmpeg.AVFrameFree(&filteredFrame)
 				ffmpeg.AVFilterGraphFree(&filterGraph)
-				return 0.0, 0.0, getLoudnormStats(), fmt.Errorf("encoding failed during flush: %w", err)
+				return 0.0, 0.0, nil, getLoudnormStats(), fmt.Errorf("encoding failed during flush: %w", err)
 			}
 
 			ffmpeg.AVFrameUnref(filteredFrame)
@@ -529,19 +535,19 @@ func applyLoudnormAndMeasure(
 	// Flush encoder
 	if err := encoder.Flush(); err != nil {
 		ffmpeg.AVFilterGraphFree(&filterGraph)
-		return 0.0, 0.0, getLoudnormStats(), fmt.Errorf("failed to flush encoder: %w", err)
+		return 0.0, 0.0, nil, getLoudnormStats(), fmt.Errorf("failed to flush encoder: %w", err)
 	}
 
 	// Close encoder before rename
 	if err := encoder.Close(); err != nil {
 		ffmpeg.AVFilterGraphFree(&filterGraph)
-		return 0.0, 0.0, getLoudnormStats(), fmt.Errorf("failed to close encoder: %w", err)
+		return 0.0, 0.0, nil, getLoudnormStats(), fmt.Errorf("failed to close encoder: %w", err)
 	}
 
 	// Atomic rename: temp file → original file (in-place update)
 	if err := os.Rename(tempPath, inputPath); err != nil {
 		ffmpeg.AVFilterGraphFree(&filterGraph)
-		return 0.0, 0.0, getLoudnormStats(), fmt.Errorf("failed to rename output: %w", err)
+		return 0.0, 0.0, nil, getLoudnormStats(), fmt.Errorf("failed to rename output: %w", err)
 	}
 
 	// Free filter graph before getting stats — loudnorm outputs JSON on graph destruction
@@ -550,17 +556,24 @@ func applyLoudnormAndMeasure(
 	// Capture loudnorm stats (JSON output captured during filter graph free)
 	stats := getLoudnormStats()
 
-	return acc.ebur128OutputI, acc.ebur128OutputTP, stats, nil
+	// Build complete OutputMeasurements from accumulators
+	finalMeasurements := finalizeOutputMeasurements(&acc)
+
+	return acc.ebur128OutputI, acc.ebur128OutputTP, finalMeasurements, stats, nil
 }
 
-// buildLoudnormFilterSpec constructs the filter chain for Pass 3 loudnorm application.
+// buildLoudnormFilterSpec constructs the filter chain for Pass 4 loudnorm application.
 //
-// Chain order: loudnorm (second pass) → ebur128 (validation measurement) → resample
+// Chain order: loudnorm → astats → aspectralstats → ebur128 → resample
 //
 // The loudnorm filter in second pass mode:
 // - Uses measurements from measureWithLoudnorm() (LoudnormMeasurement)
 // - Applies linear gain when possible (more transparent, no adaptive EQ)
 // - Includes 100ms lookahead true peak limiter (upsamples to 192kHz internally)
+//
+// astats and aspectralstats are placed before ebur128 because ebur128 upsamples to
+// 192kHz and outputs f64. We want spectral measurements at the original sample rate
+// to match Pass 2's measurements for accurate comparison.
 //
 // Key parameters:
 // - I/TP/LRA: Target values (from config)
@@ -595,12 +608,22 @@ func buildLoudnormFilterSpec(config *FilterChainConfig, measurement *LoudnormMea
 	)
 	filters = append(filters, loudnormFilter)
 
-	// 2. ebur128 for validation (metadata only, no audio modification)
+	// 2. astats for amplitude measurements (same as Pass 2)
+	// Provides noise floor, dynamic range, RMS level, peak level, etc.
+	// measure_perchannel=all requests all available per-channel statistics
+	filters = append(filters, "astats=metadata=1:measure_perchannel=all")
+
+	// 3. aspectralstats for spectral analysis (same as Pass 2)
+	// Provides centroid, spread, skewness, kurtosis, entropy, flatness, crest, rolloff, etc.
+	// win_size=2048 and win_func=hann match Pass 2 settings for comparable measurements
+	filters = append(filters, "aspectralstats=win_size=2048:win_func=hann:measure=all")
+
+	// 4. ebur128 for loudness validation (metadata only, no audio modification)
 	// dualmono=true ensures accurate mono loudness measurement
 	// Note: ebur128 upsamples to 192kHz internally and outputs f64
 	filters = append(filters, "ebur128=metadata=1:peak=sample+true:dualmono=true")
 
-	// 3. Resample back to output format (44.1kHz/s16/mono)
+	// 5. Resample back to output format (44.1kHz/s16/mono)
 	// Required because ebur128 outputs f64 at 192kHz; encoder expects s16 at 44.1kHz
 	// Temporarily enable resample to get the filter spec, then restore
 	wasEnabled := config.ResampleEnabled
