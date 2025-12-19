@@ -415,11 +415,15 @@ type FilterChainConfig struct {
 	// When enabled, measurements are extracted from processed audio for comparison with Pass 1
 	OutputAnalysisEnabled bool
 
-	// Normalisation (Pass 3) - pure gain adjustment to hit target LUFS
-	// No dynamic processing—just clean linear gain + UREI 1176 peak protection
-	NormTargetI   float64 // Target integrated loudness (LUFS)
-	NormGainDB    float64 // Calculated gain adjustment (dB) - set during Pass 3
-	NormTolerance float64 // Acceptable deviation (LU)
+	// Loudnorm (Pass 3) - EBU R128 dynamic loudness normalisation
+	// Replaces simple volume gain + 1176 limiting with integrated dynamic normalisation
+	// Uses two-pass mode with measurements from Pass 2 for optimal transparency
+	LoudnormEnabled   bool    // Enable loudnorm in Pass 3 (default: true)
+	LoudnormTargetI   float64 // Target integrated loudness (LUFS), default: -16.0
+	LoudnormTargetTP  float64 // Target true peak (dBTP), default: -1.5
+	LoudnormTargetLRA float64 // Target loudness range (LU), default: 11.0
+	LoudnormDualMono  bool    // Treat mono as dual-mono (CRITICAL for mono files)
+	LoudnormLinear    bool    // Prefer linear mode (falls back to dynamic if needed)
 }
 
 // DefaultFilterConfig returns the scientifically-tuned default filter configuration
@@ -567,10 +571,13 @@ func DefaultFilterConfig() *FilterChainConfig {
 
 		Measurements: nil, // Will be set after Pass 1
 
-		// Normalisation target for Pass 3
-		NormTargetI:   NormTargetLUFS,  // -15 LUFS
-		NormGainDB:    0.0,             // Calculated in Pass 3
-		NormTolerance: NormToleranceLU, // ±0.5 LU
+		// Loudnorm - enabled by default with podcast-optimised settings
+		LoudnormEnabled:   true,
+		LoudnormTargetI:   -16.0, // Podcast standard (was -15 LUFS)
+		LoudnormTargetTP:  -2.0,  // Conservative headroom (prevents limiter clipping to 0.0 dBTP)
+		LoudnormTargetLRA: 20.0,  // High value to prevent dynamic mode fallback (must be >= source LRA)
+		LoudnormDualMono:  true,  // CRITICAL for mono recordings
+		LoudnormLinear:    true,  // Prefer linear (transparent) mode
 	}
 }
 
@@ -614,10 +621,15 @@ func (cfg *FilterChainConfig) buildDownmixFilter() string {
 // Used in both Pass 1 (input analysis) and Pass 2 (output analysis).
 //
 // Filter order: astats → aspectralstats → ebur128
-// ebur128 is placed LAST because it upsamples to 192kHz internally and outputs f64,
+// ebur128 is placed last because it upsamples to 192kHz internally and outputs f64,
 // which would skew spectral measurements if placed first. astats and aspectralstats
 // measure the original signal format, then ebur128 does its own internal upsampling
 // for accurate true peak detection without affecting other measurements.
+//
+// NOTE: loudnorm is NOT included here because it has no "measure only" mode -
+// it always processes/normalizes audio. Loudnorm measurement for Pass 3 is done
+// separately via measureWithLoudnorm() which reads the processed file without
+// encoding output.
 func (cfg *FilterChainConfig) buildAnalysisFilter() string {
 	if !cfg.AnalysisEnabled {
 		return ""
@@ -647,11 +659,18 @@ func (cfg *FilterChainConfig) buildAnalysisFilter() string {
 	//   metadata=1 writes per-frame loudness data to frame metadata (lavfi.r128.* keys)
 	//   peak=sample+true enables both sample peak and true peak measurement
 	//   (required for lavfi.r128.sample_peak and lavfi.r128.true_peak metadata)
+	//   dualmono=true: CRITICAL - treats mono as dual-mono for correct loudness measurement
+	//   (mono without dualmono is measured ~3 LU quieter than intended)
 	// Note: astats measure_perchannel=all requests all available per-channel statistics
+	//
+	// IMPORTANT: loudnorm is NOT included here, even for Pass 2, because loudnorm
+	// doesn't have a "measure only" mode - it always processes/normalizes audio.
+	// Loudnorm measurement for Pass 3 is done separately via measureWithLoudnorm()
+	// which reads the file without encoding output.
 	return fmt.Sprintf(
 		"astats=metadata=1:measure_perchannel=all,"+
 			"aspectralstats=win_size=2048:win_func=hann:measure=all,"+
-			"ebur128=metadata=1:peak=sample+true:target=%.0f",
+			"ebur128=metadata=1:peak=sample+true:dualmono=true:target=%.0f",
 		cfg.TargetI)
 }
 

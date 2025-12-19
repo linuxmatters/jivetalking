@@ -85,9 +85,13 @@ func newTestConfig() *FilterChainConfig {
 		UREI1176InputLevel:  1.0,
 		UREI1176OutputLevel: 1.0,
 
-		// Normalisation defaults (Pass 3)
-		NormTargetI:   NormTargetLUFS,  // -15 LUFS
-		NormTolerance: NormToleranceLU, // ±0.5 LU
+		// Loudnorm defaults (Pass 3)
+		LoudnormEnabled:   true,
+		LoudnormTargetI:   -16.0,
+		LoudnormTargetTP:  -1.5,
+		LoudnormTargetLRA: 11.0,
+		LoudnormDualMono:  true,
+		LoudnormLinear:    true,
 
 		FilterOrder: DefaultFilterOrder,
 	}
@@ -705,8 +709,8 @@ func TestBuildAnalysisFilter(t *testing.T) {
 		if !strings.Contains(result, "measure=all") {
 			t.Error("buildAnalysisFilter() should collect all spectral measurements")
 		}
-		if !strings.Contains(result, "ebur128=metadata=1:peak=sample+true") {
-			t.Errorf("buildAnalysisFilter() missing ebur128 filter with sample+true peak, got %q", result)
+		if !strings.Contains(result, "ebur128=metadata=1:peak=sample+true:dualmono=true") {
+			t.Errorf("buildAnalysisFilter() missing ebur128 filter with dualmono=true, got %q", result)
 		}
 		if !strings.Contains(result, "target=-16") {
 			t.Errorf("buildAnalysisFilter() missing target=-16, got %q", result)

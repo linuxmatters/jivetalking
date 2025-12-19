@@ -131,6 +131,7 @@ func processWithFilters(inputPath, outputPath string, config *FilterChainConfig,
 
 // processWithStandardFilters performs audio processing using the standard single-input filter graph.
 // If outputMeasurements is non-nil and config.OutputAnalysisEnabled is true, populates it with Pass 2 output analysis.
+// For Pass 2 with loudnorm enabled, also captures loudnorm's measurement JSON for use in Pass 3.
 func processWithStandardFilters(inputPath, outputPath string, config *FilterChainConfig, progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements), measurements *AudioMeasurements, outputMeasurements **OutputMeasurements) error {
 	// Open input audio file
 	reader, metadata, err := audio.OpenAudioFile(inputPath)
@@ -149,6 +150,8 @@ func processWithStandardFilters(inputPath, outputPath string, config *FilterChai
 	estimatedTotalFrames := (totalDuration * sampleRate) / samplesPerFrame
 
 	// Create filter graph with complete processing chain
+	// NOTE: loudnorm is NOT in the Pass 2 filter chain because it always processes audio
+	// (no measure-only mode). Loudnorm measurement is done separately in Pass 3.
 	filterGraph, bufferSrcCtx, bufferSinkCtx, err := CreateProcessingFilterGraph(
 		reader.GetDecoderContext(),
 		config,
@@ -265,14 +268,16 @@ func processWithStandardFilters(inputPath, outputPath string, config *FilterChai
 		ffmpeg.AVFrameUnref(filteredFrame)
 	}
 
-	// Finalize output measurements if enabled
-	if outputAcc != nil && outputMeasurements != nil {
-		*outputMeasurements = finalizeOutputMeasurements(outputAcc)
-	}
-
 	// Flush the encoder
 	if err := encoder.Flush(); err != nil {
 		return fmt.Errorf("failed to flush encoder: %w", err)
+	}
+
+	// Finalize output measurements if enabled
+	// NOTE: Loudnorm measurements are NOT captured here - loudnorm is not in the Pass 2
+	// filter chain. Loudnorm measurement is done separately in Pass 3 via measureWithLoudnorm().
+	if outputAcc != nil && outputMeasurements != nil {
+		*outputMeasurements = finalizeOutputMeasurements(outputAcc)
 	}
 
 	return nil

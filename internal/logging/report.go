@@ -473,7 +473,8 @@ type ReportData struct {
 	EndTime      time.Time
 	Pass1Time    time.Duration
 	Pass2Time    time.Duration
-	Pass3Time    time.Duration // Normalisation pass (may be 0 if skipped)
+	Pass3Time    time.Duration // Loudnorm measurement pass (may be 0 if skipped)
+	Pass4Time    time.Duration // Loudnorm application pass (may be 0 if skipped)
 	Result       *processor.ProcessingResult
 	SampleRate   int
 	Channels     int
@@ -716,6 +717,8 @@ func GenerateReport(data ReportData) error {
 				fmt.Fprintf(f, "True Peak:           %.1f dBTP %s\n", om.OutputTP, formatComparison(om.OutputTP, m.InputTP, "dBTP", 1))
 				fmt.Fprintf(f, "Sample Peak:         %.1f dBFS %s\n", om.SamplePeak, formatComparison(om.SamplePeak, m.SamplePeak, "dBFS", 1))
 				fmt.Fprintf(f, "Loudness Range:      %.1f LU %s\n", om.OutputLRA, formatComparison(om.OutputLRA, m.InputLRA, "LU", 1))
+				fmt.Fprintf(f, "Gating Threshold:    %.1f LUFS (for loudnorm)\n", om.OutputThresh)
+				fmt.Fprintf(f, "Target Offset:       %+.2f dB (calculated)\n", om.TargetOffset)
 
 				// Noise floor comparison
 				if om.AstatsNoiseFloor != 0 && !math.IsInf(om.AstatsNoiseFloor, -1) {
@@ -936,15 +939,17 @@ func GenerateReport(data ReportData) error {
 	// Processing Time
 	fmt.Fprintln(f, "Processing Time")
 	fmt.Fprintln(f, "---------------")
-	fmt.Fprintf(f, "Pass 1 (Analysis):   %s\n", formatDuration(data.Pass1Time))
-	fmt.Fprintf(f, "Pass 2 (Processing): %s\n", formatDuration(data.Pass2Time))
-	if data.Pass3Time > 0 {
-		fmt.Fprintf(f, "Pass 3 (Normalise):  %s\n", formatDuration(data.Pass3Time))
+	fmt.Fprintf(f, "Pass 1 (Analysis):    %s\n", formatDuration(data.Pass1Time))
+	fmt.Fprintf(f, "Pass 2 (Processing):  %s\n", formatDuration(data.Pass2Time))
+	if data.Pass3Time > 0 || data.Pass4Time > 0 {
+		fmt.Fprintf(f, "Pass 3 (Measuring):   %s\n", formatDuration(data.Pass3Time))
+		fmt.Fprintf(f, "Pass 4 (Normalising): %s\n", formatDuration(data.Pass4Time))
 	} else if data.Result != nil && data.Result.NormResult != nil && data.Result.NormResult.Skipped {
-		fmt.Fprintln(f, "Pass 3 (Normalise):  skipped")
+		fmt.Fprintln(f, "Pass 3 (Measuring):   skipped")
+		fmt.Fprintln(f, "Pass 4 (Normalising): skipped")
 	}
 	totalTime := data.EndTime.Sub(data.StartTime)
-	fmt.Fprintf(f, "Total Time:          %s\n", formatDuration(totalTime))
+	fmt.Fprintf(f, "Total Time:           %s\n", formatDuration(totalTime))
 
 	if data.DurationSecs > 0 {
 		audioDuration := time.Duration(data.DurationSecs * float64(time.Second))
@@ -956,43 +961,94 @@ func GenerateReport(data ReportData) error {
 	return nil
 }
 
-// formatNormalisationResult outputs the Pass 3 normalisation details
+// formatNormalisationResult outputs the loudnorm normalisation pass details
 func formatNormalisationResult(f *os.File, result *processor.NormalisationResult, config *processor.FilterChainConfig) {
-	writeSection(f, "Pass 3: Normalisation")
+	writeSection(f, "Pass 3: Loudnorm Measurement")
 
-	if result == nil {
-		fmt.Fprintln(f, "Status: NOT RUN (no output measurements)")
+	if result == nil || !config.LoudnormEnabled {
+		fmt.Fprintln(f, "Status: DISABLED")
 		return
 	}
 
 	if result.Skipped {
-		fmt.Fprintf(f, "Status: SKIPPED (already within ±%.1f LU of target)\n", config.NormTolerance)
-		fmt.Fprintf(f, "Measured: %.1f LUFS (target: %.1f LUFS)\n", result.InputLUFS, config.NormTargetI)
+		fmt.Fprintln(f, "Status: SKIPPED")
 		return
 	}
 
 	fmt.Fprintln(f, "Status: APPLIED")
-	fmt.Fprintf(f, "Pre-normalisation:  %.1f LUFS\n", result.InputLUFS)
-	fmt.Fprintf(f, "Gain applied:       %+.1f dB\n", result.GainApplied)
-	fmt.Fprintf(f, "Post-normalisation: %.1f LUFS\n", result.OutputLUFS)
-	fmt.Fprintf(f, "Target:             %.1f LUFS (±%.1f LU tolerance)\n", config.NormTargetI, config.NormTolerance)
+	fmt.Fprintln(f, "")
+	fmt.Fprintln(f, "Pre-normalisation (Pass 2 output):")
+	fmt.Fprintf(f, "  Integrated loudness: %.1f LUFS\n", result.InputLUFS)
+	fmt.Fprintf(f, "  True peak:           %.1f dBTP\n", result.InputTP)
+	fmt.Fprintln(f, "")
 
-	if result.WithinTarget {
-		fmt.Fprintln(f, "Result: ✓ Within target tolerance")
+	writeSection(f, "Pass 4: Loudnorm Normalisation")
+	fmt.Fprintln(f, "")
+	fmt.Fprintln(f, "Loudnorm configuration:")
+	if result.LinearModeForced {
+		fmt.Fprintf(f, "  Target I:   %.1f LUFS (adjusted from %.1f to preserve linear mode)\n",
+			result.EffectiveTargetI, result.RequestedTargetI)
 	} else {
-		deviation := math.Abs(result.OutputLUFS - config.NormTargetI)
-		fmt.Fprintf(f, "Result: ⚠ Outside tolerance (deviation: %.2f LU)\n", deviation)
+		fmt.Fprintf(f, "  Target I:   %.1f LUFS\n", config.LoudnormTargetI)
+	}
+	fmt.Fprintf(f, "  Target TP:  %.1f dBTP\n", config.LoudnormTargetTP)
+	fmt.Fprintf(f, "  Target LRA: %.1f LU\n", config.LoudnormTargetLRA)
+	fmt.Fprintf(f, "  Mode:       %s\n", loudnormModeString(config.LoudnormLinear))
+	fmt.Fprintf(f, "  Dual mono:  %v\n", config.LoudnormDualMono)
+	fmt.Fprintf(f, "  Offset:     %+.2f dB\n", result.GainApplied)
+
+	// Display loudnorm measurement (from Pass 3, used for Pass 4 parameters)
+	fmt.Fprintln(f, "")
+	fmt.Fprintln(f, "Loudnorm measurement (from Pass 3):")
+	fmt.Fprintf(f, "  Input I:         %.2f LUFS\n", result.InputLUFS)
+	fmt.Fprintf(f, "  Input TP:        %.2f dBTP\n", result.InputTP)
+	fmt.Fprintf(f, "  Target Offset:   %.2f dB (from loudnorm, used in Pass 4)\n", result.GainApplied)
+
+	// Display loudnorm filter's second pass stats (parsed from JSON output)
+	if result.LoudnormStats != nil {
+		stats := result.LoudnormStats
+		fmt.Fprintln(f, "")
+		fmt.Fprintln(f, "Loudnorm second pass diagnostics:")
+		fmt.Fprintf(f, "  Input I:         %s LUFS\n", stats.InputI)
+		fmt.Fprintf(f, "  Input TP:        %s dBTP\n", stats.InputTP)
+		fmt.Fprintf(f, "  Input LRA:       %s LU\n", stats.InputLRA)
+		fmt.Fprintf(f, "  Input Thresh:    %s LUFS\n", stats.InputThresh)
+		fmt.Fprintf(f, "  Output I:        %s LUFS\n", stats.OutputI)
+		fmt.Fprintf(f, "  Output TP:       %s dBTP\n", stats.OutputTP)
+		fmt.Fprintf(f, "  Output LRA:      %s LU\n", stats.OutputLRA)
+		fmt.Fprintf(f, "  Output Thresh:   %s LUFS\n", stats.OutputThresh)
+		fmt.Fprintf(f, "  Norm Type:       %s\n", stats.NormalizationType)
+		fmt.Fprintf(f, "  Target Offset:   %s dB\n", stats.TargetOffset)
 	}
 
-	// Show UREI 1176 limiter parameters if enabled
-	if config.UREI1176Enabled {
-		fmt.Fprintln(f, "")
-		fmt.Fprintln(f, "UREI 1176 Limiter (tuned from Pass 2 output):")
-		fmt.Fprintf(f, "  Attack:    %.1f ms\n", config.UREI1176Attack)
-		fmt.Fprintf(f, "  Release:   %.0f ms\n", config.UREI1176Release)
-		fmt.Fprintf(f, "  Ceiling:   %.1f dBTP\n", config.UREI1176Ceiling)
-		fmt.Fprintf(f, "  ASC Level: %.2f\n", config.UREI1176ASCLevel)
+	fmt.Fprintln(f, "")
+	fmt.Fprintln(f, "Post-normalisation:")
+	fmt.Fprintf(f, "  Integrated loudness: %.1f LUFS\n", result.OutputLUFS)
+	fmt.Fprintf(f, "  True peak:           %.1f dBTP\n", result.OutputTP)
+
+	fmt.Fprintln(f, "")
+	// Calculate deviation from effective target (what loudnorm was actually targeting)
+	effectiveDeviation := math.Abs(result.OutputLUFS - result.EffectiveTargetI)
+	if result.WithinTarget {
+		if result.LinearModeForced {
+			// Target was adjusted to preserve linear mode
+			requestedDeviation := math.Abs(result.OutputLUFS - result.RequestedTargetI)
+			fmt.Fprintf(f, "Result: ✓ Linear mode preserved (%.2f LU from effective target, %.2f LU from requested)\n",
+				effectiveDeviation, requestedDeviation)
+		} else {
+			fmt.Fprintf(f, "Result: ✓ Within target (deviation: %.2f LU)\n", effectiveDeviation)
+		}
+	} else {
+		fmt.Fprintf(f, "Result: ⚠ Outside tolerance (deviation: %.2f LU)\n", effectiveDeviation)
 	}
+}
+
+// loudnormModeString converts linear bool to readable mode string
+func loudnormModeString(linear bool) string {
+	if linear {
+		return "Linear (target adjusted to prevent dynamic fallback)"
+	}
+	return "Dynamic"
 }
 
 // formatDuration formats a duration in a human-readable way

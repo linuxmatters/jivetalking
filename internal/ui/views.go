@@ -102,11 +102,13 @@ func renderFileDetails(file FileProgress) string {
 	case 2:
 		passName = "Processing Audio"
 	case 3:
+		passName = "Measuring Levels"
+	case 4:
 		passName = "Normalising Audio"
 	default:
 		passName = "Processing"
 	}
-	content.WriteString(fmt.Sprintf("Pass %d/3: %s\n", file.CurrentPass, passName))
+	content.WriteString(fmt.Sprintf("Pass %d/4: %s\n", file.CurrentPass, passName))
 
 	// Progress bar
 	content.WriteString(renderProgressBar(file.Progress, 40))

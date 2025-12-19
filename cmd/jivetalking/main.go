@@ -104,7 +104,7 @@ func main() {
 				})
 				continue
 			}
-			pass2Time := time.Since(pass2Start) - ph.pass1Time - ph.pass3Time
+			pass2Time := time.Since(pass2Start) - ph.pass1Time - ph.pass3Time - ph.pass4Time
 
 			// Get file metadata for logging
 			var metadata *audio.Metadata
@@ -126,6 +126,7 @@ func main() {
 					Pass1Time:    ph.pass1Time,
 					Pass2Time:    pass2Time,
 					Pass3Time:    ph.pass3Time,
+					Pass4Time:    ph.pass4Time,
 					Result:       result,
 					SampleRate:   metadata.SampleRate,
 					Channels:     metadata.Channels,
@@ -167,6 +168,8 @@ type progressHandler struct {
 	pass1Time  time.Duration
 	pass3Start time.Time
 	pass3Time  time.Duration
+	pass4Start time.Time
+	pass4Time  time.Duration
 }
 
 func (ph *progressHandler) callback(pass int, passName string, progress float64, level float64, measurements *processor.AudioMeasurements) {
@@ -181,6 +184,10 @@ func (ph *progressHandler) callback(pass int, passName string, progress float64,
 		ph.pass3Start = time.Now()
 	} else if pass == 3 && progress == 1.0 {
 		ph.pass3Time = time.Since(ph.pass3Start)
+	} else if pass == 4 && progress == 0.0 {
+		ph.pass4Start = time.Now()
+	} else if pass == 4 && progress == 1.0 {
+		ph.pass4Time = time.Since(ph.pass4Start)
 	}
 
 	ph.p.Send(ui.ProgressMsg{

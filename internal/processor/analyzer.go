@@ -648,12 +648,13 @@ var (
 	metaKeyNumberOfSamples   = ffmpeg.GlobalCStr("lavfi.astats.1.Number_of_samples")
 
 	// ebur128 metadata keys
-	metaKeyEbur128I          = ffmpeg.GlobalCStr("lavfi.r128.I")
-	metaKeyEbur128M          = ffmpeg.GlobalCStr("lavfi.r128.M")
-	metaKeyEbur128S          = ffmpeg.GlobalCStr("lavfi.r128.S")
-	metaKeyEbur128TruePeak   = ffmpeg.GlobalCStr("lavfi.r128.true_peak")
-	metaKeyEbur128SamplePeak = ffmpeg.GlobalCStr("lavfi.r128.sample_peak")
-	metaKeyEbur128LRA        = ffmpeg.GlobalCStr("lavfi.r128.LRA")
+	metaKeyEbur128I            = ffmpeg.GlobalCStr("lavfi.r128.I")
+	metaKeyEbur128M            = ffmpeg.GlobalCStr("lavfi.r128.M")
+	metaKeyEbur128S            = ffmpeg.GlobalCStr("lavfi.r128.S")
+	metaKeyEbur128TruePeak     = ffmpeg.GlobalCStr("lavfi.r128.true_peak")
+	metaKeyEbur128SamplePeak   = ffmpeg.GlobalCStr("lavfi.r128.sample_peak")
+	metaKeyEbur128LRA          = ffmpeg.GlobalCStr("lavfi.r128.LRA")
+	metaKeyEbur128TargetThresh = ffmpeg.GlobalCStr("lavfi.r128.target_threshold")
 
 	// Silence detection metadata keys (from silencedetect filter)
 	// For mono audio these are lavfi.silence_start.1, lavfi.silence_end.1, lavfi.silence_duration.1
@@ -1231,9 +1232,21 @@ type OutputMeasurements struct {
 	BaseMeasurements
 
 	// Output-specific loudness measurements from ebur128
-	OutputI   float64 `json:"output_i"`   // Integrated loudness (LUFS)
-	OutputTP  float64 `json:"output_tp"`  // True peak (dBTP)
-	OutputLRA float64 `json:"output_lra"` // Loudness range (LU)
+	OutputI      float64 `json:"output_i"`      // Integrated loudness (LUFS)
+	OutputTP     float64 `json:"output_tp"`     // True peak (dBTP)
+	OutputLRA    float64 `json:"output_lra"`    // Loudness range (LU)
+	OutputThresh float64 `json:"output_thresh"` // Gating threshold (LUFS) - for loudnorm
+	TargetOffset float64 `json:"target_offset"` // Pre-limiter offset (dB) - from loudnorm measurement
+
+	// Loudnorm measurement from Pass 2 analysis chain
+	// These come from loudnorm's first pass (measurement mode, without linear=true)
+	// and are used for the application pass in Pass 3
+	LoudnormInputI       float64 `json:"loudnorm_input_i"`       // Loudnorm's measured integrated loudness (LUFS)
+	LoudnormInputTP      float64 `json:"loudnorm_input_tp"`      // Loudnorm's measured true peak (dBTP)
+	LoudnormInputLRA     float64 `json:"loudnorm_input_lra"`     // Loudnorm's measured loudness range (LU)
+	LoudnormInputThresh  float64 `json:"loudnorm_input_thresh"`  // Loudnorm's measured threshold (LUFS)
+	LoudnormTargetOffset float64 `json:"loudnorm_target_offset"` // Loudnorm's calculated offset for second pass
+	LoudnormMeasured     bool    `json:"loudnorm_measured"`      // True if loudnorm measurement was captured
 
 	// Silence region analysis (same region as Pass 1, for noise reduction comparison)
 	SilenceSample *SilenceAnalysis `json:"silence_sample,omitempty"` // Measurements from same silence region
@@ -1248,13 +1261,14 @@ type outputMetadataAccumulators struct {
 	baseMetadataAccumulators
 
 	// ebur128 measurements (cumulative - we keep latest values)
-	ebur128OutputI   float64
-	ebur128OutputM   float64 // Momentary loudness
-	ebur128OutputS   float64 // Short-term loudness
-	ebur128OutputTP  float64
-	ebur128OutputSP  float64 // Sample peak
-	ebur128OutputLRA float64
-	ebur128Found     bool
+	ebur128OutputI      float64
+	ebur128OutputM      float64 // Momentary loudness
+	ebur128OutputS      float64 // Short-term loudness
+	ebur128OutputTP     float64
+	ebur128OutputSP     float64 // Sample peak
+	ebur128OutputLRA    float64
+	ebur128OutputThresh float64 // Gating threshold for loudnorm
+	ebur128Found        bool
 }
 
 // extractOutputFrameMetadata extracts audio analysis metadata from a Pass 2 filtered frame.
@@ -1382,6 +1396,10 @@ func extractOutputFrameMetadata(metadata *ffmpeg.AVDictionary, acc *outputMetada
 	if value, ok := getFloatMetadata(metadata, metaKeyEbur128LRA); ok {
 		acc.ebur128OutputLRA = value
 	}
+	// Gating threshold (for loudnorm two-pass mode)
+	if value, ok := getFloatMetadata(metadata, metaKeyEbur128TargetThresh); ok {
+		acc.ebur128OutputThresh = value
+	}
 }
 
 // finalizeOutputMeasurements converts accumulated values to OutputMeasurements struct.
@@ -1422,9 +1440,17 @@ func finalizeOutputMeasurements(acc *outputMetadataAccumulators) *OutputMeasurem
 			NumberOfSamples:   acc.astatsNumberOfSamples,
 		},
 		// Output-specific loudness measurements
-		OutputI:   acc.ebur128OutputI,
-		OutputTP:  acc.ebur128OutputTP,
-		OutputLRA: acc.ebur128OutputLRA,
+		OutputI:      acc.ebur128OutputI,
+		OutputTP:     acc.ebur128OutputTP,
+		OutputLRA:    acc.ebur128OutputLRA,
+		OutputThresh: acc.ebur128OutputThresh,
+		TargetOffset: 0.0, // Will be calculated in Pass 3
+	}
+
+	// If ebur128 target_threshold metadata is missing, calculate it manually
+	// according to EBU R128 standard: gating threshold = integrated loudness - 10 LU
+	if m.OutputThresh == 0.0 && m.OutputI != 0.0 {
+		m.OutputThresh = m.OutputI - 10.0
 	}
 
 	// Calculate average spectral statistics from aspectralstats
