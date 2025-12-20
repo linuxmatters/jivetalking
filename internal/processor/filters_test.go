@@ -1181,6 +1181,11 @@ func TestBuildDNS1500Filter(t *testing.T) {
 		if !strings.Contains(filter, "rf=-43.0") {
 			t.Errorf("Filter missing rf=-43.0\nGot: %s", filter)
 		}
+
+		// Must contain compand filter for residual noise suppression
+		if !strings.Contains(filter, "compand=") {
+			t.Errorf("Filter missing compand=\nGot: %s", filter)
+		}
 	})
 
 	t.Run("track noise disabled", func(t *testing.T) {
@@ -1195,6 +1200,43 @@ func TestBuildDNS1500Filter(t *testing.T) {
 		// Must contain tn=0 when track noise is disabled
 		if !strings.Contains(filter, "tn=0") {
 			t.Errorf("Filter should have tn=0 when TrackNoise=false\nGot: %s", filter)
+		}
+	})
+
+	t.Run("compand uses configured parameters", func(t *testing.T) {
+		config := newTestConfig()
+		config.DNS1500Enabled = true
+		config.DNS1500SilenceStart = 1.0
+		config.DNS1500SilenceEnd = 2.0
+		config.DNS1500CompandThreshold = -60.0
+		config.DNS1500CompandExpansion = 20.0
+		config.DNS1500CompandAttack = 0.005
+		config.DNS1500CompandDecay = 0.100
+		config.DNS1500CompandKnee = 6.0
+
+		filter := config.buildDNS1500Filter()
+
+		// Must contain compand with correct timing
+		if !strings.Contains(filter, "attacks=0.005") {
+			t.Errorf("Filter missing attacks=0.005\nGot: %s", filter)
+		}
+		if !strings.Contains(filter, "decays=0.100") {
+			t.Errorf("Filter missing decays=0.100\nGot: %s", filter)
+		}
+		if !strings.Contains(filter, "soft-knee=6.0") {
+			t.Errorf("Filter missing soft-knee=6.0\nGot: %s", filter)
+		}
+
+		// Must contain FLAT reduction curve points
+		// With threshold -60 and expansion 20: -90→-110, -75→-95, -60→-60
+		if !strings.Contains(filter, "-90/-110") {
+			t.Errorf("Filter missing -90/-110 point\nGot: %s", filter)
+		}
+		if !strings.Contains(filter, "-75/-95") {
+			t.Errorf("Filter missing -75/-95 point\nGot: %s", filter)
+		}
+		if !strings.Contains(filter, "-60/-60") {
+			t.Errorf("Filter missing threshold point -60/-60\nGot: %s", filter)
 		}
 	})
 }

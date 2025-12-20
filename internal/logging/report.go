@@ -756,6 +756,13 @@ func formatDNS1500Filter(f *os.File, cfg *processor.FilterChainConfig, m *proces
 	fmt.Fprintf(f, "        Residual Floor: %.1f dB\n", cfg.DNS1500ResidFloor)
 	fmt.Fprintf(f, "        Silence Window: %.3fs – %.3fs\n", cfg.DNS1500SilenceStart, cfg.DNS1500SilenceEnd)
 
+	// Show compand (residual crusher) parameters
+	fmt.Fprintf(f, "        Compand: threshold %.0f dB, expansion %.0f dB\n",
+		cfg.DNS1500CompandThreshold, cfg.DNS1500CompandExpansion)
+	fmt.Fprintf(f, "          Timing: attack %.0fms, decay %.0fms, knee %.0f dB\n",
+		cfg.DNS1500CompandAttack*1000, cfg.DNS1500CompandDecay*1000, cfg.DNS1500CompandKnee)
+	fmt.Fprintf(f, "          Curve: FLAT (uniform expansion below threshold)\n")
+
 	// Show adaptive rationale
 	if m != nil && m.NoiseProfile != nil {
 		np := m.NoiseProfile
@@ -785,6 +792,7 @@ func formatDNS1500Filter(f *os.File, cfg *processor.FilterChainConfig, m *proces
 		fmt.Fprintf(f, "        Rationale: measured floor %.1f dBFS, %s noise → %.1f dB reduction\n",
 			np.MeasuredNoiseFloor, noiseChar, cfg.DNS1500NoiseReduce)
 		fmt.Fprintf(f, "        Adaptivity: LRA %.1f LU → %s adaptation\n", m.InputLRA, adaptivityDesc)
+		fmt.Fprintf(f, "        Compand target: -80 dBFS → %.0f dB expansion gap\n", cfg.DNS1500CompandExpansion)
 		fmt.Fprintf(f, "        DNS-1500 philosophy: learn noise from silence, track continuously\n")
 	}
 }

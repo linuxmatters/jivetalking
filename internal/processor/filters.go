@@ -342,6 +342,15 @@ type FilterChainConfig struct {
 	DNS1500SilenceStart float64 // Timestamp (seconds) to start noise sampling
 	DNS1500SilenceEnd   float64 // Timestamp (seconds) to stop noise sampling
 
+	// DNS-1500 Compand - single-band soft expander for residual noise suppression
+	// Applied after afftdn to crush residual noise using FLAT reduction curve
+	// Parameters derived from Pass 1 measurements (NoiseProfile)
+	DNS1500CompandThreshold float64 // Expansion threshold (dB) - set to input noise floor (trough)
+	DNS1500CompandExpansion float64 // Expansion depth (dB) - gap between input floor and target floor
+	DNS1500CompandAttack    float64 // Attack time (seconds) - fixed at 5ms for speech
+	DNS1500CompandDecay     float64 // Decay time (seconds) - fixed at 100ms for speech
+	DNS1500CompandKnee      float64 // Soft knee (dB) - fixed at 6dB for transparency
+
 	// Dolby SR Denoise - 6-band multiband compander inspired by "Least Treatment" philosophy
 	// Uses mcompand with FLAT reduction curve for artifact-free noise elimination
 	// Used as fallback when DNS-1500 cannot be enabled (no silence detected)
@@ -500,6 +509,14 @@ func DefaultFilterConfig() *FilterChainConfig {
 		DNS1500ResidFloor:   -38.0, // Overridden: relative to MeasuredNoiseFloor
 		DNS1500SilenceStart: 0.0,   // Overridden: NoiseProfile.Start
 		DNS1500SilenceEnd:   0.0,   // Overridden: NoiseProfile.Start + Duration
+
+		// DNS-1500 Compand - single-band soft expander for residual noise suppression
+		// Applied after afftdn to crush residual noise; all parameters from Pass 1 measurements
+		DNS1500CompandThreshold: -50.0, // Overridden: NoiseProfile.MeasuredNoiseFloor (input trough)
+		DNS1500CompandExpansion: 10.0,  // Overridden: gap between input floor and target floor
+		DNS1500CompandAttack:    0.005, // 5ms - fixed, empirically validated for speech
+		DNS1500CompandDecay:     0.100, // 100ms - fixed, empirically validated for speech
+		DNS1500CompandKnee:      6.0,   // 6dB - fixed, soft knee for transparency
 
 		// Dolby SR-Inspired Denoise - 6-band multiband compander
 		// Implements SR philosophy: Least Treatment via FLAT reduction curve
@@ -925,14 +942,16 @@ func buildFlatReductionCurve(expansionDB, thresholdDB float64) string {
 }
 
 // buildDNS1500Filter builds the CEDAR DNS-1500-inspired noise reduction filter.
-// Uses FFmpeg's afftdn with inline noise learning via asendcmd during detected silence.
+// Uses FFmpeg's afftdn with inline noise learning via asendcmd during detected silence,
+// followed by a single-band compand soft expander to crush residual noise.
 // This is the primary noise reduction filter when valid silence timestamps are available.
 // Falls back to DolbySR (mcompand) when no suitable silence is detected.
 //
 // Filter graph structure:
 //
 //	asendcmd=c='start_time afftdn@dns1500 sn start; end_time afftdn@dns1500 sn stop',
-//	afftdn@dns1500=nr=X:nf=Y:tn=1:ad=Z:gs=W:rf=R
+//	afftdn@dns1500=nr=X:nf=Y:tn=1:ad=Z:gs=W:rf=R,
+//	compand=attacks=A:decays=D:soft-knee=K:points=CURVE
 //
 // The asendcmd filter sends commands at specific timestamps:
 //   - At silence start: triggers noise sampling start
@@ -945,6 +964,11 @@ func buildFlatReductionCurve(expansionDB, thresholdDB float64) string {
 //   - ad: adaptivity rate (0-1, higher = slower adaptation)
 //   - gs: gain smoothing across frequency bins (0-50)
 //   - rf: residual floor level (-80 to -20 dB)
+//
+// compand parameters (derived from Pass 1 measurements):
+//   - threshold: input noise floor (where noise lives)
+//   - expansion: gap between input floor and target floor (-80 dBFS)
+//   - Uses FLAT reduction curve: uniform expansion below threshold
 func (cfg *FilterChainConfig) buildDNS1500Filter() string {
 	if !cfg.DNS1500Enabled {
 		return ""
@@ -974,8 +998,37 @@ func (cfg *FilterChainConfig) buildDNS1500Filter() string {
 		cfg.DNS1500ResidFloor,
 	)
 
-	// Return combined filter chain
-	return fmt.Sprintf("%s,%s", cmdSpec, afftdnSpec)
+	// Build compand filter for residual noise suppression
+	// Uses FLAT reduction curve: every point below threshold gets same reduction
+	compandSpec := cfg.buildDNS1500CompandFilter()
+
+	// Return combined filter chain: asendcmd → afftdn → compand
+	return fmt.Sprintf("%s,%s,%s", cmdSpec, afftdnSpec, compandSpec)
+}
+
+// buildDNS1500CompandFilter builds the compand filter for residual noise suppression.
+// Uses FLAT reduction curve: uniform expansion below threshold.
+// Parameters are derived from Pass 1 measurements in tuneDNS1500.
+func (cfg *FilterChainConfig) buildDNS1500CompandFilter() string {
+	// Build FLAT reduction curve
+	// Every point below threshold gets the same expansion (reduction)
+	// Points: -90 → (-90 - exp), -75 → (-75 - exp), threshold → threshold, -30 → -30, 0 → 0
+	exp := cfg.DNS1500CompandExpansion
+	thresh := cfg.DNS1500CompandThreshold
+
+	out90 := -90.0 - exp
+	out75 := -75.0 - exp
+
+	// Format: attacks:decays:soft-knee:points
+	// Points format: in1/out1|in2/out2|...
+	return fmt.Sprintf(
+		"compand=attacks=%.3f:decays=%.3f:soft-knee=%.1f:points=-90/%.0f|-75/%.0f|%.0f/%.0f|-30/-30|0/0",
+		cfg.DNS1500CompandAttack,
+		cfg.DNS1500CompandDecay,
+		cfg.DNS1500CompandKnee,
+		out90, out75,
+		thresh, thresh,
+	)
 }
 
 // buildDS201GateFilter builds the DS201-inspired gate filter specification.

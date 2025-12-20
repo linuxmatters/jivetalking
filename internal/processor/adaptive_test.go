@@ -2469,6 +2469,118 @@ func TestTuneDNS1500(t *testing.T) {
 			t.Error("DNS1500TrackNoise should always be enabled by tuneDNS1500")
 		}
 	})
+
+	t.Run("compand threshold set to input noise floor", func(t *testing.T) {
+		config := newTestConfig()
+		measurements := &AudioMeasurements{
+			NoiseProfile: &NoiseProfile{
+				Start:              1 * time.Second,
+				Duration:           500 * time.Millisecond,
+				MeasuredNoiseFloor: -65.0,
+			},
+			InputLRA: 10.0,
+		}
+
+		tuneDNS1500(config, measurements)
+
+		if config.DNS1500CompandThreshold != -65.0 {
+			t.Errorf("DNS1500CompandThreshold should equal noise floor -65.0, got %.1f",
+				config.DNS1500CompandThreshold)
+		}
+	})
+
+	t.Run("compand expansion derived from gap to target floor", func(t *testing.T) {
+		config := newTestConfig()
+		measurements := &AudioMeasurements{
+			NoiseProfile: &NoiseProfile{
+				Start:              1 * time.Second,
+				Duration:           500 * time.Millisecond,
+				MeasuredNoiseFloor: -60.0, // Gap to -80 target = 20 dB
+			},
+			InputLRA: 10.0,
+		}
+
+		tuneDNS1500(config, measurements)
+
+		// Expansion should be gap between -60 and -80 = 20 dB
+		expectedExpansion := 20.0
+		if config.DNS1500CompandExpansion != expectedExpansion {
+			t.Errorf("DNS1500CompandExpansion should be %.1f, got %.1f",
+				expectedExpansion, config.DNS1500CompandExpansion)
+		}
+	})
+
+	t.Run("compand expansion clamped to min/max", func(t *testing.T) {
+		// Test minimum clamp (very clean source)
+		config := newTestConfig()
+		measurements := &AudioMeasurements{
+			NoiseProfile: &NoiseProfile{
+				Start:              1 * time.Second,
+				Duration:           500 * time.Millisecond,
+				MeasuredNoiseFloor: -82.0, // Gap to -80 = -2 dB (below min)
+			},
+			InputLRA: 10.0,
+		}
+
+		tuneDNS1500(config, measurements)
+
+		// Should be clamped to minimum (6 dB)
+		if config.DNS1500CompandExpansion != 6.0 {
+			t.Errorf("DNS1500CompandExpansion should be clamped to 6.0, got %.1f",
+				config.DNS1500CompandExpansion)
+		}
+
+		// Test maximum clamp (very noisy source)
+		config2 := newTestConfig()
+		measurements2 := &AudioMeasurements{
+			NoiseProfile: &NoiseProfile{
+				Start:              1 * time.Second,
+				Duration:           500 * time.Millisecond,
+				MeasuredNoiseFloor: -40.0, // Gap to -80 = 40 dB (above max)
+			},
+			InputLRA: 10.0,
+		}
+
+		tuneDNS1500(config2, measurements2)
+
+		// Should be clamped to maximum (30 dB)
+		if config2.DNS1500CompandExpansion != 30.0 {
+			t.Errorf("DNS1500CompandExpansion should be clamped to 30.0, got %.1f",
+				config2.DNS1500CompandExpansion)
+		}
+	})
+
+	t.Run("compand fixed timing parameters", func(t *testing.T) {
+		config := newTestConfig()
+		measurements := &AudioMeasurements{
+			NoiseProfile: &NoiseProfile{
+				Start:              1 * time.Second,
+				Duration:           500 * time.Millisecond,
+				MeasuredNoiseFloor: -55.0,
+			},
+			InputLRA: 10.0,
+		}
+
+		tuneDNS1500(config, measurements)
+
+		// Attack should be 5ms
+		if config.DNS1500CompandAttack != 0.005 {
+			t.Errorf("DNS1500CompandAttack should be 0.005, got %.3f",
+				config.DNS1500CompandAttack)
+		}
+
+		// Decay should be 100ms
+		if config.DNS1500CompandDecay != 0.100 {
+			t.Errorf("DNS1500CompandDecay should be 0.100, got %.3f",
+				config.DNS1500CompandDecay)
+		}
+
+		// Knee should be 6 dB
+		if config.DNS1500CompandKnee != 6.0 {
+			t.Errorf("DNS1500CompandKnee should be 6.0, got %.1f",
+				config.DNS1500CompandKnee)
+		}
+	})
 }
 
 func TestDNS1500DisablesDolbySR(t *testing.T) {

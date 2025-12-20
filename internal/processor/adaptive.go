@@ -143,6 +143,16 @@ const (
 	dns1500GainSmoothNoisy       = 15    // Higher smoothing for noisy sources
 	dns1500ResidualHeadroomNoisy = 8.0   // Less headroom = higher residual floor
 
+	// DNS-1500 Compand constants (single-band soft expander for residual noise)
+	// Uses FLAT reduction curve: every point below threshold gets same reduction
+	// Parameters are fixed/empirically validated for speech (from mcompand-spike.sh)
+	dns1500CompandTargetFloor  = -80.0 // dBFS - target noise floor after compand
+	dns1500CompandAttack       = 0.005 // 5ms - fast enough to catch noise between words
+	dns1500CompandDecay        = 0.100 // 100ms - slow enough to avoid pumping
+	dns1500CompandKnee         = 6.0   // 6dB soft knee for transparency
+	dns1500CompandExpansionMin = 6.0   // Minimum expansion (clean sources)
+	dns1500CompandExpansionMax = 30.0  // Maximum expansion (very noisy sources)
+
 	// DS201 Gate coordination with DNS-1500
 	// When DNS-1500 is active, the gate sees post-NR audio, so we adjust threshold/range
 	// to account for the reduced noise floor after NR processing
@@ -1123,6 +1133,21 @@ func tuneDNS1500(config *FilterChainConfig, measurements *AudioMeasurements) {
 
 	// ─── Track noise always enabled ─────────────────────────────────────────────
 	config.DNS1500TrackNoise = true
+
+	// ─── Compand parameters (residual noise crusher) ────────────────────────────
+	// Threshold: set to input noise floor (where noise lives)
+	// This is the measured trough from Pass 1, not the afftdn residual
+	config.DNS1500CompandThreshold = np.MeasuredNoiseFloor
+
+	// Expansion depth: gap between input noise floor and target floor
+	// Larger gap = more aggressive expansion needed
+	expansionGap := np.MeasuredNoiseFloor - dns1500CompandTargetFloor
+	config.DNS1500CompandExpansion = clamp(expansionGap, dns1500CompandExpansionMin, dns1500CompandExpansionMax)
+
+	// Fixed timing parameters (empirically validated for speech)
+	config.DNS1500CompandAttack = dns1500CompandAttack
+	config.DNS1500CompandDecay = dns1500CompandDecay
+	config.DNS1500CompandKnee = dns1500CompandKnee
 }
 
 // tuneDolbySR adapts the Dolby SR-inspired 6-band mcompand expander based on measurements.
