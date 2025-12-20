@@ -236,6 +236,9 @@ func measureWithLoudnorm(inputPath string, config *FilterChainConfig, progressCa
 //
 // Solving for ceiling: ceiling = target_TP - gainRequired - safety_margin
 //
+// FFmpeg alimiter constraint: the limit parameter accepts 0.0625 to 1.0 (linear),
+// which corresponds to -24.08 dBTP to 0 dBTP. Ceilings below this are clamped.
+//
 // Parameters:
 //   - measured_I: Measured integrated loudness from Pass 3 (LUFS)
 //   - measured_TP: Measured true peak from Pass 3 (dBTP)
@@ -243,24 +246,35 @@ func measureWithLoudnorm(inputPath string, config *FilterChainConfig, progressCa
 //   - target_TP: Target true peak (dBTP), typically -2.0
 //
 // Returns:
-//   - ceiling: The limiter ceiling in dBTP
+//   - ceiling: The limiter ceiling in dBTP (clamped to minLimiterCeilingDB if needed)
 //   - needed: True if limiting is required (projected TP exceeds target)
-func calculateLimiterCeiling(measured_I, measured_TP, target_I, target_TP float64) (ceiling float64, needed bool) {
+//   - clamped: True if ceiling was clamped to minimum (loudnorm may need to adjust target)
+func calculateLimiterCeiling(measured_I, measured_TP, target_I, target_TP float64) (ceiling float64, needed bool, clamped bool) {
 	// Safety margin accounts for loudnorm measurement precision and rounding
 	const safetyMargin = 0.5 // dB
+
+	// FFmpeg alimiter minimum: limit=0.0625 = 20*log10(0.0625) ≈ -24.08 dBTP
+	// Use -24.0 dBTP as practical minimum with small safety buffer
+	const minLimiterCeilingDB = -24.0
 
 	gainRequired := target_I - measured_I
 	projectedTP := measured_TP + gainRequired
 
 	// No limiting needed if linear mode already possible
 	if projectedTP <= target_TP {
-		return 0, false
+		return 0, false, false
 	}
 
 	// Calculate ceiling: target_TP - gainRequired - safetyMargin
 	ceiling = target_TP - gainRequired - safetyMargin
 
-	return ceiling, true
+	// Clamp to alimiter's minimum supported ceiling
+	if ceiling < minLimiterCeilingDB {
+		ceiling = minLimiterCeilingDB
+		clamped = true
+	}
+
+	return ceiling, true, clamped
 }
 
 // calculateLinearModeTarget calculates the target I and offset that ensure loudnorm
@@ -390,7 +404,9 @@ func ApplyNormalisation(
 	}
 
 	// Calculate limiter ceiling (actual limiting happens in buildLoudnormFilterSpec)
-	limiterCeiling, limiterNeeded := calculateLimiterCeiling(
+	// clamped=true means ceiling was limited to alimiter's minimum (-24 dBTP),
+	// so loudnorm may still need to adjust target for very quiet audio
+	limiterCeiling, limiterNeeded, limiterClamped := calculateLimiterCeiling(
 		measurement.InputI,
 		measurement.InputTP,
 		config.LoudnormTargetI,
@@ -403,8 +419,10 @@ func ApplyNormalisation(
 	//
 	// IMPORTANT: When the limiter is enabled, loudnorm sees the LIMITED peaks (limiterCeiling),
 	// not the original measured peaks. This creates the headroom needed for full gain.
+	// EXCEPTION: When clamped, the ceiling isn't low enough for full gain, so use original TP
+	// to let calculateLinearModeTarget adjust the target appropriately.
 	effectiveTP := measurement.InputTP
-	if limiterNeeded {
+	if limiterNeeded && !limiterClamped {
 		effectiveTP = limiterCeiling
 	}
 	effectiveTargetI, _, linearPossible := calculateLinearModeTarget(
@@ -652,7 +670,7 @@ func buildLoudnormFilterSpec(config *FilterChainConfig, measurement *LoudnormMea
 
 	// 1. Pre-limiting with adaptive ceiling (1176-inspired peak limiter)
 	// Calculate if limiting is needed to allow loudnorm's full linear gain
-	ceiling, needsLimiting := calculateLimiterCeiling(
+	ceiling, needsLimiting, _ := calculateLimiterCeiling(
 		measurement.InputI,
 		measurement.InputTP,
 		config.LoudnormTargetI,

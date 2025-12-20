@@ -125,6 +125,8 @@ func TestCalculateLinearModeTarget(t *testing.T) {
 func TestCalculateLimiterCeiling(t *testing.T) {
 	// Safety margin is 0.5 dB in the implementation
 	const safetyMargin = 0.5
+	// Minimum ceiling is -24.0 dBTP (alimiter limit=0.0625)
+	const minCeiling = -24.0
 
 	tests := []struct {
 		name        string
@@ -134,6 +136,7 @@ func TestCalculateLimiterCeiling(t *testing.T) {
 		target_TP   float64
 		wantCeiling float64
 		wantNeeded  bool
+		wantClamped bool
 	}{
 		{
 			name:        "limiting needed - typical podcast",
@@ -146,6 +149,7 @@ func TestCalculateLimiterCeiling(t *testing.T) {
 			// ceiling = -2.0 - 8.9 - 0.5 = -11.4 dBTP
 			wantCeiling: -11.4,
 			wantNeeded:  true,
+			wantClamped: false,
 		},
 		{
 			name:        "limiting needed - loud peaks",
@@ -158,6 +162,7 @@ func TestCalculateLimiterCeiling(t *testing.T) {
 			// ceiling = -2.0 - 4.0 - 0.5 = -6.5 dBTP
 			wantCeiling: -6.5,
 			wantNeeded:  true,
+			wantClamped: false,
 		},
 		{
 			name:        "no limiting needed - quiet peaks",
@@ -169,6 +174,7 @@ func TestCalculateLimiterCeiling(t *testing.T) {
 			// projected TP = -10.0 + 4.0 = -6.0 dBTP (under -2.0)
 			wantCeiling: 0,
 			wantNeeded:  false,
+			wantClamped: false,
 		},
 		{
 			name:        "no limiting needed - needs attenuation",
@@ -180,6 +186,7 @@ func TestCalculateLimiterCeiling(t *testing.T) {
 			// projected TP = -1.0 + (-4.0) = -5.0 dBTP (under -2.0)
 			wantCeiling: 0,
 			wantNeeded:  false,
+			wantClamped: false,
 		},
 		{
 			name:        "exactly at boundary - no limiting",
@@ -191,28 +198,61 @@ func TestCalculateLimiterCeiling(t *testing.T) {
 			// projected TP = -6.0 + 4.0 = -2.0 dBTP (exactly at target)
 			wantCeiling: 0,
 			wantNeeded:  false,
+			wantClamped: false,
 		},
 		{
-			name:        "very quiet audio - large limiting needed",
+			name:        "very quiet audio - clamped to minimum",
 			measured_I:  -43.0,
 			measured_TP: -20.0,
 			target_I:    -16.0,
 			target_TP:   -2.0,
 			// gain = -16.0 - (-43.0) = 27.0 dB
 			// projected TP = -20.0 + 27.0 = 7.0 dBTP (exceeds -2.0)
-			// ceiling = -2.0 - 27.0 - 0.5 = -29.5 dBTP
-			wantCeiling: -29.5,
+			// calculated ceiling = -2.0 - 27.0 - 0.5 = -29.5 dBTP
+			// but -29.5 < -24.0, so clamped to -24.0 dBTP
+			wantCeiling: minCeiling,
 			wantNeeded:  true,
+			wantClamped: true,
+		},
+		{
+			name:        "just under minimum - clamped",
+			measured_I:  -38.0,
+			measured_TP: -15.0,
+			target_I:    -16.0,
+			target_TP:   -2.0,
+			// gain = -16.0 - (-38.0) = 22.0 dB
+			// projected TP = -15.0 + 22.0 = 7.0 dBTP (exceeds -2.0)
+			// calculated ceiling = -2.0 - 22.0 - 0.5 = -24.5 dBTP
+			// -24.5 < -24.0, so clamped to -24.0 dBTP
+			wantCeiling: minCeiling,
+			wantNeeded:  true,
+			wantClamped: true,
+		},
+		{
+			name:        "just above minimum - not clamped",
+			measured_I:  -37.0,
+			measured_TP: -15.0,
+			target_I:    -16.0,
+			target_TP:   -2.0,
+			// gain = -16.0 - (-37.0) = 21.0 dB
+			// projected TP = -15.0 + 21.0 = 6.0 dBTP (exceeds -2.0)
+			// ceiling = -2.0 - 21.0 - 0.5 = -23.5 dBTP (above -24.0)
+			wantCeiling: -23.5,
+			wantNeeded:  true,
+			wantClamped: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ceiling, needed := calculateLimiterCeiling(
+			ceiling, needed, clamped := calculateLimiterCeiling(
 				tt.measured_I, tt.measured_TP, tt.target_I, tt.target_TP)
 
 			if needed != tt.wantNeeded {
 				t.Errorf("needed = %v, want %v", needed, tt.wantNeeded)
+			}
+			if clamped != tt.wantClamped {
+				t.Errorf("clamped = %v, want %v", clamped, tt.wantClamped)
 			}
 			if needed && math.Abs(ceiling-tt.wantCeiling) > 0.01 {
 				t.Errorf("ceiling = %.2f dBTP, want %.2f dBTP", ceiling, tt.wantCeiling)
