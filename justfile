@@ -164,7 +164,7 @@ presenters: mark martin popey
 logs: mark-logs martin-logs popey-logs
 
 # Show all presenters stashed logs
-stahsed-logs: mark-stashed-logs martin-stashed-logs popey-stashed-logs
+stashed-logs: mark-stashed-logs martin-stashed-logs popey-stashed-logs
 
 # stash all presenters logs
 stash: mark-log-stash martin-log-stash popey-log-stash

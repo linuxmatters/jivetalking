@@ -121,3 +121,102 @@ func TestCalculateLinearModeTarget(t *testing.T) {
 		})
 	}
 }
+
+func TestCalculateLimiterCeiling(t *testing.T) {
+	// Safety margin is 0.5 dB in the implementation
+	const safetyMargin = 0.5
+
+	tests := []struct {
+		name        string
+		measured_I  float64
+		measured_TP float64
+		target_I    float64
+		target_TP   float64
+		wantCeiling float64
+		wantNeeded  bool
+	}{
+		{
+			name:        "limiting needed - typical podcast",
+			measured_I:  -24.9,
+			measured_TP: -5.0,
+			target_I:    -16.0,
+			target_TP:   -2.0,
+			// gain = -16.0 - (-24.9) = 8.9 dB
+			// projected TP = -5.0 + 8.9 = 3.9 dBTP (exceeds -2.0)
+			// ceiling = -2.0 - 8.9 - 0.5 = -11.4 dBTP
+			wantCeiling: -11.4,
+			wantNeeded:  true,
+		},
+		{
+			name:        "limiting needed - loud peaks",
+			measured_I:  -20.0,
+			measured_TP: -3.0,
+			target_I:    -16.0,
+			target_TP:   -2.0,
+			// gain = -16.0 - (-20.0) = 4.0 dB
+			// projected TP = -3.0 + 4.0 = 1.0 dBTP (exceeds -2.0)
+			// ceiling = -2.0 - 4.0 - 0.5 = -6.5 dBTP
+			wantCeiling: -6.5,
+			wantNeeded:  true,
+		},
+		{
+			name:        "no limiting needed - quiet peaks",
+			measured_I:  -20.0,
+			measured_TP: -10.0,
+			target_I:    -16.0,
+			target_TP:   -2.0,
+			// gain = -16.0 - (-20.0) = 4.0 dB
+			// projected TP = -10.0 + 4.0 = -6.0 dBTP (under -2.0)
+			wantCeiling: 0,
+			wantNeeded:  false,
+		},
+		{
+			name:        "no limiting needed - needs attenuation",
+			measured_I:  -12.0,
+			measured_TP: -1.0,
+			target_I:    -16.0,
+			target_TP:   -2.0,
+			// gain = -16.0 - (-12.0) = -4.0 dB (attenuation)
+			// projected TP = -1.0 + (-4.0) = -5.0 dBTP (under -2.0)
+			wantCeiling: 0,
+			wantNeeded:  false,
+		},
+		{
+			name:        "exactly at boundary - no limiting",
+			measured_I:  -20.0,
+			measured_TP: -6.0,
+			target_I:    -16.0,
+			target_TP:   -2.0,
+			// gain = -16.0 - (-20.0) = 4.0 dB
+			// projected TP = -6.0 + 4.0 = -2.0 dBTP (exactly at target)
+			wantCeiling: 0,
+			wantNeeded:  false,
+		},
+		{
+			name:        "very quiet audio - large limiting needed",
+			measured_I:  -43.0,
+			measured_TP: -20.0,
+			target_I:    -16.0,
+			target_TP:   -2.0,
+			// gain = -16.0 - (-43.0) = 27.0 dB
+			// projected TP = -20.0 + 27.0 = 7.0 dBTP (exceeds -2.0)
+			// ceiling = -2.0 - 27.0 - 0.5 = -29.5 dBTP
+			wantCeiling: -29.5,
+			wantNeeded:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ceiling, needed := calculateLimiterCeiling(
+				tt.measured_I, tt.measured_TP, tt.target_I, tt.target_TP)
+
+			if needed != tt.wantNeeded {
+				t.Errorf("needed = %v, want %v", needed, tt.wantNeeded)
+			}
+			if needed && math.Abs(ceiling-tt.wantCeiling) > 0.01 {
+				t.Errorf("ceiling = %.2f dBTP, want %.2f dBTP", ceiling, tt.wantCeiling)
+			}
+		})
+	}
+}

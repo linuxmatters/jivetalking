@@ -314,6 +314,11 @@ func GenerateReport(data ReportData) error {
 		writeFilterChainApplied(f, data.Result.Config, data.Result.Measurements)
 	}
 
+	// Peak Limiter (Pass 4 pre-limiting before loudnorm)
+	if data.Result != nil && data.Result.NormResult != nil {
+		writeDiagnosticPeakLimiter(f, data.Result.NormResult, data.Result.Config)
+	}
+
 	// Loudnorm (follows filter chain as it's the final processing stage)
 	if data.Result != nil && data.Result.Config != nil {
 		writeDiagnosticLoudnorm(f, data.Result.NormResult, data.Result.Config)
@@ -1733,6 +1738,68 @@ func writeDiagnosticSilence(f *os.File, measurements *processor.AudioMeasurement
 		fmt.Fprintf(f, "  No silence regions detected in audio. Noise profiling unavailable.\n")
 	}
 
+	fmt.Fprintln(f, "")
+}
+
+// writeDiagnosticPeakLimiter outputs the Pass 4 pre-limiting diagnostics.
+// The peak limiter creates headroom before loudnorm so it can apply full linear gain.
+func writeDiagnosticPeakLimiter(f *os.File, result *processor.NormalisationResult, config *processor.FilterChainConfig) {
+	if result == nil || result.Skipped {
+		return
+	}
+
+	writeSection(f, "Diagnostic: Peak Limiter")
+
+	if !result.LimiterEnabled {
+		fmt.Fprintln(f, "Status: BYPASSED")
+		fmt.Fprintln(f, "")
+		fmt.Fprintln(f, "No pre-limiting required. Loudnorm can apply full linear gain without")
+		fmt.Fprintln(f, "exceeding the target true peak ceiling.")
+		fmt.Fprintln(f, "")
+		projectedTP := result.InputTP + result.LimiterGain
+		fmt.Fprintf(f, "Projected TP:    %.1f dBTP (gain %.1f dB applied to %.1f dBTP peaks)\n",
+			projectedTP, result.LimiterGain, result.InputTP)
+		fmt.Fprintf(f, "Target TP:       %.1f dBTP\n", config.LoudnormTargetTP)
+		fmt.Fprintf(f, "Headroom:        %.1f dB\n", config.LoudnormTargetTP-projectedTP)
+		fmt.Fprintln(f, "")
+		return
+	}
+
+	fmt.Fprintln(f, "Status: ACTIVE")
+	fmt.Fprintln(f, "")
+	fmt.Fprintln(f, "Pre-limiting applied to create headroom for loudnorm's linear gain.")
+	fmt.Fprintln(f, "Without limiting, loudnorm would either clip or reduce the target LUFS.")
+	fmt.Fprintln(f, "")
+
+	// Calculate projected TP without limiting
+	projectedTPWithoutLimiter := result.InputTP + result.LimiterGain
+
+	fmt.Fprintln(f, "Problem:")
+	fmt.Fprintf(f, "  Input TP:          %.1f dBTP (peaks from Pass 2 filtered audio)\n", result.InputTP)
+	fmt.Fprintf(f, "  Gain Required:     %+.1f dB (to reach %.1f LUFS from %.1f LUFS)\n",
+		result.LimiterGain, config.LoudnormTargetI, result.InputLUFS)
+	fmt.Fprintf(f, "  Projected TP:      %.1f dBTP (would exceed %.1f dBTP target by %.1f dB)\n",
+		projectedTPWithoutLimiter, config.LoudnormTargetTP,
+		projectedTPWithoutLimiter-config.LoudnormTargetTP)
+	fmt.Fprintln(f, "")
+
+	fmt.Fprintln(f, "Solution (1176-inspired peak limiting):")
+	fmt.Fprintf(f, "  Limiter Ceiling:   %.1f dBTP\n", result.LimiterCeiling)
+	fmt.Fprintf(f, "  Peak Reduction:    %.1f dB (from %.1f to %.1f dBTP)\n",
+		result.InputTP-result.LimiterCeiling, result.InputTP, result.LimiterCeiling)
+	fmt.Fprintln(f, "")
+
+	fmt.Fprintln(f, "Filter parameters:")
+	fmt.Fprintln(f, "  Attack:    0.1 ms   (fast - catches all peaks)")
+	fmt.Fprintln(f, "  Release:   50 ms    (quick recovery, avoids pumping)")
+	fmt.Fprintln(f, "  ASC:       enabled  (Auto Soft Clipping for natural release)")
+	fmt.Fprintln(f, "  ASC Level: 0.5      (moderate smoothing for speech)")
+	fmt.Fprintln(f, "")
+
+	fmt.Fprintln(f, "Rationale:")
+	fmt.Fprintln(f, "  The UREI 1176 at 20:1 ratio was the broadcast standard for peak limiting.")
+	fmt.Fprintln(f, "  Fast attack provides a \"firm lid\" on peaks; quick release stays transparent.")
+	fmt.Fprintln(f, "  Only peaks above the ceiling are affected (typically <5% of audio).")
 	fmt.Fprintln(f, "")
 }
 

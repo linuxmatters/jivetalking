@@ -227,6 +227,42 @@ func measureWithLoudnorm(inputPath string, config *FilterChainConfig, progressCa
 	return measurement, nil
 }
 
+// calculateLimiterCeiling calculates the adaptive ceiling for pre-limiting in Pass 4.
+// This allows loudnorm to apply full linear gain without exceeding target TP.
+//
+// The ceiling is calculated so that after loudnorm applies its gain:
+//
+//	projected_TP = ceiling + gainRequired <= target_TP
+//
+// Solving for ceiling: ceiling = target_TP - gainRequired - safety_margin
+//
+// Parameters:
+//   - measured_I: Measured integrated loudness from Pass 3 (LUFS)
+//   - measured_TP: Measured true peak from Pass 3 (dBTP)
+//   - target_I: Target integrated loudness (LUFS), typically -16.0
+//   - target_TP: Target true peak (dBTP), typically -2.0
+//
+// Returns:
+//   - ceiling: The limiter ceiling in dBTP
+//   - needed: True if limiting is required (projected TP exceeds target)
+func calculateLimiterCeiling(measured_I, measured_TP, target_I, target_TP float64) (ceiling float64, needed bool) {
+	// Safety margin accounts for loudnorm measurement precision and rounding
+	const safetyMargin = 0.5 // dB
+
+	gainRequired := target_I - measured_I
+	projectedTP := measured_TP + gainRequired
+
+	// No limiting needed if linear mode already possible
+	if projectedTP <= target_TP {
+		return 0, false
+	}
+
+	// Calculate ceiling: target_TP - gainRequired - safetyMargin
+	ceiling = target_TP - gainRequired - safetyMargin
+
+	return ceiling, true
+}
+
 // calculateLinearModeTarget calculates the target I and offset that ensure loudnorm
 // stays in linear mode (never falls back to dynamic normalization).
 //
@@ -283,6 +319,11 @@ type NormalisationResult struct {
 	RequestedTargetI float64        // The target I that was requested (from config)
 	EffectiveTargetI float64        // The target I actually used (may be lower to ensure linear mode)
 	LinearModeForced bool           // True if target was adjusted to force linear mode
+
+	// Limiter diagnostics (Pass 4 pre-limiting)
+	LimiterEnabled bool    // True if pre-limiting was applied
+	LimiterCeiling float64 // Ceiling in dBTP (only valid if LimiterEnabled)
+	LimiterGain    float64 // Gain required that triggered limiting (dB)
 
 	// FinalMeasurements contains full analysis after normalisation (Pass 4)
 	// Includes spectral characteristics, amplitude stats, and loudness measurements
@@ -348,11 +389,27 @@ func ApplyNormalisation(
 		progressCallback(4, "Normalising", 0.0, 0.0, nil)
 	}
 
-	// Calculate effective target I that ensures linear mode (no dynamic fallback)
-	// loudnorm requires: measured_TP + (target_I - measured_I) <= target_TP for linear mode
-	effectiveTargetI, _, linearPossible := calculateLinearModeTarget(
+	// Calculate limiter ceiling (actual limiting happens in buildLoudnormFilterSpec)
+	limiterCeiling, limiterNeeded := calculateLimiterCeiling(
 		measurement.InputI,
 		measurement.InputTP,
+		config.LoudnormTargetI,
+		config.LoudnormTargetTP,
+	)
+	limiterGain := config.LoudnormTargetI - measurement.InputI
+
+	// Calculate effective target I that ensures linear mode (no dynamic fallback)
+	// loudnorm requires: measured_TP + (target_I - measured_I) <= target_TP for linear mode
+	//
+	// IMPORTANT: When the limiter is enabled, loudnorm sees the LIMITED peaks (limiterCeiling),
+	// not the original measured peaks. This creates the headroom needed for full gain.
+	effectiveTP := measurement.InputTP
+	if limiterNeeded {
+		effectiveTP = limiterCeiling
+	}
+	effectiveTargetI, _, linearPossible := calculateLinearModeTarget(
+		measurement.InputI,
+		effectiveTP,
 		config.LoudnormTargetI,
 		config.LoudnormTargetTP,
 	)
@@ -391,6 +448,9 @@ func ApplyNormalisation(
 		RequestedTargetI:  config.LoudnormTargetI,
 		EffectiveTargetI:  effectiveTargetI,
 		LinearModeForced:  !linearPossible,
+		LimiterEnabled:    limiterNeeded,
+		LimiterCeiling:    limiterCeiling,
+		LimiterGain:       limiterGain,
 		FinalMeasurements: finalMeasurements,
 	}, nil
 }
@@ -564,7 +624,10 @@ func applyLoudnormAndMeasure(
 
 // buildLoudnormFilterSpec constructs the filter chain for Pass 4 loudnorm application.
 //
-// Chain order: loudnorm → astats → aspectralstats → ebur128 → resample
+// Chain order: [alimiter] → loudnorm → astats → aspectralstats → ebur128 → resample
+//
+// The alimiter is inserted when needed to create headroom for loudnorm's linear mode.
+// It uses 1176-inspired parameters for transparent peak limiting.
 //
 // The loudnorm filter in second pass mode:
 // - Uses measurements from measureWithLoudnorm() (LoudnormMeasurement)
@@ -587,19 +650,51 @@ func applyLoudnormAndMeasure(
 func buildLoudnormFilterSpec(config *FilterChainConfig, measurement *LoudnormMeasurement) string {
 	var filters []string
 
-	// 1. loudnorm (second pass mode)
+	// 1. Pre-limiting with adaptive ceiling (1176-inspired peak limiter)
+	// Calculate if limiting is needed to allow loudnorm's full linear gain
+	ceiling, needsLimiting := calculateLimiterCeiling(
+		measurement.InputI,
+		measurement.InputTP,
+		config.LoudnormTargetI,
+		config.LoudnormTargetTP,
+	)
+	if needsLimiting {
+		// 1176-inspired parameters for transparent peak limiting:
+		// - attack=0.1ms: Fast attack catches all peaks (1176's "firm lid")
+		// - release=50ms: Quick recovery avoids pumping on speech
+		// - asc=1: Auto Soft Clipping approximates 1176's two-stage release
+		// - asc_level=0.5: Moderate smoothing for speech
+		// - level_in/level_out=1: Unity gain (no makeup)
+		// - latency=1: Enable lookahead for better transient handling
+		limiterCeilingLinear := math.Pow(10, ceiling/20.0)
+		limiterFilter := fmt.Sprintf(
+			"alimiter=limit=%.6f:attack=0.1:release=50:level_in=1:level_out=1:level=0:latency=1:asc=1:asc_level=0.5",
+			limiterCeilingLinear,
+		)
+		filters = append(filters, limiterFilter)
+	}
+
+	// 2. loudnorm (second pass mode)
 	// measured_i/tp/lra/thresh come from loudnorm's first pass measurement
 	// offset: loudnorm's own calculated offset from first pass (critical!)
 	// linear=true: Enable linear mode (applies consistent gain, no adaptive EQ)
 	// dual_mono=true: CRITICAL - treats mono as dual-mono for correct loudness measurement
 	// print_format=json: Outputs JSON with normalization_type, target_offset, output_i/tp/lra
+	//
+	// IMPORTANT: When pre-limiting is enabled, we pass the limiter ceiling as measured_TP
+	// so loudnorm knows the actual peak level it will receive. This allows it to apply
+	// full linear gain without falling back to dynamic mode.
+	effectiveMeasuredTP := measurement.InputTP
+	if needsLimiting {
+		effectiveMeasuredTP = ceiling
+	}
 	loudnormFilter := fmt.Sprintf(
 		"loudnorm=I=%.2f:TP=%.2f:LRA=%.1f:measured_I=%.2f:measured_TP=%.2f:measured_LRA=%.2f:measured_thresh=%.2f:offset=%.2f:dual_mono=%s:linear=%s:print_format=json",
 		config.LoudnormTargetI,  // Using %.2f for precision on adjusted targets
 		config.LoudnormTargetTP, // Also %.2f for consistency
 		config.LoudnormTargetLRA,
 		measurement.InputI,
-		measurement.InputTP,
+		effectiveMeasuredTP,
 		measurement.InputLRA,
 		measurement.InputThresh,
 		measurement.TargetOffset, // From first pass - critical for linear mode
@@ -608,22 +703,22 @@ func buildLoudnormFilterSpec(config *FilterChainConfig, measurement *LoudnormMea
 	)
 	filters = append(filters, loudnormFilter)
 
-	// 2. astats for amplitude measurements (same as Pass 2)
+	// 3. astats for amplitude measurements (same as Pass 2)
 	// Provides noise floor, dynamic range, RMS level, peak level, etc.
 	// measure_perchannel=all requests all available per-channel statistics
 	filters = append(filters, "astats=metadata=1:measure_perchannel=all")
 
-	// 3. aspectralstats for spectral analysis (same as Pass 2)
+	// 4. aspectralstats for spectral analysis (same as Pass 2)
 	// Provides centroid, spread, skewness, kurtosis, entropy, flatness, crest, rolloff, etc.
 	// win_size=2048 and win_func=hann match Pass 2 settings for comparable measurements
 	filters = append(filters, "aspectralstats=win_size=2048:win_func=hann:measure=all")
 
-	// 4. ebur128 for loudness validation (metadata only, no audio modification)
+	// 5. ebur128 for loudness validation (metadata only, no audio modification)
 	// dualmono=true ensures accurate mono loudness measurement
 	// Note: ebur128 upsamples to 192kHz internally and outputs f64
 	filters = append(filters, "ebur128=metadata=1:peak=sample+true:dualmono=true")
 
-	// 5. Resample back to output format (44.1kHz/s16/mono)
+	// 6. Resample back to output format (44.1kHz/s16/mono)
 	// Required because ebur128 outputs f64 at 192kHz; encoder expects s16 at 44.1kHz
 	// Temporarily enable resample to get the filter spec, then restore
 	wasEnabled := config.ResampleEnabled
