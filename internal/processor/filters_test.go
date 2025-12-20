@@ -65,7 +65,7 @@ func newTestConfig() *FilterChainConfig {
 		LA2ARatio:          2.5,
 		LA2AAttack:         15,
 		LA2ARelease:        80,
-		LA2AMakeup:         3,
+		LA2AMakeup:         0, // Unity gain - loudnorm handles all level adjustment
 		LA2AKnee:           2.5,
 		LA2AMix:            1.0,
 		DeessIntensity:     0.5,
@@ -1052,9 +1052,9 @@ func TestBuildDolbySRMcompandFilter(t *testing.T) {
 			t.Errorf("Filter missing FLAT curve point -75/-88\nGot: %s", filter)
 		}
 
-		// Makeup gain is now applied in LA2A compressor, not here
+		// Makeup gain is disabled - loudnorm handles all level adjustment
 		if strings.Contains(filter, "volume=") {
-			t.Errorf("Filter should not contain volume filter (makeup is in LA2A now)\nGot: %s", filter)
+			t.Errorf("Filter should not contain volume filter (loudnorm handles gain)\nGot: %s", filter)
 		}
 	})
 

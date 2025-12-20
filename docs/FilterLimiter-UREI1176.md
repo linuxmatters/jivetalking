@@ -1,4 +1,4 @@
-# UREI 1176-Inspired Adaptive Limiter
+# UREI 1176-Inspired Peak Limiter for Loudnorm Headroom
 
 ## Executive Summary
 
@@ -8,29 +8,58 @@ The **UREI 1176 Peak Limiter** (1967) revolutionised dynamics processing as the 
 2. **Program-dependent release** — fast recovery after transients, slower during sustained compression
 3. **Soft-knee compression** — natural, musical response even at high ratios
 4. **Fixed threshold architecture** — compression controlled via input gain, not threshold adjustment
-5. **Harmonic enhancement** — Class A output stage and transformers add "bright, forward" character
 
-The 1176 complements the LA-2A perfectly in a vocal chain: where the LA-2A provides gentle optical levelling, the 1176 catches the peaks that slip through with surgical precision. For podcast limiting, we implement the 1176's philosophy as a final safety limiter.
+**In Jivetalking**, the 1176-inspired limiter serves a specific purpose: **creating headroom for loudnorm's linear mode** by reducing peaks before loudnorm applies gain. This prevents loudnorm from falling back to dynamic mode (which causes audible pumping and noise floor elevation).
 
 ---
 
-## The 1176's Place in the Processing Chain
+## The 1176 at 20:1: True Peak Limiting
 
-The classic professional vocal chain is: **1176 → LA-2A → Pultec**
+The 1176's 20:1 ratio mode was designed specifically for peak limiting:
 
-For Jivetalking's podcast processing:
+> "The 20:1 ratio is typically used when peak-limiting is desired"
+> — UA 1176 Classic Limiter Collection Manual
+
+> "With 20:1 ratio and fast attack and release settings, the 2-1176 was an outstanding limiter for male vocals, providing a really firm lid without squashing the sound."
+> — UA 2-1176 Dual Manual
+
+**Key characteristics at 20:1:**
+- **Highest threshold** — only catches the loudest peaks
+- **Firmest knee** — decisive peak control
+- **Minimal coloration** — affects <5% of audio (peak transients only)
+
+This is exactly what we need: transparent peak reduction to create headroom, not dynamic shaping.
+
+---
+
+## Role in Jivetalking's Processing Chain
+
+### Position: Pass 4, Before Loudnorm
+
 ```
-DS201Gate → LA2ACompressor → [EQ/DeEss] → 1176Limiter
-     ↓              ↓                            ↓
-  Gate noise    Level control              Catch peaks
+Pass 1: Analysis → Pass 2: Processing → Pass 3: Loudnorm Measurement → Pass 4: [Limiter] → Loudnorm
 ```
 
-The 1176 as limiter serves a different purpose than the LA-2A as compressor:
+The limiter operates **after** Pass 3 measurement but **before** loudnorm application. This allows us to calculate the exact ceiling needed based on Pass 3's measurements.
 
-| Processor | Role | Character | Target |
-|-----------|------|-----------|--------|
-| LA-2A | Levelling | Gentle, warming, program-dependent | Overall dynamics |
-| 1176 | Peak limiting | Fast, punchy, transient control | Peak protection |
+### Purpose: Enable Loudnorm Linear Mode
+
+Loudnorm in linear mode applies consistent gain without adaptive EQ. For linear mode to work:
+
+```
+measured_TP + gain_required ≤ target_TP
+```
+
+When this condition fails, loudnorm falls back to dynamic mode. The limiter ensures the condition is met by reducing `measured_TP` to an appropriate ceiling.
+
+**Example:**
+- Pass 3 measures: LUFS = -24.9, TP = -5.0 dBTP
+- Target: LUFS = -16.0, TP = -2.0 dBTP
+- Gain required: 8.9 dB
+- Projected TP after gain: -5.0 + 8.9 = **+3.9 dBTP** (exceeds target!)
+- Required ceiling: -2.0 - 8.9 - 0.5 (margin) = **-11.4 dBTP**
+
+The limiter reduces peaks from -5.0 to -11.4 dBTP, allowing loudnorm to apply 8.9 dB linear gain.
 
 ---
 
@@ -139,301 +168,203 @@ The `alimiter` filter provides lookahead limiting with these parameters:
 
 ---
 
-## 1176-Inspired Limiter Design
+## 1176-Inspired Peak Limiter Design (Pass 4)
 
-### 1. Ceiling (Limit): Conservative True Peak Safety
+The limiter's role is simple and focused: **reduce peaks to a calculated ceiling** so loudnorm can apply linear gain. This is the 1176 at 20:1 — transparent peak limiting, not dynamic shaping.
 
-The 1176 hardware outputs line level with headroom. For podcast delivery, we target broadcast-safe levels.
+### 1. Ceiling: Adaptive from Pass 3 Measurements
 
-**Proposal:** Set ceiling based on target format:
-```
-limit = -1.0 dBTP (default podcast safety)
-      = -2.0 dBTP (streaming platforms like Spotify)
-      = -0.5 dBTP (when subsequent processing follows)
-```
+Unlike the original design doc's fixed ceiling options, we calculate the **exact ceiling needed** for loudnorm linear mode:
 
-This is configurable rather than measurement-driven, as it's a delivery standard.
+```go
+func calculateLimiterCeiling(measured_I, measured_TP, target_I, target_TP float64) (ceiling float64, needed bool) {
+    gainRequired := target_I - measured_I
+    projectedTP := measured_TP + gainRequired
 
-### 2. Attack: Transient-Aware Fast Response
+    // No limiting needed if linear mode already possible
+    if projectedTP <= target_TP {
+        return 0, false
+    }
 
-The 1176's magic is catching peaks while preserving attack character. We adapt attack based on transient measurements.
+    // Calculate ceiling: target_TP - gainRequired - safetyMargin
+    // Safety margin (0.5 dB) accounts for loudnorm measurement precision
+    ceiling = target_TP - gainRequired - 0.5
 
-**Proposal:** Use **MaxDifference** and **SpectralCrest** to tune attack:
-
-| Condition | Attack Time | Rationale |
-|-----------|-------------|-----------|
-| MaxDiff > 25% OR Crest > 50dB | 0.1ms | Extreme transients (plosives) — 1176-fast |
-| MaxDiff > 15% OR Crest > 35dB | 0.5ms | Sharp consonants — balanced |
-| MaxDiff > 8% | 0.8ms | Normal speech — preserve attack |
-| Soft delivery | 1.0ms | Gentle content — minimal limiting |
-
-**Note:** Even our "fast" 0.1ms is slower than the 1176's 20µs, but FFmpeg's lookahead compensates — it "sees" the peak coming.
-
-### 3. Release: Program-Dependent Approximation
-
-The 1176's two-stage release prevents pumping on sustained signals. We approximate this using ASC (Auto Soft Clipping) mode.
-
-**Proposal:** Base release on **SpectralFlux** and **LRA**, use ASC for adaptation:
-
-| Condition | Release Time | ASC Level | Rationale |
-|-----------|--------------|-----------|-----------|
-| High Flux (>0.03) + Wide LRA (>15 LU) | 200ms | 0.7 | Expressive — fast recovery, ASC smooths |
-| Moderate Flux + Moderate LRA | 150ms | 0.5 | Standard podcast delivery |
-| Low Flux (<0.01) + Narrow LRA (<10 LU) | 100ms | 0.3 | Controlled — quick response |
-| Very wide DR (>35dB) | +50ms | +0.2 | Heavy peaks need longer recovery |
-
-**ASC Mode:** When enabled, `asc=1`, the limiter releases to an average reduction level rather than zero, mimicking the 1176's behaviour of "staying in compression" during loud passages.
-
-### 4. Input Level: Gain Staging from Measurements
-
-Unlike the 1176's input-as-threshold design, we use input level to optimise signal entering the limiter.
-
-**Proposal:** Calculate input gain from **Peak Level** and **Integrated LUFS**:
-
-```
-headroom_needed = limit_ceiling - true_peak
-if headroom_needed < 0:
-    level_in = 10^(headroom_needed / 20)  // Reduce to prevent clipping
-else:
-    level_in = 1.0  // No input gain needed
+    return ceiling, true
+}
 ```
 
-For significantly quiet content (Integrated LUFS < -30):
-```
-boost = min(6.0, -24 - integrated_lufs)  // Gentle boost, max 6dB
-level_in = 10^(boost / 20)
-```
+### 2. Attack: 1176 Fastest (20:1 Peak Limiting Mode)
 
-### 5. Output Level: Makeup for Target Loudness
+For peak limiting, the 1176 was used at its fastest attack to catch transients cleanly:
 
-**Proposal:** Calculate output level to approach target loudness:
+> "With ultra-fast attack times as low as 20 microseconds, the 1176 can act as a true peak limiter to catch initial transients"
+> — Vintage King
 
-```
-target_lufs = -16.0  // Podcast standard, configurable
-current_lufs = integrated_lufs
-makeup_db = min(target_lufs - current_lufs, 12.0)  // Cap at 12dB
+**Fixed setting:** `attack = 0.1ms` (FFmpeg's practical minimum with lookahead)
 
-if makeup_db > 0:
-    level_out = 10^(makeup_db / 20)
-else:
-    level_out = 1.0  // Don't reduce if already loud enough
-```
+This is **not** the "grit" setting (which requires fast attack AND fast release on sustained signals). For brief peak transients, fast attack is transparent.
 
-**Note:** This is gentle makeup; the final loudness normalisation pass handles precise LUFS targeting.
+### 3. Release: 1176 Fastest (50ms)
 
-### 6. ASC (Auto Soft Clipping): 1176 Program-Dependency
+The 1176's fastest release (50ms) provides quick recovery after peak limiting:
 
-The ASC feature is FFmpeg's closest equivalent to the 1176's program-dependent release. When enabled, instead of releasing to unity gain, the limiter releases to an average attenuation level.
+| Release | 1176 Setting | Character |
+|---------|--------------|-----------|
+| 50ms | 7 (fastest) | Quick recovery, no pumping on speech |
+| 100-200ms | 4-5 (medium) | Would cause audible "release tail" |
 
-**Proposal:** Enable ASC based on **Dynamic Range** and **Spectral Crest**:
+**Fixed setting:** `release = 50ms`
 
-| Condition | ASC | ASC Level | Rationale |
-|-----------|-----|-----------|-----------|
-| DR > 30dB OR Crest > 40dB | Enabled | 0.6-0.8 | Dynamic content benefits from smooth recovery |
-| DR 20-30dB | Enabled | 0.4-0.6 | Moderate smoothing |
-| DR < 20dB | Disabled | — | Already compressed, direct limiting fine |
-| Noise Floor > -50dB | Enabled | +0.2 | ASC helps mask pumping artefacts |
+For peak limiting (affecting only transients), fast release is ideal. The ASC mode prevents any pumping that might occur.
+
+### 4. ASC: Program-Dependent Release Approximation
+
+ASC (Auto Soft Clipping) is **always enabled** for peak limiting. It prevents the abrupt release that can cause artifacts:
+
+**Fixed settings:** `asc = 1`, `asc_level = 0.5`
+
+### 5. Input/Output Levels: Unity
+
+The limiter's sole job is peak reduction. Loudnorm handles all level adjustment:
+
+**Fixed settings:** `level_in = 1.0`, `level_out = 1.0`
 
 ---
 
 ## Implementation Plan
 
-### New Constants
+### Simplified Constants
 
 ```go
 const (
-    // 1176-inspired attack times (FFmpeg minimum ~0.1ms vs 1176's 0.02ms)
-    u1176AttackExtremeTrans = 0.1   // ms - plosives, extreme peaks
-    u1176AttackSharpTrans   = 0.5   // ms - sharp consonants
-    u1176AttackNormal       = 0.8   // ms - standard speech
-    u1176AttackGentle       = 1.0   // ms - soft delivery
-    u1176MaxDiffExtreme     = 0.25  // 25% - extreme transients
-    u1176MaxDiffSharp       = 0.15  // 15% - sharp transients
-    u1176MaxDiffNormal      = 0.08  // 8% - normal threshold
-    u1176CrestExtreme       = 50.0  // dB - extremely peaked
-    u1176CrestSharp         = 35.0  // dB - notably peaked
+    // 1176 at 20:1 peak limiting mode
+    limiterAttack   = 0.1   // ms - fastest practical attack
+    limiterRelease  = 50.0  // ms - 1176 fastest release
+    limiterASCLevel = 0.5   // Moderate program-dependent release
 
-    // 1176-inspired release times (matching hardware range)
-    u1176ReleaseExpressive = 200  // ms - wide dynamics
-    u1176ReleaseStandard   = 150  // ms - typical podcast
-    u1176ReleaseControlled = 100  // ms - narrow dynamics
-    u1176ReleaseHeavyBoost = 50   // ms - added for heavy DR
-    u1176FluxDynamic       = 0.03 // Above: dynamic/expressive
-    u1176FluxStatic        = 0.01 // Below: controlled/monotone
-
-    // ASC (Auto Soft Clipping) - approximates program-dependent release
-    u1176ASCLevelDynamic    = 0.7  // For dynamic content
-    u1176ASCLevelModerate   = 0.5  // For standard content
-    u1176ASCLevelControlled = 0.3  // For controlled content
-    u1176ASCNoisyBoost      = 0.2  // Additional for noisy recordings
-    u1176DynamicRangeWide   = 30.0 // dB - above: enable ASC
-    u1176DynamicRangeMod    = 20.0 // dB - above: moderate ASC
-
-    // Ceiling options (dBTP)
-    u1176CeilingPodcast   = -1.0  // Standard podcast safety
-    u1176CeilingStreaming = -2.0  // Spotify/Apple Music
-    u1176CeilingChain     = -0.5  // When more processing follows
-
-    // Gain limits
-    u1176InputBoostMax  = 6.0   // dB maximum input boost
-    u1176MakeupMax      = 12.0  // dB maximum makeup gain
-    u1176TargetLUFS     = -16.0 // Target loudness (configurable)
-    u1176QuietThreshold = -30.0 // LUFS below: apply input boost
+    // Ceiling calculation
+    limiterSafetyMargin = 0.5 // dB - accounts for measurement precision
 )
 ```
 
-### New Tuning Functions
+### Ceiling Calculation Function
 
 ```go
-// tune1176Limiter adapts limiting to emulate 1176 peak limiting character.
-// Uses spectral measurements to inform transient-aware, program-dependent behaviour.
-func tune1176Limiter(config *FilterChainConfig, measurements *AudioMeasurements) {
-    tune1176Ceiling(config, measurements)
-    tune1176Attack(config, measurements)
-    tune1176Release(config, measurements)
-    tune1176ASC(config, measurements)
-    tune1176InputLevel(config, measurements)
-    tune1176OutputLevel(config, measurements)
-}
+// calculateLimiterCeiling determines the ceiling needed for loudnorm linear mode.
+// Returns the ceiling in dBTP and whether limiting is needed at all.
+//
+// Parameters come from Pass 3 loudnorm measurement:
+//   - measured_I: Integrated loudness (LUFS)
+//   - measured_TP: True peak (dBTP)
+//   - target_I: Target loudness (LUFS), typically -16.0
+//   - target_TP: Target true peak (dBTP), typically -2.0
+func calculateLimiterCeiling(measured_I, measured_TP, target_I, target_TP float64) (ceiling float64, needed bool) {
+    // Calculate gain that loudnorm needs to apply
+    gainRequired := target_I - measured_I
 
-// tune1176Attack sets attack time based on transient characteristics.
-// Emulates the 1176's ability to catch peaks while preserving attack character.
-func tune1176Attack(config *FilterChainConfig, m *AudioMeasurements) {
-    // Check for extreme transients
-    if m.MaxDifference > u1176MaxDiffExtreme || m.SpectralCrest > u1176CrestExtreme {
-        config.LimiterAttack = u1176AttackExtremeTrans
-        return
+    // Project where true peak will end up after gain
+    projectedTP := measured_TP + gainRequired
+
+    // If projected TP is within target, no limiting needed
+    if projectedTP <= target_TP {
+        return 0, false
     }
 
-    // Sharp transients
-    if m.MaxDifference > u1176MaxDiffSharp || m.SpectralCrest > u1176CrestSharp {
-        config.LimiterAttack = u1176AttackSharpTrans
-        return
-    }
+    // Calculate ceiling that allows linear mode:
+    // ceiling + gainRequired = target_TP (with safety margin)
+    ceiling = target_TP - gainRequired - limiterSafetyMargin
 
-    // Normal transients
-    if m.MaxDifference > u1176MaxDiffNormal {
-        config.LimiterAttack = u1176AttackNormal
-        return
-    }
-
-    // Soft delivery
-    config.LimiterAttack = u1176AttackGentle
-}
-
-// tune1176Release sets release time with ASC for program-dependent behaviour.
-// Approximates the 1176's two-stage release mechanism.
-func tune1176Release(config *FilterChainConfig, m *AudioMeasurements) {
-    var baseRelease float64
-
-    // Base release on flux and LRA
-    if m.SpectralFlux > u1176FluxDynamic && m.LoudnessRange > 15.0 {
-        baseRelease = u1176ReleaseExpressive
-    } else if m.SpectralFlux < u1176FluxStatic && m.LoudnessRange < 10.0 {
-        baseRelease = u1176ReleaseControlled
-    } else {
-        baseRelease = u1176ReleaseStandard
-    }
-
-    // Add recovery time for very wide dynamic range
-    if m.DynamicRange > 35.0 {
-        baseRelease += u1176ReleaseHeavyBoost
-    }
-
-    config.LimiterRelease = baseRelease
-}
-
-// tune1176ASC enables Auto Soft Clipping to approximate program-dependent release.
-// When enabled, limiter releases to average attenuation rather than unity.
-func tune1176ASC(config *FilterChainConfig, m *AudioMeasurements) {
-    // Enable ASC for dynamic content
-    if m.DynamicRange > u1176DynamicRangeWide || m.SpectralCrest > 40.0 {
-        config.LimiterASC = true
-        config.LimiterASCLevel = u1176ASCLevelDynamic
-    } else if m.DynamicRange > u1176DynamicRangeMod {
-        config.LimiterASC = true
-        config.LimiterASCLevel = u1176ASCLevelModerate
-    } else {
-        config.LimiterASC = false
-        config.LimiterASCLevel = 0
-        return
-    }
-
-    // Boost ASC for noisy recordings (helps mask pumping)
-    if m.NoiseFloor > -50.0 {
-        config.LimiterASCLevel = min(1.0, config.LimiterASCLevel + u1176ASCNoisyBoost)
-    }
+    return ceiling, true
 }
 ```
 
 ### Filter String Generation
 
 ```go
-// build1176LimiterFilter generates the FFmpeg alimiter filter string.
-func build1176LimiterFilter(config *FilterChainConfig) string {
-    ceiling := math.Pow(10, config.LimiterCeiling/20.0) // dBTP to linear
+// buildPass4LimiterFilter generates the alimiter filter for Pass 4.
+// Only called when limiting is needed (ceiling calculation returned needed=true).
+func buildPass4LimiterFilter(ceiling float64) string {
+    // Convert dBTP to linear (0.0-1.0)
+    ceilingLinear := math.Pow(10, ceiling/20.0)
 
-    params := []string{
-        fmt.Sprintf("limit=%.6f", ceiling),
-        fmt.Sprintf("attack=%.1f", config.LimiterAttack),
-        fmt.Sprintf("release=%.1f", config.LimiterRelease),
-        fmt.Sprintf("level_in=%.4f", config.LimiterInputLevel),
-        fmt.Sprintf("level_out=%.4f", config.LimiterOutputLevel),
-        "level=0", // Disable auto-level, we control output
-        "latency=1", // Compensate lookahead delay
+    return fmt.Sprintf(
+        "alimiter=limit=%.6f:attack=%.1f:release=%.1f:level_in=1:level_out=1:asc=1:asc_level=%.2f:level=0:latency=1",
+        ceilingLinear,
+        limiterAttack,
+        limiterRelease,
+        limiterASCLevel,
+    )
+}
+```
+
+### Integration in normalise.go
+
+The limiter is added to the Pass 4 filter chain conditionally:
+
+```go
+func buildLoudnormFilterSpec(config *FilterChainConfig, measurement *LoudnormMeasurement) string {
+    var filters []string
+
+    // 1. Limiter (if needed for linear mode)
+    ceiling, needsLimiting := calculateLimiterCeiling(
+        measurement.InputI,
+        measurement.InputTP,
+        config.LoudnormTargetI,
+        config.LoudnormTargetTP,
+    )
+    if needsLimiting {
+        filters = append(filters, buildPass4LimiterFilter(ceiling))
     }
 
-    if config.LimiterASC {
-        params = append(params,
-            "asc=1",
-            fmt.Sprintf("asc_level=%.2f", config.LimiterASCLevel),
-        )
-    } else {
-        params = append(params, "asc=0")
-    }
+    // 2. Loudnorm (second pass with linear=true)
+    // ... existing loudnorm filter spec ...
 
-    return "alimiter=" + strings.Join(params, ":")
+    // 3. Analysis filters (astats, aspectralstats, ebur128)
+    // ... existing analysis filters ...
+
+    return strings.Join(filters, ",")
 }
 ```
 
 ---
 
-## Integration with Processing Chain
+## Why This Approach Works
 
-### Filter Order
-
-```
-DS201HighPass → DS201LowPass → [denoise] → DS201Gate →
-LA2ACompressor → [EQ] → [DeEss] → LoudnessNorm → 1176Limiter
-```
-
-The 1176 limiter sits last in the chain. This mirrors the professional chain where the 1176 catches any peaks that slip through earlier processing.
-
-### Interaction with LA-2A Compressor
-
-The LA-2A-inspired compressor handles levelling; the 1176-inspired limiter handles peaks:
-
-| LA-2A Compressor | 1176 Limiter |
-|------------------|--------------|
-| Soft ratio (2.5-3.5:1) | Hard limit (∞:1) |
-| Slow attack (8-12ms) | Fast attack (0.1-3ms) |
-| Program-dependent release | ASC-assisted release |
-| Gentle levelling | Peak protection |
-
-**Gain staging:** The LA-2A's makeup gain should leave headroom for the limiter. Cap LA-2A makeup at 6dB and let the limiter's output stage handle final level.
+| Aspect | Design Decision | Rationale |
+|--------|-----------------|-----------|
+| **Ceiling** | Adaptive from measurements | Exact headroom needed, not over-limiting |
+| **Attack** | Fixed 0.1ms (fastest) | 1176 peak limiting mode; catches all transients |
+| **Release** | Fixed 50ms (fastest) | Quick recovery; no audible "release tail" |
+| **ASC** | Always enabled | Prevents pumping; 1176 program-dependent character |
+| **Levels** | Unity | Loudnorm handles all level adjustment |
 
 ---
 
-## Expected Outcomes
+## Comparison: Peak Limiting vs Original "Safety Net" Design
 
-| Scenario | Current Behaviour | Proposed 1176 Behaviour |
-|----------|-------------------|------------------------|
-| Sharp plosives (MaxDiff > 25%) | Generic limiting | 0.1ms attack catches peaks cleanly |
-| Expressive delivery (high Flux, wide LRA) | Fixed release | 200ms release + ASC 0.7 preserves dynamics |
-| Monotone delivery (low Flux, narrow LRA) | Same processing | 100ms release, ASC off, quick response |
-| Very wide DR (>35dB) | May pump | Extended release (+50ms) smooths recovery |
-| Noisy recording | Same limiting | ASC boost (+0.2) masks pumping artefacts |
-| Quiet input (LUFS < -30) | Under-limited | Input boost (up to 6dB) before limiting |
+The original design doc described the 1176 as a **chain-end safety limiter** with adaptive parameters. The new role is simpler:
+
+| Aspect | Original Design | Pass 4 Peak Limiting |
+|--------|-----------------|---------------------|
+| **Purpose** | Catch peaks after all processing | Create headroom for loudnorm |
+| **Position** | End of Pass 2 chain | Before loudnorm in Pass 4 |
+| **Ceiling** | Fixed (-1.0 to -2.0 dBTP) | Adaptive (calculated from measurements) |
+| **Attack** | Adaptive (0.1-1.0ms) | Fixed 0.1ms (1176 peak limiting mode) |
+| **Release** | Adaptive (100-200ms) | Fixed 50ms (1176 fastest) |
+| **Input/Output** | Adaptive gain staging | Unity (loudnorm handles levels) |
+
+---
+
+## Edge Cases
+
+| Scenario | Behaviour |
+|----------|-----------|
+| **Audio already quiet enough** | Limiting skipped; `projectedTP <= target_TP` |
+| **Very quiet audio (large gain needed)** | Ceiling may be low (e.g., -20 dBTP); only affects brief transients |
+| **Already at target LUFS** | No gain needed; limiting skipped |
+| **Hot recording (TP near 0)** | Aggressive limiting; acceptable tradeoff vs dynamic mode pumping |
+| **Noisy recording** | ASC handles it gracefully; quick release prevents pumping |
 
 ---
 

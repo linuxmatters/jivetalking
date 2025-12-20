@@ -932,12 +932,6 @@ func formatDS201GateFilter(f *os.File, cfg *processor.FilterChainConfig, m *proc
 	fmt.Fprintf(f, "        Timing: attack %.2fms, release %.0fms (soft expander)\n", cfg.DS201GateAttack, cfg.DS201GateRelease)
 	fmt.Fprintf(f, "        Range: %.1f dB reduction, knee %.1f\n", rangeDB, cfg.DS201GateKnee)
 
-	// Show makeup gain if applied (> 1.0 linear = 0 dB)
-	if cfg.DS201GateMakeup > 1.01 { // Small tolerance for floating point
-		makeupDB := processor.LinearToDb(cfg.DS201GateMakeup)
-		fmt.Fprintf(f, "        Makeup: +%.1f dB (LUFS gap recovery)\n", makeupDB)
-	}
-
 	// Show rationale based on measurements
 	if m != nil {
 		var rationale []string
@@ -1007,7 +1001,7 @@ func formatLA2ACompressorFilter(f *os.File, cfg *processor.FilterChainConfig, m 
 
 	fmt.Fprintf(f, "%sLA-2A Compressor: threshold %.0f dB, ratio %.1f:1\n", prefix, cfg.LA2AThreshold, cfg.LA2ARatio)
 	fmt.Fprintf(f, "        Timing: attack %.0fms, release %.0fms\n", cfg.LA2AAttack, cfg.LA2ARelease)
-	fmt.Fprintf(f, "        Makeup: %+.0f dB, mix %.0f%%, knee %.1f\n", cfg.LA2AMakeup, cfg.LA2AMix*100, cfg.LA2AKnee)
+	fmt.Fprintf(f, "        Mix: %.0f%%, knee %.1f\n", cfg.LA2AMix*100, cfg.LA2AKnee)
 
 	// Show rationale
 	if m != nil && m.DynamicRange > 0 {

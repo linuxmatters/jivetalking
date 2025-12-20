@@ -66,7 +66,6 @@ const (
 	ds201GateGentleLRAThreshold = 10.0 // LU - below this with extreme LUFS gap triggers gentle mode
 	ds201GateGentleRatio        = 1.2  // Minimal gain variation in expansion zone
 	ds201GateGentleKnee         = 2.0  // Sharper transition reduces hunting
-	ds201GateGentleMakeup       = 1.0  // Unity gain - no makeup
 
 	// De-esser intensity levels
 	deessIntensityBright = 0.6 // Bright voice base intensity
@@ -229,14 +228,6 @@ const (
 	ds201GateSilenceCrestThreshold = 25.0 // dB - above: use RMS (noise has spikes)
 	ds201GateEntropyClean          = 0.7  // Above: can use peak detection
 
-	// Makeup gain: based on LUFS gap to target
-	// Applies gentle gain recovery post-gate, avoiding normaliser artifacts
-	// Conservative approach: only a fraction of gap, capped to avoid clipping
-	ds201GateMakeupLUFSScale  = 0.25 // Apply 25% of LUFS gap as makeup
-	ds201GateMakeupMinGapLUFS = 8.0  // Only apply makeup if gap > 8 LU
-	ds201GateMakeupMaxDB      = 4.0  // Cap at 4 dB (~1.58 linear) to avoid clipping
-	ds201GateMakeupTPHeadroom = -3.0 // Skip makeup if true peak already > -3 dBTP
-
 	// DS201 Low-Pass filter tuning
 	ds201LPDefaultFreq = 16000.0 // Hz - default cutoff (preserves all audible content)
 	ds201LPMinFreq     = 8000.0  // Hz - minimum cutoff (never filter below this)
@@ -326,17 +317,6 @@ const (
 	la2aMixNoisy        = 0.85  // Noisy recordings (more dry hides pumping)
 	la2aNoiseFloorClean = -65.0 // dBFS - below: clean enough for full wet
 	la2aNoiseFloorNoisy = -45.0 // dBFS - above: noisy, reduce wet
-
-	// LA-2A Makeup Gain: LUFS-based gain staging (like DS201 gate)
-	// Rather than estimating gain reduction, use LUFS gap to target for
-	// consistent loudness alignment across the processing chain.
-	la2aMakeupLUFSScale           = 0.35 // Apply 35% of LUFS gap as makeup (more than gate's 25%)
-	la2aMakeupMinGapLUFS          = 6.0  // Only apply makeup if gap > 6 LU (lower threshold than gate)
-	la2aMakeupMaxDB               = 6.0  // dB maximum makeup (compressor can handle more than gate)
-	la2aMakeupTPHeadroom          = -2.0 // Skip makeup if true peak already > -2 dBTP
-	la2aMakeupMin                 = 0.0  // dB minimum makeup (can be zero)
-	la2aMakeupMax                 = 6.0  // dB maximum makeup (legacy, for clamp)
-	la2aMakeupDolbySRCompensation = 1.3  // dB - compensates for Linkwitz-Riley crossover level loss when DolbySR enabled
 
 	// Mains hum filter parameters
 	humEntropyThreshold   = 0.7  // Below this = tonal noise detected (hum/buzz)
@@ -457,7 +437,6 @@ const (
 	defaultDeessIntensity     = 0.0
 	defaultLA2ARatio          = 3.0   // LA-2A baseline ratio
 	defaultLA2AThreshold      = -18.0 // Moderate threshold
-	defaultLA2AMakeup         = 2.0   // Conservative makeup
 	defaultLA2AAttack         = 10.0  // LA-2A fixed attack
 	defaultLA2ARelease        = 200.0 // LA-2A two-stage release approximation
 	defaultLA2AKnee           = 4.0   // LA-2A T4 optical cell soft knee
@@ -1181,8 +1160,7 @@ func tuneDolbySR(config *FilterChainConfig, measurements *AudioMeasurements, _ f
 		config.DolbySRExpansionDB = dolbySRExpansionNoisy // 24 dB
 	}
 
-	// Makeup gain is fixed (Linkwitz-Riley crossover compensation)
-	// Already set to default in DefaultFilterConfig
+	// Makeup gain left at default (1.0 unity) from DefaultFilterConfig
 }
 
 // tuneArnndn adapts RNN-based noise reduction based on measurements.
@@ -1467,9 +1445,7 @@ func tuneDS201Gate(config *FilterChainConfig, measurements *AudioMeasurements) {
 	// 7. Detection: RMS for bleed, peak for clean
 	config.DS201GateDetection = calculateDS201GateDetection(silenceEntropy, silenceCrest)
 
-	// 8. Makeup: always unity - gain staging consolidated in LA2A compressor
-	// See tuneLA2AMakeup for the compensating gain calculation.
-	config.DS201GateMakeup = 1.0
+	// Note: Makeup gain left at default (1.0 unity) - loudnorm handles all level adjustment
 
 	// Gentle gate mode override: for extreme LUFS gap + low LRA
 	// Very quiet recordings with uniform levels cause the gate's soft expansion
@@ -1728,7 +1704,7 @@ func tuneLA2ACompressor(config *FilterChainConfig, measurements *AudioMeasuremen
 	tuneLA2AThreshold(config, measurements)
 	tuneLA2AKnee(config, measurements)
 	tuneLA2AMix(config, measurements)
-	tuneLA2AMakeup(config, measurements)
+	// Note: Makeup gain left at default (0 dB unity) - loudnorm handles all level adjustment
 }
 
 // tuneLA2AAttack sets attack time based on transient characteristics.
@@ -1923,149 +1899,6 @@ func tuneLA2AMix(config *FilterChainConfig, measurements *AudioMeasurements) {
 	config.LA2AMix = mix
 }
 
-// tuneLA2AMakeup sets makeup gain based on LUFS gap to target.
-//
-// This uses LUFS-based gain staging rather than estimating gain reduction from
-// compression parameters. This provides:
-// - More consistent loudness alignment across the processing chain
-// - Better integration with downstream normalisation stages
-// - Predictable behaviour regardless of input dynamics
-//
-// Gain staging consolidation:
-// - When DolbySR is enabled, adds 1.3 dB to compensate for Linkwitz-Riley crossover loss
-// - When DS201Gate is enabled (not in gentle mode), adds the gate's calculated makeup
-//
-// This consolidates gain staging in a single location rather than spreading it across filters.
-func tuneLA2AMakeup(config *FilterChainConfig, measurements *AudioMeasurements) {
-	makeup := calculateLA2AMakeup(
-		measurements.InputI,
-		measurements.InputTP,
-		config.TargetI,
-	)
-
-	// Add DolbySR crossover compensation when enabled
-	if config.DolbySREnabled {
-		makeup += la2aMakeupDolbySRCompensation
-	}
-
-	// Add DS201 gate makeup compensation when gate is enabled (and not in gentle mode)
-	// Gentle mode is for extreme LUFS gaps where makeup would cause issues
-	if config.DS201GateEnabled && !config.DS201GateGentleMode {
-		gateLinear := calculateDS201GateMakeup(
-			measurements.InputI,
-			measurements.InputTP,
-			config.TargetI,
-		)
-		// Convert linear to dB (gate returns linear, LA2A uses dB)
-		if gateLinear > 1.0 {
-			makeup += LinearToDb(gateLinear)
-		}
-	}
-
-	config.LA2AMakeup = makeup
-}
-
-// calculateDS201GateMakeup determines post-gate makeup gain based on LUFS gap.
-//
-// Rather than relying on later normalisation stages which can introduce artifacts,
-// this provides gentle gain recovery immediately after gating. The makeup is:
-// - A fraction of the LUFS gap to target (conservative approach)
-// - Only applied if the gap exceeds a minimum threshold
-// - Capped to avoid clipping (considers true peak headroom)
-// - Returned as linear gain (1.0 = unity, 2.0 = +6dB)
-//
-// This helps quiet recordings come up without the pumping/breathing artifacts
-// that dynamic normalisers can introduce.
-func calculateDS201GateMakeup(inputLUFS, inputTP, targetLUFS float64) float64 {
-	// Calculate LUFS gap to target
-	lufsGap := targetLUFS - inputLUFS
-	if lufsGap < 0 {
-		lufsGap = 0 // Audio is already louder than target
-	}
-
-	// Skip makeup if gap is small (audio is already close to target)
-	if lufsGap < ds201GateMakeupMinGapLUFS {
-		return 1.0
-	}
-
-	// Skip makeup if true peak is already high (no headroom)
-	if inputTP > ds201GateMakeupTPHeadroom {
-		return 1.0
-	}
-
-	// Calculate makeup as fraction of gap
-	makeupDB := lufsGap * ds201GateMakeupLUFSScale
-
-	// Cap to maximum to avoid clipping
-	if makeupDB > ds201GateMakeupMaxDB {
-		makeupDB = ds201GateMakeupMaxDB
-	}
-
-	// Also limit based on true peak headroom
-	// If TP is -5 dBTP, we have ~5 dB headroom before clipping at -0.3 dBTP
-	tpHeadroom := -0.3 - inputTP // How much room before target TP
-	if makeupDB > tpHeadroom {
-		makeupDB = tpHeadroom
-	}
-
-	// Don't apply negative makeup
-	if makeupDB < 0 {
-		return 1.0
-	}
-
-	// Convert dB to linear for agate's makeup parameter
-	return DbToLinear(makeupDB)
-}
-
-// calculateLA2AMakeup determines post-compression makeup gain based on LUFS gap.
-//
-// Similar to DS201 gate makeup but slightly more aggressive since:
-// - Compressor is earlier in chain (more stages to refine afterwards)
-// - Compressor reduces dynamics, so peaks are less likely to clip
-// - Limiter at end of chain provides safety net
-//
-// Returns makeup gain in dB (not linear, unlike DS201 gate which returns linear).
-func calculateLA2AMakeup(inputLUFS, inputTP, targetLUFS float64) float64 {
-	// Calculate LUFS gap to target
-	lufsGap := targetLUFS - inputLUFS
-	if lufsGap < 0 {
-		lufsGap = 0 // Audio is already louder than target
-	}
-
-	// Skip makeup if gap is small (audio is already close to target)
-	if lufsGap < la2aMakeupMinGapLUFS {
-		return la2aMakeupMin
-	}
-
-	// Skip makeup if true peak is already high (no headroom)
-	if inputTP > la2aMakeupTPHeadroom {
-		return la2aMakeupMin
-	}
-
-	// Calculate makeup as fraction of gap
-	makeupDB := lufsGap * la2aMakeupLUFSScale
-
-	// Cap to maximum to avoid over-driving
-	if makeupDB > la2aMakeupMaxDB {
-		makeupDB = la2aMakeupMaxDB
-	}
-
-	// Also limit based on true peak headroom
-	// If TP is -5 dBTP, we have ~5 dB headroom before clipping at -0.3 dBTP
-	// But compressor reduces peaks, so we can be slightly more aggressive
-	tpHeadroom := -0.3 - inputTP
-	if makeupDB > tpHeadroom {
-		makeupDB = tpHeadroom
-	}
-
-	// Don't apply negative makeup
-	if makeupDB < la2aMakeupMin {
-		return la2aMakeupMin
-	}
-
-	return makeupDB
-}
-
 // ==========================================================================
 // UREI 1176-Inspired Limiter Tuning Functions
 // ==========================================================================
@@ -2203,7 +2036,7 @@ func sanitizeConfig(config *FilterChainConfig) {
 	// LA-2A compressor
 	config.LA2ARatio = sanitizeFloat(config.LA2ARatio, defaultLA2ARatio)
 	config.LA2AThreshold = sanitizeFloat(config.LA2AThreshold, defaultLA2AThreshold)
-	config.LA2AMakeup = sanitizeFloat(config.LA2AMakeup, defaultLA2AMakeup)
+	// Note: LA2AMakeup not sanitised - always 0 (set in DefaultFilterConfig)
 
 	// DS201-inspired gate threshold needs additional check for zero/negative
 	if math.IsNaN(config.DS201GateThreshold) || math.IsInf(config.DS201GateThreshold, 0) || config.DS201GateThreshold <= 0 {

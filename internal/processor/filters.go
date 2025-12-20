@@ -519,7 +519,7 @@ func DefaultFilterConfig() *FilterChainConfig {
 		DS201GateRelease:   350,    // 350ms release (adaptive: based on flux/ZCR, +50ms hold compensation)
 		DS201GateRange:     0.0625, // -24dB reduction (adaptive: based on silence entropy)
 		DS201GateKnee:      3.0,    // Soft knee (adaptive: based on spectral crest)
-		DS201GateMakeup:    1.0,    // Adaptive makeup (LUFS-based)
+		DS201GateMakeup:    1.0,    // Unity gain (loudnorm handles all level adjustment)
 		DS201GateDetection: "rms",  // RMS detection (adaptive: rms for bleed, peak for clean)
 
 		// LA-2A Compressor - Teletronix LA-2A style optical compressor emulation
@@ -534,7 +534,7 @@ func DefaultFilterConfig() *FilterChainConfig {
 		LA2ARatio:     3.0, // 3:1 ratio (LA-2A Compress mode baseline)
 		LA2AAttack:    10,  // 10ms attack (LA-2A fixed attack, preserves transients)
 		LA2ARelease:   200, // 200ms release (LA-2A two-stage approximation)
-		LA2AMakeup:    0,   // Adaptive makeup (LUFS-based gain staging like DS201 gate)
+		LA2AMakeup:    0,   // Unity gain (0 dB - loudnorm handles all level adjustment)
 		LA2AKnee:      4.0, // Soft knee (LA-2A T4 optical cell characteristic)
 		LA2AMix:       1.0, // 100% wet (true LA-2A has no parallel compression)
 
@@ -901,9 +901,7 @@ func (cfg *FilterChainConfig) buildDolbySRFilter() string {
 	// Join bands with escaped pipe separators (space before and after)
 	filter := "mcompand=args=" + strings.Join(bandSpecs, " \\| ")
 
-	// Note: Linkwitz-Riley crossover compensation is applied in the LA2A compressor
-	// makeup gain when DolbySR is enabled (see tuneLA2AMakeup in adaptive.go).
-	// This simplifies gain staging by consolidating makeup gains in one place.
+	// Note: All makeup gain is set to unity - loudnorm handles all level adjustment.
 
 	return filter
 }

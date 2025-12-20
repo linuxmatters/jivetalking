@@ -1442,334 +1442,6 @@ func TestTuneDS201Gate(t *testing.T) {
 			})
 		}
 	})
-
-	t.Run("makeup gain based on LUFS gap", func(t *testing.T) {
-		// Tests for calculateDS201GateMakeup
-		// Makeup provides gentle gain recovery post-gate based on LUFS gap
-		//
-		// Constants:
-		// ds201GateMakeupLUFSScale = 0.25 (25% of gap)
-		// ds201GateMakeupMinGapLUFS = 8.0 (only apply if gap > 8 LU)
-		// ds201GateMakeupMaxDB = 4.0 (cap at 4 dB)
-		// ds201GateMakeupTPHeadroom = -3.0 (skip if TP > -3)
-
-		tests := []struct {
-			name         string
-			inputLUFS    float64
-			inputTP      float64
-			targetLUFS   float64
-			wantMakeupDB float64
-			tolerance    float64
-			desc         string
-		}{
-			{
-				name:         "loud audio - no makeup needed",
-				inputLUFS:    -18.0,
-				inputTP:      -3.0,
-				targetLUFS:   -16.0,
-				wantMakeupDB: 0.0, // Gap only 2 LU, below minimum 8 LU
-				tolerance:    0.1,
-				desc:         "small gap means no makeup",
-			},
-			{
-				name:         "quiet audio - moderate makeup",
-				inputLUFS:    -31.0,
-				inputTP:      -8.0,
-				targetLUFS:   -16.0,
-				wantMakeupDB: 3.75, // Gap 15 LU × 0.25 = 3.75 dB
-				tolerance:    0.1,
-				desc:         "15 LU gap gives 3.75 dB makeup",
-			},
-			{
-				name:         "very quiet audio - capped makeup",
-				inputLUFS:    -40.0,
-				inputTP:      -10.0,
-				targetLUFS:   -16.0,
-				wantMakeupDB: 4.0, // Gap 24 LU × 0.25 = 6 dB, capped to 4 dB
-				tolerance:    0.1,
-				desc:         "makeup capped at 4 dB max",
-			},
-			{
-				name:         "high true peak - no makeup",
-				inputLUFS:    -31.0,
-				inputTP:      -2.0, // Already very loud peaks
-				targetLUFS:   -16.0,
-				wantMakeupDB: 0.0, // TP > -3 dBTP, skip makeup
-				tolerance:    0.1,
-				desc:         "no headroom due to high true peak",
-			},
-			{
-				name:         "limited by true peak headroom",
-				inputLUFS:    -31.0,
-				inputTP:      -2.5, // Only 2.2 dB headroom to -0.3 target
-				targetLUFS:   -16.0,
-				wantMakeupDB: 0.0, // TP > -3, skipped
-				tolerance:    0.1,
-				desc:         "true peak headroom limits makeup",
-			},
-			{
-				name:         "audio louder than target",
-				inputLUFS:    -14.0,
-				inputTP:      -5.0,
-				targetLUFS:   -16.0,
-				wantMakeupDB: 0.0, // Negative gap, no makeup
-				tolerance:    0.1,
-				desc:         "no makeup when already loud",
-			},
-		}
-
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				makeup := calculateDS201GateMakeup(tt.inputLUFS, tt.inputTP, tt.targetLUFS)
-				makeupDB := linearToDB(makeup)
-
-				// For unity gain (1.0), linearToDB returns 0
-				if tt.wantMakeupDB == 0 {
-					if makeup > 1.01 {
-						t.Errorf("DS201GateMakeup = %.3f (%.1f dB), want ~1.0 (0 dB) [%s]",
-							makeup, makeupDB, tt.desc)
-					}
-				} else {
-					if math.Abs(makeupDB-tt.wantMakeupDB) > tt.tolerance {
-						t.Errorf("DS201GateMakeup = %.3f (%.1f dB), want ~%.1f dB [%s]",
-							makeup, makeupDB, tt.wantMakeupDB, tt.desc)
-					}
-				}
-			})
-		}
-	})
-
-	t.Run("LA2A_Makeup", func(t *testing.T) {
-		// Tests for calculateLA2AMakeup
-		// LUFS-based makeup provides gentle gain recovery post-compression
-		//
-		// Constants:
-		// la2aMakeupLUFSScale = 0.35 (35% of gap, more aggressive than gate)
-		// la2aMakeupMinGapLUFS = 6.0 (only apply if gap > 6 LU)
-		// la2aMakeupMaxDB = 6.0 (cap at 6 dB)
-		// la2aMakeupTPHeadroom = -2.0 (skip if TP > -2)
-
-		tests := []struct {
-			name         string
-			inputLUFS    float64
-			inputTP      float64
-			targetLUFS   float64
-			wantMakeupDB float64
-			tolerance    float64
-			desc         string
-		}{
-			{
-				name:         "loud audio - no makeup needed",
-				inputLUFS:    -18.0,
-				inputTP:      -3.0,
-				targetLUFS:   -16.0,
-				wantMakeupDB: 0.0, // Gap only 2 LU, below minimum 6 LU
-				tolerance:    0.1,
-				desc:         "small gap means no makeup",
-			},
-			{
-				name:         "moderate gap - some makeup",
-				inputLUFS:    -26.0,
-				inputTP:      -8.0,
-				targetLUFS:   -16.0,
-				wantMakeupDB: 3.5, // Gap 10 LU × 0.35 = 3.5 dB
-				tolerance:    0.1,
-				desc:         "10 LU gap gives 3.5 dB makeup",
-			},
-			{
-				name:         "quiet audio - moderate makeup",
-				inputLUFS:    -31.0,
-				inputTP:      -8.0,
-				targetLUFS:   -16.0,
-				wantMakeupDB: 5.25, // Gap 15 LU × 0.35 = 5.25 dB
-				tolerance:    0.1,
-				desc:         "15 LU gap gives 5.25 dB makeup",
-			},
-			{
-				name:         "very quiet audio - capped makeup",
-				inputLUFS:    -40.0,
-				inputTP:      -10.0,
-				targetLUFS:   -16.0,
-				wantMakeupDB: 6.0, // Gap 24 LU × 0.35 = 8.4 dB, capped to 6 dB
-				tolerance:    0.1,
-				desc:         "makeup capped at 6 dB max",
-			},
-			{
-				name:         "high true peak - no makeup",
-				inputLUFS:    -31.0,
-				inputTP:      -1.0, // Already very loud peaks
-				targetLUFS:   -16.0,
-				wantMakeupDB: 0.0, // TP > -2 dBTP, skip makeup
-				tolerance:    0.1,
-				desc:         "no headroom due to high true peak",
-			},
-			{
-				name:         "limited by true peak headroom",
-				inputLUFS:    -31.0,
-				inputTP:      -3.0, // Only 2.7 dB headroom to -0.3 target
-				targetLUFS:   -16.0,
-				wantMakeupDB: 2.7, // Limited by TP headroom (-0.3 - (-3.0) = 2.7)
-				tolerance:    0.1,
-				desc:         "true peak headroom limits makeup",
-			},
-			{
-				name:         "audio louder than target",
-				inputLUFS:    -14.0,
-				inputTP:      -5.0,
-				targetLUFS:   -16.0,
-				wantMakeupDB: 0.0, // Negative gap, no makeup
-				tolerance:    0.1,
-				desc:         "no makeup when already loud",
-			},
-			{
-				name:         "exactly at minimum gap threshold",
-				inputLUFS:    -22.0,
-				inputTP:      -8.0,
-				targetLUFS:   -16.0,
-				wantMakeupDB: 2.1, // Gap exactly 6 LU × 0.35 = 2.1 dB
-				tolerance:    0.1,
-				desc:         "at minimum gap threshold applies makeup",
-			},
-			{
-				name:         "just below minimum gap threshold",
-				inputLUFS:    -21.5,
-				inputTP:      -8.0,
-				targetLUFS:   -16.0,
-				wantMakeupDB: 0.0, // Gap 5.5 LU, below minimum 6 LU
-				tolerance:    0.1,
-				desc:         "below minimum gap threshold means no makeup",
-			},
-		}
-
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				makeupDB := calculateLA2AMakeup(tt.inputLUFS, tt.inputTP, tt.targetLUFS)
-
-				if tt.wantMakeupDB == 0 {
-					if makeupDB > 0.1 {
-						t.Errorf("LA2AMakeup = %.2f dB, want ~0 dB [%s]",
-							makeupDB, tt.desc)
-					}
-				} else {
-					if math.Abs(makeupDB-tt.wantMakeupDB) > tt.tolerance {
-						t.Errorf("LA2AMakeup = %.2f dB, want ~%.1f dB [%s]",
-							makeupDB, tt.wantMakeupDB, tt.desc)
-					}
-				}
-			})
-		}
-	})
-}
-
-func TestTuneLA2AMakeup_DolbySRCompensation(t *testing.T) {
-	// Tests that LA2A makeup adds 1.3 dB when DolbySR is enabled
-	// This compensates for Linkwitz-Riley crossover level loss in mcompand
-
-	// Baseline measurements: 10 LU gap gives 3.5 dB base makeup (10 × 0.35)
-	measurements := &AudioMeasurements{
-		InputI:  -26.0, // 10 LU gap to -16 target
-		InputTP: -8.0,  // Safe headroom
-	}
-
-	t.Run("DolbySR enabled adds 1.3 dB compensation", func(t *testing.T) {
-		config := DefaultFilterConfig()
-		config.DolbySREnabled = true
-		config.DS201GateEnabled = false // Isolate DolbySR compensation
-
-		tuneLA2AMakeup(config, measurements)
-
-		// Base makeup (3.5) + DolbySR compensation (1.3) = 4.8 dB
-		wantMakeup := 4.8
-		if math.Abs(config.LA2AMakeup-wantMakeup) > 0.1 {
-			t.Errorf("LA2AMakeup with DolbySR = %.2f dB, want ~%.1f dB", config.LA2AMakeup, wantMakeup)
-		}
-	})
-
-	t.Run("DolbySR disabled has no compensation", func(t *testing.T) {
-		config := DefaultFilterConfig()
-		config.DolbySREnabled = false
-		config.DS201GateEnabled = false // Isolate DolbySR compensation
-
-		tuneLA2AMakeup(config, measurements)
-
-		// Base makeup only (3.5 dB)
-		wantMakeup := 3.5
-		if math.Abs(config.LA2AMakeup-wantMakeup) > 0.1 {
-			t.Errorf("LA2AMakeup without DolbySR = %.2f dB, want ~%.1f dB", config.LA2AMakeup, wantMakeup)
-		}
-	})
-}
-
-func TestTuneLA2AMakeup_DS201GateCompensation(t *testing.T) {
-	// Tests that LA2A makeup adds gate compensation when DS201Gate is enabled
-	// This compensates for gate makeup that was previously applied in the gate filter
-
-	// Baseline measurements: 10 LU gap gives 3.5 dB base makeup (10 × 0.35)
-	measurements := &AudioMeasurements{
-		InputI:  -26.0, // 10 LU gap to -16 target
-		InputTP: -8.0,  // Safe headroom
-	}
-
-	t.Run("DS201Gate enabled adds makeup compensation", func(t *testing.T) {
-		config := DefaultFilterConfig()
-		config.DolbySREnabled = false // Isolate gate compensation
-		config.DS201GateEnabled = true
-		config.DS201GateGentleMode = false
-
-		tuneLA2AMakeup(config, measurements)
-
-		// Gate compensation: 10 LU × 0.25 = 2.5 dB
-		// Base makeup (3.5) + gate compensation (2.5) = 6.0 dB
-		wantMakeup := 6.0
-		if math.Abs(config.LA2AMakeup-wantMakeup) > 0.1 {
-			t.Errorf("LA2AMakeup with DS201Gate = %.2f dB, want ~%.1f dB", config.LA2AMakeup, wantMakeup)
-		}
-	})
-
-	t.Run("DS201Gate gentle mode has no makeup compensation", func(t *testing.T) {
-		config := DefaultFilterConfig()
-		config.DolbySREnabled = false // Isolate gate compensation
-		config.DS201GateEnabled = true
-		config.DS201GateGentleMode = true
-
-		tuneLA2AMakeup(config, measurements)
-
-		// Gentle mode: no gate makeup compensation
-		// Base makeup only (3.5 dB)
-		wantMakeup := 3.5
-		if math.Abs(config.LA2AMakeup-wantMakeup) > 0.1 {
-			t.Errorf("LA2AMakeup with DS201Gate gentle = %.2f dB, want ~%.1f dB", config.LA2AMakeup, wantMakeup)
-		}
-	})
-
-	t.Run("DS201Gate disabled has no compensation", func(t *testing.T) {
-		config := DefaultFilterConfig()
-		config.DolbySREnabled = false
-		config.DS201GateEnabled = false
-
-		tuneLA2AMakeup(config, measurements)
-
-		// Base makeup only (3.5 dB)
-		wantMakeup := 3.5
-		if math.Abs(config.LA2AMakeup-wantMakeup) > 0.1 {
-			t.Errorf("LA2AMakeup without DS201Gate = %.2f dB, want ~%.1f dB", config.LA2AMakeup, wantMakeup)
-		}
-	})
-
-	t.Run("Both DolbySR and DS201Gate enabled combines compensations", func(t *testing.T) {
-		config := DefaultFilterConfig()
-		config.DolbySREnabled = true
-		config.DS201GateEnabled = true
-		config.DS201GateGentleMode = false
-
-		tuneLA2AMakeup(config, measurements)
-
-		// Base (3.5) + DolbySR (1.3) + gate (2.5) = 7.3 dB
-		wantMakeup := 7.3
-		if math.Abs(config.LA2AMakeup-wantMakeup) > 0.1 {
-			t.Errorf("LA2AMakeup with both = %.2f dB, want ~%.1f dB", config.LA2AMakeup, wantMakeup)
-		}
-	})
 }
 
 // linearToDB converts linear amplitude to dB for test error messages
@@ -1883,10 +1555,10 @@ func TestSanitizeConfig(t *testing.T) {
 	// Uses defaults from adaptive.go:
 	// defaultHighpassFreq   = 80.0
 	// defaultDeessIntensity = 0.0
-	// defaultLA2ARatio      = 2.5
-	// defaultLA2AThreshold  = -20.0
-	// defaultLA2AMakeup     = 3.0
+	// defaultLA2ARatio      = 3.0
+	// defaultLA2AThreshold  = -18.0
 	// defaultGateThreshold  = 0.01 (linear, ~-40dBFS)
+	// Note: LA2AMakeup not sanitised - always 0 (set in DefaultFilterConfig)
 
 	tests := []struct {
 		name   string
@@ -1901,7 +1573,6 @@ func TestSanitizeConfig(t *testing.T) {
 				DeessIntensity:     0.3,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
-				LA2AMakeup:         4.0,
 				DS201GateThreshold: 0.02,
 			},
 			want: FilterChainConfig{
@@ -1909,7 +1580,6 @@ func TestSanitizeConfig(t *testing.T) {
 				DeessIntensity:     0.3,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
-				LA2AMakeup:         4.0,
 				DS201GateThreshold: 0.02,
 			},
 		},
@@ -1922,7 +1592,6 @@ func TestSanitizeConfig(t *testing.T) {
 				DeessIntensity:     0.3,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
-				LA2AMakeup:         4.0,
 				DS201GateThreshold: 0.02,
 			},
 			want: FilterChainConfig{
@@ -1930,7 +1599,6 @@ func TestSanitizeConfig(t *testing.T) {
 				DeessIntensity:     0.3,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
-				LA2AMakeup:         4.0,
 				DS201GateThreshold: 0.02,
 			},
 		},
@@ -1941,7 +1609,6 @@ func TestSanitizeConfig(t *testing.T) {
 				DeessIntensity:     math.NaN(),
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
-				LA2AMakeup:         4.0,
 				DS201GateThreshold: 0.02,
 			},
 			want: FilterChainConfig{
@@ -1949,25 +1616,6 @@ func TestSanitizeConfig(t *testing.T) {
 				DeessIntensity:     0.0, // defaultDeessIntensity
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
-				LA2AMakeup:         4.0,
-				DS201GateThreshold: 0.02,
-			},
-		},
-		{
-			config: FilterChainConfig{
-				DS201HPFreq:        100.0,
-				DeessIntensity:     0.3,
-				LA2ARatio:          3.0,
-				LA2AThreshold:      -24.0,
-				LA2AMakeup:         4.0,
-				DS201GateThreshold: 0.02,
-			},
-			want: FilterChainConfig{
-				DS201HPFreq:        100.0,
-				DeessIntensity:     0.3,
-				LA2ARatio:          3.0,
-				LA2AThreshold:      -24.0,
-				LA2AMakeup:         4.0,
 				DS201GateThreshold: 0.02,
 			},
 		},
@@ -1978,7 +1626,6 @@ func TestSanitizeConfig(t *testing.T) {
 				DeessIntensity:     0.3,
 				LA2ARatio:          math.NaN(),
 				LA2AThreshold:      -24.0,
-				LA2AMakeup:         4.0,
 				DS201GateThreshold: 0.02,
 			},
 			want: FilterChainConfig{
@@ -1986,7 +1633,6 @@ func TestSanitizeConfig(t *testing.T) {
 				DeessIntensity:     0.3,
 				LA2ARatio:          3.0, // defaultLA2ARatio (LA-2A inspired)
 				LA2AThreshold:      -24.0,
-				LA2AMakeup:         4.0,
 				DS201GateThreshold: 0.02,
 			},
 		},
@@ -1997,7 +1643,6 @@ func TestSanitizeConfig(t *testing.T) {
 				DeessIntensity:     0.3,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      math.NaN(),
-				LA2AMakeup:         4.0,
 				DS201GateThreshold: 0.02,
 			},
 			want: FilterChainConfig{
@@ -2005,26 +1650,6 @@ func TestSanitizeConfig(t *testing.T) {
 				DeessIntensity:     0.3,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -18.0, // defaultLA2AThreshold (LA-2A inspired)
-				LA2AMakeup:         4.0,
-				DS201GateThreshold: 0.02,
-			},
-		},
-		{
-			name: "NaN LA2AMakeup gets default",
-			config: FilterChainConfig{
-				DS201HPFreq:        100.0,
-				DeessIntensity:     0.3,
-				LA2ARatio:          3.0,
-				LA2AThreshold:      -24.0,
-				LA2AMakeup:         math.NaN(),
-				DS201GateThreshold: 0.02,
-			},
-			want: FilterChainConfig{
-				DS201HPFreq:        100.0,
-				DeessIntensity:     0.3,
-				LA2ARatio:          3.0,
-				LA2AThreshold:      -24.0,
-				LA2AMakeup:         2.0, // defaultLA2AMakeup (LA-2A inspired)
 				DS201GateThreshold: 0.02,
 			},
 		},
@@ -2035,7 +1660,6 @@ func TestSanitizeConfig(t *testing.T) {
 				DeessIntensity:     0.3,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
-				LA2AMakeup:         4.0,
 				DS201GateThreshold: math.NaN(),
 			},
 			want: FilterChainConfig{
@@ -2043,7 +1667,6 @@ func TestSanitizeConfig(t *testing.T) {
 				DeessIntensity:     0.3,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
-				LA2AMakeup:         4.0,
 				DS201GateThreshold: 0.01, // defaultGateThreshold
 			},
 		},
@@ -2056,7 +1679,6 @@ func TestSanitizeConfig(t *testing.T) {
 				DeessIntensity:     math.Inf(1),
 				LA2ARatio:          math.Inf(1),
 				LA2AThreshold:      math.Inf(1),
-				LA2AMakeup:         math.Inf(1),
 				DS201GateThreshold: math.Inf(1),
 			},
 			want: FilterChainConfig{
@@ -2064,7 +1686,6 @@ func TestSanitizeConfig(t *testing.T) {
 				DeessIntensity:     0.0,
 				LA2ARatio:          3.0,   // LA-2A inspired
 				LA2AThreshold:      -18.0, // LA-2A inspired
-				LA2AMakeup:         2.0,   // LA-2A inspired
 				DS201GateThreshold: 0.01,
 			},
 		},
@@ -2075,7 +1696,6 @@ func TestSanitizeConfig(t *testing.T) {
 				DeessIntensity:     math.Inf(-1),
 				LA2ARatio:          math.Inf(-1),
 				LA2AThreshold:      math.Inf(-1),
-				LA2AMakeup:         math.Inf(-1),
 				DS201GateThreshold: math.Inf(-1),
 			},
 			want: FilterChainConfig{
@@ -2083,7 +1703,6 @@ func TestSanitizeConfig(t *testing.T) {
 				DeessIntensity:     0.0,
 				LA2ARatio:          3.0,   // LA-2A inspired
 				LA2AThreshold:      -18.0, // LA-2A inspired
-				LA2AMakeup:         2.0,   // LA-2A inspired
 				DS201GateThreshold: 0.01,
 			},
 		},
@@ -2097,7 +1716,6 @@ func TestSanitizeConfig(t *testing.T) {
 				DeessIntensity:     0.0, // zero is valid for DeessIntensity
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
-				LA2AMakeup:         4.0,
 				DS201GateThreshold: 0.0, // zero is NOT valid for GateThreshold
 			},
 			want: FilterChainConfig{
@@ -2105,7 +1723,6 @@ func TestSanitizeConfig(t *testing.T) {
 				DeessIntensity:     0.0,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
-				LA2AMakeup:         4.0,
 				DS201GateThreshold: 0.01, // defaultGateThreshold
 			},
 		},
@@ -2116,7 +1733,6 @@ func TestSanitizeConfig(t *testing.T) {
 				DeessIntensity:     0.3,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
-				LA2AMakeup:         4.0,
 				DS201GateThreshold: -0.5, // negative is NOT valid for GateThreshold
 			},
 			want: FilterChainConfig{
@@ -2124,7 +1740,6 @@ func TestSanitizeConfig(t *testing.T) {
 				DeessIntensity:     0.3,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
-				LA2AMakeup:         4.0,
 				DS201GateThreshold: 0.01, // defaultGateThreshold
 			},
 		},
@@ -2138,7 +1753,6 @@ func TestSanitizeConfig(t *testing.T) {
 				DeessIntensity:     0.0, // valid: de-essing disabled
 				LA2ARatio:          0.0, // passes through (edge case: probably invalid)
 				LA2AThreshold:      0.0, // passes through (0 dB threshold)
-				LA2AMakeup:         0.0, // passes through (0 dB makeup)
 				DS201GateThreshold: 0.02,
 			},
 			want: FilterChainConfig{
@@ -2146,7 +1760,6 @@ func TestSanitizeConfig(t *testing.T) {
 				DeessIntensity:     0.0,
 				LA2ARatio:          0.0,
 				LA2AThreshold:      0.0,
-				LA2AMakeup:         0.0,
 				DS201GateThreshold: 0.02,
 			},
 		},
@@ -2159,7 +1772,6 @@ func TestSanitizeConfig(t *testing.T) {
 				DeessIntensity:     0.3,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -40.0, // very aggressive threshold
-				LA2AMakeup:         4.0,
 				DS201GateThreshold: 0.02,
 			},
 			want: FilterChainConfig{
@@ -2167,7 +1779,6 @@ func TestSanitizeConfig(t *testing.T) {
 				DeessIntensity:     0.3,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -40.0,
-				LA2AMakeup:         4.0,
 				DS201GateThreshold: 0.02,
 			},
 		},
@@ -2180,7 +1791,6 @@ func TestSanitizeConfig(t *testing.T) {
 				DeessIntensity:     math.NaN(),
 				LA2ARatio:          math.NaN(),
 				LA2AThreshold:      math.NaN(),
-				LA2AMakeup:         math.NaN(),
 				DS201GateThreshold: math.NaN(),
 			},
 			want: FilterChainConfig{
@@ -2188,7 +1798,6 @@ func TestSanitizeConfig(t *testing.T) {
 				DeessIntensity:     0.0,
 				LA2ARatio:          3.0,   // LA-2A inspired
 				LA2AThreshold:      -18.0, // LA-2A inspired
-				LA2AMakeup:         2.0,   // LA-2A inspired
 				DS201GateThreshold: 0.01,
 			},
 		},
@@ -2201,7 +1810,6 @@ func TestSanitizeConfig(t *testing.T) {
 				DeessIntensity:     0.3,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
-				LA2AMakeup:         4.0,
 				DS201GateThreshold: 1e-10, // very small but positive
 			},
 			want: FilterChainConfig{
@@ -2209,7 +1817,6 @@ func TestSanitizeConfig(t *testing.T) {
 				DeessIntensity:     0.3,
 				LA2ARatio:          3.0,
 				LA2AThreshold:      -24.0,
-				LA2AMakeup:         4.0,
 				DS201GateThreshold: 1e-10,
 			},
 		},
@@ -2233,9 +1840,6 @@ func TestSanitizeConfig(t *testing.T) {
 			}
 			if config.LA2AThreshold != tt.want.LA2AThreshold {
 				t.Errorf("LA2AThreshold = %v, want %v", config.LA2AThreshold, tt.want.LA2AThreshold)
-			}
-			if config.LA2AMakeup != tt.want.LA2AMakeup {
-				t.Errorf("LA2AMakeup = %v, want %v", config.LA2AMakeup, tt.want.LA2AMakeup)
 			}
 			if config.DS201GateThreshold != tt.want.DS201GateThreshold {
 				t.Errorf("DS201GateThreshold = %v, want %v", config.DS201GateThreshold, tt.want.DS201GateThreshold)
@@ -2577,7 +2181,6 @@ func TestTuneDolbySR_Disabled(t *testing.T) {
 
 func TestBuildDolbySRFilter(t *testing.T) {
 	// Verify the filter builder produces valid mcompand chain
-	// Note: Makeup gain is now applied in LA2A compressor, not DolbySR filter
 
 	config := newTestConfig()
 	config.DolbySREnabled = true
@@ -2605,9 +2208,9 @@ func TestBuildDolbySRFilter(t *testing.T) {
 		t.Errorf("Filter missing FLAT curve point -75/-88\nGot: %s", filter)
 	}
 
-	// Makeup gain is now in LA2A compressor, not here
+	// DolbySR filter applies noise reduction only, no gain changes
 	if containsString(filter, "volume=") {
-		t.Errorf("Filter should not contain volume filter (makeup is in LA2A now)\nGot: %s", filter)
+		t.Errorf("Filter should not contain volume filter\nGot: %s", filter)
 	}
 }
 
