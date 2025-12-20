@@ -789,10 +789,14 @@ func formatDNS1500Filter(f *os.File, cfg *processor.FilterChainConfig, m *proces
 			adaptivityDesc = "moderate"
 		}
 
+		// Calculate effective floor for rationale display
+		effectiveFloor := np.MeasuredNoiseFloor - cfg.DNS1500NoiseReduce
+
 		fmt.Fprintf(f, "        Rationale: measured floor %.1f dBFS, %s noise → %.1f dB reduction\n",
 			np.MeasuredNoiseFloor, noiseChar, cfg.DNS1500NoiseReduce)
 		fmt.Fprintf(f, "        Adaptivity: LRA %.1f LU → %s adaptation\n", m.InputLRA, adaptivityDesc)
-		fmt.Fprintf(f, "        Compand target: -80 dBFS → %.0f dB expansion gap\n", cfg.DNS1500CompandExpansion)
+		fmt.Fprintf(f, "        Compand: effective floor %.1f dBFS (post-afftdn) → %.0f dB expansion to -80 target\n",
+			effectiveFloor, cfg.DNS1500CompandExpansion)
 		fmt.Fprintf(f, "        DNS-1500 philosophy: learn noise from silence, track continuously\n")
 	}
 }

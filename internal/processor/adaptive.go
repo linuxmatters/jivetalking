@@ -1135,13 +1135,14 @@ func tuneDNS1500(config *FilterChainConfig, measurements *AudioMeasurements) {
 	config.DNS1500TrackNoise = true
 
 	// ─── Compand parameters (residual noise crusher) ────────────────────────────
-	// Threshold: set to input noise floor (where noise lives)
-	// This is the measured trough from Pass 1, not the afftdn residual
-	config.DNS1500CompandThreshold = np.MeasuredNoiseFloor
+	// Account for afftdn's contribution: compand works on post-afftdn signal
+	// Effective floor = measured floor lowered by afftdn reduction
+	effectiveFloor := np.MeasuredNoiseFloor - config.DNS1500NoiseReduce
+	config.DNS1500CompandThreshold = effectiveFloor
 
-	// Expansion depth: gap between input noise floor and target floor
-	// Larger gap = more aggressive expansion needed
-	expansionGap := np.MeasuredNoiseFloor - dns1500CompandTargetFloor
+	// Expansion depth: gap between effective floor (post-afftdn) and target floor
+	// This prevents double-dipping: afftdn already reduced noise, compand finishes the job
+	expansionGap := effectiveFloor - dns1500CompandTargetFloor
 	config.DNS1500CompandExpansion = clamp(expansionGap, dns1500CompandExpansionMin, dns1500CompandExpansionMax)
 
 	// Fixed timing parameters (empirically validated for speech)

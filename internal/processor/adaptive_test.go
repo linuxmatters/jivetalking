@@ -2470,40 +2470,45 @@ func TestTuneDNS1500(t *testing.T) {
 		}
 	})
 
-	t.Run("compand threshold set to input noise floor", func(t *testing.T) {
+	t.Run("compand threshold set to effective floor after afftdn", func(t *testing.T) {
 		config := newTestConfig()
 		measurements := &AudioMeasurements{
 			NoiseProfile: &NoiseProfile{
 				Start:              1 * time.Second,
 				Duration:           500 * time.Millisecond,
-				MeasuredNoiseFloor: -65.0,
+				MeasuredNoiseFloor: -65.0, // afftdn reduces by 6dB (clamped min)
 			},
 			InputLRA: 10.0,
 		}
 
 		tuneDNS1500(config, measurements)
 
-		if config.DNS1500CompandThreshold != -65.0 {
-			t.Errorf("DNS1500CompandThreshold should equal noise floor -65.0, got %.1f",
-				config.DNS1500CompandThreshold)
+		// Effective floor = measured (-65) - afftdn reduction (6) = -71
+		// afftdn reduction: gap to -70 target = 5 dB, clamped to min 6 dB
+		expectedThreshold := -71.0
+		if config.DNS1500CompandThreshold != expectedThreshold {
+			t.Errorf("DNS1500CompandThreshold should be %.1f (effective floor), got %.1f",
+				expectedThreshold, config.DNS1500CompandThreshold)
 		}
 	})
 
-	t.Run("compand expansion derived from gap to target floor", func(t *testing.T) {
+	t.Run("compand expansion derived from effective floor to target", func(t *testing.T) {
 		config := newTestConfig()
 		measurements := &AudioMeasurements{
 			NoiseProfile: &NoiseProfile{
 				Start:              1 * time.Second,
 				Duration:           500 * time.Millisecond,
-				MeasuredNoiseFloor: -60.0, // Gap to -80 target = 20 dB
+				MeasuredNoiseFloor: -60.0, // afftdn reduces by 10dB (gap to -70)
 			},
 			InputLRA: 10.0,
 		}
 
 		tuneDNS1500(config, measurements)
 
-		// Expansion should be gap between -60 and -80 = 20 dB
-		expectedExpansion := 20.0
+		// afftdn reduction = -60 - (-70) = 10 dB
+		// Effective floor = -60 - 10 = -70
+		// Expansion = -70 - (-80) = 10 dB
+		expectedExpansion := 10.0
 		if config.DNS1500CompandExpansion != expectedExpansion {
 			t.Errorf("DNS1500CompandExpansion should be %.1f, got %.1f",
 				expectedExpansion, config.DNS1500CompandExpansion)
@@ -2517,14 +2522,15 @@ func TestTuneDNS1500(t *testing.T) {
 			NoiseProfile: &NoiseProfile{
 				Start:              1 * time.Second,
 				Duration:           500 * time.Millisecond,
-				MeasuredNoiseFloor: -82.0, // Gap to -80 = -2 dB (below min)
+				MeasuredNoiseFloor: -82.0, // Very clean: afftdn min 6dB, effective = -88
 			},
 			InputLRA: 10.0,
 		}
 
 		tuneDNS1500(config, measurements)
 
-		// Should be clamped to minimum (6 dB)
+		// Effective floor = -82 - 6 = -88 (afftdn clamped to min 6)
+		// Gap to -80 target = -8 dB → clamped to minimum (6 dB)
 		if config.DNS1500CompandExpansion != 6.0 {
 			t.Errorf("DNS1500CompandExpansion should be clamped to 6.0, got %.1f",
 				config.DNS1500CompandExpansion)
@@ -2536,14 +2542,15 @@ func TestTuneDNS1500(t *testing.T) {
 			NoiseProfile: &NoiseProfile{
 				Start:              1 * time.Second,
 				Duration:           500 * time.Millisecond,
-				MeasuredNoiseFloor: -40.0, // Gap to -80 = 40 dB (above max)
+				MeasuredNoiseFloor: -35.0, // Very noisy: afftdn capped at 15dB, effective = -50
 			},
 			InputLRA: 10.0,
 		}
 
 		tuneDNS1500(config2, measurements2)
 
-		// Should be clamped to maximum (30 dB)
+		// Effective floor = -35 - 15 = -50 (noisy source caps afftdn at 15)
+		// Gap to -80 target = 30 dB → at maximum limit
 		if config2.DNS1500CompandExpansion != 30.0 {
 			t.Errorf("DNS1500CompandExpansion should be clamped to 30.0, got %.1f",
 				config2.DNS1500CompandExpansion)
