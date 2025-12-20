@@ -2515,8 +2515,8 @@ func TestTuneDNS1500(t *testing.T) {
 		}
 	})
 
-	t.Run("compand expansion clamped to min/max", func(t *testing.T) {
-		// Test minimum clamp (very clean source)
+	t.Run("compand threshold clamped for clean sources", func(t *testing.T) {
+		// Test threshold clamp (very clean source where effective floor < -74)
 		config := newTestConfig()
 		measurements := &AudioMeasurements{
 			NoiseProfile: &NoiseProfile{
@@ -2529,10 +2529,16 @@ func TestTuneDNS1500(t *testing.T) {
 
 		tuneDNS1500(config, measurements)
 
-		// Effective floor = -82 - 6 = -88 (afftdn clamped to min 6)
-		// Gap to -80 target = -8 dB → clamped to minimum (6 dB)
+		// Effective floor = -82 - 6 = -88, but clamped to -74 for valid compand filter
+		// (compand filter requires threshold > -75 for ascending point order)
+		if config.DNS1500CompandThreshold != -74.0 {
+			t.Errorf("DNS1500CompandThreshold should be clamped to -74.0, got %.1f",
+				config.DNS1500CompandThreshold)
+		}
+
+		// Expansion = -74 - (-80) = 6 dB (minimum)
 		if config.DNS1500CompandExpansion != 6.0 {
-			t.Errorf("DNS1500CompandExpansion should be clamped to 6.0, got %.1f",
+			t.Errorf("DNS1500CompandExpansion should be 6.0, got %.1f",
 				config.DNS1500CompandExpansion)
 		}
 
