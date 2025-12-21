@@ -123,18 +123,11 @@ type ProcessingResult struct {
 	NormResult *NormalisationResult // nil if normalisation disabled or skipped
 }
 
-// processWithFilters performs the actual audio processing with the complete filter chain.
+// processWithFilters performs audio processing using the standard single-input filter graph.
 // Applies the filter chain built by BuildFilterSpec() which includes asendcmd for noise profile learning
 // when NoiseProfileStart/End timestamps are set in the config.
 // If outputMeasurements is non-nil and config.OutputAnalysisEnabled is true, populates it with Pass 2 output analysis.
 func processWithFilters(inputPath, outputPath string, config *FilterChainConfig, progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements), measurements *AudioMeasurements, outputMeasurements **OutputMeasurements) error {
-	return processWithStandardFilters(inputPath, outputPath, config, progressCallback, measurements, outputMeasurements)
-}
-
-// processWithStandardFilters performs audio processing using the standard single-input filter graph.
-// If outputMeasurements is non-nil and config.OutputAnalysisEnabled is true, populates it with Pass 2 output analysis.
-// For Pass 2 with loudnorm enabled, also captures loudnorm's measurement JSON for use in Pass 3.
-func processWithStandardFilters(inputPath, outputPath string, config *FilterChainConfig, progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements), measurements *AudioMeasurements, outputMeasurements **OutputMeasurements) error {
 	// Open input audio file
 	reader, metadata, err := audio.OpenAudioFile(inputPath)
 	if err != nil {
