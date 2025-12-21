@@ -2556,9 +2556,9 @@ func TestTuneDNS1500(t *testing.T) {
 		tuneDNS1500(config2, measurements2)
 
 		// Effective floor = -35 - 15 = -50 (noisy source caps afftdn at 15)
-		// Gap to -80 target = 30 dB → at maximum limit
-		if config2.DNS1500CompandExpansion != 30.0 {
-			t.Errorf("DNS1500CompandExpansion should be clamped to 30.0, got %.1f",
+		// Gap to -80 target = 30 dB → clamped to 15 dB max (prevents pumping)
+		if config2.DNS1500CompandExpansion != 15.0 {
+			t.Errorf("DNS1500CompandExpansion should be clamped to 15.0, got %.1f",
 				config2.DNS1500CompandExpansion)
 		}
 	})

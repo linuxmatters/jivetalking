@@ -151,7 +151,7 @@ const (
 	dns1500CompandDecay        = 0.100 // 100ms - slow enough to avoid pumping
 	dns1500CompandKnee         = 6.0   // 6dB soft knee for transparency
 	dns1500CompandExpansionMin = 6.0   // Minimum expansion (clean sources)
-	dns1500CompandExpansionMax = 30.0  // Maximum expansion (very noisy sources)
+	dns1500CompandExpansionMax = 15.0  // Maximum expansion (beyond this: diminishing returns, pumping risk)
 
 	// DS201 Gate coordination with DNS-1500
 	// When DNS-1500 is active, the gate sees post-NR audio, so we adjust threshold/range
