@@ -1590,6 +1590,45 @@ func writeNoiseFloorTable(f *os.File, inputNoise *processor.NoiseProfile, filter
 	}
 	table.AddMetricRow("RMS Level", inputRMS, filteredRMS, finalRMS, 1, "dBFS", "")
 
+	// Noise Reduction Delta (input - filtered/final, positive = reduction achieved)
+	// Shows how much the noise floor was lowered by processing
+	filteredDelta := math.NaN()
+	finalDelta := math.NaN()
+	if !math.IsNaN(inputRMS) && !math.IsNaN(filteredRMS) {
+		filteredDelta = inputRMS - filteredRMS // Positive = noise reduced
+	}
+	if !math.IsNaN(inputRMS) && !math.IsNaN(finalRMS) {
+		finalDelta = inputRMS - finalRMS
+	}
+
+	// Interpret the noise reduction effectiveness
+	var reductionInterp string
+	if !math.IsNaN(filteredDelta) {
+		if filteredDelta < 0 {
+			reductionInterp = "🟖 noise increased"
+		} else if filteredDelta < 3 {
+			reductionInterp = "minimal reduction"
+		} else if filteredDelta < 10 {
+			reductionInterp = "good reduction"
+		} else {
+			reductionInterp = "excellent reduction"
+		}
+	}
+
+	// Format with explicit sign to show direction
+	formatDelta := func(delta float64) string {
+		if math.IsNaN(delta) {
+			return MissingValue
+		}
+		if delta >= 0 {
+			return fmt.Sprintf("+%.1f", delta)
+		}
+		return fmt.Sprintf("%.1f", delta)
+	}
+	table.AddRow("Noise Reduction",
+		[]string{MissingValue, formatDelta(filteredDelta), formatDelta(finalDelta)},
+		"dB", reductionInterp)
+
 	// Peak Level
 	inputPeak := inputNoise.PeakLevel
 	filteredPeak := math.NaN()
