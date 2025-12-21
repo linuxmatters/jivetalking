@@ -250,8 +250,18 @@ func measureWithLoudnorm(inputPath string, config *FilterChainConfig, progressCa
 //   - needed: True if limiting is required (projected TP exceeds target)
 //   - clamped: True if ceiling was clamped to minimum (loudnorm may need to adjust target)
 func calculateLimiterCeiling(measured_I, measured_TP, target_I, target_TP float64) (ceiling float64, needed bool, clamped bool) {
-	// Safety margin accounts for loudnorm measurement precision and rounding
-	const safetyMargin = 0.5 // dB
+	// Safety margin accounts for inter-sample peak (ISP) creation during limiting.
+	// FFmpeg's alimiter operates on sample peaks, not true peaks. When the limiter
+	// shapes waveforms to reduce peaks, the resulting waveform can have ISPs that
+	// exceed the sample peak ceiling. These ISPs are then amplified by loudnorm's gain.
+	//
+	// Observed ISP creation varies by source material:
+	// - Most files: 0.1-0.5 dB ISP after limiting+gain
+	// - Worst case (E70-Martin): 1.6 dB ISP after limiting+gain
+	//
+	// Using 2.0 dB margin ensures broadcast compliance (-2.0 dBTP) even for
+	// worst-case ISP creation. This is conservative but guarantees compliance.
+	const safetyMargin = 2.0 // dB - accounts for ISP creation during limiting
 
 	// FFmpeg alimiter minimum: limit=0.0625 = 20*log10(0.0625) ≈ -24.08 dBTP
 	// Use -24.0 dBTP as practical minimum with small safety buffer
