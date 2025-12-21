@@ -140,6 +140,8 @@ func measureWithLoudnorm(inputPath string, config *FilterChainConfig, progressCa
 	// Calculate total samples for progress reporting
 	totalSamples := int64(metadata.Duration * float64(metadata.SampleRate))
 	var samplesProcessed int64
+	var frameCount int
+	const progressUpdateInterval = 100 // Send progress update every N frames
 
 	// Build measurement filter: loudnorm (without linear=true) + null sink
 	// loudnorm in single-pass mode outputs its measurements to JSON when freed
@@ -188,8 +190,9 @@ func measureWithLoudnorm(inputPath string, config *FilterChainConfig, progressCa
 		}
 		ffmpeg.AVFrameFree(&filteredFrame)
 
-		// Progress update periodically (every second of audio)
-		if progressCallback != nil && samplesProcessed%int64(metadata.SampleRate) == 0 {
+		// Progress update periodically (every N frames for smooth updates)
+		frameCount++
+		if progressCallback != nil && frameCount%progressUpdateInterval == 0 {
 			progress := math.Min(0.99, float64(samplesProcessed)/float64(totalSamples))
 			progressCallback(3, "Measuring", progress, 0.0, nil)
 		}
@@ -548,6 +551,11 @@ func applyLoudnormAndMeasure(
 	var acc outputMetadataAccumulators
 	var framesProcessed int64
 
+	// Calculate total samples for accurate progress reporting
+	totalSamples := int64(metadata.Duration * float64(metadata.SampleRate))
+	var samplesProcessed int64
+	const progressUpdateInterval = 100 // Send progress update every N frames
+
 	for {
 		frame, err := reader.ReadFrame()
 		if err != nil {
@@ -556,6 +564,9 @@ func applyLoudnormAndMeasure(
 		if frame == nil {
 			break
 		}
+
+		// Track samples for progress
+		samplesProcessed += int64(frame.NbSamples())
 
 		// Push frame into filter graph
 		if _, err := ffmpeg.AVBuffersrcAddFrameFlags(bufferSrcCtx, frame, 0); err != nil {
@@ -586,15 +597,14 @@ func applyLoudnormAndMeasure(
 
 			framesProcessed++
 			ffmpeg.AVFrameUnref(filteredFrame)
-
-			// Progress update every 1000 frames
-			if progressCallback != nil && framesProcessed%1000 == 0 {
-				// Estimate progress (rough approximation)
-				progress := math.Min(0.9, float64(framesProcessed)/100000.0)
-				progressCallback(4, "Normalising", progress, acc.ebur128OutputI, nil)
-			}
 		}
 		ffmpeg.AVFrameFree(&filteredFrame)
+
+		// Progress update periodically (every N input frames for smooth updates)
+		if progressCallback != nil && framesProcessed%progressUpdateInterval == 0 {
+			progress := math.Min(0.99, float64(samplesProcessed)/float64(totalSamples))
+			progressCallback(4, "Normalising", progress, acc.ebur128OutputI, nil)
+		}
 	}
 
 	// Flush filter graph
