@@ -104,9 +104,10 @@ type intervalAccumulator struct {
 	// because astats with reset=0 provides cumulative stats, not per-interval.
 	rawSumSquares  float64 // Sum of squared sample values (normalized -1 to 1)
 	rawSampleCount int64   // Total sample count for this interval
+	rawPeakAbs     float64 // Maximum absolute sample value (linear, 0.0-1.0) for this interval
 
-	// ─── Peak tracking (max per interval) ───────────────────────────────────────
-	peakMax float64 // Maximum peak level (dBFS)
+	// ─── Peak tracking (max per interval, from astats metadata) ─────────────────
+	peakMax float64 // Maximum peak level from astats (dBFS) - cumulative, less accurate
 
 	// ─── aspectralstats accumulators (valid per-window from FFmpeg) ─────────────
 	spectralMeanSum     float64
@@ -193,12 +194,12 @@ func (a *intervalAccumulator) add(m intervalFrameMetrics) {
 	a.frameCount++
 }
 
-// frameSumSquares calculates the sum of squared sample values and sample count from an audio frame.
+// frameSumSquaresAndPeak calculates sum of squared sample values, sample count, and peak from an audio frame.
 // Handles S16, FLT, S32, and DBL sample formats, normalizing to [-1.0, 1.0] range.
-// Returns sumSquares, sampleCount, and ok (false if format is unsupported or frame is invalid).
-func frameSumSquares(frame *ffmpeg.AVFrame) (sumSquares float64, sampleCount int64, ok bool) {
+// Returns sumSquares, sampleCount, peakAbsolute, and ok (false if format is unsupported or frame is invalid).
+func frameSumSquaresAndPeak(frame *ffmpeg.AVFrame) (sumSquares float64, sampleCount int64, peakAbs float64, ok bool) {
 	if frame == nil || frame.NbSamples() == 0 {
-		return 0, 0, false
+		return 0, 0, 0, false
 	}
 
 	sampleFmt := frame.Format()
@@ -207,7 +208,7 @@ func frameSumSquares(frame *ffmpeg.AVFrame) (sumSquares float64, sampleCount int
 
 	dataPtr := frame.Data().Get(0)
 	if dataPtr == nil {
-		return 0, 0, false
+		return 0, 0, 0, false
 	}
 
 	switch ffmpeg.AVSampleFormat(sampleFmt) {
@@ -217,8 +218,12 @@ func frameSumSquares(frame *ffmpeg.AVFrame) (sumSquares float64, sampleCount int
 			normalized := float64(sample) / 32768.0
 			sumSquares += normalized * normalized
 			sampleCount++
+			absVal := math.Abs(normalized)
+			if absVal > peakAbs {
+				peakAbs = absVal
+			}
 		}
-		return sumSquares, sampleCount, true
+		return sumSquares, sampleCount, peakAbs, true
 
 	case ffmpeg.AVSampleFmtFlt, ffmpeg.AVSampleFmtFltp:
 		samples := unsafe.Slice((*float32)(dataPtr), int(nbSamples)*int(nbChannels))
@@ -226,8 +231,12 @@ func frameSumSquares(frame *ffmpeg.AVFrame) (sumSquares float64, sampleCount int
 			normalized := float64(sample)
 			sumSquares += normalized * normalized
 			sampleCount++
+			absVal := math.Abs(normalized)
+			if absVal > peakAbs {
+				peakAbs = absVal
+			}
 		}
-		return sumSquares, sampleCount, true
+		return sumSquares, sampleCount, peakAbs, true
 
 	case ffmpeg.AVSampleFmtS32, ffmpeg.AVSampleFmtS32P:
 		samples := unsafe.Slice((*int32)(dataPtr), int(nbSamples)*int(nbChannels))
@@ -235,38 +244,59 @@ func frameSumSquares(frame *ffmpeg.AVFrame) (sumSquares float64, sampleCount int
 			normalized := float64(sample) / 2147483648.0
 			sumSquares += normalized * normalized
 			sampleCount++
+			absVal := math.Abs(normalized)
+			if absVal > peakAbs {
+				peakAbs = absVal
+			}
 		}
-		return sumSquares, sampleCount, true
+		return sumSquares, sampleCount, peakAbs, true
 
 	case ffmpeg.AVSampleFmtDbl, ffmpeg.AVSampleFmtDblp:
 		samples := unsafe.Slice((*float64)(dataPtr), int(nbSamples)*int(nbChannels))
 		for _, sample := range samples {
 			sumSquares += sample * sample
 			sampleCount++
+			absVal := math.Abs(sample)
+			if absVal > peakAbs {
+				peakAbs = absVal
+			}
 		}
-		return sumSquares, sampleCount, true
+		return sumSquares, sampleCount, peakAbs, true
 
 	default:
-		return 0, 0, false
+		return 0, 0, 0, false
 	}
 }
 
-// addFrameRMS accumulates RMS from raw frame samples for accurate per-interval measurement.
-// This bypasses astats metadata (which is cumulative) to get true per-interval RMS.
-func (a *intervalAccumulator) addFrameRMS(frame *ffmpeg.AVFrame) {
-	if ss, count, ok := frameSumSquares(frame); ok {
+// addFrameRMSAndPeak accumulates RMS and peak from raw frame samples for accurate per-interval measurement.
+// This bypasses astats metadata (which is cumulative) to get true per-interval RMS and peak.
+func (a *intervalAccumulator) addFrameRMSAndPeak(frame *ffmpeg.AVFrame) {
+	if ss, count, peak, ok := frameSumSquaresAndPeak(frame); ok {
 		a.rawSumSquares += ss
 		a.rawSampleCount += count
+		if peak > a.rawPeakAbs {
+			a.rawPeakAbs = peak
+		}
 	}
 }
 
 // finalize converts accumulated values to an IntervalSample.
 func (a *intervalAccumulator) finalize(timestamp time.Duration) IntervalSample {
+	// PeakLevel: Use raw sample calculation for accurate per-interval measurement
+	// This is calculated directly from frame samples, not from astats metadata,
+	// because astats with reset=0 provides cumulative stats, not per-interval.
+	var peakLevelDB float64
+	if a.rawPeakAbs > 0 {
+		peakLevelDB = 20.0 * math.Log10(a.rawPeakAbs)
+	} else {
+		peakLevelDB = -120.0
+	}
+
 	sample := IntervalSample{
 		Timestamp: timestamp,
 
-		// Max values (already computed)
-		PeakLevel:  a.peakMax,
+		// Max values
+		PeakLevel:  peakLevelDB,
 		TruePeak:   a.truePeakMax,
 		SamplePeak: a.samplePeakMax,
 	}
@@ -315,11 +345,12 @@ func (a *intervalAccumulator) finalize(timestamp time.Duration) IntervalSample {
 func (a *intervalAccumulator) reset() {
 	a.frameCount = 0
 
-	// Raw sample RMS
+	// Raw sample RMS and peak
 	a.rawSumSquares = 0
 	a.rawSampleCount = 0
+	a.rawPeakAbs = 0
 
-	// Peak tracking
+	// Peak tracking (astats metadata)
 	a.peakMax = -120.0
 
 	// aspectralstats
@@ -489,7 +520,104 @@ func getIntervalsInRange(intervals []IntervalSample, start, end time.Duration) [
 	if len(result) == 0 {
 		return nil
 	}
+
 	return result
+}
+
+// measureSilenceCandidateFromIntervals computes metrics for a silence region using pre-collected interval data.
+// This avoids re-reading the audio file - all measurements come from Pass 1's interval samples.
+// Returns nil if no intervals fall within the region (should not happen for valid candidates).
+func measureSilenceCandidateFromIntervals(region SilenceRegion, intervals []IntervalSample) *SilenceCandidateMetrics {
+	// Extract intervals within the candidate region
+	regionIntervals := getIntervalsInRange(intervals, region.Start, region.Start+region.Duration)
+	if len(regionIntervals) == 0 {
+		return nil
+	}
+
+	// Accumulate metrics for averaging
+	var rmsSum, peakMax float64
+	var centroidSum, flatnessSum, kurtosisSum, entropySum float64
+	peakMax = -120.0
+
+	for _, interval := range regionIntervals {
+		rmsSum += interval.RMSLevel
+		if interval.PeakLevel > peakMax {
+			peakMax = interval.PeakLevel
+		}
+		centroidSum += interval.SpectralCentroid
+		flatnessSum += interval.SpectralFlatness
+		kurtosisSum += interval.SpectralKurtosis
+		entropySum += interval.SpectralEntropy
+	}
+
+	n := float64(len(regionIntervals))
+
+	return &SilenceCandidateMetrics{
+		Region:           region,
+		RMSLevel:         rmsSum / n,
+		PeakLevel:        peakMax,
+		CrestFactor:      peakMax - (rmsSum / n), // Peak - RMS in dB
+		Entropy:          entropySum / n,
+		SpectralCentroid: centroidSum / n,
+		SpectralFlatness: flatnessSum / n,
+		SpectralKurtosis: kurtosisSum / n,
+	}
+}
+
+// extractNoiseProfileFromIntervals creates a NoiseProfile using pre-collected interval data.
+// This avoids re-reading the audio file - all measurements come from Pass 1's interval samples.
+// Returns nil if no intervals fall within the region.
+func extractNoiseProfileFromIntervals(region *SilenceRegion, intervals []IntervalSample) *NoiseProfile {
+	if region == nil {
+		return nil
+	}
+
+	// Extract intervals within the silence region
+	regionIntervals := getIntervalsInRange(intervals, region.Start, region.Start+region.Duration)
+	if len(regionIntervals) == 0 {
+		return nil
+	}
+
+	// Accumulate metrics for averaging
+	var rmsSum, peakMax float64
+	var entropySum, centroidSum, flatnessSum, kurtosisSum float64
+	peakMax = -120.0
+
+	for _, interval := range regionIntervals {
+		rmsSum += interval.RMSLevel
+		if interval.PeakLevel > peakMax {
+			peakMax = interval.PeakLevel
+		}
+		entropySum += interval.SpectralEntropy
+		centroidSum += interval.SpectralCentroid
+		flatnessSum += interval.SpectralFlatness
+		kurtosisSum += interval.SpectralKurtosis
+	}
+
+	n := float64(len(regionIntervals))
+	avgRMS := rmsSum / n
+
+	// Build noise profile from interval data
+	profile := &NoiseProfile{
+		Start:              region.Start,
+		Duration:           region.Duration,
+		MeasuredNoiseFloor: avgRMS,
+		PeakLevel:          peakMax,
+		CrestFactor:        peakMax - avgRMS, // Peak - RMS in dB
+		Entropy:            entropySum / n,
+		SpectralCentroid:   centroidSum / n,
+		SpectralFlatness:   flatnessSum / n,
+		SpectralKurtosis:   kurtosisSum / n,
+	}
+
+	// Record warning if using silence region outside ideal range (8-18s)
+	if region.Duration < idealDurationMin {
+		profile.ExtractionWarning = fmt.Sprintf("using short silence region (%.1fs) - ideally need >=%ds", region.Duration.Seconds(), int(idealDurationMin.Seconds()))
+	} else if region.Duration > idealDurationMax {
+		profile.ExtractionWarning = fmt.Sprintf("using long silence region (%.1fs) - ideally <=%ds", region.Duration.Seconds(), int(idealDurationMax.Seconds()))
+	}
+
+	return profile
 }
 
 // scoreIntervalWindow calculates a quality score for a contiguous window of intervals.
@@ -1852,9 +1980,9 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 		inputSamplesProcessed += int64(frame.NbSamples())
 		lastFrameTime = inputFrameTime
 
-		// Accumulate RMS from INPUT frame (before filter graph which upsamples to 192kHz)
-		// This gives accurate RMS values matching the original audio levels
-		intervalAcc.addFrameRMS(frame)
+		// Accumulate RMS and peak from INPUT frame (before filter graph which upsamples to 192kHz)
+		// This gives accurate RMS and peak values matching the original audio levels
+		intervalAcc.addFrameRMSAndPeak(frame)
 
 		// Check if interval complete (250ms elapsed) based on input time
 		if inputFrameTime-intervalStartTime >= intervalDuration {
@@ -1891,6 +2019,10 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 			// Extract measurements from frame metadata (whole-file accumulators)
 			extractFrameMetadata(filteredFrame.Metadata(), acc)
 
+			// Also accumulate into current interval for per-interval spectral data
+			// Filtered frames roughly correspond to input timing (just at higher sample rate)
+			intervalAcc.add(extractIntervalFrameMetrics(filteredFrame.Metadata()))
+
 			ffmpeg.AVFrameUnref(filteredFrame)
 		}
 	}
@@ -1911,6 +2043,9 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 
 		// Extract measurements from remaining frames
 		extractFrameMetadata(filteredFrame.Metadata(), acc)
+
+		// Also accumulate into current interval for per-interval spectral data
+		intervalAcc.add(extractIntervalFrameMetrics(filteredFrame.Metadata()))
 
 		ffmpeg.AVFrameUnref(filteredFrame)
 	}
@@ -2052,8 +2187,8 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 	measurements.SilenceRegions = findSilenceCandidatesFromIntervals(intervals, silenceThreshold, 0)
 
 	// Extract noise profile from best silence region (if available)
-	// This provides precise noise floor measurement from actual silence in the recording
-	silenceResult := findBestSilenceRegion(filename, measurements.SilenceRegions, totalDuration, measurements.NoiseFloor)
+	// Uses interval data for all measurements - no file re-reading required
+	silenceResult := findBestSilenceRegion(measurements.SilenceRegions, intervals, totalDuration)
 
 	// Store all evaluated candidates for reporting/debugging
 	measurements.SilenceCandidates = silenceResult.Candidates
@@ -2066,7 +2201,8 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 		refinedRegion := refineToGoldenSubregion(originalRegion, intervals)
 		wasRefined := refinedRegion.Start != originalRegion.Start || refinedRegion.Duration != originalRegion.Duration
 
-		if profile, err := extractNoiseProfile(filename, refinedRegion); err == nil && profile != nil {
+		// Extract noise profile from interval data (no file re-read)
+		if profile := extractNoiseProfileFromIntervals(refinedRegion, intervals); profile != nil {
 			measurements.NoiseProfile = profile
 
 			// Store refinement info for logging/debugging
@@ -2286,7 +2422,7 @@ func segmentLongSilenceRegion(region SilenceRegion) []SilenceRegion {
 // - Temporal position (earlier = slightly better)
 // - Duration (closer to 15s = better)
 //
-// The filename parameter is required to measure spectral characteristics of candidates.
+// Uses pre-collected interval data for measurements - no file re-reading required.
 // Returns nil if no suitable region is found.
 // findBestSilenceRegionResult contains the selected region and all evaluated candidates
 type findBestSilenceRegionResult struct {
@@ -2294,7 +2430,7 @@ type findBestSilenceRegionResult struct {
 	Candidates []SilenceCandidateMetrics
 }
 
-func findBestSilenceRegion(filename string, regions []SilenceRegion, totalDuration float64, noiseFloor float64) *findBestSilenceRegionResult {
+func findBestSilenceRegion(regions []SilenceRegion, intervals []IntervalSample, totalDuration float64) *findBestSilenceRegionResult {
 	result := &findBestSilenceRegionResult{}
 
 	if len(regions) == 0 {
@@ -2340,10 +2476,10 @@ func findBestSilenceRegion(filename string, regions []SilenceRegion, totalDurati
 	for i := range candidates {
 		candidate := &candidates[i]
 
-		// Measure spectral characteristics
-		metrics := measureSilenceCandidateSpectral(filename, *candidate)
+		// Measure spectral characteristics from interval data (no file re-read)
+		metrics := measureSilenceCandidateFromIntervals(*candidate, intervals)
 		if metrics == nil {
-			// Measurement failed - skip this candidate
+			// No intervals in range - skip this candidate
 			continue
 		}
 
@@ -2532,316 +2668,6 @@ func clampFloat(value, min, max float64) float64 {
 		return max
 	}
 	return value
-}
-
-// measureSilenceCandidateSpectral measures spectral and amplitude characteristics of a silence region.
-// This is used during candidate evaluation to detect crosstalk-contaminated regions.
-// Runs aspectralstats + astats on the trimmed region and returns aggregated metrics.
-// Returns nil if measurement fails (non-fatal - candidate will be skipped).
-func measureSilenceCandidateSpectral(filename string, region SilenceRegion) *SilenceCandidateMetrics {
-	// Open the audio file
-	reader, _, err := audio.OpenAudioFile(filename)
-	if err != nil {
-		return nil // Non-fatal - skip this candidate
-	}
-	defer reader.Close()
-
-	decCtx := reader.GetDecoderContext()
-
-	// Create filter graph for spectral measurement
-	// Filter chain:
-	// 1. atrim: extract only the silence region
-	// 2. aformat: convert to mono for consistent measurement
-	// 3. aspectralstats: measure spectral characteristics (centroid, flatness, kurtosis)
-	// 4. astats: measure amplitude characteristics (RMS, peak, entropy)
-	filterSpec := fmt.Sprintf(
-		"atrim=start=%f:duration=%f,aformat=channel_layouts=mono,aspectralstats=measure=centroid+flatness+kurtosis,astats=metadata=1:measure_perchannel=RMS_level+Peak_level+Entropy",
-		region.Start.Seconds(), region.Duration.Seconds())
-
-	filterGraph, bufferSrcCtx, bufferSinkCtx, err := setupFilterGraph(decCtx, filterSpec)
-	if err != nil {
-		return nil // Non-fatal - skip this candidate
-	}
-	defer ffmpeg.AVFilterGraphFree(&filterGraph)
-
-	// Process frames through filter to collect measurements
-	filteredFrame := ffmpeg.AVFrameAlloc()
-	defer ffmpeg.AVFrameFree(&filteredFrame)
-
-	// Accumulators for spectral stats (need to average across frames)
-	var centroidSum, flatnessSum, kurtosisSum float64
-	var spectralFrameCount int
-
-	// Latest values for astats (cumulative, keep last)
-	var rmsLevel, peakLevel, entropy float64
-	var astatsFound bool
-
-	for {
-		frame, err := reader.ReadFrame()
-		if err != nil {
-			break
-		}
-		if frame == nil {
-			break // EOF
-		}
-
-		// Push frame into filter graph
-		if _, err := ffmpeg.AVBuffersrcAddFrameFlags(bufferSrcCtx, frame, 0); err != nil {
-			continue // Skip problematic frames
-		}
-
-		// Pull filtered frames and extract measurements
-		for {
-			if _, err := ffmpeg.AVBuffersinkGetFrame(bufferSinkCtx, filteredFrame); err != nil {
-				if errors.Is(err, ffmpeg.EAgain) || errors.Is(err, ffmpeg.AVErrorEOF) {
-					break
-				}
-				continue
-			}
-
-			if metadata := filteredFrame.Metadata(); metadata != nil {
-				// Spectral stats (accumulated for averaging)
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralCentroid); ok {
-					centroidSum += value
-					spectralFrameCount++
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralFlatness); ok {
-					flatnessSum += value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralKurtosis); ok {
-					kurtosisSum += value
-				}
-
-				// Amplitude stats (keep latest cumulative values)
-				if value, ok := getFloatMetadata(metadata, metaKeyRMSLevel); ok {
-					rmsLevel = value
-					astatsFound = true
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeyPeakLevel); ok {
-					peakLevel = value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeyEntropy); ok {
-					entropy = value
-				}
-			}
-
-			ffmpeg.AVFrameUnref(filteredFrame)
-		}
-	}
-
-	// Flush filter graph
-	if _, err := ffmpeg.AVBuffersrcAddFrameFlags(bufferSrcCtx, nil, 0); err == nil {
-		for {
-			if _, err := ffmpeg.AVBuffersinkGetFrame(bufferSinkCtx, filteredFrame); err != nil {
-				break
-			}
-
-			if metadata := filteredFrame.Metadata(); metadata != nil {
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralCentroid); ok {
-					centroidSum += value
-					spectralFrameCount++
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralFlatness); ok {
-					flatnessSum += value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralKurtosis); ok {
-					kurtosisSum += value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeyRMSLevel); ok {
-					rmsLevel = value
-					astatsFound = true
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeyPeakLevel); ok {
-					peakLevel = value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeyEntropy); ok {
-					entropy = value
-				}
-			}
-
-			ffmpeg.AVFrameUnref(filteredFrame)
-		}
-	}
-
-	// Need at least some measurements to be useful
-	if spectralFrameCount == 0 || !astatsFound {
-		return nil
-	}
-
-	// Calculate averages for spectral stats
-	metrics := &SilenceCandidateMetrics{
-		Region:           region,
-		RMSLevel:         rmsLevel,
-		PeakLevel:        peakLevel,
-		CrestFactor:      peakLevel - rmsLevel, // Both in dB
-		Entropy:          entropy,
-		SpectralCentroid: centroidSum / float64(spectralFrameCount),
-		SpectralFlatness: flatnessSum / float64(spectralFrameCount),
-		SpectralKurtosis: kurtosisSum / float64(spectralFrameCount),
-	}
-
-	return metrics
-}
-
-// extractNoiseProfile measures noise characteristics from a silence region.
-// Uses atrim + astats filter chain to measure RMS level, peak level, and entropy.
-// DNS-1500 uses inline noise learning via asendcmd with timestamps, so no WAV extraction needed.
-// Returns nil, nil if no suitable silence region exists or extraction fails non-fatally.
-func extractNoiseProfile(filename string, region *SilenceRegion) (*NoiseProfile, error) {
-	if region == nil {
-		return nil, nil
-	}
-
-	// Open the audio file
-	reader, _, err := audio.OpenAudioFile(filename)
-	if err != nil {
-		return nil, nil // Non-fatal - extraction skipped
-	}
-	defer reader.Close()
-
-	decCtx := reader.GetDecoderContext()
-
-	// Create filter graph for extraction with trimming, format conversion, and measurement
-	// Filter chain:
-	// 1. atrim: extract only the silence region (using start/duration for consistency with Pass 2)
-	// 2. aformat: convert to S16 format BEFORE measuring for consistency with Pass 2
-	//    Pass 2's output file is always S16 (from processing chain's aformat), so we must
-	//    measure in the same format to get comparable results
-	// 3. astats: measure noise characteristics on S16 samples
-	//    - RMS_level, Peak_level: noise characteristics
-	//    - Entropy: 1.0 = white noise (broadband), lower = tonal noise (hum/buzz)
-	filterSpec := fmt.Sprintf(
-		"atrim=start=%f:duration=%f,aformat=sample_rates=44100:channel_layouts=mono:sample_fmts=s16,astats=metadata=1:measure_perchannel=RMS_level+Peak_level+Entropy",
-		region.Start.Seconds(), region.Duration.Seconds())
-
-	filterGraph, bufferSrcCtx, bufferSinkCtx, err := setupFilterGraph(decCtx, filterSpec)
-	if err != nil {
-		return nil, nil // Non-fatal - extraction skipped
-	}
-	defer ffmpeg.AVFilterGraphFree(&filterGraph)
-
-	// Process frames through filter to measure noise
-	filteredFrame := ffmpeg.AVFrameAlloc()
-	defer ffmpeg.AVFrameFree(&filteredFrame)
-
-	// Track measurements from astats
-	var measuredNoiseFloor float64
-	var peakLevel float64
-	var entropy float64
-	var noiseFloorFound bool
-	var framesProcessed int64
-
-	for {
-		frame, err := reader.ReadFrame()
-		if err != nil {
-			break
-		}
-		if frame == nil {
-			break // EOF
-		}
-
-		// Push frame into filter graph
-		if _, err := ffmpeg.AVBuffersrcAddFrameFlags(bufferSrcCtx, frame, 0); err != nil {
-			continue // Skip problematic frames
-		}
-
-		// Pull filtered frames
-		for {
-			if _, err := ffmpeg.AVBuffersinkGetFrame(bufferSinkCtx, filteredFrame); err != nil {
-				if errors.Is(err, ffmpeg.EAgain) || errors.Is(err, ffmpeg.AVErrorEOF) {
-					break
-				}
-				continue
-			}
-
-			// Extract noise measurements from metadata
-			if metadata := filteredFrame.Metadata(); metadata != nil {
-				// RMS_level: average noise floor
-				if value, ok := getFloatMetadata(metadata, metaKeyRMSLevel); ok {
-					measuredNoiseFloor = value
-					noiseFloorFound = true
-				}
-				// Peak_level: transient noise indicator
-				if value, ok := getFloatMetadata(metadata, metaKeyPeakLevel); ok {
-					peakLevel = value
-				}
-				// Entropy: noise type classifier (1.0 = broadband/white, lower = tonal/hum)
-				if value, ok := getFloatMetadata(metadata, metaKeyEntropy); ok {
-					entropy = value
-				}
-			}
-
-			framesProcessed++
-			ffmpeg.AVFrameUnref(filteredFrame)
-		}
-	}
-
-	// Flush filter graph
-	if _, err := ffmpeg.AVBuffersrcAddFrameFlags(bufferSrcCtx, nil, 0); err == nil {
-		for {
-			if _, err := ffmpeg.AVBuffersinkGetFrame(bufferSinkCtx, filteredFrame); err != nil {
-				break
-			}
-
-			if metadata := filteredFrame.Metadata(); metadata != nil {
-				if value, ok := getFloatMetadata(metadata, metaKeyRMSLevel); ok {
-					measuredNoiseFloor = value
-					noiseFloorFound = true
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeyPeakLevel); ok {
-					peakLevel = value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeyEntropy); ok {
-					entropy = value
-				}
-			}
-
-			framesProcessed++
-			ffmpeg.AVFrameUnref(filteredFrame)
-		}
-	}
-
-	if framesProcessed == 0 {
-		return nil, nil // No frames in silence region
-	}
-
-	// Calculate crest factor from peak and RMS (both in dB)
-	// Crest factor (dB) = Peak_level - RMS_level
-	// This is more reliable than FFmpeg's linear Crest_factor output for very quiet signals
-	crestFactorDB := 0.0
-	if noiseFloorFound && peakLevel != 0 {
-		crestFactorDB = peakLevel - measuredNoiseFloor
-	}
-
-	// Build noise profile result
-	profile := &NoiseProfile{
-		Start:       region.Start,
-		Duration:    region.Duration,
-		PeakLevel:   peakLevel,
-		CrestFactor: crestFactorDB, // Stored in dB (peak - RMS)
-		Entropy:     entropy,       // 1.0 = broadband noise, lower = tonal noise
-	}
-
-	// Record warning if using silence region outside ideal range (8-18s)
-	if region.Duration < idealDurationMin {
-		profile.ExtractionWarning = fmt.Sprintf("using short silence region (%.1fs) - ideally need >=%ds", region.Duration.Seconds(), int(idealDurationMin.Seconds()))
-	} else if region.Duration > idealDurationMax {
-		profile.ExtractionWarning = fmt.Sprintf("using long silence region (%.1fs) - ideally <=%ds", region.Duration.Seconds(), int(idealDurationMax.Seconds()))
-	}
-
-	if noiseFloorFound {
-		profile.MeasuredNoiseFloor = measuredNoiseFloor
-	} else {
-		// Fallback: use overall noise floor estimate
-		profile.MeasuredNoiseFloor = -60.0 // Conservative estimate
-		if profile.ExtractionWarning != "" {
-			profile.ExtractionWarning += "; noise floor estimated"
-		} else {
-			profile.ExtractionWarning = "noise floor estimated (measurement failed)"
-		}
-	}
-
-	return profile, nil
 }
 
 // MeasureOutputSilenceRegion analyses the same silence region in the output file

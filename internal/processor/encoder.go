@@ -244,7 +244,7 @@ func (e *Encoder) Close() error {
 // calculateFrameLevel calculates the RMS (Root Mean Square) level of an audio frame in dB
 // This provides accurate audio level measurement for VU meter display
 func calculateFrameLevel(frame *ffmpeg.AVFrame) float64 {
-	sumSquares, sampleCount, ok := frameSumSquares(frame)
+	sumSquares, sampleCount, _, ok := frameSumSquaresAndPeak(frame)
 	if !ok {
 		return -30.0 // Unsupported format
 	}
