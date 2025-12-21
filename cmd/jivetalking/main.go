@@ -22,7 +22,6 @@ var (
 // CLI defines the command-line interface
 type CLI struct {
 	Version bool     `short:"v" help:"Show version information"`
-	Config  string   `short:"c" type:"path" help:"Path to TOML config file (optional)"`
 	Logs    bool     `help:"Save detailed analysis logs"`
 	Files   []string `arg:"" name:"files" help:"Audio files to process" type:"existingfile" optional:""`
 }
