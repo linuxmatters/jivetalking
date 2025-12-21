@@ -1,6 +1,6 @@
 # Jivetalking 🕺
 
-*Professional podcast audio preprocessing—broadcast-quality results with zero audio engineering knowledge required*
+*Professional podcast audio preprocessing-broadcast-quality results with zero audio engineering knowledge required*
 
 ---
 
@@ -50,7 +50,7 @@ Measures your audio's characteristics to drive adaptive processing:
 | **Gate** | DS201 expander | Soft expansion for natural inter-phrase cleanup |
 | **Declicker** | DC-1 | Autoregressive (AR) interpolation click/pop remover |
 | **Compressor** | LA-2A | Programme-dependent optical compression with ~10ms attack |
-| **De-esser** | — | Tames sibilance (adaptive intensity based on spectral rolloff) |
+| **De-esser** | - | Tames sibilance (adaptive intensity based on spectral rolloff) |
 
 ### Pass 3 & 4: Loudness Normalisation
 
@@ -65,12 +65,12 @@ Two-stage EBU R128 loudness normalisation using FFmpeg's loudnorm filter:
 
 Each filter prepares audio for the next:
 
-1. **Rumble removal before spectral analysis** — prevents low-frequency artifacts from confusing noise profiling
-2. **Denoising before gating** — lowers the noise floor so the gate threshold can be set optimally
-3. **Gating before compression** — removes silence before dynamics processing amplifies room tone
-4. **Compression before de-essing** — compression emphasises sibilance; de-essing corrects it
-5. **Normalisation last** — sees the fully processed signal for accurate loudness targeting
-6. **Limiter before loudnorm** — creates headroom so loudnorm can apply full linear gain without clipping or falling back to dynamic mode
+1. **Rumble removal before spectral analysis** - prevents low-frequency artifacts from confusing noise profiling
+2. **Denoising before gating** - lowers the noise floor so the gate threshold can be set optimally
+3. **Gating before compression** - removes silence before dynamics processing amplifies room tone
+4. **Compression before de-essing** - compression emphasises sibilance; de-essing corrects it
+5. **Normalisation last** - sees the fully processed signal for accurate loudness targeting
+6. **Limiter before loudnorm** - creates headroom so loudnorm can apply full linear gain without clipping or falling back to dynamic mode
 
 ### Why Adaptive Matters
 
@@ -91,13 +91,21 @@ Jivetalking measures your specific audio and adapts every filter automatically. 
 ┌─────────────────────────────────────────────────────────────┐
 │  2. Process                                                 │
 │     $ jivetalking *.flac                                    │
-│     Output: *-processed.flac (level-matched at -18 LUFS)   │
+│     Output: *-processed.flac (level-matched at -18 LUFS)    │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
-│  3. Edit                                                    │
-│     Import processed files into Audacity                    │
-│     Files already level-matched—just cut, arrange, export   │
+│  3. Edit in Audacity                                        │
+│     • Import all processed files                            │
+│     • Top/tail and remove flubs                             │
+│     • Select all tracks → Tracks menu → Mix → Mix to Mono   │
+└─────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────┐
+│  4. Finalize                                                │
+│     • Analyze → Loudness Normalization (preview to check)   │
+│     • Normalize to -16 LUFS (dual-mono required)            │
+│     • Export as final podcast file                          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -105,7 +113,7 @@ Jivetalking measures your specific audio and adapts every filter automatically. 
 
 ## Installation
 
-Single binary with embedded FFmpeg—no external dependencies.
+Single binary with embedded FFmpeg-no external dependencies.
 
 ```bash
 # Download the latest release for your platform
@@ -147,9 +155,9 @@ internal/
 
 ### Design Documentation
 
-- [Gate: Drawmer DS201](docs/FilterGate-Drawmer%20DS201.md) — Soft expander gate with adaptive threshold
-- [Noise Removal: CEDAR DNS-1500](docs/FilterNoise-CEDAR%20DNS-1500.md) — Inline noise learning with voice protection
-- [Noise Removal: Dolby SR](docs/FilterNoise-Dolby%20SR.md) — 6-band multiband expander fallback
-- [Declick: CEDAR DC-1](docs/FilterDeclick-CEDAR%20DC-1.md) — Autoregressive declicker
-- [Compressor: LA-2A](docs/FilterCompressor-Teletronix%20LA-2A.md) — Programme-dependent optical compression
-- [Limiter: UREI 1176](docs/FilterLimiter-UREI1176.md) — adaptive peak limiter
+- [Gate: Drawmer DS201](docs/FilterGate-Drawmer%20DS201.md) - Soft expander gate with adaptive threshold
+- [Noise Removal: CEDAR DNS-1500](docs/FilterNoise-CEDAR%20DNS-1500.md) - Inline noise learning with voice protection
+- [Noise Removal: Dolby SR](docs/FilterNoise-Dolby%20SR.md) - 6-band multiband expander fallback
+- [Declick: CEDAR DC-1](docs/FilterDeclick-CEDAR%20DC-1.md) - Autoregressive declicker
+- [Compressor: LA-2A](docs/FilterCompressor-Teletronix%20LA-2A.md) - Programme-dependent optical compression
+- [Limiter: UREI 1176](docs/FilterLimiter-UREI1176.md) - adaptive peak limiter
