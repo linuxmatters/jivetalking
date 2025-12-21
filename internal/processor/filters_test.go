@@ -90,7 +90,7 @@ func newTestConfig() *FilterChainConfig {
 		LoudnormDualMono:  true,
 		LoudnormLinear:    true,
 
-		FilterOrder: DefaultFilterOrder,
+		FilterOrder: Pass2FilterOrder,
 	}
 }
 
@@ -875,22 +875,6 @@ func TestPass2FilterOrder(t *testing.T) {
 		for _, id := range Pass2FilterOrder {
 			if id == FilterUREI1176 {
 				t.Errorf("FilterUREI1176 should not be in Pass2FilterOrder (moved to Pass 3)")
-			}
-		}
-	})
-}
-
-func TestDefaultFilterOrder(t *testing.T) {
-	t.Run("equals Pass2FilterOrder", func(t *testing.T) {
-		if len(DefaultFilterOrder) != len(Pass2FilterOrder) {
-			t.Fatalf("DefaultFilterOrder length %d != Pass2FilterOrder length %d",
-				len(DefaultFilterOrder), len(Pass2FilterOrder))
-		}
-
-		for i := range DefaultFilterOrder {
-			if DefaultFilterOrder[i] != Pass2FilterOrder[i] {
-				t.Errorf("DefaultFilterOrder[%d] = %q, Pass2FilterOrder[%d] = %q",
-					i, DefaultFilterOrder[i], i, Pass2FilterOrder[i])
 			}
 		}
 	})

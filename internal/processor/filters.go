@@ -114,9 +114,6 @@ var Pass2FilterOrder = []FilterID{
 	FilterResample,
 }
 
-// DefaultFilterOrder kept for backwards compatibility, points to Pass2FilterOrder
-var DefaultFilterOrder = Pass2FilterOrder
-
 // =============================================================================
 // Dolby SR mcompand Configuration
 // =============================================================================
@@ -404,7 +401,7 @@ type FilterChainConfig struct {
 	UREI1176OutputLevel float64 // Linear - output gain (default 1.0)
 
 	// Filter chain order - controls the sequence of filters in the processing chain
-	// Use DefaultFilterOrder or customise for experimentation
+	// Use Pass2FilterOrder or customise for experimentation
 	FilterOrder []FilterID
 
 	// Pass 1 measurements (nil for first pass)
@@ -427,10 +424,6 @@ type FilterChainConfig struct {
 
 // DefaultFilterConfig returns the scientifically-tuned default filter configuration
 // for podcast spoken word audio processing.
-//
-// FILTER ENABLE/DISABLE STATUS:
-// Currently only highpass and bandreject are enabled while the filter chain is
-// being recalibrated. Other filters have been disabled to establish a clean baseline.
 func DefaultFilterConfig() *FilterChainConfig {
 	return &FilterChainConfig{
 		// Pass (set by caller, defaults to 0 meaning unset)
@@ -569,7 +562,7 @@ func DefaultFilterConfig() *FilterChainConfig {
 		UREI1176OutputLevel: 1.0, // Unity output
 
 		// Filter chain order - use default order
-		FilterOrder: DefaultFilterOrder,
+		FilterOrder: Pass2FilterOrder,
 
 		Measurements: nil, // Will be set after Pass 1
 
@@ -1135,14 +1128,14 @@ func (cfg *FilterChainConfig) buildUREI1176Filter() string {
 }
 
 // BuildFilterSpec builds the FFmpeg filter specification string for Pass 2 processing.
-// Filter order is determined by cfg.FilterOrder (or DefaultFilterOrder if empty).
+// Filter order is determined by cfg.FilterOrder (or Pass2FilterOrder if empty).
 // Each filter checks its Enabled flag and returns empty string if disabled.
 // Uses the package-level filterBuilders registry for filter spec generation.
 func (cfg *FilterChainConfig) BuildFilterSpec() string {
 	// Use configured order or default
 	order := cfg.FilterOrder
 	if len(order) == 0 {
-		order = DefaultFilterOrder
+		order = Pass2FilterOrder
 	}
 
 	// Build filters in specified order, skipping disabled/empty
