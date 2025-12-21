@@ -47,10 +47,9 @@ type FilterID string
 // Filter identifiers for the audio processing chain
 const (
 	// Infrastructure filters (applied in both passes or pass-specific)
-	FilterDownmix       FilterID = "downmix"       // Stereo → mono conversion (both passes)
-	FilterAnalysis      FilterID = "analysis"      // ebur128 + astats + aspectralstats (both passes)
-	FilterSilenceDetect FilterID = "silencedetect" // Silence region detection (Pass 1 only)
-	FilterResample      FilterID = "resample"      // Output format: 44.1kHz/16-bit/mono (Pass 2 only)
+	FilterDownmix  FilterID = "downmix"  // Stereo → mono conversion (both passes)
+	FilterAnalysis FilterID = "analysis" // ebur128 + astats + aspectralstats (both passes)
+	FilterResample FilterID = "resample" // Output format: 44.1kHz/16-bit/mono (Pass 2 only)
 
 	// DS201-inspired frequency-conscious filtering (Pass 2 only)
 	// Drawmer DS201 pioneered HP/LP side-chain filtering for frequency-conscious gating.
@@ -185,7 +184,6 @@ type filterBuilderFunc func(*FilterChainConfig) string
 var filterBuilders = map[FilterID]filterBuilderFunc{
 	FilterDownmix:        (*FilterChainConfig).buildDownmixFilter,
 	FilterAnalysis:       (*FilterChainConfig).buildAnalysisFilter,
-	FilterSilenceDetect:  (*FilterChainConfig).buildSilenceDetectFilter,
 	FilterResample:       (*FilterChainConfig).buildResampleFilter,
 	FilterDS201HighPass:  (*FilterChainConfig).buildDS201HighpassFilter,
 	FilterDS201LowPass:   (*FilterChainConfig).buildDS201LowPassFilter,
@@ -272,12 +270,6 @@ type FilterChainConfig struct {
 	// Analysis (ebur128 + astats + aspectralstats) - audio measurement collection
 	// Captures loudness, dynamics, spectral characteristics
 	AnalysisEnabled bool
-
-	// Silence Detection (silencedetect) - finds quiet regions for noise profiling
-	// Pass 1 only - identifies silence regions for noise sample extraction
-	SilenceDetectEnabled  bool
-	SilenceDetectLevel    float64 // dB threshold for silence detection
-	SilenceDetectDuration float64 // Minimum silence duration in seconds
 
 	// Resample (aformat) - output format standardisation
 	// Pass 2 only - ensures consistent output format
@@ -449,11 +441,6 @@ func DefaultFilterConfig() *FilterChainConfig {
 
 		// Analysis - always enabled to collect measurements
 		AnalysisEnabled: true,
-
-		// Silence Detection - enabled by default (Pass 1 only via filter order)
-		SilenceDetectEnabled:  true,
-		SilenceDetectLevel:    -50.0, // -50dB threshold
-		SilenceDetectDuration: 0.5,   // 0.5 second minimum
 
 		// Resample - enabled by default (Pass 2 only via filter order)
 		ResampleEnabled:    true,
@@ -687,16 +674,6 @@ func (cfg *FilterChainConfig) buildAnalysisFilter() string {
 			"aspectralstats=win_size=2048:win_func=hann:measure=all,"+
 			"ebur128=metadata=1:peak=sample+true:dualmono=true:target=%.0f",
 		cfg.TargetI)
-}
-
-// buildSilenceDetectFilter builds the silence detection filter.
-// Identifies quiet regions for noise sample extraction in Pass 1.
-func (cfg *FilterChainConfig) buildSilenceDetectFilter() string {
-	if !cfg.SilenceDetectEnabled {
-		return ""
-	}
-	return fmt.Sprintf("silencedetect=noise=%.0fdB:duration=%.2f",
-		cfg.SilenceDetectLevel, cfg.SilenceDetectDuration)
 }
 
 // buildResampleFilter builds the output format standardisation filter.

@@ -480,8 +480,6 @@ func formatFilter(f *os.File, filterID processor.FilterID, cfg *processor.Filter
 		formatDownmixFilter(f, cfg, prefix)
 	case processor.FilterAnalysis:
 		formatAnalysisFilter(f, cfg, prefix)
-	case processor.FilterSilenceDetect:
-		formatSilenceDetectFilter(f, cfg, prefix)
 	case processor.FilterResample:
 		formatResampleFilter(f, cfg, prefix)
 	case processor.FilterDS201HighPass:
@@ -1136,16 +1134,6 @@ func formatAnalysisFilter(f *os.File, cfg *processor.FilterChainConfig, prefix s
 		return
 	}
 	fmt.Fprintf(f, "%sanalysis: collect audio measurements (ebur128 + astats + aspectralstats)\n", prefix)
-}
-
-// formatSilenceDetectFilter outputs silence detection filter details
-func formatSilenceDetectFilter(f *os.File, cfg *processor.FilterChainConfig, prefix string) {
-	if !cfg.SilenceDetectEnabled {
-		fmt.Fprintf(f, "%ssilencedetect: DISABLED\n", prefix)
-		return
-	}
-	fmt.Fprintf(f, "%ssilencedetect: threshold %.0f dB, min duration %.2fs\n",
-		prefix, cfg.SilenceDetectLevel, cfg.SilenceDetectDuration)
 }
 
 // formatResampleFilter outputs resample filter details

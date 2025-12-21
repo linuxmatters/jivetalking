@@ -13,15 +13,12 @@ import (
 func newTestConfig() *FilterChainConfig {
 	return &FilterChainConfig{
 		// Infrastructure filters (disabled by default for isolated tests)
-		DownmixEnabled:        false,
-		AnalysisEnabled:       false,
-		SilenceDetectEnabled:  false,
-		SilenceDetectLevel:    -50.0,
-		SilenceDetectDuration: 0.5,
-		ResampleEnabled:       false,
-		ResampleSampleRate:    44100,
-		ResampleFormat:        "s16",
-		ResampleFrameSize:     4096,
+		DownmixEnabled:     false,
+		AnalysisEnabled:    false,
+		ResampleEnabled:    false,
+		ResampleSampleRate: 44100,
+		ResampleFormat:     "s16",
+		ResampleFrameSize:  4096,
 
 		// Processing filters (all disabled by default)
 		DS201HPEnabled:    false,
@@ -662,7 +659,7 @@ func TestDbToLinearFormula(t *testing.T) {
 	}
 }
 
-// Tests for infrastructure filters (Downmix, Analysis, SilenceDetect, Resample)
+// Tests for infrastructure filters (Downmix, Analysis, Resample)
 
 func TestBuildDownmixFilter(t *testing.T) {
 	t.Run("enabled returns aformat mono", func(t *testing.T) {
@@ -737,47 +734,6 @@ func TestBuildAnalysisFilter(t *testing.T) {
 
 		if result != "" {
 			t.Errorf("buildAnalysisFilter() = %q, want empty string", result)
-		}
-	})
-}
-
-func TestBuildSilenceDetectFilter(t *testing.T) {
-	t.Run("enabled returns silencedetect with threshold and duration", func(t *testing.T) {
-		config := newTestConfig()
-		config.SilenceDetectEnabled = true
-		config.SilenceDetectLevel = -50.0
-		config.SilenceDetectDuration = 0.5
-
-		result := config.buildSilenceDetectFilter()
-
-		expected := "silencedetect=noise=-50dB:duration=0.50"
-		if result != expected {
-			t.Errorf("buildSilenceDetectFilter() = %q, want %q", result, expected)
-		}
-	})
-
-	t.Run("uses configured parameters", func(t *testing.T) {
-		config := newTestConfig()
-		config.SilenceDetectEnabled = true
-		config.SilenceDetectLevel = -40.0
-		config.SilenceDetectDuration = 1.0
-
-		result := config.buildSilenceDetectFilter()
-
-		expected := "silencedetect=noise=-40dB:duration=1.00"
-		if result != expected {
-			t.Errorf("buildSilenceDetectFilter() = %q, want %q", result, expected)
-		}
-	})
-
-	t.Run("disabled returns empty string", func(t *testing.T) {
-		config := newTestConfig()
-		config.SilenceDetectEnabled = false
-
-		result := config.buildSilenceDetectFilter()
-
-		if result != "" {
-			t.Errorf("buildSilenceDetectFilter() = %q, want empty string", result)
 		}
 	})
 }

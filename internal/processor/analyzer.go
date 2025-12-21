@@ -1903,7 +1903,6 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 		preScanNF = -50.0
 	}
 	adaptiveThreshold := calculateAdaptiveSilenceThreshold(preScanNF)
-	config.SilenceDetectLevel = adaptiveThreshold
 
 	// Open audio file
 	reader, metadata, err := audio.OpenAudioFile(filename)
