@@ -35,6 +35,11 @@ type NoiseProfile struct {
 	SpectralCentroid float64 `json:"spectral_centroid,omitempty"` // Hz, where energy is concentrated (voice range: 300-4000 Hz)
 	SpectralFlatness float64 `json:"spectral_flatness,omitempty"` // 0-1, noise-like vs tonal (higher = more noise-like)
 	SpectralKurtosis float64 `json:"spectral_kurtosis,omitempty"` // Peakiness (high = peaked harmonics like speech)
+
+	// Golden sub-region refinement info (populated when a long candidate is refined)
+	OriginalStart    time.Duration `json:"original_start,omitempty"`    // Original candidate start before refinement
+	OriginalDuration time.Duration `json:"original_duration,omitempty"` // Original candidate duration before refinement
+	WasRefined       bool          `json:"was_refined,omitempty"`       // True if region was refined from a longer candidate
 }
 
 // SilenceCandidateMetrics contains measurements for evaluating silence region candidates.
@@ -382,7 +387,125 @@ const (
 
 	// roomToneScoreThreshold is the minimum score (0-1) for an interval to be considered room tone.
 	roomToneScoreThreshold = 0.5
+
+	// Golden sub-region refinement constants
+	// After selecting the best silence candidate, refine to the cleanest sub-window
+	// to isolate optimal noise profile (avoids pre-intentional silence contamination).
+	goldenWindowDuration = 10 * time.Second       // Target duration for refined region
+	goldenWindowMinimum  = 8 * time.Second        // Minimum acceptable refined duration
+	goldenIntervalSize   = 250 * time.Millisecond // Must match interval sampling (intervalDuration)
 )
+
+// refineToGoldenSubregion finds the cleanest sub-region within a silence candidate.
+// Uses existing interval samples to find the window with lowest average RMS.
+// Returns the original region if it's already at or below goldenWindowDuration,
+// or if refinement fails for any reason (insufficient intervals, etc.).
+//
+// This addresses cases like Popey E72 where a 17.2s candidate at 24.0s absorbed
+// both pre-intentional (noisier) and intentional (cleaner) silence periods.
+// By refining to the cleanest 10s window, we isolate the optimal noise profile.
+func refineToGoldenSubregion(candidate *SilenceRegion, intervals []IntervalSample) *SilenceRegion {
+	if candidate == nil {
+		return nil
+	}
+
+	// No refinement needed if already at or below target duration
+	if candidate.Duration <= goldenWindowDuration {
+		return candidate
+	}
+
+	// Extract intervals within the candidate's time range
+	candidateIntervals := getIntervalsInRange(intervals, candidate.Start, candidate.End)
+	if candidateIntervals == nil {
+		return candidate
+	}
+
+	// Calculate window size in intervals (10s / 250ms = 40 intervals)
+	windowIntervals := int(goldenWindowDuration / goldenIntervalSize)
+	minimumIntervals := int(goldenWindowMinimum / goldenIntervalSize)
+
+	// Need at least minimum window worth of intervals
+	if len(candidateIntervals) < minimumIntervals {
+		return candidate
+	}
+
+	// If we have fewer intervals than target window, use what we have
+	if len(candidateIntervals) < windowIntervals {
+		windowIntervals = len(candidateIntervals)
+	}
+
+	// Slide window across intervals, finding position with lowest average RMS
+	bestStartIdx := 0
+	bestRMS := scoreIntervalWindow(candidateIntervals[:windowIntervals])
+
+	for startIdx := 1; startIdx <= len(candidateIntervals)-windowIntervals; startIdx++ {
+		windowRMS := scoreIntervalWindow(candidateIntervals[startIdx : startIdx+windowIntervals])
+		if windowRMS < bestRMS {
+			bestRMS = windowRMS
+			bestStartIdx = startIdx
+		}
+	}
+
+	// Calculate refined region bounds from the best window position
+	refinedStart := candidateIntervals[bestStartIdx].Timestamp
+	refinedDuration := time.Duration(windowIntervals) * goldenIntervalSize
+	refinedEnd := refinedStart + refinedDuration
+
+	return &SilenceRegion{
+		Start:    refinedStart,
+		End:      refinedEnd,
+		Duration: refinedDuration,
+	}
+}
+
+// getIntervalsInRange returns intervals that fall within the given time range.
+// Returns nil if no intervals found in range.
+func getIntervalsInRange(intervals []IntervalSample, start, end time.Duration) []IntervalSample {
+	if len(intervals) == 0 {
+		return nil
+	}
+
+	// Find first interval at or after start time
+	startIdx := -1
+	for i, interval := range intervals {
+		if interval.Timestamp >= start {
+			startIdx = i
+			break
+		}
+	}
+	if startIdx < 0 {
+		return nil
+	}
+
+	// Collect intervals until we reach or exceed end time
+	var result []IntervalSample
+	for i := startIdx; i < len(intervals); i++ {
+		if intervals[i].Timestamp >= end {
+			break
+		}
+		result = append(result, intervals[i])
+	}
+
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+// scoreIntervalWindow calculates a quality score for a contiguous window of intervals.
+// Returns average RMS level in dBFS (lower = better/quieter).
+// Could be extended to incorporate spectral stability (flux variance) if needed.
+func scoreIntervalWindow(intervals []IntervalSample) float64 {
+	if len(intervals) == 0 {
+		return 0 // Should not happen in normal use
+	}
+
+	var sumRMS float64
+	for _, interval := range intervals {
+		sumRMS += interval.RMSLevel
+	}
+	return sumRMS / float64(len(intervals))
+}
 
 // roomToneScore calculates a 0-1 score indicating how likely an interval is room tone.
 // Room tone has characteristic spectral behaviour:
@@ -1936,8 +2059,23 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 	measurements.SilenceCandidates = silenceResult.Candidates
 
 	if silenceResult.BestRegion != nil {
-		if profile, err := extractNoiseProfile(filename, silenceResult.BestRegion); err == nil && profile != nil {
+		// Refine to golden sub-region: find cleanest 10s window within the candidate.
+		// This isolates optimal noise profile from long candidates that may span
+		// both pre-intentional (noisier) and intentional (cleaner) silence.
+		originalRegion := silenceResult.BestRegion
+		refinedRegion := refineToGoldenSubregion(originalRegion, intervals)
+		wasRefined := refinedRegion.Start != originalRegion.Start || refinedRegion.Duration != originalRegion.Duration
+
+		if profile, err := extractNoiseProfile(filename, refinedRegion); err == nil && profile != nil {
 			measurements.NoiseProfile = profile
+
+			// Store refinement info for logging/debugging
+			if wasRefined {
+				profile.WasRefined = true
+				profile.OriginalStart = originalRegion.Start
+				profile.OriginalDuration = originalRegion.Duration
+			}
+
 			// If we got a noise profile measurement, use it as the primary noise floor
 			// This is more accurate than the overall RMS_trough because it's from pure silence
 			if profile.MeasuredNoiseFloor != 0 && !math.IsInf(profile.MeasuredNoiseFloor, -1) {
@@ -2224,8 +2362,9 @@ func findBestSilenceRegion(filename string, regions []SilenceRegion, totalDurati
 				selectedCandidate = candidate
 				selectedIdx = len(result.Candidates) - 1
 				bestScore = score
-			} else if score > bestScore {
-				// Better than current best - update
+			} else if score >= bestScore {
+				// Equal or better than current best - prefer later candidate
+				// (intentional room tone is recorded after brief intro/setup)
 				selectedCandidate = candidate
 				selectedIdx = len(result.Candidates) - 1
 				bestScore = score

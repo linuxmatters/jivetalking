@@ -1707,11 +1707,28 @@ func writeDiagnosticSilence(f *os.File, measurements *processor.AudioMeasurement
 	if len(measurements.SilenceCandidates) > 0 {
 		fmt.Fprintf(f, "Silence Candidates:  %d evaluated\n", len(measurements.SilenceCandidates))
 		for i, c := range measurements.SilenceCandidates {
-			isSelected := measurements.NoiseProfile != nil && c.Region.Start == measurements.NoiseProfile.Start
+			// Check if this candidate was selected (may have been refined, so check original start if refined)
+			isSelected := false
+			if measurements.NoiseProfile != nil {
+				if measurements.NoiseProfile.WasRefined {
+					// Compare against original candidate bounds before refinement
+					isSelected = c.Region.Start == measurements.NoiseProfile.OriginalStart
+				} else {
+					isSelected = c.Region.Start == measurements.NoiseProfile.Start
+				}
+			}
 
 			if isSelected {
 				fmt.Fprintf(f, "  Candidate %d:       %.1fs at %.1fs (score: %.3f) [SELECTED]\n",
 					i+1, c.Region.Duration.Seconds(), c.Region.Start.Seconds(), c.Score)
+
+				// Show refinement details if this candidate was refined to a golden sub-region
+				if measurements.NoiseProfile.WasRefined {
+					fmt.Fprintf(f, "    Refined:         %.1fs at %.1fs (golden sub-region)\n",
+						measurements.NoiseProfile.Duration.Seconds(),
+						measurements.NoiseProfile.Start.Seconds())
+				}
+
 				fmt.Fprintf(f, "    RMS Level:       %.1f dBFS\n", c.RMSLevel)
 				fmt.Fprintf(f, "    Peak Level:      %.1f dBFS\n", c.PeakLevel)
 				fmt.Fprintf(f, "    Crest Factor:    %.1f dB\n", c.CrestFactor)

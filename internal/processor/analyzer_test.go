@@ -2,6 +2,7 @@ package processor
 
 import (
 	"testing"
+	"time"
 )
 
 func TestAnalyzeAudio(t *testing.T) {
@@ -173,6 +174,299 @@ func TestCalculateAdaptiveGateThreshold(t *testing.T) {
 			if result < tt.wantMin || result > tt.wantMax {
 				t.Errorf("calculateAdaptiveDS201GateThreshold(%.1f, %.1f) = %.1f dB, want %.1f to %.1f dB [%s]",
 					tt.noiseFloor, tt.rmsTrough, result, tt.wantMin, tt.wantMax, tt.desc)
+			}
+		})
+	}
+}
+
+// ============================================================================
+// Golden Sub-Region Refinement Tests
+// ============================================================================
+
+// makeTestIntervals creates synthetic interval samples for testing.
+// Each interval is 250ms, RMS levels are specified per interval.
+func makeTestIntervals(startTime time.Duration, rmsLevels []float64) []IntervalSample {
+	intervals := make([]IntervalSample, len(rmsLevels))
+	for i, rms := range rmsLevels {
+		intervals[i] = IntervalSample{
+			Timestamp: startTime + time.Duration(i)*250*time.Millisecond,
+			RMSLevel:  rms,
+		}
+	}
+	return intervals
+}
+
+func TestRefineToGoldenSubregion(t *testing.T) {
+	tests := []struct {
+		name          string
+		candidate     *SilenceRegion
+		intervals     []IntervalSample
+		wantStart     time.Duration
+		wantDuration  time.Duration
+		wantUnchanged bool // If true, expect original region returned
+		desc          string
+	}{
+		{
+			name: "short candidate - no refinement needed",
+			candidate: &SilenceRegion{
+				Start:    24 * time.Second,
+				End:      34 * time.Second,
+				Duration: 10 * time.Second,
+			},
+			intervals:     makeTestIntervals(24*time.Second, make([]float64, 40)), // 40 intervals = 10s
+			wantStart:     24 * time.Second,
+			wantDuration:  10 * time.Second,
+			wantUnchanged: true,
+			desc:          "candidates at or below 10s should pass through unchanged",
+		},
+		{
+			name: "long candidate with uniform quality",
+			candidate: &SilenceRegion{
+				Start:    24 * time.Second,
+				End:      44 * time.Second,
+				Duration: 20 * time.Second,
+			},
+			intervals: makeTestIntervals(24*time.Second, func() []float64 {
+				// 80 intervals at -70 dBFS (uniform)
+				levels := make([]float64, 80)
+				for i := range levels {
+					levels[i] = -70.0
+				}
+				return levels
+			}()),
+			wantStart:    24 * time.Second, // First window when all equal
+			wantDuration: 10 * time.Second,
+			desc:         "uniform quality should return first 10s window",
+		},
+		{
+			name: "long candidate with golden pocket at end",
+			candidate: &SilenceRegion{
+				Start:    24 * time.Second,
+				End:      44 * time.Second,
+				Duration: 20 * time.Second,
+			},
+			intervals: makeTestIntervals(24*time.Second, func() []float64 {
+				// 80 intervals: first 40 at -65 dBFS, last 40 at -75 dBFS
+				levels := make([]float64, 80)
+				for i := range levels {
+					if i < 40 {
+						levels[i] = -65.0 // Noisier first half
+					} else {
+						levels[i] = -75.0 // Quieter second half
+					}
+				}
+				return levels
+			}()),
+			wantStart:    34 * time.Second, // Should find quieter region at 34s (10s into candidate)
+			wantDuration: 10 * time.Second,
+			desc:         "should find the quieter 10s window in the second half",
+		},
+		{
+			name: "candidate at recording start",
+			candidate: &SilenceRegion{
+				Start:    0,
+				End:      15 * time.Second,
+				Duration: 15 * time.Second,
+			},
+			intervals: makeTestIntervals(0, func() []float64 {
+				// 60 intervals: first 20 at -60 dBFS, rest at -72 dBFS
+				levels := make([]float64, 60)
+				for i := range levels {
+					if i < 20 {
+						levels[i] = -60.0 // Intro noise
+					} else {
+						levels[i] = -72.0 // Clean room tone
+					}
+				}
+				return levels
+			}()),
+			wantStart:    5 * time.Second, // 20 intervals = 5s offset to quieter region
+			wantDuration: 10 * time.Second,
+			desc:         "should handle candidates starting at 0s correctly",
+		},
+		{
+			name: "insufficient intervals - returns original",
+			candidate: &SilenceRegion{
+				Start:    24 * time.Second,
+				End:      30 * time.Second,
+				Duration: 6 * time.Second,
+			},
+			intervals:     makeTestIntervals(24*time.Second, make([]float64, 24)), // 24 intervals = 6s < 8s minimum
+			wantStart:     24 * time.Second,
+			wantDuration:  6 * time.Second,
+			wantUnchanged: true,
+			desc:          "candidates with insufficient intervals should pass through",
+		},
+		{
+			name:          "nil candidate",
+			candidate:     nil,
+			intervals:     makeTestIntervals(0, make([]float64, 80)),
+			wantUnchanged: true,
+			desc:          "nil input should return nil",
+		},
+		{
+			name: "no intervals in range",
+			candidate: &SilenceRegion{
+				Start:    100 * time.Second,
+				End:      120 * time.Second,
+				Duration: 20 * time.Second,
+			},
+			intervals:     makeTestIntervals(0, make([]float64, 80)), // Intervals at 0-20s, candidate at 100-120s
+			wantStart:     100 * time.Second,
+			wantDuration:  20 * time.Second,
+			wantUnchanged: true,
+			desc:          "should return original when no intervals match candidate range",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := refineToGoldenSubregion(tt.candidate, tt.intervals)
+
+			if tt.candidate == nil {
+				if result != nil {
+					t.Errorf("expected nil result for nil candidate, got %+v", result)
+				}
+				return
+			}
+
+			if result == nil {
+				t.Fatal("unexpected nil result")
+			}
+
+			if tt.wantUnchanged {
+				if result.Start != tt.candidate.Start || result.Duration != tt.candidate.Duration {
+					t.Errorf("expected unchanged region, got Start=%v Duration=%v (original Start=%v Duration=%v)",
+						result.Start, result.Duration, tt.candidate.Start, tt.candidate.Duration)
+				}
+				return
+			}
+
+			if result.Start != tt.wantStart {
+				t.Errorf("Start = %v, want %v [%s]", result.Start, tt.wantStart, tt.desc)
+			}
+			if result.Duration != tt.wantDuration {
+				t.Errorf("Duration = %v, want %v [%s]", result.Duration, tt.wantDuration, tt.desc)
+			}
+		})
+	}
+}
+
+func TestGetIntervalsInRange(t *testing.T) {
+	// Create intervals from 0s to 20s (80 intervals × 250ms)
+	allIntervals := makeTestIntervals(0, make([]float64, 80))
+
+	tests := []struct {
+		name      string
+		start     time.Duration
+		end       time.Duration
+		wantCount int
+		wantFirst time.Duration
+		wantLast  time.Duration
+	}{
+		{
+			name:      "full range",
+			start:     0,
+			end:       20 * time.Second,
+			wantCount: 80,
+			wantFirst: 0,
+			wantLast:  19750 * time.Millisecond,
+		},
+		{
+			name:      "middle range",
+			start:     5 * time.Second,
+			end:       15 * time.Second,
+			wantCount: 40,
+			wantFirst: 5 * time.Second,
+			wantLast:  14750 * time.Millisecond,
+		},
+		{
+			name:      "no overlap - before",
+			start:     25 * time.Second,
+			end:       30 * time.Second,
+			wantCount: 0,
+		},
+		{
+			name:      "partial overlap at start",
+			start:     0,
+			end:       2 * time.Second,
+			wantCount: 8,
+			wantFirst: 0,
+			wantLast:  1750 * time.Millisecond,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := getIntervalsInRange(allIntervals, tt.start, tt.end)
+
+			if tt.wantCount == 0 {
+				if result != nil {
+					t.Errorf("expected nil for no overlap, got %d intervals", len(result))
+				}
+				return
+			}
+
+			if len(result) != tt.wantCount {
+				t.Errorf("got %d intervals, want %d", len(result), tt.wantCount)
+			}
+
+			if len(result) > 0 {
+				if result[0].Timestamp != tt.wantFirst {
+					t.Errorf("first timestamp = %v, want %v", result[0].Timestamp, tt.wantFirst)
+				}
+				if result[len(result)-1].Timestamp != tt.wantLast {
+					t.Errorf("last timestamp = %v, want %v", result[len(result)-1].Timestamp, tt.wantLast)
+				}
+			}
+		})
+	}
+}
+
+func TestScoreIntervalWindow(t *testing.T) {
+	tests := []struct {
+		name    string
+		rmsVals []float64
+		wantAvg float64
+		epsilon float64
+	}{
+		{
+			name:    "uniform values",
+			rmsVals: []float64{-70, -70, -70, -70},
+			wantAvg: -70.0,
+			epsilon: 0.001,
+		},
+		{
+			name:    "mixed values",
+			rmsVals: []float64{-60, -70, -80, -70},
+			wantAvg: -70.0, // Average of -60, -70, -80, -70
+			epsilon: 0.001,
+		},
+		{
+			name:    "single value",
+			rmsVals: []float64{-65.5},
+			wantAvg: -65.5,
+			epsilon: 0.001,
+		},
+		{
+			name:    "empty returns zero",
+			rmsVals: []float64{},
+			wantAvg: 0.0,
+			epsilon: 0.001,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			intervals := makeTestIntervals(0, tt.rmsVals)
+			result := scoreIntervalWindow(intervals)
+
+			diff := result - tt.wantAvg
+			if diff < 0 {
+				diff = -diff
+			}
+			if diff > tt.epsilon {
+				t.Errorf("scoreIntervalWindow() = %v, want %v (±%v)", result, tt.wantAvg, tt.epsilon)
 			}
 		})
 	}
