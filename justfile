@@ -1,7 +1,7 @@
 # Jivetalking - Just Commands
 
-# Test episode number (change this to test different episodes)
-episode := "70"
+# Import presenter integration tests if testdata/justfile exists (not in git)
+import? 'testdata/justfile'
 
 # List commands
 default:
@@ -89,7 +89,9 @@ build: _check-submodule
 
 # Clean build artifacts
 clean:
-    rm -fv jivetalking 2>/dev/null || true
+    @rm -fv jivetalking 2>/dev/null || true
+    @rm -fv testdata/LMP-*-processed.* 2>/dev/null || true
+    @rm -fv testdata/LMP-*-stashed.* 2>/dev/null || true
 
 # Run tests
 test: _check-submodule
@@ -105,69 +107,3 @@ install: build
 # Make a VHS tape recording
 vhs: build
     @vhs ./jivetalking.tape
-
-# Get Mark's processed logs
-mark-logs:
-    @cat testdata/LMP-{{episode}}-mark-processed.log
-
-# Stash Mark's processed logs
-mark-log-stash:
-    @cp testdata/LMP-{{episode}}-mark-processed.log testdata/LMP-{{episode}}-mark-stashed.log
-
-# Get Mark's stashed logs
-mark-stashed-logs:
-    @cat testdata/LMP-{{episode}}-mark-stashed.log
-
-# Process Mark
-mark: build
-    @rm -f testdata/LMP-{{episode}}-mark-processed.*
-    @./jivetalking --logs testdata/LMP-{{episode}}-mark.flac
-    @just mark-logs
-
-# Get Martin's processed logs
-martin-logs:
-    @cat testdata/LMP-{{episode}}-martin-processed.log
-
-# Get Martin's stashed logs
-martin-stashed-logs:
-    @cat testdata/LMP-{{episode}}-martin-stashed.log
-
-# Stash Martin's processed logs
-martin-log-stash:
-    @cp testdata/LMP-{{episode}}-martin-processed.log testdata/LMP-{{episode}}-martin-stashed.log
-
-# Process Martin
-martin: build
-    @rm -f testdata/LMP-{{episode}}-martin-processed.*
-    @./jivetalking --logs testdata/LMP-{{episode}}-martin.flac
-    @just martin-logs
-
-# Get popey's processed logs
-popey-logs:
-    @cat testdata/LMP-{{episode}}-popey-processed.log
-
-# Get popey's stashed logs
-popey-stashed-logs:
-    @cat testdata/LMP-{{episode}}-popey-stashed.log
-
-# Stash popey's processed logs
-popey-log-stash:
-    @cp testdata/LMP-{{episode}}-popey-processed.log testdata/LMP-{{episode}}-popey-stashed.log
-
-# Process popey
-popey: build
-    @rm -f testdata/LMP-{{episode}}-popey-processed.*
-    @./jivetalking --logs testdata/LMP-{{episode}}-popey.flac
-    @just popey-logs
-
-# Process all presenters
-presenters: mark martin popey
-
-# Show all presenters logs
-logs: mark-logs martin-logs popey-logs
-
-# Show all presenters stashed logs
-stashed-logs: mark-stashed-logs martin-stashed-logs popey-stashed-logs
-
-# stash all presenters logs
-stash: mark-log-stash martin-log-stash popey-log-stash
