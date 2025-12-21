@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Go CLI tool for podcast audio preprocessing. Transforms raw voice recordings into broadcast-ready audio at -16 LUFS using a two-pass adaptive filter chain. Uses [Charm Bubbletea](https://github.com/charmbracelet/bubbletea) for the TUI and embeds FFmpeg via the `ffmpeg-statigo` submodule.
+Go CLI tool for podcast audio preprocessing. Transforms raw voice recordings into broadcast-ready audio at -18 LUFS using a four-pass adaptive processing pipeline. Uses [Charm Bubbletea](https://github.com/charmbracelet/bubbletea) for the TUI and embeds FFmpeg via the `ffmpeg-statigo` submodule.
 
 ## Architecture
 
@@ -49,16 +49,25 @@ Key patterns from ffmpeg-statigo:
 
 ## Audio Processing Pipeline
 
-**Two-pass architecture:**
+**Four-pass architecture:**
 1. **Pass 1 (Analysis):** Measures LUFS, true peak, LRA, noise floor, spectral characteristics
 2. **Pass 2 (Processing):** Applies adaptive filter chain tuned to measurements
+3. **Pass 3 (Measuring):** Runs loudnorm in measurement mode to get input stats
+4. **Pass 4 (Normalising):** Applies loudnorm with linear mode; UREI 1176-inspired limiter creates headroom for full linear gain
 
-**Filter chain order (intentional):**
+**Filter chain order (Pass 2):**
 ```
-highpass → adeclick → dolby-sr-single → arnndn → agate → acompressor → deesser → alimiter
+highpass → dns1500/dolbysr → arnndn → agate → adeclick → acompressor → deesser
 ```
 
-Each filter prepares audio for the next. Rumble removal before spectral analysis. Compression before de-essing (compression emphasises sibilance). Limiter provides final brick-wall safety.
+Each filter prepares audio for the next. Rumble removal before noise profiling. Denoising before gating. Compression before de-essing (compression emphasises sibilance).
+
+**Normalisation (Pass 3/4):**
+```
+alimiter (peak reduction) → loudnorm (linear mode)
+```
+
+The limiter creates headroom so loudnorm can apply full linear gain to reach -18 LUFS without clipping or falling back to dynamic mode.
 
 ## Adaptive Processing Patterns
 

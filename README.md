@@ -6,7 +6,7 @@
 
 ## What It Does
 
-Raw microphone recordings are messy: room rumble, background hiss, awkward silences, inconsistent volume, harsh sibilance. Jivetalking fixes all of this automatically, transforming raw voice recordings into broadcast-ready audio at the **-16 LUFS podcast standard**.
+Raw microphone recordings are messy: room rumble, background hiss, awkward silences, inconsistent volume, harsh sibilance. Jivetalking fixes all of this automatically, transforming raw voice recordings into broadcast-ready audio at **-18 LUFS** (the broadcast/podcast standard).
 
 ```bash
 jivetalking presenter1.flac presenter2.flac presenter3.flac
@@ -21,7 +21,7 @@ That's it. No configuration, no knobs to tweak, no audio knowledge required.
 | Principle | Implementation |
 |-----------|----------------|
 | **Best outcome by default** | Professional results with zero configuration |
-| **Quality over speed** | Two-pass processing for measurement-driven accuracy |
+| **Quality over speed** | Four-pass processing for measurement-driven accuracy |
 | **Transparency over depth** | Every filter prioritises natural sound |
 | **Adaptive everything** | Parameters tune automatically to your specific recording |
 
@@ -51,8 +51,15 @@ Measures your audio's characteristics to drive adaptive processing:
 | **Declicker** | DC-1 | Autoregressive (AR) interpolation click/pop remover |
 | **Compressor** | LA-2A | Programme-dependent optical compression with ~10ms attack |
 | **De-esser** | — | Tames sibilance (adaptive intensity based on spectral rolloff) |
-| **Normalisation** | — | Two-stage loudness targeting to -16 LUFS |
-| **Limiter** | — | Brick-wall safety net for true peak compliance |
+
+### Pass 3 & 4: Loudness Normalisation
+
+Two-stage EBU R128 loudness normalisation using FFmpeg's loudnorm filter:
+
+| Pass | What It Does |
+|------|-------------|
+| **Pass 3: Measure** | Analyses processed audio to get integrated loudness, true peak, LRA, and threshold |
+| **Pass 4: Normalise** | Applies loudnorm with linear mode using Pass 3 measurements; UREI 1176-inspired peak limiter creates headroom for full linear gain |
 
 ### Why This Order Matters
 
@@ -63,7 +70,7 @@ Each filter prepares audio for the next:
 3. **Gating before compression** — removes silence before dynamics processing amplifies room tone
 4. **Compression before de-essing** — compression emphasises sibilance; de-essing corrects it
 5. **Normalisation last** — sees the fully processed signal for accurate loudness targeting
-6. **Limiter as safety net** — catches any rare peaks from upstream processing
+6. **Limiter before loudnorm** — creates headroom so loudnorm can apply full linear gain without clipping or falling back to dynamic mode
 
 ### Why Adaptive Matters
 
@@ -84,7 +91,7 @@ Jivetalking measures your specific audio and adapts every filter automatically. 
 ┌─────────────────────────────────────────────────────────────┐
 │  2. Process                                                 │
 │     $ jivetalking *.flac                                    │
-│     Output: *-processed.flac (level-matched at -16 LUFS)    │
+│     Output: *-processed.flac (level-matched at -18 LUFS)   │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
