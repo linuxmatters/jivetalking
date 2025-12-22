@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	ffmpeg "github.com/linuxmatters/ffmpeg-statigo"
+	"github.com/linuxmatters/jivetalking/internal/mains"
 )
 
 //go:embed models/bd.rnnn
@@ -451,11 +452,11 @@ func DefaultFilterConfig() *FilterChainConfig {
 
 		// DS201-Inspired Hum Notch Filter - removes 50/60Hz hum and harmonics (part of DS201HighPass composite)
 		// Tuned by tuneDS201HumFilter; set DS201HumHarmonics=0 to disable hum notches
-		DS201HumFrequency: 50.0,   // 50Hz (UK/EU mains), can be set to 60Hz for US
-		DS201HumHarmonics: 4,      // Filter 4 harmonics (50, 100, 150, 200Hz)
-		DS201HumWidth:     1.0,    // 1Hz wide notch at each harmonic
-		DS201HumTransform: "tdii", // Transposed Direct Form II - best floating-point numerical accuracy
-		DS201HumMix:       1.0,    // Full wet signal (can reduce for subtle application)
+		DS201HumFrequency: float64(mains.Frequency()), // Auto-detect 50Hz or 60Hz from system timezone
+		DS201HumHarmonics: 4,                          // Filter 4 harmonics (50, 100, 150, 200Hz or 60, 120, 180, 240Hz)
+		DS201HumWidth:     1.0,                        // 1Hz wide notch at each harmonic
+		DS201HumTransform: "tdii",                     // Transposed Direct Form II - best floating-point numerical accuracy
+		DS201HumMix:       1.0,                        // Full wet signal (can reduce for subtle application)
 
 		// DS201-Inspired Low-pass Filter - removes ultrasonic noise (part of DS201 side-chain)
 		DS201LPEnabled:   true,
