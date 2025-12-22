@@ -92,6 +92,8 @@ clean:
     @rm -fv jivetalking 2>/dev/null || true
     @rm -fv testdata/LMP-*-processed.* 2>/dev/null || true
     @rm -fv testdata/LMP-*-stashed.* 2>/dev/null || true
+    @rm -fv testdata/*.png 2>/dev/null || true
+    @rm -fv testdata/*.txt 2>/dev/null || true
 
 # Run tests
 test: _check-submodule
