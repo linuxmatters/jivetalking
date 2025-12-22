@@ -670,18 +670,19 @@ func roomToneScore(interval IntervalSample, rmsP50, fluxP50 float64) float64 {
 	return roomToneAmplitudeWeight*amplitudeScore + roomToneFluxWeight*fluxScore
 }
 
-// calculateSilenceThresholdFromIntervals derives the silence threshold from interval data.
-// Uses spectral analysis to identify room tone by its characteristic stability and quietness.
+// estimateNoiseFloorAndThreshold analyses interval data to estimate noise floor and silence threshold.
+// Returns (noiseFloor, silenceThreshold, ok). If ok is false, fallback values should be used.
 //
-// Key insight: room tone detection should use behavioral characteristics, not just amplitude:
+// Uses spectral analysis to identify room tone by its characteristic stability and quietness:
 // 1. Room tone is quieter than speech (but may overlap with quiet speech)
 // 2. Room tone has low spectral flux (stable, unchanging)
 // 3. Room tone has consistent spectral characteristics
 //
-// We compute a "room tone score" for each interval and use that to find the threshold.
-func calculateSilenceThresholdFromIntervals(intervals []IntervalSample, fallbackThreshold float64) float64 {
+// The noise floor is the max RMS of high-confidence room tone intervals.
+// The silence threshold adds headroom to the noise floor for detection margin.
+func estimateNoiseFloorAndThreshold(intervals []IntervalSample) (noiseFloor, silenceThreshold float64, ok bool) {
 	if len(intervals) < silenceThresholdMinIntervals {
-		return fallbackThreshold
+		return 0, 0, false
 	}
 
 	// Only use the first silenceSearchPercent% of intervals for threshold calculation
@@ -734,8 +735,7 @@ func calculateSilenceThresholdFromIntervals(intervals []IntervalSample, fallback
 		candidateCount = len(scored)
 	}
 
-	// Threshold is the maximum RMS among high-confidence room tone intervals
-	// Add small headroom to catch edge cases
+	// Noise floor is the maximum RMS among high-confidence room tone intervals
 	maxRoomToneRMS := -120.0
 	for i := 0; i < candidateCount; i++ {
 		if scored[i].rms > maxRoomToneRMS {
@@ -743,7 +743,18 @@ func calculateSilenceThresholdFromIntervals(intervals []IntervalSample, fallback
 		}
 	}
 
-	return maxRoomToneRMS + silenceThresholdHeadroomDB
+	return maxRoomToneRMS, maxRoomToneRMS + silenceThresholdHeadroomDB, true
+}
+
+// calculateSilenceThresholdFromIntervals derives the silence threshold from interval data.
+// This is a convenience wrapper around estimateNoiseFloorAndThreshold for callers that only
+// need the threshold value.
+func calculateSilenceThresholdFromIntervals(intervals []IntervalSample, fallbackThreshold float64) float64 {
+	_, threshold, ok := estimateNoiseFloorAndThreshold(intervals)
+	if !ok {
+		return fallbackThreshold
+	}
+	return threshold
 }
 
 // findSilenceCandidatesFromIntervals identifies silence regions from interval samples.
@@ -1443,8 +1454,8 @@ type AudioMeasurements struct {
 	TargetOffset float64 `json:"target_offset"` // Offset for normalization
 	NoiseFloor   float64 `json:"noise_floor"`   // Measured noise floor from astats (dBFS)
 
-	// Pre-scan adaptive silence detection thresholds
-	PreScanNoiseFloor  float64 `json:"prescan_noise_floor"`  // Noise floor estimated from first 15% of audio (dBFS)
+	// Adaptive silence detection thresholds (derived from interval sampling)
+	PreScanNoiseFloor  float64 `json:"prescan_noise_floor"`  // Noise floor estimated from first 15% of intervals (dBFS)
 	SilenceDetectLevel float64 `json:"silence_detect_level"` // Adaptive silencedetect threshold used (dBFS)
 
 	// Silence detection results (derived from interval sampling)
@@ -1725,165 +1736,36 @@ func finalizeOutputMeasurements(acc *outputMetadataAccumulators) *OutputMeasurem
 	return m
 }
 
-// Pre-scan constants
+// Threshold bounds for adaptive silence detection
 const (
-	// preScanPercent is the fraction of audio to scan for adaptive threshold detection.
-	// We scan the first 15% of the recording to estimate the noise floor before running
-	// the full Pass 1 analysis. This allows silencedetect to use an adaptive threshold.
-	preScanPercent = 0.15
-
-	// preScanSilenceHeadroom is added to the pre-scan noise floor to get the silencedetect threshold.
+	// silenceFallbackHeadroom is added to the noise floor to get the silencedetect threshold.
 	// A region is considered "silence" if it's within this headroom of the noise floor.
 	// Higher values detect more silence (including quieter room tone) but may include crosstalk.
-	preScanSilenceHeadroom = 6.0 // dB
+	silenceFallbackHeadroom = 6.0 // dB
 
-	// preScanMinThreshold prevents silencedetect from being too sensitive in very quiet recordings.
+	// silenceMinThreshold prevents silencedetect from being too sensitive in very quiet recordings.
 	// Even professional recordings rarely have silence below -70 dBFS.
-	preScanMinThreshold = -70.0
+	silenceMinThreshold = -70.0
 
-	// preScanMaxThreshold prevents silencedetect from detecting loud sections as silence.
+	// silenceMaxThreshold prevents silencedetect from detecting loud sections as silence.
 	// If the estimated threshold is above this, something is wrong with the recording.
-	preScanMaxThreshold = -35.0
+	silenceMaxThreshold = -35.0
 )
 
-// preScanNoiseFloor performs a quick scan of the first 15% of the audio to estimate
-// the noise floor. This is used to set an adaptive silencedetect threshold for Pass 1.
-//
-// The function runs astats on the initial portion of audio and returns the RMSTrough
-// measurement, which represents the level of the quietest segments (likely ambient noise).
-//
-// Returns the estimated noise floor in dBFS, or an error if the scan fails.
-// If RMSTrough is not available, falls back to RMSLevel - 15dB.
-func preScanNoiseFloor(filename string) (float64, error) {
-	// Open audio file
-	reader, metadata, err := audio.OpenAudioFile(filename)
-	if err != nil {
-		return 0, fmt.Errorf("pre-scan: failed to open audio file: %w", err)
-	}
-	defer reader.Close()
-
-	// Calculate how many frames to process (15% of audio)
-	totalDuration := metadata.Duration
-	scanDuration := totalDuration * preScanPercent
-	sampleRate := float64(metadata.SampleRate)
-	samplesPerFrame := 4096.0
-	maxFrames := int((scanDuration * sampleRate) / samplesPerFrame)
-
-	// Create a simple filter graph with just downmix and astats
-	// We need mono for consistent measurements, and astats for noise floor detection
-	filterSpec := "aformat=channel_layouts=mono,astats=metadata=1:measure_overall=Noise_floor+RMS_level+RMS_trough+Peak_level:measure_perchannel=0"
-
-	filterGraph, bufferSrcCtx, bufferSinkCtx, err := setupFilterGraph(
-		reader.GetDecoderContext(),
-		filterSpec,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("pre-scan: failed to create filter graph: %w", err)
-	}
-	defer ffmpeg.AVFilterGraphFree(&filterGraph)
-
-	filteredFrame := ffmpeg.AVFrameAlloc()
-	defer ffmpeg.AVFrameFree(&filteredFrame)
-
-	// Track measurements
-	var rmsTrough, rmsLevel float64
-	frameCount := 0
-
-	// Process frames until we've scanned 15% of the audio
-	for frameCount < maxFrames {
-		frame, err := reader.ReadFrame()
-		if err != nil {
-			return 0, fmt.Errorf("pre-scan: failed to read frame: %w", err)
-		}
-		if frame == nil {
-			break // EOF
-		}
-
-		// Push frame into filter graph
-		if _, err := ffmpeg.AVBuffersrcAddFrameFlags(bufferSrcCtx, frame, 0); err != nil {
-			return 0, fmt.Errorf("pre-scan: failed to add frame to filter: %w", err)
-		}
-		frameCount++
-
-		// Pull filtered frames and extract astats metadata
-		for {
-			if _, err := ffmpeg.AVBuffersinkGetFrame(bufferSinkCtx, filteredFrame); err != nil {
-				if errors.Is(err, ffmpeg.EAgain) || errors.Is(err, ffmpeg.AVErrorEOF) {
-					break
-				}
-				return 0, fmt.Errorf("pre-scan: failed to get filtered frame: %w", err)
-			}
-
-			// Extract astats measurements from metadata
-			if metadata := filteredFrame.Metadata(); metadata != nil {
-				if value, ok := getFloatMetadata(metadata, metaKeyRMSTrough); ok {
-					rmsTrough = value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeyRMSLevel); ok {
-					rmsLevel = value
-				}
-			}
-
-			ffmpeg.AVFrameUnref(filteredFrame)
-		}
-	}
-
-	// Flush the filter graph
-	if _, err := ffmpeg.AVBuffersrcAddFrameFlags(bufferSrcCtx, nil, 0); err != nil {
-		return 0, fmt.Errorf("pre-scan: failed to flush filter: %w", err)
-	}
-
-	// Pull remaining frames
-	for {
-		if _, err := ffmpeg.AVBuffersinkGetFrame(bufferSinkCtx, filteredFrame); err != nil {
-			if errors.Is(err, ffmpeg.EAgain) || errors.Is(err, ffmpeg.AVErrorEOF) {
-				break
-			}
-			return 0, fmt.Errorf("pre-scan: failed to get remaining frame: %w", err)
-		}
-
-		if metadata := filteredFrame.Metadata(); metadata != nil {
-			if value, ok := getFloatMetadata(metadata, metaKeyRMSTrough); ok {
-				rmsTrough = value
-			}
-			if value, ok := getFloatMetadata(metadata, metaKeyRMSLevel); ok {
-				rmsLevel = value
-			}
-		}
-
-		ffmpeg.AVFrameUnref(filteredFrame)
-	}
-
-	// Determine noise floor from measurements
-	var noiseFloor float64
-	if rmsTrough != 0 && !math.IsInf(rmsTrough, -1) {
-		// Primary: use RMSTrough (quietest segments)
-		noiseFloor = rmsTrough
-	} else if rmsLevel != 0 && !math.IsInf(rmsLevel, -1) {
-		// Fallback: estimate from overall RMS level
-		// Quiet segments are typically 12-18dB below average RMS
-		noiseFloor = rmsLevel - 15.0
-	} else {
-		// No measurements available, use conservative default
-		return -50.0, nil // Default silencedetect threshold
-	}
-
-	return noiseFloor, nil
-}
-
-// calculateAdaptiveSilenceThreshold computes the silencedetect threshold from the pre-scan noise floor.
+// calculateAdaptiveSilenceThreshold computes a bounded silence threshold from a noise floor estimate.
 // Returns a threshold that's slightly above the noise floor to detect quiet room tone as silence.
+// This is used as a fallback when interval-based estimation has insufficient data.
 func calculateAdaptiveSilenceThreshold(noiseFloor float64) float64 {
 	// Silence threshold = noise floor + headroom
 	// This allows silencedetect to find regions that are at or slightly above the ambient noise
-	threshold := noiseFloor + preScanSilenceHeadroom
+	threshold := noiseFloor + silenceFallbackHeadroom
 
 	// Apply bounds to prevent extreme values
-	if threshold < preScanMinThreshold {
-		threshold = preScanMinThreshold
+	if threshold < silenceMinThreshold {
+		threshold = silenceMinThreshold
 	}
-	if threshold > preScanMaxThreshold {
-		threshold = preScanMaxThreshold
+	if threshold > silenceMaxThreshold {
+		threshold = silenceMaxThreshold
 	}
 
 	return threshold
@@ -1894,15 +1776,12 @@ func calculateAdaptiveSilenceThreshold(noiseFloor float64) float64 {
 //
 // Implementation note: ebur128 and astats write measurements to frame metadata with lavfi.r128.*
 // and lavfi.astats.Overall.* keys respectively. We extract these from the last processed frames.
+//
+// The noise floor and silence threshold are computed from interval data AFTER the full pass,
+// eliminating the need for a separate pre-scan phase.
 func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements)) (*AudioMeasurements, error) {
-	// Pre-scan: Estimate noise floor from first 15% of audio to set adaptive silencedetect threshold
-	// This allows detection of intentional room tone that may be quieter than the default -50 dBFS
-	preScanNF, err := preScanNoiseFloor(filename)
-	if err != nil {
-		// Non-fatal: fall back to default threshold if pre-scan fails
-		preScanNF = -50.0
-	}
-	adaptiveThreshold := calculateAdaptiveSilenceThreshold(preScanNF)
+	// Default fallback threshold if interval analysis yields insufficient data
+	const defaultNoiseFloor = -50.0
 
 	// Open audio file
 	reader, metadata, err := audio.OpenAudioFile(filename)
@@ -2061,11 +1940,20 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 	ffmpeg.AVFilterGraphFree(&filterGraph)
 	filterFreed = true
 
+	// Estimate noise floor and silence threshold from interval data
+	// This replaces the previous separate pre-scan pass
+	noiseFloorEstimate, silenceThreshold, ok := estimateNoiseFloorAndThreshold(intervals)
+	if !ok {
+		// Fallback if insufficient interval data (very short recordings)
+		noiseFloorEstimate = defaultNoiseFloor
+		silenceThreshold = calculateAdaptiveSilenceThreshold(defaultNoiseFloor)
+	}
+
 	// Create measurements struct and populate from accumulators
 	measurements := &AudioMeasurements{
-		// Store pre-scan adaptive silence detection thresholds
-		PreScanNoiseFloor:  preScanNF,
-		SilenceDetectLevel: adaptiveThreshold,
+		// Noise floor estimated from interval data (replaces pre-scan)
+		PreScanNoiseFloor:  noiseFloorEstimate,
+		SilenceDetectLevel: silenceThreshold,
 	}
 
 	// Populate ebur128 loudness measurements
@@ -2178,11 +2066,8 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 	// Store 250ms interval samples for data-driven silence candidate detection
 	measurements.IntervalSamples = intervals
 
-	// Detect silence regions using data-driven threshold from interval distribution
-	// Instead of arbitrary headroom, derive threshold from the actual RMS distribution:
-	// Silence intervals are statistical outliers at the low end of the distribution
-	silenceThreshold := calculateSilenceThresholdFromIntervals(intervals, adaptiveThreshold)
-	measurements.SilenceDetectLevel = silenceThreshold // Update with actual computed threshold
+	// Detect silence regions using threshold already computed from interval distribution
+	// The silenceThreshold was calculated above via estimateNoiseFloorAndThreshold()
 	measurements.SilenceRegions = findSilenceCandidatesFromIntervals(intervals, silenceThreshold, 0)
 
 	// Extract noise profile from best silence region (if available)

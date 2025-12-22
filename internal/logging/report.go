@@ -1684,7 +1684,7 @@ func writeDiagnosticSilence(f *os.File, measurements *processor.AudioMeasurement
 
 	// Show adaptive silence detection threshold if different from default
 	if measurements.SilenceDetectLevel != 0 && measurements.SilenceDetectLevel != -50.0 {
-		fmt.Fprintf(f, "Silence Threshold:   %.1f dB (adaptive from %.1f dB pre-scan)\n",
+		fmt.Fprintf(f, "Silence Threshold:   %.1f dB (from %.1f dB noise floor estimate)\n",
 			measurements.SilenceDetectLevel, measurements.PreScanNoiseFloor)
 	}
 
