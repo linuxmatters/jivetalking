@@ -29,7 +29,6 @@ const (
 	// Spectral decrease thresholds for LF voice content protection
 	spectralDecreaseVeryWarm = -0.08 // Below: very warm voice, needs maximum LF protection
 	spectralDecreaseWarm     = -0.05 // Below: warm voice with significant LF body
-	spectralDecreaseBalanced = 0.0   // Near zero: balanced voice
 	// Above 0: thin voice, highpass safe
 
 	// Spectral skewness threshold for LF emphasis detection
@@ -54,10 +53,8 @@ const (
 	rolloffLimited     = 8000.0  // Below: limited HF extension
 	rolloffExtensive   = 12000.0 // Above: extensive HF content
 
-	// LUFS gap thresholds for adaptive processing intensity
-	lufsGapModerate   = 15.0 // dB - moderate gain required
-	lufsGapAggressive = 25.0 // dB - aggressive processing needed
-	lufsGapExtreme    = 25.0 // dB - extreme gap, gate needs special handling
+	// LUFS gap threshold for adaptive processing intensity
+	lufsGapExtreme = 25.0 // dB - extreme gap, gate needs special handling
 
 	// Gentle gate mode: for extreme LUFS gap + low LRA
 	// Very quiet recordings with uniform levels cause the gate's soft expansion
@@ -240,13 +237,6 @@ const (
 
 	// DS201 Low-Pass filter tuning
 	ds201LPDefaultFreq = 16000.0 // Hz - default cutoff (preserves all audible content)
-	ds201LPMinFreq     = 8000.0  // Hz - minimum cutoff (never filter below this)
-	ds201LPHeadroom    = 2000.0  // Hz - headroom above rolloff when setting cutoff
-
-	// Noise floor quality thresholds
-	noiseFloorClean   = -60.0 // dBFS - very clean recording
-	noiseFloorTypical = -50.0 // dBFS - typical podcast
-	noiseFloorNoisy   = -40.0 // dBFS - noisy recording (for compression mix)
 
 	// ==========================================================================
 	// LA-2A-Inspired Compression Parameters
@@ -377,79 +367,11 @@ const (
 	arnnDnMixMin = 0.5  // Minimum mix (below this, filter has negligible effect)
 	arnnDnMixMax = 0.85 // Maximum mix (above risks artifacts)
 
-	// ==========================================================================
-	// UREI 1176-Inspired Limiter Parameters
-	// ==========================================================================
-	// The UREI 1176 Peak Limiter (1967) pioneered microsecond-level attack times
-	// and program-dependent release. As a safety limiter, we implement its
-	// philosophy using FFmpeg's alimiter with adaptive attack/release/ASC.
-	// Key characteristics:
-	// - Ultra-fast FET attack (20µs-800µs) — we use 0.1-1.0ms (FFmpeg minimum)
-	// - Program-dependent two-stage release — approximated via ASC mode
-	// - Soft-knee via ASC — releases to average attenuation, not unity
-	// ==========================================================================
-
-	// UREI 1176-inspired attack times (FFmpeg minimum ~0.1ms vs 1176's 20µs)
-	// Lookahead compensates for the slower digital attack
-	u1176AttackExtreme = 0.1 // ms - extreme transients (plosives)
-	u1176AttackSharp   = 0.5 // ms - sharp consonants
-	u1176AttackNormal  = 0.8 // ms - standard speech
-	u1176AttackGentle  = 1.0 // ms - soft delivery
-
-	// Transient detection thresholds (MaxDifference as fraction 0-1)
-	u1176MaxDiffExtreme = 0.25 // 25% - extreme transients trigger fastest attack
-	u1176MaxDiffSharp   = 0.15 // 15% - sharp transients
-	u1176MaxDiffNormal  = 0.08 // 8% - normal speech threshold
-
-	// Spectral crest thresholds (dB) - secondary transient indicator
-	u1176CrestExtreme = 50.0 // dB - extremely peaked spectrum
-	u1176CrestSharp   = 35.0 // dB - notably peaked
-
-	// UREI 1176-inspired release times (matching hardware range 50-1100ms)
-	u1176ReleaseExpressive = 200.0 // ms - wide dynamics (high flux + wide LRA)
-	u1176ReleaseStandard   = 150.0 // ms - typical podcast delivery
-	u1176ReleaseControlled = 100.0 // ms - narrow dynamics (low flux + narrow LRA)
-	u1176ReleaseDRBoost    = 50.0  // ms - added for very wide dynamic range
-
-	// Release tuning thresholds
-	u1176FluxDynamic = 0.03 // Above: dynamic/expressive content
-	u1176FluxStatic  = 0.01 // Below: controlled/monotone content
-	u1176LRAWide     = 15.0 // LU - above: wide loudness range
-	u1176LRANarrow   = 10.0 // LU - below: narrow loudness range
-	u1176DRWide      = 35.0 // dB - above: add release boost
-
-	// ASC (Auto Soft Clipping) - approximates 1176 program-dependent release
-	// When enabled, limiter releases to average attenuation rather than unity
-	u1176ASCDynamic    = 0.7 // For dynamic content (wide DR or high crest)
-	u1176ASCModerate   = 0.5 // For moderate content
-	u1176ASCControlled = 0.3 // For controlled content (narrow DR)
-	u1176ASCNoisyBoost = 0.2 // Additional for noisy recordings (masks pumping)
-
-	// ASC enabling thresholds
-	u1176DREnableASC    = 30.0  // dB - above: enable ASC with dynamic level
-	u1176DRModerateASC  = 20.0  // dB - above: enable ASC with moderate level
-	u1176CrestEnableASC = 40.0  // dB - above: enable ASC (prominent peaks)
-	u1176NoiseFloorASC  = -50.0 // dBFS - above: boost ASC to mask pumping
-
-	// Ceiling (dBTP) - hardcoded podcast standard for now
-	u1176CeilingPodcast = -1.0 // dBTP - podcast/broadcast safety
-
-	// Gain staging (configurable, default unity)
-	u1176InputLevelDefault  = 1.0 // Linear - unity gain
-	u1176OutputLevelDefault = 1.0 // Linear - unity gain
-
-	// LUFS to RMS conversion constant
-	// Rough conversion: LUFS ≈ -23 + 20*log10(RMS)
-	lufsRmsOffset = 23.0
-
 	// Default fallback values for sanitization
 	ds201DefaultHPFreq        = 80.0
 	defaultDeessIntensity     = 0.0
 	defaultLA2ARatio          = 3.0   // LA-2A baseline ratio
 	defaultLA2AThreshold      = -18.0 // Moderate threshold
-	defaultLA2AAttack         = 10.0  // LA-2A fixed attack
-	defaultLA2ARelease        = 200.0 // LA-2A two-stage release approximation
-	defaultLA2AKnee           = 4.0   // LA-2A T4 optical cell soft knee
 	ds201DefaultGateThreshold = 0.01  // -40dBFS
 	defaultHumFrequency       = 50.0  // UK mains
 	defaultHumHarmonics       = 4
@@ -497,7 +419,7 @@ const (
 	// Dolby SR mcompand Expansion Tuning
 	// ==========================================================================
 	// Dolby SR mcompand adaptive tuning constants.
-	// Validated across 3 presenters (Mark, Martin, Popey).
+	// Validated across 3 presenters
 	// Uses RMS trough (noise floor) to select threshold AND expansion in lockstep.
 	//
 	// Simplified tuning (threshold + expansion based on trough):
@@ -617,9 +539,9 @@ func AdaptConfig(config *FilterChainConfig, measurements *AudioMeasurements) {
 
 	// Tune each filter adaptively based on measurements
 	// Order matters: gate threshold calculated BEFORE denoise filters
-	tuneDS201HighPass(config, measurements, lufsGap) // Composite: highpass + hum notch
-	tuneDS201LowPass(config, measurements)           // Ultrasonic rejection (adaptive)
-	tuneDC1Declick(config, measurements)             // CEDAR DC-1 inspired declicker
+	tuneDS201HighPass(config, measurements) // Composite: highpass + hum notch
+	tuneDS201LowPass(config, measurements)  // Ultrasonic rejection (adaptive)
+	tuneDC1Declick(config, measurements)    // CEDAR DC-1 inspired declicker
 
 	// Noise reduction: DNS-1500 primary, DolbySR fallback
 	// If DolbySR is pre-enabled (forced by caller), skip DNS-1500 entirely
@@ -679,7 +601,7 @@ func calculateLUFSGap(targetI, inputI float64) float64 {
 // - Low entropy (< 0.7) indicates periodic/tonal noise → enable hum removal
 // - High entropy indicates broadband noise → skip notch filter
 // - Voice-aware: reduces harmonics for warm voices to protect vocal fundamentals
-func tuneDS201HighPass(config *FilterChainConfig, measurements *AudioMeasurements, lufsGap float64) {
+func tuneDS201HighPass(config *FilterChainConfig, measurements *AudioMeasurements) {
 	if measurements.SpectralCentroid <= 0 {
 		// No spectral analysis available - keep default
 		return
@@ -1929,125 +1851,6 @@ func tuneLA2AMix(config *FilterChainConfig, measurements *AudioMeasurements) {
 	}
 
 	config.LA2AMix = mix
-}
-
-// ==========================================================================
-// UREI 1176-Inspired Limiter Tuning Functions
-// ==========================================================================
-
-// tuneUREI1176Limiter adapts the UREI 1176-inspired limiter based on Pass 1 measurements.
-// The 1176's character comes from:
-// - Ultra-fast FET attack catching peaks while preserving attack character
-// - Program-dependent two-stage release (approximated via ASC)
-// - Soft-knee behaviour at high ratios (ASC provides averaging)
-//
-// As a safety limiter at chain end, it catches peaks that slip through earlier processing.
-// Loudness normalisation is handled upstream; this focuses purely on peak protection.
-func tuneUREI1176Limiter(config *FilterChainConfig, measurements *AudioMeasurements) {
-	tuneUREI1176Attack(config, measurements)
-	tuneUREI1176Release(config, measurements)
-	tuneUREI1176ASC(config, measurements)
-	// Ceiling and gain levels use defaults (configurable via Option C)
-}
-
-// tuneUREI1176Attack sets attack time based on transient characteristics.
-// The 1176's FET responds in microseconds; FFmpeg's minimum is ~0.1ms but
-// lookahead compensates by "seeing" peaks coming.
-//
-// Uses MaxDifference (sample-to-sample jumps) and SpectralCrest (impulsive energy)
-// to detect transient sharpness:
-// - Extreme transients (plosives): 0.1ms attack
-// - Sharp consonants: 0.5ms attack
-// - Normal speech: 0.8ms attack
-// - Soft delivery: 1.0ms attack
-func tuneUREI1176Attack(config *FilterChainConfig, m *AudioMeasurements) {
-	// MaxDifference from astats is in sample units (0-32768 for 16-bit audio)
-	// Normalize to 0-1 ratio for comparison with thresholds
-	maxDiff := m.MaxDifference / 32768.0
-
-	// Check for extreme transients (plosives, hard consonants)
-	if maxDiff > u1176MaxDiffExtreme || m.SpectralCrest > u1176CrestExtreme {
-		config.UREI1176Attack = u1176AttackExtreme
-		return
-	}
-
-	// Sharp transients
-	if maxDiff > u1176MaxDiffSharp || m.SpectralCrest > u1176CrestSharp {
-		config.UREI1176Attack = u1176AttackSharp
-		return
-	}
-
-	// Normal transients
-	if maxDiff > u1176MaxDiffNormal {
-		config.UREI1176Attack = u1176AttackNormal
-		return
-	}
-
-	// Soft delivery - minimal limiting needed
-	config.UREI1176Attack = u1176AttackGentle
-}
-
-// tuneUREI1176Release sets release time based on dynamics and flux.
-// The 1176's two-stage release (fast after transients, slow during sustained compression)
-// is approximated by combining base release with ASC mode.
-//
-// Uses SpectralFlux (frame-to-frame change) and InputLRA (macro-dynamics):
-// - High flux + wide LRA (expressive): 200ms release
-// - Moderate: 150ms release
-// - Low flux + narrow LRA (controlled): 100ms release
-// - Very wide dynamic range: +50ms boost
-func tuneUREI1176Release(config *FilterChainConfig, m *AudioMeasurements) {
-	var baseRelease float64
-
-	// Classify based on flux and LRA
-	switch {
-	case m.SpectralFlux > u1176FluxDynamic && m.InputLRA > u1176LRAWide:
-		// Expressive delivery - preserve dynamics with longer release
-		baseRelease = u1176ReleaseExpressive
-	case m.SpectralFlux < u1176FluxStatic && m.InputLRA < u1176LRANarrow:
-		// Controlled delivery - quick response OK
-		baseRelease = u1176ReleaseControlled
-	default:
-		// Standard podcast delivery
-		baseRelease = u1176ReleaseStandard
-	}
-
-	// Add recovery time for very wide dynamic range
-	if m.DynamicRange > u1176DRWide {
-		baseRelease += u1176ReleaseDRBoost
-	}
-
-	config.UREI1176Release = baseRelease
-}
-
-// tuneUREI1176ASC enables Auto Soft Clipping to approximate program-dependent release.
-// When enabled, the limiter releases to an average attenuation level rather than unity,
-// mimicking the 1176's behaviour of "staying in compression" during loud passages.
-//
-// Uses DynamicRange and SpectralCrest to determine ASC parameters:
-// - Wide DR (>30dB) or high crest (>40dB): ASC 0.7 (dynamic content)
-// - Moderate DR (>20dB): ASC 0.5 (standard smoothing)
-// - Narrow DR: ASC off (direct limiting fine)
-// - Noisy recordings: boost ASC to mask pumping artefacts
-func tuneUREI1176ASC(config *FilterChainConfig, m *AudioMeasurements) {
-	// Enable ASC for dynamic content
-	switch {
-	case m.DynamicRange > u1176DREnableASC || m.SpectralCrest > u1176CrestEnableASC:
-		config.UREI1176ASC = true
-		config.UREI1176ASCLevel = u1176ASCDynamic
-	case m.DynamicRange > u1176DRModerateASC:
-		config.UREI1176ASC = true
-		config.UREI1176ASCLevel = u1176ASCModerate
-	default:
-		config.UREI1176ASC = false
-		config.UREI1176ASCLevel = 0
-		return // Early return - no ASC, no noise boost
-	}
-
-	// Boost ASC for noisy recordings (helps mask pumping artefacts)
-	if m.NoiseFloor > u1176NoiseFloorASC {
-		config.UREI1176ASCLevel = math.Min(1.0, config.UREI1176ASCLevel+u1176ASCNoisyBoost)
-	}
 }
 
 // sanitizeConfig ensures no NaN or Inf values remain after adaptive tuning

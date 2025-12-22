@@ -21,7 +21,8 @@ type Encoder struct {
 
 // createOutputEncoder creates an encoder for FLAC output
 // TODO: Add WAV fallback if FLAC encoder is not available
-func createOutputEncoder(outputPath string, metadata *audio.Metadata, bufferSinkCtx *ffmpeg.AVFilterContext) (*Encoder, error) {
+// TODO: Use metadata parameter for output file metadata passthrough
+func createOutputEncoder(outputPath string, _ *audio.Metadata, bufferSinkCtx *ffmpeg.AVFilterContext) (*Encoder, error) {
 	// Allocate output format context
 	outputPathC := ffmpeg.ToCStr(outputPath)
 	defer outputPathC.Free()

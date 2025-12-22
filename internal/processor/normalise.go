@@ -260,7 +260,7 @@ func calculateLimiterCeiling(measured_I, measured_TP, target_I, target_TP float6
 	//
 	// Observed ISP creation varies by source material:
 	// - Most files: 0.1-0.5 dB ISP after limiting+gain
-	// - Worst case (E70-Martin): 1.6 dB ISP after limiting+gain
+	// - Worst case: 1.6 dB ISP after limiting+gain
 	//
 	// Using 2.0 dB margin ensures broadcast compliance (-2.0 dBTP) even for
 	// worst-case ISP creation. This is conservative but guarantees compliance.

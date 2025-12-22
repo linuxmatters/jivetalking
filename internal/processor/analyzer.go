@@ -432,7 +432,7 @@ const (
 // Returns the original region if it's already at or below goldenWindowDuration,
 // or if refinement fails for any reason (insufficient intervals, etc.).
 //
-// This addresses cases like Popey E72 where a 17.2s candidate at 24.0s absorbed
+// This addresses cases where a 17.2s candidate at 24.0s absorbed
 // both pre-intentional (noisier) and intentional (cleaner) silence periods.
 // By refining to the cleanest 10s window, we isolate the optimal noise profile.
 func refineToGoldenSubregion(candidate *SilenceRegion, intervals []IntervalSample) *SilenceRegion {
@@ -744,17 +744,6 @@ func estimateNoiseFloorAndThreshold(intervals []IntervalSample) (noiseFloor, sil
 	}
 
 	return maxRoomToneRMS, maxRoomToneRMS + silenceThresholdHeadroomDB, true
-}
-
-// calculateSilenceThresholdFromIntervals derives the silence threshold from interval data.
-// This is a convenience wrapper around estimateNoiseFloorAndThreshold for callers that only
-// need the threshold value.
-func calculateSilenceThresholdFromIntervals(intervals []IntervalSample, fallbackThreshold float64) float64 {
-	_, threshold, ok := estimateNoiseFloorAndThreshold(intervals)
-	if !ok {
-		return fallbackThreshold
-	}
-	return threshold
 }
 
 // findSilenceCandidatesFromIntervals identifies silence regions from interval samples.
@@ -2233,7 +2222,6 @@ const (
 	minimumSilenceDuration = 8 * time.Second  // Minimum 8s (up from 2s) to avoid inter-word gaps
 	idealDurationMin       = 8 * time.Second  // Ideal range lower bound
 	idealDurationMax       = 18 * time.Second // Ideal range upper bound
-	maxSilenceDuration     = 30 * time.Second // Penalise regions longer than this
 
 	// Long region segmentation: break up long silence regions to find cleanest subsection
 	// Intentional room tone may be embedded within a longer quiet period (e.g., quiet lead-up + room tone)
