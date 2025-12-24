@@ -13,8 +13,7 @@ internal/
 ├── processor/
 │   ├── analyzer.go         # Pass 1: ebur128 + astats + aspectralstats analysis
 │   ├── processor.go        # Pass 2: adaptive filter chain execution
-│   ├── filters.go          # FilterChainConfig, BuildFilterSpec(), defaults
-│   └── models/cb.rnnn      # Embedded RNN model for arnndn noise reduction
+│   └── filters.go          # FilterChainConfig, BuildFilterSpec(), defaults
 ├── ui/                     # Bubbletea model, views, messages
 └── cli/                    # Help styling, version output
 ```
@@ -57,10 +56,10 @@ Key patterns from ffmpeg-statigo:
 
 **Filter chain order (Pass 2):**
 ```
-highpass → dns1500/dolbysr → arnndn → agate → adeclick → acompressor → deesser
+highpass → noiseremove → gate → adeclick → acompressor → deesser
 ```
 
-Each filter prepares audio for the next. Rumble removal before noise profiling. Denoising before gating. Compression before de-essing (compression emphasises sibilance).
+Each filter prepares audio for the next. Rumble removal before noise reduction. Denoising before gating. Compression before de-essing (compression emphasises sibilance).
 
 **Normalisation (Pass 3/4):**
 ```
@@ -74,7 +73,7 @@ The limiter creates headroom so loudnorm can apply full linear gain to reach -18
 Filter parameters adapt based on Pass 1 measurements. See `adaptive.go`:
 
 - **Highpass frequency:** 60-120Hz based on spectral centroid and LUFS gap
-- **Dolby SR Single:** Adaptive afftdn (2-6dB) for subtle noise reduction
+- **NoiseRemove compand:** Threshold and expansion derived from measured noise floor
 - **De-esser intensity:** 0.0-0.6 based on spectral centroid + rolloff
 - **Gate threshold:** Derived from measured noise floor
 

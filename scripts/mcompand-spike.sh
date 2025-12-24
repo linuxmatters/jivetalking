@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
-# mcompand-spike.sh - Systematic expansion sweep for DolbySR refactoring
+# mcompand-spike.sh - Compand tuning for post-anlmdn residual suppression
+#
+# Tests gentler compand settings appropriate for use AFTER anlmdn has done
+# the heavy noise reduction. Compand's role is now:
+# - Residual noise suppression in silence regions
+# - Breath noise attenuation between speech
+# - NOT primary noise reduction (anlmdn does that)
 #
 # Compares two approaches across three presenters:
 # 1. compand     - Single-band baseline (control)
 # 2. mcompand    - FFmpeg's multiband with voice-protective scaling
 #
-# CRITICAL FINDING (2025-12-09): FLAT reduction curve produces zero room noise!
-# Original spike with mcompand and FLAT 16dB reduction completely eliminates
-# room noise with ZERO audible artifacts.
+# UPDATED 2024-12-24: Reduced expansion levels (4/6/8 dB) and lower thresholds
+# for post-anlmdn tuning. Original aggressive settings (8/12/16 dB, -40/-45/-50 dB)
+# were for compand-only noise reduction.
 
 #
 # Usage: ./scripts/mcompand-spike.sh [--level] [duration_seconds]
@@ -20,7 +26,7 @@ set -euo pipefail
 TESTDATA_DIR="testdata"
 OUTPUT_DIR="testdata/mcompand-sweep"
 PRESENTERS=("mark" "martin" "popey")
-EXPANSION_LEVELS=(16 20 24)
+EXPANSION_LEVELS=(4 6 8)
 LEVEL_OUTPUT=false
 DURATION=300
 
@@ -181,39 +187,35 @@ build_mcompand_filter() {
 # Uses conservative settings to avoid colouring the audio.
 #
 # acompressor: Gentle 2:1 ratio, high threshold (-24dB), slow attack/release
-# speechnorm: Low expansion (1.5x max), conservative peak target (0.7)
 build_level_chain() {
     # Gentle compressor: only catch peaks, don't squash dynamics
     # threshold=0.0625 = -24dB, ratio=2, attack=50ms, release=200ms
     local comp="acompressor=threshold=0.0625:ratio=2:attack=50:release=200:makeup=3.0:knee=4"
 
-    # Conservative speechnorm: gentle expansion, low peak target
-    # expansion=1.5 (max 1.5x boost), peak=0.7 (-3dB), raise=0.0005 (slow ramp)
-    local norm="speechnorm=peak=0.7:expansion=1.5:compression=1.2:threshold=0.1:raise=0.0005"
-
-    echo ",${comp},${norm}"
+    echo ",${comp}"
 }
 
 # Calculate adaptive threshold based on RMS trough (noise floor indicator)
-# Returns: threshold in dB (-50 to -45 range)
+# Returns: threshold in dB (-60 to -50 range)
 #
-# Strategy:
-#   - Clean sources (trough < -85 dB): use default -50 dB threshold
-#   - Moderate noise (-85 to -80 dB): raise to -47 dB
-#   - Noisy sources (trough > -80 dB): raise to -45 dB to catch more noise
+# POST-ANLMDN STRATEGY (gentler than original):
+#   - Clean sources (trough < -85 dB): use -60 dB threshold (catches breaths)
+#   - Moderate noise (-85 to -80 dB): use -55 dB threshold
+#   - Noisy sources (trough > -80 dB): use -50 dB threshold
 #
-# This shifts the expansion curve up for noisy sources, causing more of the
-# noise floor to be expanded (pushed down) without changing band scaling.
+# These are LOWER than original (-50/-45/-40) because anlmdn already pushed
+# the noise floor down significantly. Compand now targets residual noise
+# and breath sounds, not primary room noise.
 calculate_adaptive_threshold() {
     local trough="$1"
 
     awk -v t="$trough" 'BEGIN {
         if (t < -85) {
-            print -50  # Clean: default threshold
+            print -60  # Clean: low threshold for breath taming
         } else if (t < -80) {
-            print -45  # Moderate: slightly raised
+            print -55  # Moderate: slightly raised
         } else {
-            print -40  # Noisy: raised to catch more noise
+            print -50  # Noisy: catch residual noise
         }
     }'
 }
@@ -260,7 +262,7 @@ format_delta() {
 
 main() {
     echo "╔══════════════════════════════════════════════════════════════════╗"
-    echo "║           mcompand Expansion Sweep - DolbySR Refactoring         ║"
+    echo "║              mcompand Expansion Sweep - Post-anlmdn              ║"
     echo "╚══════════════════════════════════════════════════════════════════╝"
     echo ""
     if [[ "$LEVEL_OUTPUT" == "true" ]]; then
@@ -283,7 +285,7 @@ main() {
     echo ""
 
     for presenter in "${PRESENTERS[@]}"; do
-        local src_file="${TESTDATA_DIR}/LMP-69-${presenter}.flac"
+        local src_file="${TESTDATA_DIR}/LMP-72-${presenter}.flac"
 
         if [[ ! -f "$src_file" ]]; then
             log_error "Source file not found: $src_file"
@@ -311,25 +313,25 @@ main() {
     echo ""
 
     for presenter in "${PRESENTERS[@]}"; do
-        local src_file="${TESTDATA_DIR}/LMP-69-${presenter}.flac"
+        local src_file="${TESTDATA_DIR}/LMP-72-${presenter}.flac"
 
         if [[ ! -f "$src_file" ]]; then
             continue
         fi
 
-        log_info "${presenter} (single-band compand, threshold -50 dB)"
+        log_info "${presenter} (single-band compand, threshold -55 dB)"
 
         for exp in "${EXPANSION_LEVELS[@]}"; do
-            local out_file="${OUTPUT_DIR}/LMP-69-${presenter}-compand-exp${exp}dB.flac"
+            local out_file="${OUTPUT_DIR}/LMP-72-${presenter}-compand-exp${exp}dB.flac"
 
-            # Build FLAT reduction curve with -50 dB threshold (matching working spike)
+            # Build FLAT reduction curve with -55 dB threshold (post-anlmdn tuning)
             # Every point below threshold gets the SAME reduction amount
-            # Points: -90, -75, -50 (threshold), -30, 0
+            # Points: -90, -75, -55 (threshold), -30, 0
             local out90 out75
             out90=$(awk -v e="$exp" 'BEGIN {printf "%.0f", -90 - e}')        # FLAT reduction at -90
             out75=$(awk -v e="$exp" 'BEGIN {printf "%.0f", -75 - e}')        # FLAT reduction at -75
 
-            local filter="aformat=channel_layouts=mono,compand=attacks=0.005:decays=0.1:soft-knee=6:points=-90/${out90}|-75/${out75}|-50/-50|-30/-30|0/0"
+            local filter="aformat=channel_layouts=mono,compand=attacks=0.005:decays=0.1:soft-knee=6:points=-90/${out90}|-75/${out75}|-55/-55|-30/-30|0/0"
 
             # Add levelling chain if requested
             if [[ "$LEVEL_OUTPUT" == "true" ]]; then
@@ -353,22 +355,22 @@ main() {
     # ========================================================================
     # Generate voice-protective mcompand samples (fixed threshold)
     # ========================================================================
-    log_info "Phase 2.2: Generating voice-protective mcompand samples (fixed -50dB threshold)..."
+    log_info "Phase 2.2: Generating voice-protective mcompand samples (fixed -55dB threshold)..."
     echo ""
 
     for presenter in "${PRESENTERS[@]}"; do
-        local src_file="${TESTDATA_DIR}/LMP-69-${presenter}.flac"
+        local src_file="${TESTDATA_DIR}/LMP-72-${presenter}.flac"
 
         if [[ ! -f "$src_file" ]]; then
             continue
         fi
 
-        log_info "${presenter} (6-band mcompand, voice-protective scaling, threshold -50dB)"
+        log_info "${presenter} (6-band mcompand, voice-protective scaling, threshold -55dB)"
 
         for exp in "${EXPANSION_LEVELS[@]}"; do
-            local out_file="${OUTPUT_DIR}/LMP-69-${presenter}-mcompand-exp${exp}dB.flac"
+            local out_file="${OUTPUT_DIR}/LMP-72-${presenter}-mcompand-exp${exp}dB.flac"
             local filter
-            filter=$(build_mcompand_filter "$exp" "-50")
+            filter=$(build_mcompand_filter "$exp" "-55")
             # Add mono format prefix
             filter="aformat=channel_layouts=mono,${filter}"
 
@@ -398,7 +400,7 @@ main() {
     echo ""
 
     for presenter in "${PRESENTERS[@]}"; do
-        local src_file="${TESTDATA_DIR}/LMP-69-${presenter}.flac"
+        local src_file="${TESTDATA_DIR}/LMP-72-${presenter}.flac"
 
         if [[ ! -f "$src_file" ]]; then
             continue
@@ -413,7 +415,7 @@ main() {
         log_info "${presenter} (6-band mcompand, ${scaling_desc} scaling, threshold ${adaptive_threshold}dB based on trough ${trough}dB)"
 
         for exp in "${EXPANSION_LEVELS[@]}"; do
-            local out_file="${OUTPUT_DIR}/LMP-69-${presenter}-mcompand-adaptive-exp${exp}dB.flac"
+            local out_file="${OUTPUT_DIR}/LMP-72-${presenter}-mcompand-adaptive-exp${exp}dB.flac"
             local filter
             filter=$(build_mcompand_filter "$exp" "$adaptive_threshold")
             # Add mono format prefix
@@ -447,7 +449,7 @@ main() {
         local presenter="$1"
         local exp="$2"
         local filter_type="$3"  # "compand", "mcompand", "mcompand-adaptive"
-        local out_file="${OUTPUT_DIR}/LMP-69-${presenter}-${filter_type}-exp${exp}dB.flac"
+        local out_file="${OUTPUT_DIR}/LMP-72-${presenter}-${filter_type}-exp${exp}dB.flac"
 
         if [[ ! -f "$out_file" ]]; then
             printf "%-12s %4d │ %8s %9s %9s %9s %8s │ %s\n" \

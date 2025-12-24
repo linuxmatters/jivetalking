@@ -486,14 +486,10 @@ func formatFilter(f *os.File, filterID processor.FilterID, cfg *processor.Filter
 		formatDS201HighpassFilter(f, cfg, m, prefix)
 	case processor.FilterDS201LowPass:
 		formatDS201LowPassFilter(f, cfg, m, prefix)
+	case processor.FilterNoiseRemove:
+		formatNoiseRemoveFilter(f, cfg, m, prefix)
 	case processor.FilterDC1Declick:
 		formatDC1DeclickFilter(f, cfg, prefix)
-	case processor.FilterDNS1500:
-		formatDNS1500Filter(f, cfg, m, prefix)
-	case processor.FilterDolbySR:
-		formatDolbySRFilter(f, cfg, m, prefix)
-	case processor.FilterArnndn:
-		formatArnndnFilter(f, cfg, m, prefix)
 	case processor.FilterDS201Gate:
 		formatDS201GateFilter(f, cfg, m, prefix)
 	case processor.FilterLA2ACompressor:
@@ -568,78 +564,6 @@ func formatDS201HighpassFilter(f *os.File, cfg *processor.FilterChainConfig, m *
 		if cfg.DS201HPPoles == 1 {
 			fmt.Fprintf(f, "        Slope: 6dB/oct (gentle rolloff — preserving warmth)\n")
 		}
-
-		// Show noise character if tonal (explains why no boost)
-		if m.NoiseProfile != nil && m.NoiseProfile.Entropy < 0.5 {
-			fmt.Fprintf(f, "        Note: no LF boost (tonal noise, entropy %.3f — DS201 hum filter handles it)\n", m.NoiseProfile.Entropy)
-		}
-	}
-
-	// DS201HighPass is composite: also show hum notch filter details if harmonics > 0
-	if cfg.DS201HumHarmonics > 0 {
-		formatDS201HumFilterInternal(f, cfg, m, prefix)
-	}
-}
-
-// formatDS201HumFilterInternal outputs DS201-inspired hum notch filter details (called from DS201HighPass composite)
-func formatDS201HumFilterInternal(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
-	// Note: enabled check is done by caller (formatDS201HighpassFilter)
-
-	// Build the header with width and transform info
-	transformInfo := ""
-	if cfg.DS201HumTransform == "tdii" {
-		transformInfo = ", tdii"
-	} else if cfg.DS201HumTransform != "" {
-		transformInfo = ", " + cfg.DS201HumTransform
-	}
-	fmt.Fprintf(f, "%sDS201 hum filter: %.0f Hz + %d harmonics (%.1f Hz wide%s)\n",
-		prefix, cfg.DS201HumFrequency, cfg.DS201HumHarmonics, cfg.DS201HumWidth, transformInfo)
-
-	if m != nil && m.NoiseProfile != nil {
-		fmt.Fprintf(f, "        Rationale: tonal noise detected (entropy %.3f < 0.7)\n", m.NoiseProfile.Entropy)
-
-		// Explain reduced harmonics for warm voices
-		if cfg.DS201HumHarmonics <= 2 {
-			isWarmSkewness := m.SpectralSkewness > 1.0
-			isWarmDecrease := m.SpectralDecrease < -0.02
-			if isWarmSkewness || isWarmDecrease {
-				reason := ""
-				if isWarmSkewness && isWarmDecrease {
-					reason = fmt.Sprintf("skewness %.2f, decrease %.3f", m.SpectralSkewness, m.SpectralDecrease)
-				} else if isWarmSkewness {
-					reason = fmt.Sprintf("skewness %.2f", m.SpectralSkewness)
-				} else {
-					reason = fmt.Sprintf("decrease %.3f", m.SpectralDecrease)
-				}
-				fmt.Fprintf(f, "        Harmonics: reduced to %d (warm voice: %s — protecting vocal fundamentals)\n",
-					cfg.DS201HumHarmonics, reason)
-			}
-		}
-
-		// Explain notch width choice (always show for completeness)
-		if cfg.DS201HumWidth <= 0.3 {
-			fmt.Fprintf(f, "        Width: %.1f Hz (very narrow — warm voice protection)\n", cfg.DS201HumWidth)
-		} else if cfg.DS201HumWidth < 1.0 {
-			fmt.Fprintf(f, "        Width: %.1f Hz (narrow surgical notch — very tonal hum)\n", cfg.DS201HumWidth)
-		} else {
-			fmt.Fprintf(f, "        Width: %.1f Hz (standard surgical notch)\n", cfg.DS201HumWidth)
-		}
-
-		// Explain transform type
-		if cfg.DS201HumTransform == "tdii" {
-			fmt.Fprintf(f, "        Transform: TDII (transposed direct form II — best floating-point accuracy)\n")
-		} else if cfg.DS201HumTransform != "" && cfg.DS201HumTransform != "di" {
-			fmt.Fprintf(f, "        Transform: %s\n", cfg.DS201HumTransform)
-		}
-
-		// Explain mix if not full wet
-		if cfg.DS201HumMix > 0 && cfg.DS201HumMix < 1.0 {
-			mixReason := "warm voice"
-			if cfg.DS201HumMix <= 0.7 {
-				mixReason = "very warm voice"
-			}
-			fmt.Fprintf(f, "        Mix: %.0f%% (%s — blending filtered with dry signal)\n", cfg.DS201HumMix*100, mixReason)
-		}
 	}
 }
 
@@ -708,6 +632,41 @@ func formatDS201LowPassFilter(f *os.File, cfg *processor.FilterChainConfig, m *p
 	}
 }
 
+// formatNoiseRemoveFilter outputs NoiseRemove (anlmdn + compand) filter details
+// Uses Non-Local Means denoiser followed by compand for residual suppression
+func formatNoiseRemoveFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
+	if !cfg.NoiseRemoveEnabled {
+		fmt.Fprintf(f, "%snoiseremove: DISABLED\n", prefix)
+		return
+	}
+
+	// Header: filter name and algorithm
+	fmt.Fprintf(f, "%snoiseremove: anlmdn + compand (Non-Local Means denoiser)\n", prefix)
+
+	// anlmdn parameters (fixed from spike validation)
+	fmt.Fprintf(f, "        anlmdn: s=%.5f, p=%.4fs, r=%.4fs, m=%.0f\n",
+		cfg.NoiseRemoveStrength,
+		cfg.NoiseRemovePatchSec,
+		cfg.NoiseRemoveResearchSec,
+		cfg.NoiseRemoveSmooth)
+
+	// compand parameters (adaptive)
+	fmt.Fprintf(f, "        compand: threshold %.0f dB, expansion %.0f dB\n",
+		cfg.NoiseRemoveCompandThreshold,
+		cfg.NoiseRemoveCompandExpansion)
+	fmt.Fprintf(f, "        timing: attack %.0fms, decay %.0fms, knee %.0f dB\n",
+		cfg.NoiseRemoveCompandAttack*1000,
+		cfg.NoiseRemoveCompandDecay*1000,
+		cfg.NoiseRemoveCompandKnee)
+
+	// Show adaptive rationale if noise profile available
+	if m != nil && m.NoiseProfile != nil && m.NoiseProfile.Duration > 0 {
+		fmt.Fprintf(f, "        Rationale: noise floor %.1f dB → target -90 dB (%.0f dB expansion)\n",
+			m.NoiseProfile.MeasuredNoiseFloor,
+			cfg.NoiseRemoveCompandExpansion)
+	}
+}
+
 // formatDC1DeclickFilter outputs CEDAR DC-1-inspired declicker filter details
 func formatDC1DeclickFilter(f *os.File, cfg *processor.FilterChainConfig, prefix string) {
 	if !cfg.DC1DeclickEnabled {
@@ -729,184 +688,6 @@ func formatDC1DeclickFilter(f *os.File, cfg *processor.FilterChainConfig, prefix
 	fmt.Fprintf(f, "        Method: %s\n", method)
 	if cfg.DC1DeclickReason != "" {
 		fmt.Fprintf(f, "        Reason: %s\n", cfg.DC1DeclickReason)
-	}
-}
-
-// formatDNS1500Filter outputs CEDAR DNS-1500-inspired noise reduction filter details
-// Uses afftdn with inline noise learning via asendcmd during detected silence
-func formatDNS1500Filter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
-	if !cfg.DNS1500Enabled {
-		if cfg.DolbySREnabled {
-			fmt.Fprintf(f, "%sDNS-1500: DISABLED (DolbySR forced on)\n", prefix)
-		} else {
-			fmt.Fprintf(f, "%sDNS-1500: DISABLED (no silence detected, using DolbySR fallback)\n", prefix)
-		}
-		return
-	}
-
-	// Header with key parameters
-	fmt.Fprintf(f, "%sDNS-1500: Noise Reduction (inline noise learning)\n", prefix)
-	fmt.Fprintf(f, "        Noise Reduction: %.1f dB\n", cfg.DNS1500NoiseReduce)
-	fmt.Fprintf(f, "        Noise Floor: %.1f dB\n", cfg.DNS1500NoiseFloor)
-	fmt.Fprintf(f, "        Track Noise: %v\n", cfg.DNS1500TrackNoise)
-	fmt.Fprintf(f, "        Adaptivity: %.2f\n", cfg.DNS1500Adaptivity)
-	fmt.Fprintf(f, "        Gain Smooth: %d\n", cfg.DNS1500GainSmooth)
-	fmt.Fprintf(f, "        Residual Floor: %.1f dB\n", cfg.DNS1500ResidFloor)
-	fmt.Fprintf(f, "        Silence Window: %.3fs – %.3fs\n", cfg.DNS1500SilenceStart, cfg.DNS1500SilenceEnd)
-
-	// Show compand (residual crusher) parameters
-	fmt.Fprintf(f, "        Compand: threshold %.0f dB, expansion %.0f dB\n",
-		cfg.DNS1500CompandThreshold, cfg.DNS1500CompandExpansion)
-	fmt.Fprintf(f, "          Timing: attack %.0fms, decay %.0fms, knee %.0f dB\n",
-		cfg.DNS1500CompandAttack*1000, cfg.DNS1500CompandDecay*1000, cfg.DNS1500CompandKnee)
-	fmt.Fprintf(f, "          Curve: FLAT (uniform expansion below threshold)\n")
-
-	// Show adaptive rationale
-	if m != nil && m.NoiseProfile != nil {
-		np := m.NoiseProfile
-
-		// Noise character description
-		var noiseChar string
-		switch {
-		case np.SpectralFlatness > 0.6:
-			noiseChar = "broadband (hiss)"
-		case np.SpectralFlatness > 0.4:
-			noiseChar = "mixed"
-		default:
-			noiseChar = "tonal (hum/bleed)"
-		}
-
-		// LRA-based adaptivity description
-		var adaptivityDesc string
-		switch {
-		case m.InputLRA < 6.0:
-			adaptivityDesc = "fast (uniform material)"
-		case m.InputLRA > 15.0:
-			adaptivityDesc = "slow (dynamic material)"
-		default:
-			adaptivityDesc = "moderate"
-		}
-
-		// Calculate effective floor for rationale display
-		effectiveFloor := np.MeasuredNoiseFloor - cfg.DNS1500NoiseReduce
-
-		fmt.Fprintf(f, "        Rationale: measured floor %.1f dBFS, %s noise → %.1f dB reduction\n",
-			np.MeasuredNoiseFloor, noiseChar, cfg.DNS1500NoiseReduce)
-		fmt.Fprintf(f, "        Adaptivity: LRA %.1f LU → %s adaptation\n", m.InputLRA, adaptivityDesc)
-		fmt.Fprintf(f, "        Compand: effective floor %.1f dBFS (post-afftdn) → %.0f dB expansion to -80 target\n",
-			effectiveFloor, cfg.DNS1500CompandExpansion)
-		fmt.Fprintf(f, "        DNS-1500 philosophy: learn noise from silence, track continuously\n")
-	}
-}
-
-// formatDolbySRFilter outputs Dolby SR-inspired denoise filter details
-// Uses 6-band mcompand multiband expander with FLAT reduction curve
-func formatDolbySRFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
-	if !cfg.DolbySREnabled {
-		fmt.Fprintf(f, "%sDolby SR: DISABLED\n", prefix)
-		return
-	}
-
-	// Header: filter name and expansion level
-	fmt.Fprintf(f, "%sDolby SR: Noise Reduction (6-band voice-protective expander)\n", prefix)
-	fmt.Fprintf(f, "        Expansion: %.0f dB (FLAT reduction curve)\n", cfg.DolbySRExpansionDB)
-	fmt.Fprintf(f, "        Threshold: %.0f dB\n", cfg.DolbySRThresholdDB)
-
-	// Show 6-band configuration
-	if len(cfg.DolbySRBands) == 6 {
-		fmt.Fprintf(f, "        Bands:\n")
-		bandNames := []string{"Sub-bass", "Chest", "Voice F1", "Voice F2", "Presence", "Air"}
-		for i, band := range cfg.DolbySRBands {
-			bandExp := cfg.DolbySRExpansionDB * band.ScalePercent / 100.0
-			fmt.Fprintf(f, "          %s (0-%d Hz): %.0fdB, %.0fms/%.0fms, knee %.0f\n",
-				bandNames[i], int(band.CrossoverHz), bandExp,
-				band.Attack*1000, band.Decay*1000, band.SoftKnee)
-		}
-	}
-
-	// Show adaptive rationale
-	if m != nil {
-		// Classify source based on RMS trough (aligned with lockstep threshold+expansion tiers)
-		// Tiers: < -85 dB (clean), -85 to -80 dB (moderate), > -80 dB (noisy)
-		var severityDesc string
-		switch {
-		case m.RMSTrough < -85:
-			severityDesc = "clean"
-		case m.RMSTrough < -80:
-			severityDesc = "moderate"
-		default:
-			severityDesc = "noisy"
-		}
-
-		// Lockstep rationale (threshold + expansion tuned together)
-		var thresholdRationale string
-		switch {
-		case m.RMSTrough < -85:
-			thresholdRationale = "gentle treatment"
-		case m.RMSTrough < -80:
-			thresholdRationale = "balanced treatment"
-		default:
-			thresholdRationale = "aggressive treatment"
-		}
-
-		fmt.Fprintf(f, "        Rationale: %s source (trough %.1f dBFS) → %.0f dB expansion, %.0f dB threshold (%s)\n",
-			severityDesc, m.RMSTrough, cfg.DolbySRExpansionDB, cfg.DolbySRThresholdDB, thresholdRationale)
-
-		// SR philosophy note
-		fmt.Fprintf(f, "        SR philosophy: 6-band voice-protective, FLAT curve (gate handles silence)\n")
-	}
-}
-
-// formatArnndnFilter outputs arnndn filter details
-func formatArnndnFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
-	if !cfg.ArnnDnEnabled {
-		fmt.Fprintf(f, "%sarnndn: DISABLED\n", prefix)
-		return
-	}
-
-	fmt.Fprintf(f, "%sarnndn: mix %.0f%%\n", prefix, cfg.ArnnDnMix*100)
-
-	// Show rationale with adjustments
-	if m != nil {
-		var adjustments []string
-
-		// Base mix explanation (matches thresholds in adaptive.go calculateArnnDnMix)
-		var baseMixDesc string
-		switch {
-		case m.NoiseFloor > -50:
-			baseMixDesc = "noisy"
-		case m.NoiseFloor > -65:
-			baseMixDesc = "moderate"
-		case m.NoiseFloor > -75:
-			baseMixDesc = "fairly clean"
-		default:
-			baseMixDesc = "very clean"
-		}
-
-		fmt.Fprintf(f, "        Base: %s (noise floor %.1f dBFS)\n", baseMixDesc, m.NoiseFloor)
-
-		// Adjustments applied
-		if m.SpectralKurtosis > 8 {
-			adjustments = append(adjustments, fmt.Sprintf("-10%% kurtosis %.1f", m.SpectralKurtosis))
-		}
-		// MaxDifference is in sample units (0-32768 for 16-bit); normalise to 0-1
-		maxDiffNorm := m.MaxDifference / 32768.0
-		if maxDiffNorm > 0.25 {
-			adjustments = append(adjustments, fmt.Sprintf("-10%% transients %.0f%%", maxDiffNorm*100))
-		}
-		if m.InputLRA > 15 {
-			adjustments = append(adjustments, fmt.Sprintf("-5%% LRA %.1f LU", m.InputLRA))
-		}
-		if m.SpectralFlatness > 0.5 {
-			adjustments = append(adjustments, fmt.Sprintf("+10%% flatness %.2f", m.SpectralFlatness))
-		}
-		if m.NoiseProfile != nil && m.NoiseProfile.Entropy > 0.5 {
-			adjustments = append(adjustments, fmt.Sprintf("+10%% entropy %.2f", m.NoiseProfile.Entropy))
-		}
-
-		if len(adjustments) > 0 {
-			fmt.Fprintf(f, "        Adjustments: %s\n", joinWithComma(adjustments))
-		}
 	}
 }
 

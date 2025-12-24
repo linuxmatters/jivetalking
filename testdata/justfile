@@ -176,6 +176,7 @@ spectrum-lf file:
 
 # Full analysis: measurements + spectrum images for a single file
 # Combined filter chain: analysis + full spectrum in one pass, then LF spectrum
+# Skips analysis if output files already exist
 [no-cd]
 analyse-full file:
     #!/usr/bin/env bash
@@ -183,6 +184,16 @@ analyse-full file:
     input="{{file}}"
     base="${input%.*}"
     name=$(basename "$base")
+
+    # Check if all output files exist
+    if [[ -f "${base}-analysis.txt" && -f "${base}-spectrum.png" && -f "${base}-spectrum-lf.png" ]]; then
+        echo "Analysis files already exist for: $name"
+        echo "  ${base}-analysis.txt"
+        echo "  ${base}-spectrum.png"
+        echo "  ${base}-spectrum-lf.png"
+        echo "Skipping analysis (delete files to regenerate)."
+        exit 0
+    fi
 
     echo "Full analysis: $name"
     echo "==========================================="
@@ -261,12 +272,12 @@ compare file:
         exit 1
     fi
 
-    echo "╔═══════════════════════════════════════════════════════════════╗"
+    echo "╔═══════════════════════════════════════════════════════════════"
     echo "║  Before/After Comparison: $name"
-    echo "╚═══════════════════════════════════════════════════════════════╝"
+    echo "╚═══════════════════════════════════════════════════════════════"
     echo ""
 
-    # Analyse original
+    # Analyse original (may skip if already exists)
     echo "▶ ORIGINAL: $input"
     echo "-------------------------------------------"
     just analyse-full "$input"
@@ -274,9 +285,11 @@ compare file:
     echo ""
     echo ""
 
-    # Analyse processed
+    # Analyse processed (always regenerate to check new processing results)
     echo "▶ PROCESSED: $processed"
     echo "-------------------------------------------"
+    # Remove existing processed analysis files to force regeneration
+    rm -f "${base}-processed-analysis.txt" "${base}-processed-spectrum.png" "${base}-processed-spectrum-lf.png"
     just analyse-full "$processed"
 
     echo ""

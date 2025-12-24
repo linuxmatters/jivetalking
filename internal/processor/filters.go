@@ -2,45 +2,12 @@
 package processor
 
 import (
-	_ "embed"
 	"fmt"
 	"math"
-	"os"
-	"path/filepath"
 	"strings"
-	"sync"
 
 	ffmpeg "github.com/linuxmatters/ffmpeg-statigo"
-	"github.com/linuxmatters/jivetalking/internal/mains"
 )
-
-//go:embed models/bd.rnnn
-var rnnModelBD []byte
-
-//go:embed models/cb.rnnn
-var rnnModelCB []byte
-
-//go:embed models/sh.rnnn
-var rnnModelSH []byte
-
-// RNNModel identifies which embedded RNN model to use for arnndn
-type RNNModel string
-
-const (
-	// RNNModelBD - Beguiling Drafter model (default)
-	// Voice in a reasonable recording environment. Fans, AC, computers, etc.
-	RNNModelBD RNNModel = "bd"
-	// RNNModelCB - Conjoined Burgers model
-	// General use in a reasonable recording environment. Fans, AC, computers, etc.
-	RNNModelCB RNNModel = "cb"
-	// RNNModelSH - Stationary Highpass model
-	// Speech in a reasonable recording environment. Fans, AC, computers, etc.
-	// Note that "speech" means speech, not other human sounds; laughter, coughing, etc are not included.
-	RNNModelSH RNNModel = "sh"
-)
-
-// DefaultRNNModel is the default model used for arnndn denoising
-const DefaultRNNModel = RNNModelBD
 
 // FilterID identifies a filter in the processing chain
 type FilterID string
@@ -59,18 +26,12 @@ const (
 	FilterDS201LowPass  FilterID = "ds201_lowpass"  // LP for ultrasonic rejection (adaptive)
 	FilterDS201Gate     FilterID = "ds201_gate"     // Soft expander inspired by DS201
 
-	// CEDAR DNS-1500-inspired noise reduction (Pass 2 only)
-	// Adaptive spectral denoising using learned noise profile from detected silence
-	FilterDNS1500 FilterID = "dns1500"
-
-	// Dolby SR-inspired noise reduction (Pass 2 only)
-	// 6-band multiband compander implementing SR philosophy: Least Treatment, transparency over depth
-	// Used as fallback when no silence region is detected for DNS-1500
-	FilterDolbySR FilterID = "dolbysr"
+	// NoiseRemove - anlmdn + compand noise reduction (Pass 2 only)
+	// Non-Local Means denoiser with a compand for residual suppression
+	FilterNoiseRemove FilterID = "noiseremove"
 
 	// Processing filters (Pass 2 only)
-	FilterDC1Declick     FilterID = "dc1_declick" // CEDAR DC-1 inspired declicker
-	FilterArnndn         FilterID = "arnndn"
+	FilterDC1Declick     FilterID = "dc1_declick"     // CEDAR DC-1 inspired declicker
 	FilterLA2ACompressor FilterID = "la2a_compressor" // Teletronix LA-2A style optical compressor
 	FilterDeesser        FilterID = "deesser"
 	FilterUREI1176       FilterID = "urei1176_limiter" // UREI 1176-inspired safety limiter
@@ -88,11 +49,9 @@ var Pass1FilterOrder = []FilterID{
 // Pass2FilterOrder defines the filter chain for processing pass.
 // Order rationale:
 // - Downmix first: ensures all downstream filters work with mono
-// - DS201HighPass: removes subsonic rumble before other filters (DS201-inspired side-chain)
+// - DS201HighPass: removes subsonic rumble before other filters
 // - DS201LowPass: removes ultrasonic content that could trigger false gates (adaptive)
-// - DNS1500: primary noise reduction using learned noise profile (requires detected silence)
-// - DolbySR: fallback noise reduction when no silence detected (profile-free expansion)
-// - Arnndn: AI-based denoising for complex/dynamic noise patterns
+// - NoiseRemove: primary noise reduction using anlmdn + compand
 // - DS201Gate: soft expander for inter-speech cleanup (after denoising lowers floor)
 // - DC1Declick: CEDAR DC-1 inspired declicker - removes clicks/pops
 // - LA2ACompressor: LA-2A style optical compression evens dynamics before normalisation
@@ -103,42 +62,14 @@ var Pass2FilterOrder = []FilterID{
 	FilterDownmix,
 	FilterDS201HighPass,
 	FilterDS201LowPass,
-	FilterDNS1500,
-	FilterDolbySR,
-	FilterArnndn,
+	FilterNoiseRemove,
 	FilterDS201Gate,
 	FilterDC1Declick,
 	FilterLA2ACompressor,
 	FilterDeesser,
-	// FilterUREI1176 moved to Pass 3 for peak protection after gain normalisation
 	FilterAnalysis,
 	FilterResample,
 }
-
-// =============================================================================
-// Dolby SR mcompand Configuration
-// =============================================================================
-
-// DolbySRBandConfig defines per-band parameters for the 6-band mcompand expander.
-// This implements the Dolby SR-inspired voice-protective multiband noise reduction.
-type DolbySRBandConfig struct {
-	CrossoverHz  float64 // Upper frequency boundary for this band
-	Attack       float64 // Attack time in seconds
-	Decay        float64 // Decay time in seconds
-	SoftKnee     float64 // Soft knee radius in dB
-	ScalePercent float64 // Expansion scaling (100 = base, 105 = +5% more expansion)
-}
-
-// Dolby SR mcompand constants (validated across 3 presenters, 27 test cases)
-const (
-	// DolbySRDefaultExpansionDB is the default expansion depth.
-	// 16 dB provides good noise reduction for clean sources while preserving voice quality.
-	DolbySRDefaultExpansionDB = 16.0
-
-	// DolbySRDefaultThresholdDB is the default expansion threshold.
-	// -50 dB is the baseline for clean sources; adapted to -45/-40 for noisier sources.
-	DolbySRDefaultThresholdDB = -50.0
-)
 
 // =============================================================================
 // Normalisation Constants (Pass 3)
@@ -154,25 +85,6 @@ const (
 	NormToleranceLU = 0.5
 )
 
-// defaultDolbySRBands returns the validated 6-band voice-protective configuration.
-// Voice bands (F1/F2) get slightly more expansion to counteract multiband spectral darkening.
-// Air band gets slightly less to prevent over-brightness on some voices.
-func defaultDolbySRBands() []DolbySRBandConfig {
-	return []DolbySRBandConfig{
-		{CrossoverHz: 100, Attack: 0.006, Decay: 0.095, SoftKnee: 6, ScalePercent: 100},   // Sub-bass
-		{CrossoverHz: 300, Attack: 0.005, Decay: 0.100, SoftKnee: 8, ScalePercent: 100},   // Chest
-		{CrossoverHz: 800, Attack: 0.005, Decay: 0.100, SoftKnee: 10, ScalePercent: 105},  // Voice F1
-		{CrossoverHz: 3300, Attack: 0.005, Decay: 0.100, SoftKnee: 12, ScalePercent: 103}, // Voice F2 (critical band - maximum smoothness)
-		{CrossoverHz: 8000, Attack: 0.002, Decay: 0.085, SoftKnee: 10, ScalePercent: 100}, // Presence
-		{CrossoverHz: 20500, Attack: 0.002, Decay: 0.080, SoftKnee: 6, ScalePercent: 95},  // Air
-	}
-}
-
-var (
-	cachedModelPaths = make(map[RNNModel]string)
-	modelCacheMutex  sync.Mutex
-)
-
 // filterBuilderFunc is a function that builds a filter spec from config.
 // Returns the FFmpeg filter specification string, or empty string if disabled.
 type filterBuilderFunc func(*FilterChainConfig) string
@@ -185,74 +97,12 @@ var filterBuilders = map[FilterID]filterBuilderFunc{
 	FilterResample:       (*FilterChainConfig).buildResampleFilter,
 	FilterDS201HighPass:  (*FilterChainConfig).buildDS201HighpassFilter,
 	FilterDS201LowPass:   (*FilterChainConfig).buildDS201LowPassFilter,
-	FilterArnndn:         (*FilterChainConfig).buildArnnDnFilter,
-	FilterDNS1500:        (*FilterChainConfig).buildDNS1500Filter,
-	FilterDolbySR:        (*FilterChainConfig).buildDolbySRFilter,
+	FilterNoiseRemove:    (*FilterChainConfig).buildNoiseRemoveFilter,
 	FilterDS201Gate:      (*FilterChainConfig).buildDS201GateFilter,
 	FilterDC1Declick:     (*FilterChainConfig).buildDC1DeclickFilter,
 	FilterLA2ACompressor: (*FilterChainConfig).buildLA2ACompressorFilter,
 	FilterDeesser:        (*FilterChainConfig).buildDeesserFilter,
 	FilterUREI1176:       (*FilterChainConfig).buildUREI1176Filter,
-}
-
-// getRNNModelPath returns the path to the cached RNN model file for the specified model.
-// On first call for each model, it extracts the embedded model to ~/.cache/jivetalking/<model>.rnnn
-// Subsequent calls return the cached path. Thread-safe.
-func getRNNModelPath(model RNNModel) (string, error) {
-	modelCacheMutex.Lock()
-	defer modelCacheMutex.Unlock()
-
-	// Return cached path if already extracted
-	if path, ok := cachedModelPaths[model]; ok {
-		return path, nil
-	}
-
-	// Get model data based on selection
-	var modelData []byte
-	var modelFilename string
-	switch model {
-	case RNNModelBD:
-		modelData = rnnModelBD
-		modelFilename = "bd.rnnn"
-	case RNNModelCB:
-		modelData = rnnModelCB
-		modelFilename = "cb.rnnn"
-	case RNNModelSH:
-		modelData = rnnModelSH
-		modelFilename = "sh.rnnn"
-	default:
-		return "", fmt.Errorf("unknown RNN model: %s", model)
-	}
-
-	// Get user cache directory (works on Linux and macOS)
-	cacheDir, err := os.UserCacheDir()
-	if err != nil {
-		return "", fmt.Errorf("failed to get user cache directory: %w", err)
-	}
-
-	// Create jivetalking cache directory
-	jiveCacheDir := filepath.Join(cacheDir, "jivetalking")
-	if err := os.MkdirAll(jiveCacheDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create cache directory: %w", err)
-	}
-
-	// Model file path
-	modelPath := filepath.Join(jiveCacheDir, modelFilename)
-
-	// Check if model already exists
-	if _, err := os.Stat(modelPath); err == nil {
-		// Model already cached
-		cachedModelPaths[model] = modelPath
-		return modelPath, nil
-	}
-
-	// Write embedded model to cache
-	if err := os.WriteFile(modelPath, modelData, 0644); err != nil {
-		return "", fmt.Errorf("failed to write model file: %w", err)
-	}
-
-	cachedModelPaths[model] = modelPath
-	return modelPath, nil
 }
 
 // FilterChainConfig holds configuration for the audio processing filter chain
@@ -285,15 +135,6 @@ type FilterChainConfig struct {
 	DS201HPMix       float64 // Wet/dry mix (0-1, 1=full filter, 0.7=subtle for warm voices)
 	DS201HPTransform string  // Filter transform: "tdii" (best accuracy), "zdf", etc.
 
-	// DS201-Inspired Hum Filter (bandreject) - removes 50/60Hz hum and harmonics
-	// Part of the DS201HighPass composite: removes tonal interference before gate detection
-	// Tuned conditionally when Pass 1 entropy indicates tonal noise (set DS201HumHarmonics=0 to disable)
-	DS201HumFrequency float64 // Fundamental frequency (50Hz UK/EU, 60Hz US)
-	DS201HumHarmonics int     // Number of harmonics to filter (1-4, default 4)
-	DS201HumWidth     float64 // Notch width in Hz (e.g., 0.5 = 0.5Hz wide notch at each harmonic)
-	DS201HumTransform string  // Filter transform type: "tdii" (transposed direct form II, best floating-point accuracy)
-	DS201HumMix       float64 // Wet/dry mix (0-1, 1=full filter, 0.9=subtle)
-
 	// DS201-Inspired Low-Pass Filter (lowpass) - removes ultrasonic noise
 	// Part of the DS201 side-chain composite: prevents HF noise from triggering gate
 	// Enabled adaptively based on content type and HF noise indicators
@@ -318,34 +159,19 @@ type FilterChainConfig struct {
 	DC1DeclickMethod    string  // 'a' = overlap-add, 's' = overlap-save
 	DC1DeclickReason    string  // Why enabled/disabled (for logging)
 
-	// DNS-1500 Noise Reduction (afftdn with inline sampling)
-	// CEDAR DNS-1500-inspired adaptive spectral denoising using learned noise profile
-	DNS1500Enabled      bool    // Enable when silence detected (primary NR filter)
-	DNS1500NoiseReduce  float64 // nr: 0.01–97 dB noise reduction amount
-	DNS1500NoiseFloor   float64 // nf: -80 to -20 dB noise floor level
-	DNS1500TrackNoise   bool    // tn: Enable continuous noise tracking after learning
-	DNS1500Adaptivity   float64 // ad: 0–1, how fast gains adapt (higher = slower)
-	DNS1500GainSmooth   int     // gs: 0–50, spatial smoothing across frequency bins
-	DNS1500ResidFloor   float64 // rf: -80 to -20 dB residual floor level
-	DNS1500SilenceStart float64 // Timestamp (seconds) to start noise sampling
-	DNS1500SilenceEnd   float64 // Timestamp (seconds) to stop noise sampling
-
-	// DNS-1500 Compand - single-band soft expander for residual noise suppression
-	// Applied after afftdn to crush residual noise using FLAT reduction curve
-	// Parameters derived from Pass 1 measurements (NoiseProfile)
-	DNS1500CompandThreshold float64 // Expansion threshold (dB) - set to input noise floor (trough)
-	DNS1500CompandExpansion float64 // Expansion depth (dB) - gap between input floor and target floor
-	DNS1500CompandAttack    float64 // Attack time (seconds) - fixed at 5ms for speech
-	DNS1500CompandDecay     float64 // Decay time (seconds) - fixed at 100ms for speech
-	DNS1500CompandKnee      float64 // Soft knee (dB) - fixed at 6dB for transparency
-
-	// Dolby SR Denoise - 6-band multiband compander inspired by "Least Treatment" philosophy
-	// Uses mcompand with FLAT reduction curve for artifact-free noise elimination
-	// Used as fallback when DNS-1500 cannot be enabled (no silence detected)
-	DolbySREnabled     bool                // Enable Dolby SR filter (fallback when DNS-1500 disabled)
-	DolbySRExpansionDB float64             // Base expansion depth (12-16 dB, default: 13)
-	DolbySRThresholdDB float64             // Expansion threshold (-50 to -45 dB, adaptive based on trough)
-	DolbySRBands       []DolbySRBandConfig // 6-band voice-protective configuration
+	// NoiseRemove - anlmdn + compand noise reduction
+	// Non-Local Means denoiser (anlmdn) with a compand for residual suppression
+	// Validated fast-compand config: -13 to -20 dB silence reduction, 20-24x realtime, ±1-2% spectral preservation
+	NoiseRemoveEnabled          bool    // Enable anlmdn+compand noise reduction
+	NoiseRemoveStrength         float64 // anlmdn strength (0.00001 = minimum, kept constant)
+	NoiseRemovePatchSec         float64 // Patch size in seconds (context window for similarity)
+	NoiseRemoveResearchSec      float64 // Research radius in seconds (search window for matching)
+	NoiseRemoveSmooth           float64 // Smoothing factor for weights (1-1000)
+	NoiseRemoveCompandThreshold float64 // Expansion threshold (dB) - set to measured noise floor
+	NoiseRemoveCompandExpansion float64 // Expansion depth (dB) - gap between input floor and target floor
+	NoiseRemoveCompandAttack    float64 // Attack time (seconds) - fixed at 5ms for speech
+	NoiseRemoveCompandDecay     float64 // Decay time (seconds) - fixed at 100ms for speech
+	NoiseRemoveCompandKnee      float64 // Soft knee (dB) - fixed at 6dB for transparency
 
 	// DS201-Inspired Gate (agate) - Drawmer DS201 style soft expander
 	// Uses gentle ratio (2:1-4:1) rather than DS201's hard gate for natural speech transitions.
@@ -382,12 +208,6 @@ type FilterChainConfig struct {
 	TargetI   float64 // LUFS target reference (podcast standard: -18)
 	TargetTP  float64 // dBTP, true peak ceiling reference
 	TargetLRA float64 // LU, loudness range reference
-
-	// RNN Denoise (arnndn) - neural network noise reduction
-	// Positioned after afftdn to handle complex/dynamic noise that spectral subtraction misses
-	ArnnDnEnabled bool     // Enable RNN denoise
-	ArnnDnModel   RNNModel // Which RNN model to use (bd, cb, sh)
-	ArnnDnMix     float64  // Mix amount -1.0 to 1.0 (1.0 = full filtering, negative = keep noise)
 
 	// UREI 1176-Inspired Limiter - final brick-wall safety net
 	// Attack/release adapt based on transient and dynamics measurements
@@ -450,14 +270,6 @@ func DefaultFilterConfig() *FilterChainConfig {
 		DS201HPMix:       1.0,    // Full wet signal (reduce for warm voice protection)
 		DS201HPTransform: "tdii", // Transposed Direct Form II - best floating-point accuracy
 
-		// DS201-Inspired Hum Notch Filter - removes 50/60Hz hum and harmonics (part of DS201HighPass composite)
-		// Tuned by tuneDS201HumFilter; set DS201HumHarmonics=0 to disable hum notches
-		DS201HumFrequency: float64(mains.Frequency()), // Auto-detect 50Hz or 60Hz from system timezone
-		DS201HumHarmonics: 4,                          // Filter 4 harmonics (50, 100, 150, 200Hz or 60, 120, 180, 240Hz)
-		DS201HumWidth:     1.0,                        // 1Hz wide notch at each harmonic
-		DS201HumTransform: "tdii",                     // Transposed Direct Form II - best floating-point numerical accuracy
-		DS201HumMix:       1.0,                        // Full wet signal (can reduce for subtle application)
-
 		// DS201-Inspired Low-pass Filter - removes ultrasonic noise (part of DS201 side-chain)
 		DS201LPEnabled:   true,
 		DS201LPFreq:      16000.0, // 16kHz cutoff (conservative default, preserves all audible content)
@@ -477,34 +289,17 @@ func DefaultFilterConfig() *FilterChainConfig {
 		DC1DeclickMethod:    "s",   // overlap-save (better quality)
 		DC1DeclickReason:    "",    // Set by tuneDC1Declick()
 
-		// DNS-1500 Noise Reduction - CEDAR DNS-1500-inspired adaptive spectral denoising
-		// Primary noise reduction filter; enabled by tuneDNS1500() when valid NoiseProfile exists
-		DNS1500Enabled:      false, // Enabled only when valid NoiseProfile exists
-		DNS1500NoiseReduce:  12.0,  // Overridden by tuneDNS1500()
-		DNS1500NoiseFloor:   -50.0, // Overridden: NoiseProfile.MeasuredNoiseFloor
-		DNS1500TrackNoise:   true,  // Always enabled for continuous adaptation
-		DNS1500Adaptivity:   0.5,   // Overridden: derived from InputLRA
-		DNS1500GainSmooth:   0,     // Overridden: derived from NoiseProfile.SpectralFlatness
-		DNS1500ResidFloor:   -38.0, // Overridden: relative to MeasuredNoiseFloor
-		DNS1500SilenceStart: 0.0,   // Overridden: NoiseProfile.Start
-		DNS1500SilenceEnd:   0.0,   // Overridden: NoiseProfile.Start + Duration
-
-		// DNS-1500 Compand - single-band soft expander for residual noise suppression
-		// Applied after afftdn to crush residual noise; all parameters from Pass 1 measurements
-		DNS1500CompandThreshold: -50.0, // Overridden: NoiseProfile.MeasuredNoiseFloor (input trough)
-		DNS1500CompandExpansion: 10.0,  // Overridden: gap between input floor and target floor
-		DNS1500CompandAttack:    0.005, // 5ms - fixed, empirically validated for speech
-		DNS1500CompandDecay:     0.100, // 100ms - fixed, empirically validated for speech
-		DNS1500CompandKnee:      6.0,   // 6dB - fixed, soft knee for transparency
-
-		// Dolby SR-Inspired Denoise - 6-band multiband compander
-		// Implements SR philosophy: Least Treatment via FLAT reduction curve
-		// Uses mcompand with voice-protective band scaling
-		// Fallback noise reduction when DNS-1500 cannot be enabled (no silence detected)
-		DolbySREnabled:     false,                     // Disabled by default; enabled as fallback by AdaptConfig()
-		DolbySRExpansionDB: DolbySRDefaultExpansionDB, // 13 dB (adaptive: 12-16 based on noise floor)
-		DolbySRThresholdDB: DolbySRDefaultThresholdDB, // -50 dB (adaptive: -50/-47/-45 based on trough)
-		DolbySRBands:       defaultDolbySRBands(),     // 6-band voice-protective configuration
+		// NoiseRemove - anlmdn + compand (validated fast-compand config)
+		NoiseRemoveEnabled:          true,    // Primary noise reduction filter
+		NoiseRemoveStrength:         0.00001, // Minimum strength (fixed from spike validation)
+		NoiseRemovePatchSec:         0.006,   // 6ms patch (fast-compand validated)
+		NoiseRemoveResearchSec:      0.0058,  // 5.8ms research (fast-compand validated)
+		NoiseRemoveSmooth:           11.0,    // Default smoothing
+		NoiseRemoveCompandThreshold: -50.0,   // Overridden by adaptive tuning
+		NoiseRemoveCompandExpansion: 10.0,    // Overridden by adaptive tuning
+		NoiseRemoveCompandAttack:    0.005,   // 5ms - fixed, empirically validated for speech
+		NoiseRemoveCompandDecay:     0.100,   // 100ms - fixed, empirically validated for speech
+		NoiseRemoveCompandKnee:      6.0,     // 6dB - fixed, soft knee for transparency
 
 		// DS201-Inspired Gate - soft expander for natural speech transitions
 		// All parameters set adaptively based on Pass 1 measurements
@@ -544,13 +339,6 @@ func DefaultFilterConfig() *FilterChainConfig {
 		TargetI:   -18.0, // Reference LUFS target (not enforced)
 		TargetTP:  -0.3,  // Reference true peak (not enforced, alimiter does real limiting at -1.5)
 		TargetLRA: 7.0,   // Reference loudness range (EBU R128 default)
-
-		// RNN Denoise - neural network noise reduction
-		// Uses specified RNN model for speech denoising
-		// Enabled by default but tuneArnndn may disable for very clean sources
-		ArnnDnEnabled: false,
-		ArnnDnModel:   DefaultRNNModel, // Use cb.rnnn (Conjoined Burgers) by default
-		ArnnDnMix:     0.7,             // Initial mix (will be tuned adaptively based on measurements)
 
 		// UREI 1176-Inspired Limiter - enabled by default as final safety net
 		UREI1176Enabled:     true,
@@ -681,37 +469,24 @@ func (cfg *FilterChainConfig) buildResampleFilter() string {
 		cfg.ResampleSampleRate, cfg.ResampleFormat, cfg.ResampleFrameSize)
 }
 
-// buildDS201HighpassFilter builds the DS201-inspired composite high-pass filter.
-// This is a frequency-conscious filter chain that combines:
-// 1. High-pass filter - removes subsonic rumble (HVAC, handling noise, etc.)
-// 2. Mains hum notches - surgical removal of 50/60Hz hum and harmonics (when enabled)
+// buildDS201HighpassFilter builds the DS201-inspired high-pass filter.
+// Removes subsonic rumble (HVAC, handling noise, etc.) before gating.
 //
 // The DS201's frequency-conscious gating uses side-chain HP/LP filters to prevent
 // false triggers. Since FFmpeg doesn't support side-chain filtering, we apply
 // frequency filtering to the audio path before gating to achieve the same effect.
 //
-// High-pass parameters:
+// Parameters:
 // - frequency: cutoff frequency in Hz (adaptive: 60-120Hz based on voice)
 // - poles: 1=6dB/oct (gentle), 2=12dB/oct (standard)
 // - width: Q factor (0.707=Butterworth, lower=gentler for warm voices)
 // - transform: filter algorithm (tdii=best floating-point accuracy)
 // - mix: wet/dry blend (1.0=full filter, 0.7=subtle for warm voices)
-//
-// Hum notch parameters (when DS201HumHarmonics > 0):
-// - frequency: fundamental (50Hz UK/EU, 60Hz US)
-// - harmonics: number of harmonics to filter (1-4, 0=disabled)
-// - width: notch width in Hz
-// - transform: zdf for minimal ringing
-//
-// Returns combined filter chain: highpass=...,bandreject=...,bandreject=...
 func (cfg *FilterChainConfig) buildDS201HighpassFilter() string {
 	if !cfg.DS201HPEnabled {
 		return ""
 	}
 
-	var filters []string
-
-	// 1. Build high-pass filter for rumble removal
 	poles := cfg.DS201HPPoles
 	if poles < 1 {
 		poles = 2 // Default to standard 12dB/oct
@@ -735,37 +510,7 @@ func (cfg *FilterChainConfig) buildDS201HighpassFilter() string {
 		hpSpec += fmt.Sprintf(":m=%.2f", cfg.DS201HPMix)
 	}
 
-	filters = append(filters, hpSpec)
-
-	// 2. Add hum notch filters if harmonics > 0
-	if cfg.DS201HumHarmonics > 0 && cfg.DS201HumFrequency > 0 {
-		for harmonic := 1; harmonic <= cfg.DS201HumHarmonics; harmonic++ {
-			freq := cfg.DS201HumFrequency * float64(harmonic)
-			// Skip frequencies above Nyquist for 44.1kHz output (22050Hz)
-			if freq >= 22000 {
-				break
-			}
-
-			// Build filter with Hz-based width for consistent notch size across harmonics
-			// width_type=h specifies width in Hz (more predictable than Q)
-			notchSpec := fmt.Sprintf("bandreject=f=%.0f:width_type=h:w=%.2f", freq, cfg.DS201HumWidth)
-
-			// Add transform type if specified (zdf = zero delay feedback, less ringing)
-			if cfg.DS201HumTransform != "" {
-				notchSpec += fmt.Sprintf(":a=%s", cfg.DS201HumTransform)
-			}
-
-			// Add mix parameter if not full wet (1.0)
-			if cfg.DS201HumMix > 0 && cfg.DS201HumMix < 1.0 {
-				notchSpec += fmt.Sprintf(":m=%.2f", cfg.DS201HumMix)
-			}
-
-			filters = append(filters, notchSpec)
-		}
-	}
-
-	// Join all filters with commas
-	return strings.Join(filters, ",")
+	return hpSpec
 }
 
 // buildDS201LowPassFilter builds the DS201-inspired low-pass filter specification.
@@ -831,159 +576,52 @@ func (cfg *FilterChainConfig) buildDC1DeclickFilter() string {
 	)
 }
 
-// buildDolbySRFilter builds the Dolby SR-inspired 6-band multiband compander filter.
-// Implements the Dolby SR noise reduction philosophy using mcompand:
-// - FLAT reduction curve: identical dB reduction at all points below threshold (artifact-free)
-// - Voice-protective band scaling: F1/F2 bands get slightly more expansion
-// - Linkwitz-Riley crossover compensation via separate volume filter
+// buildNoiseRemoveFilter builds the anlmdn+compand noise reduction filter.
+// Non-Local Means denoiser followed a compand for residual suppression.
 //
-// The mcompand filter uses expansion (below-threshold reduction) rather than compression,
-// which naturally reduces room noise during quiet passages without affecting speech.
-func (cfg *FilterChainConfig) buildDolbySRFilter() string {
-	if !cfg.DolbySREnabled {
+// Filter chain: anlmdn → compand
+//
+// anlmdn parameters (validated fast-compand config):
+// - s: strength (0.00001 = minimum, kept constant)
+// - p: patch size in seconds (6ms = 0.006s, context window for similarity)
+// - r: research radius in seconds (5.8ms = 0.0058s, search window for matching)
+// - m: smoothing factor (11 = default, weight smoothing)
+//
+// compand parameters
+// - FLAT reduction curve: uniform expansion below threshold
+// - threshold/expansion: derived from Pass 1 measurements in tuneNoiseRemove
+// - attack: 5ms (fixed, empirically validated for speech)
+// - decay: 100ms (fixed, empirically validated for speech)
+// - soft-knee: 6dB (fixed, transparent)
+func (cfg *FilterChainConfig) buildNoiseRemoveFilter() string {
+	if !cfg.NoiseRemoveEnabled {
 		return ""
 	}
 
-	// Use default bands if not set
-	bands := cfg.DolbySRBands
-	if len(bands) == 0 {
-		bands = defaultDolbySRBands()
-	}
-
-	// Use default expansion if not set
-	baseExp := cfg.DolbySRExpansionDB
-	if baseExp == 0 {
-		baseExp = DolbySRDefaultExpansionDB
-	}
-
-	// Use default threshold if not set (adaptive based on RMS trough)
-	threshold := cfg.DolbySRThresholdDB
-	if threshold == 0 {
-		threshold = DolbySRDefaultThresholdDB
-	}
-
-	// Build per-band specifications
-	var bandSpecs []string
-	for _, band := range bands {
-		// Calculate per-band expansion with voice-protective scaling
-		bandExp := baseExp * band.ScalePercent / 100.0
-
-		// Build FLAT reduction curve: identical reduction at all points below threshold
-		// This is the key insight that eliminates pumping artifacts
-		curve := buildFlatReductionCurve(bandExp, threshold)
-
-		// Format: attack\,decay soft-knee curve crossover
-		// Note: commas in attack,decay pair must be escaped for mcompand
-		spec := fmt.Sprintf("%.3f\\,%.3f %.0f %s %.0f",
-			band.Attack,
-			band.Decay,
-			band.SoftKnee,
-			curve,
-			band.CrossoverHz,
-		)
-		bandSpecs = append(bandSpecs, spec)
-	}
-
-	// Join bands with escaped pipe separators (space before and after)
-	filter := "mcompand=args=" + strings.Join(bandSpecs, " \\| ")
-
-	// Note: All makeup gain is set to unity - loudnorm handles all level adjustment.
-
-	return filter
-}
-
-// buildFlatReductionCurve creates a FLAT reduction curve for mcompand.
-// FLAT means all points below the threshold receive identical dB reduction.
-// This eliminates pumping/breathing artifacts that occur with true expansion curves.
-//
-// The threshold is adaptive based on RMS trough (noise floor indicator):
-//   - Clean sources (trough < -85 dB): -50 dB threshold
-//   - Moderate noise (-85 to -80 dB): -47 dB threshold
-//   - Noisy sources (trough > -80 dB): -45 dB threshold
-//
-// Curve format: -90/out90,-75/out75,threshold/threshold,-30/-30,0/0
-// Where out90 = -90 - expansion and out75 = -75 - expansion
-func buildFlatReductionCurve(expansionDB, thresholdDB float64) string {
-	out90 := -90 - expansionDB
-	out75 := -75 - expansionDB
-	// Note: commas between points must be escaped for mcompand args parameter
-	return fmt.Sprintf("-90/%.0f\\,-75/%.0f\\,%.0f/%.0f\\,-30/-30\\,0/0", out90, out75, thresholdDB, thresholdDB)
-}
-
-// buildDNS1500Filter builds the CEDAR DNS-1500-inspired noise reduction filter.
-// Uses FFmpeg's afftdn with inline noise learning via asendcmd during detected silence,
-// followed by a single-band compand soft expander to crush residual noise.
-// This is the primary noise reduction filter when valid silence timestamps are available.
-// Falls back to DolbySR (mcompand) when no suitable silence is detected.
-//
-// Filter graph structure:
-//
-//	asendcmd=c='start_time afftdn@dns1500 sn start; end_time afftdn@dns1500 sn stop',
-//	afftdn@dns1500=nr=X:nf=Y:tn=1:ad=Z:gs=W:rf=R,
-//	compand=attacks=A:decays=D:soft-knee=K:points=CURVE
-//
-// The asendcmd filter sends commands at specific timestamps:
-//   - At silence start: triggers noise sampling start
-//   - At silence end: stops noise sampling and locks the learned profile
-//
-// afftdn parameters (all adaptive via tuneDNS1500):
-//   - nr: noise reduction amount (0.01-97 dB)
-//   - nf: noise floor level (-80 to -20 dB)
-//   - tn: track noise continuously (0/1)
-//   - ad: adaptivity rate (0-1, higher = slower adaptation)
-//   - gs: gain smoothing across frequency bins (0-50)
-//   - rf: residual floor level (-80 to -20 dB)
-//
-// compand parameters (derived from Pass 1 measurements):
-//   - threshold: input noise floor (where noise lives)
-//   - expansion: gap between input floor and target floor (-80 dBFS)
-//   - Uses FLAT reduction curve: uniform expansion below threshold
-func (cfg *FilterChainConfig) buildDNS1500Filter() string {
-	if !cfg.DNS1500Enabled {
-		return ""
-	}
-
-	// Silence timing comes from NoiseProfile (validated by tuneDNS1500)
-	silenceStart := cfg.DNS1500SilenceStart
-	silenceEnd := cfg.DNS1500SilenceEnd
-
-	// Build asendcmd command string
-	// Format: asendcmd=c='time1 target command arg; time2 target command arg'
-	// Note: timestamps are bare values; brackets are only for FLAGS like [enter]/[leave]
-	cmdSpec := fmt.Sprintf(
-		"asendcmd=c='%.3f afftdn@dns1500 sn start; %.3f afftdn@dns1500 sn stop'",
-		silenceStart,
-		silenceEnd,
+	// Build anlmdn filter
+	anlmdnSpec := fmt.Sprintf("anlmdn=s=%.5f:p=%.4f:r=%.4f:m=%.0f",
+		cfg.NoiseRemoveStrength,
+		cfg.NoiseRemovePatchSec,
+		cfg.NoiseRemoveResearchSec,
+		cfg.NoiseRemoveSmooth,
 	)
 
-	// Build afftdn filter with instance name for asendcmd targeting
-	afftdnSpec := fmt.Sprintf(
-		"afftdn@dns1500=nr=%.1f:nf=%.1f:tn=%d:ad=%.2f:gs=%d:rf=%.1f",
-		cfg.DNS1500NoiseReduce,
-		cfg.DNS1500NoiseFloor,
-		boolToInt(cfg.DNS1500TrackNoise),
-		cfg.DNS1500Adaptivity,
-		cfg.DNS1500GainSmooth,
-		cfg.DNS1500ResidFloor,
-	)
+	// Build compand filter for residual suppression
+	compandSpec := cfg.buildNoiseRemoveCompandFilter()
 
-	// Build compand filter for residual noise suppression
-	// Uses FLAT reduction curve: every point below threshold gets same reduction
-	compandSpec := cfg.buildDNS1500CompandFilter()
-
-	// Return combined filter chain: asendcmd → afftdn → compand
-	return fmt.Sprintf("%s,%s,%s", cmdSpec, afftdnSpec, compandSpec)
+	// Combine: anlmdn,compand
+	return fmt.Sprintf("%s,%s", anlmdnSpec, compandSpec)
 }
 
-// buildDNS1500CompandFilter builds the compand filter for residual noise suppression.
-// Uses FLAT reduction curve: uniform expansion below threshold.
-// Parameters are derived from Pass 1 measurements in tuneDNS1500.
-func (cfg *FilterChainConfig) buildDNS1500CompandFilter() string {
+// buildNoiseRemoveCompandFilter builds the compand filter for residual noise suppression.
+// Compand uses FLAT reduction curve with uniform expansion below threshold.
+// Parameters are derived from Pass 1 measurements in tuneNoiseRemove (adaptive.go).
+func (cfg *FilterChainConfig) buildNoiseRemoveCompandFilter() string {
 	// Build FLAT reduction curve
 	// Every point below threshold gets the same expansion (reduction)
 	// Points: -90 → (-90 - exp), -75 → (-75 - exp), threshold → threshold, -30 → -30, 0 → 0
-	exp := cfg.DNS1500CompandExpansion
-	thresh := cfg.DNS1500CompandThreshold
+	exp := cfg.NoiseRemoveCompandExpansion
+	thresh := cfg.NoiseRemoveCompandThreshold
 
 	out90 := -90.0 - exp
 	out75 := -75.0 - exp
@@ -992,9 +630,9 @@ func (cfg *FilterChainConfig) buildDNS1500CompandFilter() string {
 	// Points format: in1/out1|in2/out2|...
 	return fmt.Sprintf(
 		"compand=attacks=%.3f:decays=%.3f:soft-knee=%.1f:points=-90/%.0f|-75/%.0f|%.0f/%.0f|-30/-30|0/0",
-		cfg.DNS1500CompandAttack,
-		cfg.DNS1500CompandDecay,
-		cfg.DNS1500CompandKnee,
+		cfg.NoiseRemoveCompandAttack,
+		cfg.NoiseRemoveCompandDecay,
+		cfg.NoiseRemoveCompandKnee,
 		out90, out75,
 		thresh, thresh,
 	)
@@ -1061,29 +699,6 @@ func (cfg *FilterChainConfig) buildDeesserFilter() string {
 		cfg.DeessAmount,
 		cfg.DeessFreq,
 	)
-}
-
-// buildArnnDnFilter builds the arnndn (RNN denoise) filter specification.
-// Neural network noise reduction for heavily uplifted audio.
-// Uses embedded RNN model (bd, cb, or sh) trained for recorded speech.
-func (cfg *FilterChainConfig) buildArnnDnFilter() string {
-	if !cfg.ArnnDnEnabled {
-		return ""
-	}
-
-	// Use default model if not specified
-	model := cfg.ArnnDnModel
-	if model == "" {
-		model = DefaultRNNModel
-	}
-
-	modelPath, err := getRNNModelPath(model)
-	if err != nil {
-		// Gracefully degrade if model unavailable
-		return ""
-	}
-
-	return fmt.Sprintf("arnndn=m=%s:mix=%.2f", modelPath, cfg.ArnnDnMix)
 }
 
 // buildUREI1176Filter builds the UREI 1176-inspired limiter filter specification.

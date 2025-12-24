@@ -21,25 +21,13 @@ func newTestConfig() *FilterChainConfig {
 		ResampleFrameSize:  4096,
 
 		// Processing filters (all disabled by default)
-		DS201HPEnabled:    false,
-		DC1DeclickEnabled: false,
-		DNS1500Enabled:    false,
-		DolbySREnabled:    false,
-		DS201GateEnabled:  false,
-		LA2AEnabled:       false,
-		DeessEnabled:      false,
-		ArnnDnEnabled:     false,
-		UREI1176Enabled:   false,
-
-		// DNS-1500 defaults (used when filter is enabled)
-		DNS1500NoiseReduce:  12.0,
-		DNS1500NoiseFloor:   -50.0,
-		DNS1500TrackNoise:   true,
-		DNS1500Adaptivity:   0.5,
-		DNS1500GainSmooth:   0,
-		DNS1500ResidFloor:   -38.0,
-		DNS1500SilenceStart: 0.0,
-		DNS1500SilenceEnd:   0.0,
+		DS201HPEnabled:     false,
+		DC1DeclickEnabled:  false,
+		NoiseRemoveEnabled: false,
+		DS201GateEnabled:   false,
+		LA2AEnabled:        false,
+		DeessEnabled:       false,
+		UREI1176Enabled:    false,
 
 		// Sensible defaults for parameters (used when filter is enabled)
 		DS201HPFreq:        80.0,
@@ -47,9 +35,6 @@ func newTestConfig() *FilterChainConfig {
 		DS201HPWidth:       0.707, // Butterworth
 		DS201HPMix:         1.0,   // Full wet
 		DS201HPTransform:   "tdii",
-		DS201HumFrequency:  50.0,
-		DS201HumHarmonics:  4,
-		DS201HumWidth:      1.0,
 		DC1DeclickMethod:   "s",
 		DS201GateThreshold: 0.01,
 		DS201GateRatio:     2.0,
@@ -72,8 +57,6 @@ func newTestConfig() *FilterChainConfig {
 		TargetTP:           -0.3,
 		TargetLRA:          7.0,
 
-		ArnnDnMix: 0.8,
-
 		UREI1176Ceiling:     -1.0,
 		UREI1176Attack:      0.8,
 		UREI1176Release:     150.0,
@@ -81,6 +64,17 @@ func newTestConfig() *FilterChainConfig {
 		UREI1176ASCLevel:    0.5,
 		UREI1176InputLevel:  1.0,
 		UREI1176OutputLevel: 1.0,
+
+		// NoiseRemove defaults (anlmdn + compand)
+		NoiseRemoveStrength:         0.00001,
+		NoiseRemovePatchSec:         0.006,
+		NoiseRemoveResearchSec:      0.0058,
+		NoiseRemoveSmooth:           11.0,
+		NoiseRemoveCompandThreshold: -50.0,
+		NoiseRemoveCompandExpansion: 10.0,
+		NoiseRemoveCompandAttack:    0.005,
+		NoiseRemoveCompandDecay:     0.100,
+		NoiseRemoveCompandKnee:      6.0,
 
 		// Loudnorm defaults (Pass 3)
 		LoudnormEnabled:   true,
@@ -531,6 +525,118 @@ func TestBuildDeesserFilter(t *testing.T) {
 	}
 }
 
+func TestBuildNoiseRemoveFilter(t *testing.T) {
+	t.Run("disabled returns empty", func(t *testing.T) {
+		config := newTestConfig()
+		config.NoiseRemoveEnabled = false
+
+		spec := config.buildNoiseRemoveFilter()
+		if spec != "" {
+			t.Errorf("buildNoiseRemoveFilter() = %q, want empty when disabled", spec)
+		}
+	})
+
+	t.Run("enabled produces anlmdn+compand chain", func(t *testing.T) {
+		config := newTestConfig()
+		config.NoiseRemoveEnabled = true
+
+		spec := config.buildNoiseRemoveFilter()
+
+		// Must contain anlmdn filter
+		if !strings.Contains(spec, "anlmdn=") {
+			t.Errorf("buildNoiseRemoveFilter() missing anlmdn filter, got: %s", spec)
+		}
+
+		// Must contain compand filter
+		if !strings.Contains(spec, "compand=") {
+			t.Errorf("buildNoiseRemoveFilter() missing compand filter, got: %s", spec)
+		}
+
+		// anlmdn must come before compand
+		anlmdnIdx := strings.Index(spec, "anlmdn=")
+		compandIdx := strings.Index(spec, "compand=")
+		if compandIdx < anlmdnIdx {
+			t.Errorf("compand must come after anlmdn in filter chain\nGot: %s", spec)
+		}
+	})
+
+	t.Run("anlmdn parameters formatted correctly", func(t *testing.T) {
+		config := newTestConfig()
+		config.NoiseRemoveEnabled = true
+		config.NoiseRemoveStrength = 0.00001
+		config.NoiseRemovePatchSec = 0.006
+		config.NoiseRemoveResearchSec = 0.0058
+		config.NoiseRemoveSmooth = 11.0
+
+		spec := config.buildNoiseRemoveFilter()
+
+		expected := []string{
+			"s=0.00001", // strength
+			"p=0.0060",  // patch
+			"r=0.0058",  // research
+			"m=11",      // smooth
+		}
+
+		for _, e := range expected {
+			if !strings.Contains(spec, e) {
+				t.Errorf("buildNoiseRemoveFilter() missing %q\nGot: %s", e, spec)
+			}
+		}
+	})
+
+	t.Run("compand parameters include threshold and expansion", func(t *testing.T) {
+		config := newTestConfig()
+		config.NoiseRemoveEnabled = true
+		config.NoiseRemoveCompandThreshold = -50.0
+		config.NoiseRemoveCompandExpansion = 10.0
+		config.NoiseRemoveCompandAttack = 0.005
+		config.NoiseRemoveCompandDecay = 0.100
+		config.NoiseRemoveCompandKnee = 6.0
+
+		spec := config.buildNoiseRemoveFilter()
+
+		expected := []string{
+			"attacks=0.005",
+			"decays=0.100",
+			"soft-knee=6.0",
+			"-50/-50", // threshold point in curve
+		}
+
+		for _, e := range expected {
+			if !strings.Contains(spec, e) {
+				t.Errorf("buildNoiseRemoveFilter() missing %q\nGot: %s", e, spec)
+			}
+		}
+
+		// Verify FLAT curve expansion: -90 should map to (-90 - expansion) = -100
+		if !strings.Contains(spec, "-90/-100") {
+			t.Errorf("buildNoiseRemoveFilter() missing FLAT curve point -90/-100 for 10dB expansion\nGot: %s", spec)
+		}
+		if !strings.Contains(spec, "-75/-85") {
+			t.Errorf("buildNoiseRemoveFilter() missing FLAT curve point -75/-85 for 10dB expansion\nGot: %s", spec)
+		}
+	})
+
+	t.Run("different expansion levels", func(t *testing.T) {
+		expansions := []float64{6.0, 15.0, 40.0}
+		for _, exp := range expansions {
+			config := newTestConfig()
+			config.NoiseRemoveEnabled = true
+			config.NoiseRemoveCompandThreshold = -55.0
+			config.NoiseRemoveCompandExpansion = exp
+
+			spec := config.buildNoiseRemoveFilter()
+
+			// Verify expansion is applied to curve points
+			// -90 should map to (-90 - exp)
+			expectedPoint := fmt.Sprintf("-90/%.0f", -90-exp)
+			if !strings.Contains(spec, expectedPoint) {
+				t.Errorf("buildNoiseRemoveFilter() with %.0fdB expansion missing curve point %s\nGot: %s", exp, expectedPoint, spec)
+			}
+		}
+	})
+}
+
 func TestBuildUREI1176Filter(t *testing.T) {
 	t.Run("typical podcast limiter", func(t *testing.T) {
 		config := newTestConfig()
@@ -843,13 +949,12 @@ func TestPass2FilterOrder(t *testing.T) {
 	})
 
 	t.Run("includes all processing filters", func(t *testing.T) {
-		// Note: FilterUREI1176 moved to Pass 3 for peak protection after gain normalisation
 		requiredFilters := []FilterID{
 			FilterDownmix,
 			FilterDS201HighPass, // Composite: includes hum notch filters
+			FilterDS201LowPass,
+			FilterNoiseRemove,
 			FilterDC1Declick,
-			FilterDolbySR,
-			FilterArnndn,
 			FilterDS201Gate,
 			FilterLA2ACompressor,
 			FilterDeesser,
@@ -876,307 +981,6 @@ func TestPass2FilterOrder(t *testing.T) {
 			if id == FilterUREI1176 {
 				t.Errorf("FilterUREI1176 should not be in Pass2FilterOrder (moved to Pass 3)")
 			}
-		}
-	})
-}
-
-// =============================================================================
-// Dolby SR mcompand Filter Tests
-// =============================================================================
-
-func TestBuildFlatReductionCurve(t *testing.T) {
-	// Tests the FLAT reduction curve builder which is key to artifact-free noise elimination.
-	// All points below threshold receive identical dB reduction.
-	// Note: commas are escaped with \, for mcompand args parameter.
-	tests := []struct {
-		expansion float64
-		threshold float64
-		want      string
-	}{
-		{12, -50, `-90/-102\,-75/-87\,-50/-50\,-30/-30\,0/0`},
-		{13, -50, `-90/-103\,-75/-88\,-50/-50\,-30/-30\,0/0`},
-		{14, -50, `-90/-104\,-75/-89\,-50/-50\,-30/-30\,0/0`},
-		{16, -50, `-90/-106\,-75/-91\,-50/-50\,-30/-30\,0/0`},
-		// Adaptive threshold tests
-		{13, -47, `-90/-103\,-75/-88\,-47/-47\,-30/-30\,0/0`},
-		{13, -45, `-90/-103\,-75/-88\,-45/-45\,-30/-30\,0/0`},
-	}
-
-	for _, tt := range tests {
-		t.Run(fmt.Sprintf("expansion_%.0fdB_threshold_%.0fdB", tt.expansion, tt.threshold), func(t *testing.T) {
-			got := buildFlatReductionCurve(tt.expansion, tt.threshold)
-			if got != tt.want {
-				t.Errorf("buildFlatReductionCurve(%.0f, %.0f) = %q, want %q", tt.expansion, tt.threshold, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestDefaultDolbySRBands(t *testing.T) {
-	// Verify the 6-band voice-protective configuration
-	bands := defaultDolbySRBands()
-
-	if len(bands) != 6 {
-		t.Fatalf("Expected 6 bands, got %d", len(bands))
-	}
-
-	// Expected configuration matches defaultDolbySRBands() in filters.go
-	expected := []struct {
-		name         string
-		crossover    float64
-		scalePercent float64
-		attack       float64
-		decay        float64
-		softKnee     float64
-	}{
-		{"Sub-bass", 100, 100, 0.006, 0.095, 6},
-		{"Chest", 300, 100, 0.005, 0.100, 8},
-		{"Voice F1", 800, 105, 0.005, 0.100, 10},
-		{"Voice F2", 3300, 103, 0.005, 0.100, 12},
-		{"Presence", 8000, 100, 0.002, 0.085, 10},
-		{"Air", 20500, 95, 0.002, 0.080, 6},
-	}
-
-	for i, want := range expected {
-		got := bands[i]
-		if got.CrossoverHz != want.crossover {
-			t.Errorf("Band %d (%s) CrossoverHz = %.0f, want %.0f", i, want.name, got.CrossoverHz, want.crossover)
-		}
-		if got.ScalePercent != want.scalePercent {
-			t.Errorf("Band %d (%s) ScalePercent = %.0f, want %.0f", i, want.name, got.ScalePercent, want.scalePercent)
-		}
-		if math.Abs(got.Attack-want.attack) > 0.0001 {
-			t.Errorf("Band %d (%s) Attack = %.4f, want %.4f", i, want.name, got.Attack, want.attack)
-		}
-		if math.Abs(got.Decay-want.decay) > 0.0001 {
-			t.Errorf("Band %d (%s) Decay = %.4f, want %.4f", i, want.name, got.Decay, want.decay)
-		}
-		if got.SoftKnee != want.softKnee {
-			t.Errorf("Band %d (%s) SoftKnee = %.0f, want %.0f", i, want.name, got.SoftKnee, want.softKnee)
-		}
-	}
-}
-
-func TestBuildDolbySRMcompandFilter(t *testing.T) {
-	t.Run("enabled with standard config", func(t *testing.T) {
-		config := newTestConfig()
-		config.DolbySREnabled = true
-		config.DolbySRExpansionDB = 13.0
-		config.DolbySRBands = defaultDolbySRBands()
-
-		filter := config.buildDolbySRFilter()
-
-		// Must not be empty
-		if filter == "" {
-			t.Fatal("buildDolbySRFilter returned empty string when enabled")
-		}
-
-		// Must contain mcompand
-		if !strings.Contains(filter, "mcompand=") {
-			t.Errorf("Filter missing mcompand=\nGot: %s", filter)
-		}
-
-		// Must contain 6 crossover frequencies (6 bands)
-		expectedCrossovers := []string{"100", "300", "800", "3300", "8000", "20500"}
-		for _, freq := range expectedCrossovers {
-			if !strings.Contains(filter, freq) {
-				t.Errorf("Filter missing crossover frequency %s\nGot: %s", freq, filter)
-			}
-		}
-
-		// Must contain FLAT reduction curve points for 13dB expansion
-		if !strings.Contains(filter, "-90/-103") {
-			t.Errorf("Filter missing FLAT curve point -90/-103\nGot: %s", filter)
-		}
-		if !strings.Contains(filter, "-75/-88") {
-			t.Errorf("Filter missing FLAT curve point -75/-88\nGot: %s", filter)
-		}
-
-		// Makeup gain is disabled - loudnorm handles all level adjustment
-		if strings.Contains(filter, "volume=") {
-			t.Errorf("Filter should not contain volume filter (loudnorm handles gain)\nGot: %s", filter)
-		}
-	})
-
-	t.Run("disabled returns empty", func(t *testing.T) {
-		config := newTestConfig()
-		config.DolbySREnabled = false
-
-		filter := config.buildDolbySRFilter()
-
-		if filter != "" {
-			t.Errorf("buildDolbySRFilter should return empty when disabled, got: %s", filter)
-		}
-	})
-
-	t.Run("different expansion levels", func(t *testing.T) {
-		expansions := []float64{12, 14, 16}
-		for _, exp := range expansions {
-			config := newTestConfig()
-			config.DolbySREnabled = true
-			config.DolbySRExpansionDB = exp
-			config.DolbySRThresholdDB = -50
-			config.DolbySRBands = defaultDolbySRBands()
-
-			filter := config.buildDolbySRFilter()
-
-			// Verify curve changes with expansion
-			curve := buildFlatReductionCurve(exp, -50)
-			// Check the first point (e.g., -90/-102 for 12dB)
-			expectedPoint := fmt.Sprintf("-90/%.0f", -90-exp)
-			if !strings.Contains(filter, expectedPoint) {
-				t.Errorf("Filter with %.0fdB expansion missing curve point %s\nGot: %s", exp, expectedPoint, filter)
-			}
-			// Sanity check: curve should be in the filter
-			if !strings.Contains(filter, curve[:20]) { // Check first 20 chars of curve
-				t.Errorf("Filter missing expected curve prefix for %.0fdB\nExpected curve: %s\nGot filter: %s", exp, curve, filter)
-			}
-		}
-	})
-}
-
-func TestBuildDNS1500Filter(t *testing.T) {
-	t.Run("disabled returns empty", func(t *testing.T) {
-		config := newTestConfig()
-		config.DNS1500Enabled = false
-
-		filter := config.buildDNS1500Filter()
-
-		if filter != "" {
-			t.Errorf("buildDNS1500Filter should return empty when disabled, got: %s", filter)
-		}
-	})
-
-	t.Run("enabled returns asendcmd+afftdn chain", func(t *testing.T) {
-		config := newTestConfig()
-		config.DNS1500Enabled = true
-		config.DNS1500NoiseReduce = 12.0
-		config.DNS1500NoiseFloor = -55.0
-		config.DNS1500TrackNoise = true
-		config.DNS1500Adaptivity = 0.5
-		config.DNS1500GainSmooth = 8
-		config.DNS1500ResidFloor = -43.0
-		config.DNS1500SilenceStart = 1.5
-		config.DNS1500SilenceEnd = 2.0
-
-		filter := config.buildDNS1500Filter()
-
-		// Must not be empty
-		if filter == "" {
-			t.Fatal("buildDNS1500Filter returned empty string when enabled")
-		}
-
-		// Must contain asendcmd for noise learning triggers
-		if !strings.Contains(filter, "asendcmd=") {
-			t.Errorf("Filter missing asendcmd=\nGot: %s", filter)
-		}
-
-		// Must contain afftdn@dns1500 instance name
-		if !strings.Contains(filter, "afftdn@dns1500") {
-			t.Errorf("Filter missing afftdn@dns1500\nGot: %s", filter)
-		}
-
-		// Must contain sn start and sn stop commands
-		if !strings.Contains(filter, "sn start") {
-			t.Errorf("Filter missing 'sn start' command\nGot: %s", filter)
-		}
-		if !strings.Contains(filter, "sn stop") {
-			t.Errorf("Filter missing 'sn stop' command\nGot: %s", filter)
-		}
-
-		// Must contain timestamp values
-		if !strings.Contains(filter, "1.500") {
-			t.Errorf("Filter missing start timestamp 1.500\nGot: %s", filter)
-		}
-		if !strings.Contains(filter, "2.000") {
-			t.Errorf("Filter missing end timestamp 2.000\nGot: %s", filter)
-		}
-
-		// Must contain noise reduction amount
-		if !strings.Contains(filter, "nr=12.0") {
-			t.Errorf("Filter missing nr=12.0\nGot: %s", filter)
-		}
-
-		// Must contain track noise flag
-		if !strings.Contains(filter, "tn=1") {
-			t.Errorf("Filter missing tn=1 (track noise enabled)\nGot: %s", filter)
-		}
-
-		// Must contain adaptivity
-		if !strings.Contains(filter, "ad=0.50") {
-			t.Errorf("Filter missing ad=0.50\nGot: %s", filter)
-		}
-
-		// Must contain gain smoothing
-		if !strings.Contains(filter, "gs=8") {
-			t.Errorf("Filter missing gs=8\nGot: %s", filter)
-		}
-
-		// Must contain noise floor
-		if !strings.Contains(filter, "nf=-55.0") {
-			t.Errorf("Filter missing nf=-55.0\nGot: %s", filter)
-		}
-
-		// Must contain residual floor
-		if !strings.Contains(filter, "rf=-43.0") {
-			t.Errorf("Filter missing rf=-43.0\nGot: %s", filter)
-		}
-
-		// Must contain compand filter for residual noise suppression
-		if !strings.Contains(filter, "compand=") {
-			t.Errorf("Filter missing compand=\nGot: %s", filter)
-		}
-	})
-
-	t.Run("track noise disabled", func(t *testing.T) {
-		config := newTestConfig()
-		config.DNS1500Enabled = true
-		config.DNS1500TrackNoise = false
-		config.DNS1500SilenceStart = 1.0
-		config.DNS1500SilenceEnd = 1.5
-
-		filter := config.buildDNS1500Filter()
-
-		// Must contain tn=0 when track noise is disabled
-		if !strings.Contains(filter, "tn=0") {
-			t.Errorf("Filter should have tn=0 when TrackNoise=false\nGot: %s", filter)
-		}
-	})
-
-	t.Run("compand uses configured parameters", func(t *testing.T) {
-		config := newTestConfig()
-		config.DNS1500Enabled = true
-		config.DNS1500SilenceStart = 1.0
-		config.DNS1500SilenceEnd = 2.0
-		config.DNS1500CompandThreshold = -60.0
-		config.DNS1500CompandExpansion = 20.0
-		config.DNS1500CompandAttack = 0.005
-		config.DNS1500CompandDecay = 0.100
-		config.DNS1500CompandKnee = 6.0
-
-		filter := config.buildDNS1500Filter()
-
-		// Must contain compand with correct timing
-		if !strings.Contains(filter, "attacks=0.005") {
-			t.Errorf("Filter missing attacks=0.005\nGot: %s", filter)
-		}
-		if !strings.Contains(filter, "decays=0.100") {
-			t.Errorf("Filter missing decays=0.100\nGot: %s", filter)
-		}
-		if !strings.Contains(filter, "soft-knee=6.0") {
-			t.Errorf("Filter missing soft-knee=6.0\nGot: %s", filter)
-		}
-
-		// Must contain FLAT reduction curve points
-		// With threshold -60 and expansion 20: -90→-110, -75→-95, -60→-60
-		if !strings.Contains(filter, "-90/-110") {
-			t.Errorf("Filter missing -90/-110 point\nGot: %s", filter)
-		}
-		if !strings.Contains(filter, "-75/-95") {
-			t.Errorf("Filter missing -75/-95 point\nGot: %s", filter)
-		}
-		if !strings.Contains(filter, "-60/-60") {
-			t.Errorf("Filter missing threshold point -60/-60\nGot: %s", filter)
 		}
 	})
 }

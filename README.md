@@ -29,7 +29,7 @@ That's it. No configuration, no knobs to tweak, no audio knowledge required.
 
 ## The Filter Chain
 
-Jivetalking's processing pipeline draws inspiration from legendary studio hardware: the **Drawmer DS201** noise gate, **CEDAR DNS-1500** and **DolbySR** dialogue noise suppressors, **Teletronix LA-2A** optical compressor, and **UREI 1176** limiter. Each filter in the chain prepares the audio for the next.
+Jivetalking's processing pipeline draws inspiration from legendary studio hardware: the **Drawmer DS201** noise gate, noise suppressor, **Teletronix LA-2A** optical compressor, and **UREI 1176** limiter. Each filter in the chain prepares the audio for the next.
 
 ### Pass 1: Analysis
 
@@ -46,7 +46,7 @@ Measures your audio's characteristics to drive adaptive processing:
 |--------|-------------|--------------|
 | **High-pass** | DS201 side-chain | Removes subsonic rumble (50–60 Hz, adaptive to voice) |
 | **Low-pass** | DS201 side-chain | Removes ultrasonic content that triggers false processing |
-| **Noise reduction** | DNS-1500 / Dolby SR | Inline noise learning with voice protection; multiband fallback |
+| **Noise reduction** | Non-Local Means | Adaptive anlmdn denoiser with compand residual suppression |
 | **Gate** | DS201 expander | Soft expansion for natural inter-phrase cleanup |
 | **Declicker** | DC-1 | Autoregressive (AR) interpolation click/pop remover |
 | **Compressor** | LA-2A | Programme-dependent optical compression with ~10ms attack |
@@ -76,7 +76,7 @@ Each filter prepares audio for the next:
 
 A dark-voiced narrator doesn't need aggressive de-essing. Pre-compressed audio doesn't need heavy compression. Clean studio recordings need different gating than noisy home offices.
 
-Jivetalking measures your specific audio and adapts every filter automatically. The DS201-inspired gate tunes its threshold to your measured noise floor. The DNS-1500-inspired denoiser learns your noise profile from detected silence and protects voice frequencies; noisy sources get gentler treatment. The LA-2A-inspired compressor adjusts ratio and release based on your dynamic range.
+Jivetalking measures your specific audio and adapts every filter automatically. The DS201-inspired gate tunes its threshold to your measured noise floor. The noise reducer adapts its compand expansion based on your measured noise profile. The LA-2A-inspired compressor adjusts ratio and release based on your dynamic range.
 
 ---
 
@@ -156,8 +156,6 @@ internal/
 ### Design Documentation
 
 - [Gate: Drawmer DS201](docs/FilterGate-Drawmer%20DS201.md) - Soft expander gate with adaptive threshold
-- [Noise Removal: CEDAR DNS-1500](docs/FilterNoise-CEDAR%20DNS-1500.md) - Inline noise learning with voice protection
-- [Noise Removal: Dolby SR](docs/FilterNoise-Dolby%20SR.md) - 6-band multiband expander fallback
 - [Declick: CEDAR DC-1](docs/FilterDeclick-CEDAR%20DC-1.md) - Autoregressive declicker
 - [Compressor: LA-2A](docs/FilterCompressor-Teletronix%20LA-2A.md) - Programme-dependent optical compression
 - [Limiter: UREI 1176](docs/FilterLimiter-UREI1176.md) - adaptive peak limiter

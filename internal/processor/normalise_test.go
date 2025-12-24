@@ -146,8 +146,8 @@ func TestCalculateLimiterCeiling(t *testing.T) {
 			target_TP:   -2.0,
 			// gain = -16.0 - (-24.9) = 8.9 dB
 			// projected TP = -5.0 + 8.9 = 3.9 dBTP (exceeds -2.0)
-			// ceiling = -2.0 - 8.9 - 2.0 = -12.9 dBTP
-			wantCeiling: -12.9,
+			// ceiling = -2.0 - 8.9 - 1.5 = -12.4 dBTP
+			wantCeiling: -12.4,
 			wantNeeded:  true,
 			wantClamped: false,
 		},
@@ -159,8 +159,8 @@ func TestCalculateLimiterCeiling(t *testing.T) {
 			target_TP:   -2.0,
 			// gain = -16.0 - (-20.0) = 4.0 dB
 			// projected TP = -3.0 + 4.0 = 1.0 dBTP (exceeds -2.0)
-			// ceiling = -2.0 - 4.0 - 2.0 = -8.0 dBTP
-			wantCeiling: -8.0,
+			// ceiling = -2.0 - 4.0 - 1.5 = -7.5 dBTP
+			wantCeiling: -7.5,
 			wantNeeded:  true,
 			wantClamped: false,
 		},
@@ -208,8 +208,8 @@ func TestCalculateLimiterCeiling(t *testing.T) {
 			target_TP:   -2.0,
 			// gain = -16.0 - (-43.0) = 27.0 dB
 			// projected TP = -20.0 + 27.0 = 7.0 dBTP (exceeds -2.0)
-			// calculated ceiling = -2.0 - 27.0 - 2.0 = -31.0 dBTP
-			// but -31.0 < -24.0, so clamped to -24.0 dBTP
+			// calculated ceiling = -2.0 - 27.0 - 1.5 = -30.5 dBTP
+			// but -30.5 < -24.0, so clamped to -24.0 dBTP
 			wantCeiling: minCeiling,
 			wantNeeded:  true,
 			wantClamped: true,
@@ -222,8 +222,8 @@ func TestCalculateLimiterCeiling(t *testing.T) {
 			target_TP:   -2.0,
 			// gain = -16.0 - (-38.0) = 22.0 dB
 			// projected TP = -15.0 + 22.0 = 7.0 dBTP (exceeds -2.0)
-			// calculated ceiling = -2.0 - 22.0 - 2.0 = -26.0 dBTP
-			// -26.0 < -24.0, so clamped to -24.0 dBTP
+			// calculated ceiling = -2.0 - 22.0 - 1.5 = -25.5 dBTP
+			// -25.5 < -24.0, so clamped to -24.0 dBTP
 			wantCeiling: minCeiling,
 			wantNeeded:  true,
 			wantClamped: true,
@@ -236,8 +236,8 @@ func TestCalculateLimiterCeiling(t *testing.T) {
 			target_TP:   -2.0,
 			// gain = -16.0 - (-35.0) = 19.0 dB
 			// projected TP = -15.0 + 19.0 = 4.0 dBTP (exceeds -2.0)
-			// ceiling = -2.0 - 19.0 - 2.0 = -23.0 dBTP (above -24.0)
-			wantCeiling: -23.0,
+			// ceiling = -2.0 - 19.0 - 1.5 = -22.5 dBTP (above -24.0)
+			wantCeiling: -22.5,
 			wantNeeded:  true,
 			wantClamped: false,
 		},
