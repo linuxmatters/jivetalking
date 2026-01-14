@@ -1,0 +1,131 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - '*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Get version from tag
+        id: get_version
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Get previous tag
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+          # Generate changelog between tags
+          if [ -n "$PREV_TAG" ]; then
+            echo "## Changes since $PREV_TAG" > CHANGELOG.md
+            git log $PREV_TAG..HEAD --pretty=format:"* %s (%h)" >> CHANGELOG.md
+          else
+            echo "## Initial Release" > CHANGELOG.md
+            git log --pretty=format:"* %s (%h)" >> CHANGELOG.md
+          fi
+
+          # Add release notes
+          cat >> CHANGELOG.md << 'EOF'
+
+          ## Installation
+
+          Download the appropriate binary for your platform below, make it executable, and move it to your PATH:
+
+          ```bash
+          # Linux (amd64)
+          chmod +x jivetalking-linux-amd64
+          sudo mv jivetalking-linux-amd64 /usr/local/bin/jivetalking
+
+          # macOS (Apple Silicon)
+          chmod +x jivetalking-darwin-arm64
+          sudo mv jivetalking-darwin-arm64 /usr/local/bin/jivetalking
+          ```
+
+          ## Checksums
+
+          SHA256 checksums are provided below for verification.
+          EOF
+
+          cat CHANGELOG.md
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.get_version.outputs.version }}
+          name: Jivetalking ${{ steps.get_version.outputs.version }}
+          body_path: CHANGELOG.md
+          draft: false
+          prerelease: false
+
+  build:
+    name: Build ${{ matrix.os }} ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    needs: create-release
+    strategy:
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+            runner: ubuntu-24.04
+          - os: linux
+            arch: arm64
+            runner: ubuntu-24.04-arm
+          - os: darwin
+            arch: amd64
+            runner: macos-15-intel
+          - os: darwin
+            arch: arm64
+            runner: macos-15
+      fail-fast: false
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.24'
+
+      - name: Download ffmpeg-statigo libraries
+        run: |
+          cd third_party/ffmpeg-statigo
+          go run ./cmd/download-lib
+
+      - name: Get version from tag
+        id: get_version
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Build binary
+        run: |
+          VERSION=${{ steps.get_version.outputs.version }}
+          echo "Building jivetalking $VERSION for ${{ matrix.os }}/${{ matrix.arch }}"
+          go build -ldflags="-X main.version=$VERSION" -o jivetalking-${{ matrix.os }}-${{ matrix.arch }} ./cmd/jivetalking
+          ls -lh jivetalking-${{ matrix.os }}-${{ matrix.arch }}
+
+      - name: Upload Assets to Release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.get_version.outputs.version }}
+          files: |
+            jivetalking-${{ matrix.os }}-${{ matrix.arch }}

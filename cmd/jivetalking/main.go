@@ -15,9 +15,10 @@ import (
 	"github.com/linuxmatters/jivetalking/internal/ui"
 )
 
-var (
-	version = "0.0.1"
-)
+// version is set via ldflags at build time
+// Local dev builds: "dev"
+// Release builds: git tag (e.g. "0.1.0")
+var version = "dev"
 
 // CLI defines the command-line interface
 type CLI struct {

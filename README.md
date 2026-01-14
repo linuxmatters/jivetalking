@@ -113,12 +113,33 @@ Jivetalking measures your specific audio and adapts every filter automatically. 
 
 ## Installation
 
-Single binary with embedded FFmpeg-no external dependencies.
+### Pre-built Binaries
+
+Single binary with embedded FFmpeg—no external dependencies.
+
+Download the latest release for your platform from the [releases page](https://github.com/linuxmatters/jivetalking/releases):
 
 ```bash
-# Download the latest release for your platform
-# Linux (amd64), macOS (amd64, arm64)
+# Linux (amd64)
+chmod +x jivetalking-linux-amd64
+sudo mv jivetalking-linux-amd64 /usr/local/bin/jivetalking
+
+# Linux (arm64)
+chmod +x jivetalking-linux-arm64
+sudo mv jivetalking-linux-arm64 /usr/local/bin/jivetalking
+
+# macOS (Intel)
+chmod +x jivetalking-darwin-amd64
+sudo mv jivetalking-darwin-amd64 /usr/local/bin/jivetalking
+
+# macOS (Apple Silicon)
+chmod +x jivetalking-darwin-arm64
+sudo mv jivetalking-darwin-arm64 /usr/local/bin/jivetalking
 ```
+
+### Build from Source
+
+See [Development](#development) section below.
 
 ---
 
