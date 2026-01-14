@@ -1,6 +1,6 @@
 # Jivetalking 🕺
 
-*Professional podcast audio preprocessing-broadcast-quality results with zero audio engineering knowledge required*
+*Professional podcast audio preprocessing - broadcast-quality results with zero audio engineering knowledge required*
 
 ---
 
@@ -46,7 +46,7 @@ Measures your audio's characteristics to drive adaptive processing:
 |--------|-------------|--------------|
 | **High-pass** | DS201 side-chain | Removes subsonic rumble (50–60 Hz, adaptive to voice) |
 | **Low-pass** | DS201 side-chain | Removes ultrasonic content that triggers false processing |
-| **Noise reduction** | Non-Local Means | Adaptive anlmdn denoiser with compand residual suppression |
+| **Noise reduction** | Non-Local Means | Adaptive Non-Local Means (anlmdn) denoiser with compand residual suppression |
 | **Gate** | DS201 expander | Soft expansion for natural inter-phrase cleanup |
 | **Declicker** | DC-1 | Autoregressive (AR) interpolation click/pop remover |
 | **Compressor** | LA-2A | Programme-dependent optical compression with ~10ms attack |
@@ -143,6 +143,40 @@ See [Development](#development) section below.
 
 ---
 
+## CLI Usage
+
+```bash
+jivetalking [flags] <files>
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-v, --version` | Show version information |
+| `-d, --debug` | Enable debug logging to `jivetalking-debug.log` |
+| `--logs` | Save detailed analysis reports |
+
+### Examples
+
+```bash
+# Process multiple files
+jivetalking presenter1.flac presenter2.flac
+
+# Process with debug logging and analysis reports
+jivetalking -d --logs recording.flac
+
+# Process all FLAC files in directory
+jivetalking *.flac
+```
+
+### Output
+
+Processed files are saved in the same directory with `-processed` suffix:
+- `recording.flac` → `recording-processed.flac`
+
+---
+
 ## Development
 
 ```bash
@@ -179,4 +213,25 @@ internal/
 - [Gate: Drawmer DS201](docs/FilterGate-Drawmer%20DS201.md) - Soft expander gate with adaptive threshold
 - [Declick: CEDAR DC-1](docs/FilterDeclick-CEDAR%20DC-1.md) - Autoregressive declicker
 - [Compressor: LA-2A](docs/FilterCompressor-Teletronix%20LA-2A.md) - Programme-dependent optical compression
-- [Limiter: UREI 1176](docs/FilterLimiter-UREI1176.md) - adaptive peak limiter
+- [Limiter: UREI 1176](docs/FilterLimiter-UREI1176.md) - Adaptive peak limiter
+- [Spectral Analysis](docs/Spectral%20Analysis.md) - How measurements drive adaptive processing
+
+---
+
+## Contributing
+
+```bash
+# Run tests before committing
+just test
+
+# Create a release (validates format, creates annotated tag)
+just release X.Y.Z
+
+# Preview changelog
+just changelog
+```
+
+- Follow [Conventional Commits](https://www.conventionalcommits.org/) format
+- Use `just build` for releases (CGO + version injection required)
+- See [AGENTS.md](AGENTS.md) for full development guidelines
+
