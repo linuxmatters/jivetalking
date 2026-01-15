@@ -471,3 +471,406 @@ func TestScoreIntervalWindow(t *testing.T) {
 		})
 	}
 }
+
+// ============================================================================
+// Speech Detection Tests
+// ============================================================================
+
+// makeSpeechTestIntervals creates synthetic interval samples with speech-like characteristics.
+// Allows control over RMS, centroid, and entropy for testing speech detection logic.
+func makeSpeechTestIntervals(startTime time.Duration, count int, rms, centroid, entropy float64) []IntervalSample {
+	intervals := make([]IntervalSample, count)
+	for i := range intervals {
+		intervals[i] = IntervalSample{
+			Timestamp:        startTime + time.Duration(i)*250*time.Millisecond,
+			RMSLevel:         rms,
+			SpectralCentroid: centroid,
+			SpectralEntropy:  entropy,
+		}
+	}
+	return intervals
+}
+
+func TestSpeechScore(t *testing.T) {
+	tests := []struct {
+		name     string
+		interval IntervalSample
+		rmsP50   float64
+		wantMin  float64
+		wantMax  float64
+	}{
+		{
+			name: "typical speech",
+			interval: IntervalSample{
+				RMSLevel:         -18.0,
+				SpectralCentroid: 1500.0, // Voice range
+				SpectralEntropy:  0.5,
+			},
+			rmsP50:  -20.0,
+			wantMin: 0.4,
+			wantMax: 1.0,
+		},
+		{
+			name: "silence (too quiet)",
+			interval: IntervalSample{
+				RMSLevel:         -50.0,
+				SpectralCentroid: 1500.0,
+				SpectralEntropy:  0.5,
+			},
+			rmsP50:  -20.0,
+			wantMin: 0.0,
+			wantMax: 0.0,
+		},
+		{
+			name: "noise (wrong centroid)",
+			interval: IntervalSample{
+				RMSLevel:         -18.0,
+				SpectralCentroid: 8000.0, // Outside voice range
+				SpectralEntropy:  0.9,    // High entropy
+			},
+			rmsP50:  -20.0,
+			wantMin: 0.0,
+			wantMax: 0.4,
+		},
+		{
+			name: "at RMS minimum threshold",
+			interval: IntervalSample{
+				RMSLevel:         -40.0, // Exactly at speechRMSMinimum
+				SpectralCentroid: 1500.0,
+				SpectralEntropy:  0.5,
+			},
+			rmsP50:  -45.0,
+			wantMin: 0.3,
+			wantMax: 0.85,
+		},
+		{
+			name: "just below RMS minimum",
+			interval: IntervalSample{
+				RMSLevel:         -40.1, // Just below threshold
+				SpectralCentroid: 1500.0,
+				SpectralEntropy:  0.5,
+			},
+			rmsP50:  -45.0,
+			wantMin: 0.0,
+			wantMax: 0.0,
+		},
+		{
+			name: "low entropy structured speech",
+			interval: IntervalSample{
+				RMSLevel:         -18.0,
+				SpectralCentroid: 2000.0,
+				SpectralEntropy:  0.2, // Very structured
+			},
+			rmsP50:  -20.0,
+			wantMin: 0.5,
+			wantMax: 1.0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			score := speechScore(tt.interval, tt.rmsP50, 1500.0)
+			if score < tt.wantMin || score > tt.wantMax {
+				t.Errorf("speechScore() = %.2f, want [%.2f, %.2f]", score, tt.wantMin, tt.wantMax)
+			}
+		})
+	}
+}
+
+func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
+	// Helper to create intervals with varied RMS for realistic median calculation
+	// Speech intervals have majority at/above median to ensure >0.4 speech score
+	// Pattern biased towards louder: 3 intervals at -12 to -16, 1 at -22
+	makeVariedSpeechIntervals := func(startTime time.Duration, count int, isSpeech bool) []IntervalSample {
+		intervals := make([]IntervalSample, count)
+		for i := range intervals {
+			rms := -50.0 // silence
+			if isSpeech {
+				// Create varied RMS where most intervals score above 0.4 threshold
+				// Median will be around -14, most intervals at/above median
+				switch i % 4 {
+				case 0:
+					rms = -12.0 // loud speech (+4 above median -> ampScore ~0.67)
+				case 1:
+					rms = -14.0 // moderate (+2 above median -> ampScore ~0.33)
+				case 2:
+					rms = -16.0 // at median (ampScore ~0)
+				case 3:
+					rms = -22.0 // quiet (below median, ampScore 0)
+				}
+			}
+			intervals[i] = IntervalSample{
+				Timestamp:        startTime + time.Duration(i)*250*time.Millisecond,
+				RMSLevel:         rms,
+				SpectralCentroid: 1500.0,
+				SpectralEntropy:  0.3, // Low entropy for better scores (~0.65 entropyScore)
+			}
+		}
+		return intervals
+	}
+
+	t.Run("finds 30s speech region", func(t *testing.T) {
+		// 10s silence + 2.5min speech (600 intervals)
+		// With 25% above threshold, this gives ~150 speech intervals (above 120 minimum)
+		// Search starts at 12s, so we lose 8 intervals, leaving 592 → ~148 speech intervals
+		silenceIntervals := makeVariedSpeechIntervals(0, 40, false)             // 10s silence
+		speechIntervals := makeVariedSpeechIntervals(10*time.Second, 600, true) // 2.5min speech
+		intervals := append(silenceIntervals, speechIntervals...)
+
+		candidates := findSpeechCandidatesFromIntervals(intervals, 10*time.Second)
+
+		if len(candidates) == 0 {
+			t.Fatal("expected at least one speech candidate")
+		}
+		if candidates[0].Duration < 30*time.Second {
+			t.Errorf("duration %v < 30s minimum", candidates[0].Duration)
+		}
+	})
+
+	t.Run("no candidates for short speech", func(t *testing.T) {
+		// 10s silence + 20s speech (too short - only 80 intervals)
+		silenceIntervals := makeVariedSpeechIntervals(0, 40, false)
+		speechIntervals := makeVariedSpeechIntervals(10*time.Second, 80, true) // 20s
+		intervals := append(silenceIntervals, speechIntervals...)
+
+		candidates := findSpeechCandidatesFromIntervals(intervals, 10*time.Second)
+
+		if len(candidates) != 0 {
+			t.Errorf("expected no candidates, got %d", len(candidates))
+		}
+	})
+
+	t.Run("handles natural pauses", func(t *testing.T) {
+		// Speech with 1.5s pause in middle (should bridge)
+		// Each segment needs enough high-scoring intervals: 300 intervals (75s) each
+		speech1 := makeVariedSpeechIntervals(10*time.Second, 300, true)         // 75s
+		pause := makeVariedSpeechIntervals(85*time.Second, 6, false)            // 1.5s pause
+		speech2 := makeVariedSpeechIntervals(86500*time.Millisecond, 300, true) // 75s more
+		intervals := append(append(speech1, pause...), speech2...)
+
+		candidates := findSpeechCandidatesFromIntervals(intervals, 5*time.Second)
+
+		if len(candidates) == 0 {
+			t.Fatal("expected speech candidate bridging pause")
+		}
+		// Combined region should be substantial
+		if candidates[0].Duration < 100*time.Second {
+			t.Errorf("expected bridged duration >100s, got %v", candidates[0].Duration)
+		}
+	})
+
+	t.Run("respects silence end boundary", func(t *testing.T) {
+		// Speech before and after silence end - only speech after should be detected
+		// Need 480+ intervals for late speech to have enough high-scoring intervals
+		earlyIntervals := makeVariedSpeechIntervals(0, 200, true)             // 50s speech at start
+		lateIntervals := makeVariedSpeechIntervals(60*time.Second, 500, true) // 125s speech later
+		intervals := append(earlyIntervals, lateIntervals...)
+
+		// Search starts at 50s (after early speech ends)
+		candidates := findSpeechCandidatesFromIntervals(intervals, 50*time.Second)
+
+		if len(candidates) == 0 {
+			t.Fatal("expected speech candidate after silence end")
+		}
+		// First candidate should start after 50s + 2s buffer = 52s
+		if candidates[0].Start < 52*time.Second {
+			t.Errorf("speech start %v should be after silence end + buffer (52s)", candidates[0].Start)
+		}
+	})
+
+	t.Run("insufficient intervals returns nil", func(t *testing.T) {
+		// Only 100 intervals (25s) - less than minimum 120 (30s)
+		intervals := makeVariedSpeechIntervals(0, 100, true)
+
+		candidates := findSpeechCandidatesFromIntervals(intervals, 0)
+
+		if candidates != nil {
+			t.Errorf("expected nil for insufficient intervals, got %d candidates", len(candidates))
+		}
+	})
+
+	t.Run("long pause breaks speech region", func(t *testing.T) {
+		// Speech with 3s pause in middle (exceeds 2s tolerance, should break)
+		speech1 := makeVariedSpeechIntervals(10*time.Second, 80, true) // 20s
+		pause := makeVariedSpeechIntervals(30*time.Second, 12, false)  // 3s pause (> tolerance)
+		speech2 := makeVariedSpeechIntervals(33*time.Second, 80, true) // 20s more
+		intervals := append(append(speech1, pause...), speech2...)
+
+		candidates := findSpeechCandidatesFromIntervals(intervals, 5*time.Second)
+
+		// Neither segment alone meets 30s minimum, so no candidates expected
+		if len(candidates) != 0 {
+			t.Errorf("expected no candidates (pause breaks region), got %d", len(candidates))
+		}
+	})
+}
+
+func TestMeasureSpeechCandidateFromIntervals(t *testing.T) {
+	t.Run("computes metrics correctly", func(t *testing.T) {
+		// Create intervals with known values
+		intervals := make([]IntervalSample, 40) // 10s of intervals
+		for i := range intervals {
+			intervals[i] = IntervalSample{
+				Timestamp:        time.Duration(i) * 250 * time.Millisecond,
+				RMSLevel:         -20.0,
+				PeakLevel:        -8.0,
+				SpectralCentroid: 1500.0,
+				SpectralFlatness: 0.3,
+				SpectralKurtosis: 5.0,
+				SpectralEntropy:  0.5,
+			}
+		}
+		// Set one interval with higher peak
+		intervals[20].PeakLevel = -5.0
+
+		region := SpeechRegion{
+			Start:    0,
+			End:      10 * time.Second,
+			Duration: 10 * time.Second,
+		}
+
+		metrics := measureSpeechCandidateFromIntervals(region, intervals)
+
+		if metrics == nil {
+			t.Fatal("expected non-nil metrics")
+		}
+
+		// Check averaged values
+		if metrics.RMSLevel != -20.0 {
+			t.Errorf("RMSLevel = %.1f, want -20.0", metrics.RMSLevel)
+		}
+		// Peak should be max across all intervals
+		if metrics.PeakLevel != -5.0 {
+			t.Errorf("PeakLevel = %.1f, want -5.0", metrics.PeakLevel)
+		}
+		// Crest factor = peak - RMS
+		expectedCrest := -5.0 - (-20.0)
+		if metrics.CrestFactor != expectedCrest {
+			t.Errorf("CrestFactor = %.1f, want %.1f", metrics.CrestFactor, expectedCrest)
+		}
+		if metrics.SpectralCentroid != 1500.0 {
+			t.Errorf("SpectralCentroid = %.1f, want 1500.0", metrics.SpectralCentroid)
+		}
+	})
+
+	t.Run("returns nil for empty range", func(t *testing.T) {
+		intervals := makeSpeechTestIntervals(0, 40, -20.0, 1500.0, 0.5)
+		region := SpeechRegion{
+			Start:    100 * time.Second, // No intervals in this range
+			End:      110 * time.Second,
+			Duration: 10 * time.Second,
+		}
+
+		metrics := measureSpeechCandidateFromIntervals(region, intervals)
+
+		if metrics != nil {
+			t.Error("expected nil for region with no intervals")
+		}
+	})
+}
+
+func TestFindBestSpeechRegion(t *testing.T) {
+	t.Run("selects longest qualifying candidate", func(t *testing.T) {
+		// Create intervals covering multiple regions
+		intervals := makeSpeechTestIntervals(0, 400, -18.0, 1500.0, 0.5) // 100s of speech-like intervals
+
+		regions := []SpeechRegion{
+			{Start: 0, End: 35 * time.Second, Duration: 35 * time.Second},
+			{Start: 40 * time.Second, End: 90 * time.Second, Duration: 50 * time.Second}, // Longest
+			{Start: 95 * time.Second, End: 100 * time.Second, Duration: 5 * time.Second},
+		}
+
+		result := findBestSpeechRegion(regions, intervals)
+
+		if result.BestRegion == nil {
+			t.Fatal("expected a best region to be selected")
+		}
+		// Should select the 50s region (longest)
+		if result.BestRegion.Duration != 50*time.Second {
+			t.Errorf("selected duration = %v, want 50s", result.BestRegion.Duration)
+		}
+	})
+
+	t.Run("returns nil for empty regions", func(t *testing.T) {
+		intervals := makeSpeechTestIntervals(0, 200, -18.0, 1500.0, 0.5)
+
+		result := findBestSpeechRegion([]SpeechRegion{}, intervals)
+
+		if result.BestRegion != nil {
+			t.Error("expected nil BestRegion for empty input")
+		}
+	})
+
+	t.Run("stores all candidates for reporting", func(t *testing.T) {
+		intervals := makeSpeechTestIntervals(0, 400, -18.0, 1500.0, 0.5)
+
+		regions := []SpeechRegion{
+			{Start: 0, End: 35 * time.Second, Duration: 35 * time.Second},
+			{Start: 40 * time.Second, End: 80 * time.Second, Duration: 40 * time.Second},
+		}
+
+		result := findBestSpeechRegion(regions, intervals)
+
+		if len(result.Candidates) != 2 {
+			t.Errorf("expected 2 candidates stored, got %d", len(result.Candidates))
+		}
+	})
+}
+
+func TestScoreSpeechCandidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		metrics *SpeechCandidateMetrics
+		wantMin float64
+		wantMax float64
+	}{
+		{
+			name: "ideal speech candidate",
+			metrics: &SpeechCandidateMetrics{
+				Region:           SpeechRegion{Duration: 60 * time.Second},
+				RMSLevel:         -15.0,
+				CrestFactor:      15.0, // Ideal
+				SpectralCentroid: 1500.0,
+			},
+			wantMin: 0.8,
+			wantMax: 1.0,
+		},
+		{
+			name: "quiet speech",
+			metrics: &SpeechCandidateMetrics{
+				Region:           SpeechRegion{Duration: 30 * time.Second},
+				RMSLevel:         -28.0,
+				CrestFactor:      15.0,
+				SpectralCentroid: 1500.0,
+			},
+			wantMin: 0.3,
+			wantMax: 0.7,
+		},
+		{
+			name: "wrong centroid",
+			metrics: &SpeechCandidateMetrics{
+				Region:           SpeechRegion{Duration: 60 * time.Second},
+				RMSLevel:         -15.0,
+				CrestFactor:      15.0,
+				SpectralCentroid: 8000.0, // Outside voice range
+			},
+			wantMin: 0.4,
+			wantMax: 0.7,
+		},
+		{
+			name:    "nil metrics",
+			metrics: nil,
+			wantMin: 0.0,
+			wantMax: 0.0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			score := scoreSpeechCandidate(tt.metrics)
+			if score < tt.wantMin || score > tt.wantMax {
+				t.Errorf("scoreSpeechCandidate() = %.2f, want [%.2f, %.2f]", score, tt.wantMin, tt.wantMax)
+			}
+		})
+	}
+}

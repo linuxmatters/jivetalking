@@ -309,6 +309,9 @@ func GenerateReport(data ReportData) error {
 	// Silence Detection (analysis that informs filter chain decisions)
 	writeDiagnosticSilence(f, inputMeasurements)
 
+	// Speech Detection (for adaptive tuning)
+	writeDiagnosticSpeech(f, inputMeasurements)
+
 	// Filter Chain Applied
 	if data.Result != nil && data.Result.Config != nil {
 		writeFilterChainApplied(f, data.Result.Config, data.Result.Measurements)
@@ -1573,6 +1576,63 @@ func writeDiagnosticSilence(f *os.File, measurements *processor.AudioMeasurement
 	} else {
 		fmt.Fprintf(f, "Silence Candidates:  NONE FOUND\n")
 		fmt.Fprintf(f, "  No silence regions detected in audio. Noise profiling unavailable.\n")
+	}
+
+	fmt.Fprintln(f, "")
+}
+
+// writeDiagnosticSpeech outputs detailed speech detection diagnostics.
+func writeDiagnosticSpeech(f *os.File, measurements *processor.AudioMeasurements) {
+	if measurements == nil {
+		return
+	}
+
+	// Only output section if speech detection was attempted
+	if len(measurements.SpeechRegions) == 0 && measurements.SpeechProfile == nil {
+		return
+	}
+
+	writeSection(f, "Diagnostic: Speech Detection")
+
+	// Show speech candidates summary
+	if len(measurements.SpeechCandidates) > 0 {
+		fmt.Fprintf(f, "Speech Candidates:   %d evaluated\n", len(measurements.SpeechCandidates))
+
+		for i, c := range measurements.SpeechCandidates {
+			// Check if this candidate was selected
+			isSelected := measurements.SpeechProfile != nil &&
+				c.Region.Start == measurements.SpeechProfile.Region.Start
+
+			if isSelected {
+				fmt.Fprintf(f, "  Candidate %d:       %.1fs at %.1fs (score: %.3f) [SELECTED]\n",
+					i+1, c.Region.Duration.Seconds(), c.Region.Start.Seconds(), c.Score)
+				fmt.Fprintf(f, "    RMS Level:       %.1f dBFS\n", c.RMSLevel)
+				fmt.Fprintf(f, "    Peak Level:      %.1f dBFS\n", c.PeakLevel)
+				fmt.Fprintf(f, "    Crest Factor:    %.1f dB\n", c.CrestFactor)
+				fmt.Fprintf(f, "    Centroid:        %.0f Hz\n", c.SpectralCentroid)
+				fmt.Fprintf(f, "    Flatness:        %.3f\n", c.SpectralFlatness)
+				fmt.Fprintf(f, "    Kurtosis:        %.1f\n", c.SpectralKurtosis)
+				fmt.Fprintf(f, "    Entropy:         %.3f\n", c.SpectralEntropy)
+			} else {
+				fmt.Fprintf(f, "  Candidate %d:       %.1fs at %.1fs (score: %.3f, RMS %.1f dBFS)\n",
+					i+1, c.Region.Duration.Seconds(), c.Region.Start.Seconds(), c.Score, c.RMSLevel)
+			}
+		}
+	} else if measurements.SpeechProfile != nil {
+		// Profile exists but no candidates list (shouldn't happen, but handle gracefully)
+		profile := measurements.SpeechProfile
+		fmt.Fprintf(f, "Elected Speech:      %.1fs at %.1fs\n",
+			profile.Region.Duration.Seconds(), profile.Region.Start.Seconds())
+		fmt.Fprintf(f, "  RMS Level:         %.1f dBFS\n", profile.RMSLevel)
+		fmt.Fprintf(f, "  Peak Level:        %.1f dBFS\n", profile.PeakLevel)
+		fmt.Fprintf(f, "  Crest Factor:      %.1f dB\n", profile.CrestFactor)
+		fmt.Fprintf(f, "  Centroid:          %.0f Hz\n", profile.SpectralCentroid)
+	} else if len(measurements.SpeechRegions) > 0 {
+		fmt.Fprintf(f, "Speech Regions:      %d detected\n", len(measurements.SpeechRegions))
+		fmt.Fprintf(f, "  No candidate met quality threshold for speech profiling.\n")
+	} else {
+		fmt.Fprintf(f, "Speech Candidates:   NONE FOUND\n")
+		fmt.Fprintf(f, "  No speech regions detected (file may be too short or all silence).\n")
 	}
 
 	fmt.Fprintln(f, "")

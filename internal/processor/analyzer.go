@@ -62,6 +62,34 @@ type SilenceCandidateMetrics struct {
 	Score float64 // Composite score for candidate ranking
 }
 
+// SpeechRegion represents a detected continuous speech period in the audio.
+// Used for extracting representative speech measurements for adaptive tuning.
+type SpeechRegion struct {
+	Start    time.Duration `json:"start"`
+	End      time.Duration `json:"end"`
+	Duration time.Duration `json:"duration"`
+}
+
+// SpeechCandidateMetrics contains measurements for evaluating speech region candidates.
+// These metrics characterise typical speech levels for adaptive filter tuning.
+type SpeechCandidateMetrics struct {
+	Region SpeechRegion `json:"region"` // The speech region being evaluated
+
+	// Amplitude metrics
+	RMSLevel    float64 `json:"rms_level"`    // dBFS, average level (higher = louder speech)
+	PeakLevel   float64 `json:"peak_level"`   // dBFS, peak level
+	CrestFactor float64 `json:"crest_factor"` // Peak - RMS in dB (speech typically 12-20 dB)
+
+	// Spectral metrics - used to confirm voice-like characteristics
+	SpectralCentroid float64 `json:"spectral_centroid"` // Hz, voice range: 300-4000 Hz
+	SpectralFlatness float64 `json:"spectral_flatness"` // 0-1, lower for tonal speech
+	SpectralKurtosis float64 `json:"spectral_kurtosis"` // Higher for harmonic speech
+	SpectralEntropy  float64 `json:"spectral_entropy"`  // Lower for structured speech than noise
+
+	// Scoring
+	Score float64 `json:"score"` // Composite score for candidate ranking
+}
+
 // IntervalSample contains all measurements for a 250ms audio window.
 // Captures comprehensive metrics from astats, aspectralstats, and ebur128 for
 // silence detection, adaptive filter tuning, and post-hoc analysis.
@@ -425,6 +453,36 @@ const (
 	goldenWindowDuration = 10 * time.Second       // Target duration for refined region
 	goldenWindowMinimum  = 8 * time.Second        // Minimum acceptable refined duration
 	goldenIntervalSize   = 250 * time.Millisecond // Must match interval sampling (intervalDuration)
+)
+
+// Speech detection constants for interval-based analysis
+const (
+	// minimumSpeechIntervals is the minimum consecutive intervals for a speech candidate.
+	// 30 seconds / 250ms = 120 intervals
+	minimumSpeechIntervals = 120
+
+	// minimumSpeechDuration is the minimum duration for speech candidate selection.
+	minimumSpeechDuration = 30 * time.Second
+
+	// speechInterruptionToleranceIntervals allows natural pauses within speech.
+	// 8 intervals = 2 seconds tolerance for breaths, brief pauses.
+	speechInterruptionToleranceIntervals = 8
+
+	// speechSearchStartBuffer adds time after silence end before searching for speech.
+	// Allows transition from room tone to actual speech content.
+	speechSearchStartBuffer = 2 * time.Second
+
+	// Voice frequency range for centroid validation
+	speechCentroidMin = 200.0  // Hz - lower bound for speech
+	speechCentroidMax = 4500.0 // Hz - upper bound for speech
+
+	// speechRMSMinimum is the minimum RMS level to be considered speech (not silence).
+	// Set relative to typical normalised speech levels.
+	speechRMSMinimum = -40.0 // dBFS
+
+	// speechEntropyMax is the maximum entropy for speech (structured signal).
+	// Pure noise approaches 1.0; speech is typically 0.3-0.7.
+	speechEntropyMax = 0.85
 )
 
 // refineToGoldenSubregion finds the cleanest sub-region within a silence candidate.
@@ -1456,6 +1514,13 @@ type AudioMeasurements struct {
 	// Scored silence candidates (for debugging/reporting)
 	SilenceCandidates []SilenceCandidateMetrics `json:"silence_candidates,omitempty"` // All evaluated candidates with scores
 
+	// Speech detection results
+	SpeechRegions    []SpeechRegion           `json:"speech_regions,omitempty"`    // Detected speech regions
+	SpeechCandidates []SpeechCandidateMetrics `json:"speech_candidates,omitempty"` // All evaluated candidates with scores
+
+	// Elected speech candidate measurements (for adaptive tuning)
+	SpeechProfile *SpeechCandidateMetrics `json:"speech_profile,omitempty"` // Best speech candidate metrics
+
 	// Noise profile extracted from best silence candidate
 	NoiseProfile *NoiseProfile `json:"noise_profile,omitempty"` // nil if extraction failed
 
@@ -2066,6 +2131,34 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 	// Store all evaluated candidates for reporting/debugging
 	measurements.SilenceCandidates = silenceResult.Candidates
 
+	// Detect speech candidates (must come after elected silence)
+	var speechSearchStart time.Duration
+	if silenceResult.BestRegion != nil {
+		speechSearchStart = silenceResult.BestRegion.End
+	} else if len(measurements.SilenceRegions) > 0 {
+		// Fallback: use end of first silence region
+		speechSearchStart = measurements.SilenceRegions[0].End
+	} else {
+		// No silence found - start speech search after 30 seconds
+		speechSearchStart = 30 * time.Second
+	}
+
+	measurements.SpeechRegions = findSpeechCandidatesFromIntervals(intervals, speechSearchStart)
+
+	// Select best speech region
+	speechResult := findBestSpeechRegion(measurements.SpeechRegions, intervals)
+	measurements.SpeechCandidates = speechResult.Candidates
+
+	if speechResult.BestRegion != nil {
+		// Store elected speech profile
+		for i := range speechResult.Candidates {
+			if speechResult.Candidates[i].Region.Start == speechResult.BestRegion.Start {
+				measurements.SpeechProfile = &speechResult.Candidates[i]
+				break
+			}
+		}
+	}
+
 	if silenceResult.BestRegion != nil {
 		// Refine to golden sub-region: find cleanest 10s window within the candidate.
 		// This isolates optimal noise profile from long candidates that may span
@@ -2540,6 +2633,274 @@ func clampFloat(value, min, max float64) float64 {
 		return max
 	}
 	return value
+}
+
+// speechScore calculates how speech-like an interval is.
+// Returns 0.0-1.0 where higher = more likely to be speech.
+// Inverts silence detection criteria: rewards amplitude, voice-range centroid, low entropy.
+func speechScore(interval IntervalSample, rmsP50, centroidP50 float64) float64 {
+	// Reject if too quiet (likely silence/room tone)
+	if interval.RMSLevel < speechRMSMinimum {
+		return 0.0
+	}
+
+	// Amplitude score: louder relative to median = better
+	// Score decays below median, peaks at +6dB above median
+	ampScore := 0.0
+	if interval.RMSLevel >= rmsP50 {
+		// Above median: score increases up to +6dB
+		boost := interval.RMSLevel - rmsP50
+		ampScore = clampFloat(boost/6.0, 0.0, 1.0)
+	}
+
+	// Centroid score: voice range (200-4500 Hz) = good
+	centroidScore := 0.0
+	if interval.SpectralCentroid >= speechCentroidMin && interval.SpectralCentroid <= speechCentroidMax {
+		// In voice range - score based on how central
+		voiceMid := (speechCentroidMin + speechCentroidMax) / 2
+		voiceHalfWidth := (speechCentroidMax - speechCentroidMin) / 2
+		distFromMid := math.Abs(interval.SpectralCentroid - voiceMid)
+		centroidScore = 1.0 - (distFromMid / voiceHalfWidth * 0.5)
+	}
+
+	// Entropy score: lower entropy = more structured = more speech-like
+	entropyScore := 0.0
+	if interval.SpectralEntropy < speechEntropyMax {
+		entropyScore = 1.0 - (interval.SpectralEntropy / speechEntropyMax)
+	}
+
+	// Weighted combination: amplitude most important, then centroid, then entropy
+	_ = centroidP50 // Reserved for future use
+	return ampScore*0.5 + centroidScore*0.3 + entropyScore*0.2
+}
+
+// findSpeechCandidatesFromIntervals identifies speech regions from interval samples.
+// Only searches after silenceEnd to ensure speech follows the elected silence candidate.
+// Uses a speech score approach that rewards amplitude, voice-range centroid, and low entropy.
+//
+// Detection algorithm:
+// 1. Start searching after silenceEnd + buffer
+// 2. Calculate reference values (medians) for speech scoring
+// 3. Score each interval for "speech likelihood"
+// 4. Find consecutive runs that meet minimum duration (30 seconds)
+// 5. Allow brief interruptions (2s) for natural pauses
+func findSpeechCandidatesFromIntervals(intervals []IntervalSample, silenceEnd time.Duration) []SpeechRegion {
+	if len(intervals) < minimumSpeechIntervals {
+		return nil
+	}
+
+	// Find start index: after silence end + buffer
+	searchStart := silenceEnd + speechSearchStartBuffer
+	startIdx := 0
+	for i, interval := range intervals {
+		if interval.Timestamp >= searchStart {
+			startIdx = i
+			break
+		}
+	}
+
+	if len(intervals)-startIdx < minimumSpeechIntervals {
+		return nil // Not enough intervals after silence
+	}
+
+	searchIntervals := intervals[startIdx:]
+
+	// Calculate medians for speech scoring
+	rmsLevels := make([]float64, len(searchIntervals))
+	centroidValues := make([]float64, len(searchIntervals))
+	for i, interval := range searchIntervals {
+		rmsLevels[i] = interval.RMSLevel
+		centroidValues[i] = interval.SpectralCentroid
+	}
+	sort.Float64s(rmsLevels)
+	sort.Float64s(centroidValues)
+
+	rmsP50 := rmsLevels[len(rmsLevels)/2]
+	centroidP50 := centroidValues[len(centroidValues)/2]
+
+	// Speech score threshold (lower than silence since speech varies more)
+	const speechScoreThreshold = 0.4
+
+	var candidates []SpeechRegion
+	var speechStart time.Duration
+	var speechIntervalCount int
+	var interruptionCount int
+	inSpeech := false
+
+	for i := 0; i < len(searchIntervals); i++ {
+		interval := searchIntervals[i]
+		score := speechScore(interval, rmsP50, centroidP50)
+		isSpeech := score >= speechScoreThreshold
+
+		if isSpeech {
+			if !inSpeech {
+				// Start of potential speech region
+				speechStart = interval.Timestamp
+				speechIntervalCount = 1
+				interruptionCount = 0
+				inSpeech = true
+			} else {
+				speechIntervalCount++
+				interruptionCount = 0
+			}
+		} else if inSpeech {
+			// Not speech - count as interruption
+			interruptionCount++
+
+			if interruptionCount > speechInterruptionToleranceIntervals {
+				// Too many consecutive interruptions - end speech region
+				lastSpeechIdx := i - interruptionCount
+				if speechIntervalCount >= minimumSpeechIntervals && lastSpeechIdx >= 0 && lastSpeechIdx < len(searchIntervals) {
+					endTime := searchIntervals[lastSpeechIdx].Timestamp + 250*time.Millisecond
+					duration := endTime - speechStart
+					candidates = append(candidates, SpeechRegion{
+						Start:    speechStart,
+						End:      endTime,
+						Duration: duration,
+					})
+				}
+				inSpeech = false
+				speechIntervalCount = 0
+				interruptionCount = 0
+			}
+		}
+	}
+
+	// Handle speech extending to end of file
+	if inSpeech && speechIntervalCount >= minimumSpeechIntervals {
+		lastInterval := searchIntervals[len(searchIntervals)-1]
+		endTime := lastInterval.Timestamp + 250*time.Millisecond
+		duration := endTime - speechStart
+		candidates = append(candidates, SpeechRegion{
+			Start:    speechStart,
+			End:      endTime,
+			Duration: duration,
+		})
+	}
+
+	return candidates
+}
+
+// measureSpeechCandidateFromIntervals computes metrics for a speech region using pre-collected interval data.
+// This avoids re-reading the audio file - all measurements come from Pass 1's interval samples.
+// Returns nil if no intervals fall within the region.
+func measureSpeechCandidateFromIntervals(region SpeechRegion, intervals []IntervalSample) *SpeechCandidateMetrics {
+	// Extract intervals within the candidate region
+	regionIntervals := getIntervalsInRange(intervals, region.Start, region.End)
+	if len(regionIntervals) == 0 {
+		return nil
+	}
+
+	// Accumulate metrics for averaging
+	var rmsSum, peakMax float64
+	var centroidSum, flatnessSum, kurtosisSum, entropySum float64
+	peakMax = -120.0
+
+	for _, interval := range regionIntervals {
+		rmsSum += interval.RMSLevel
+		if interval.PeakLevel > peakMax {
+			peakMax = interval.PeakLevel
+		}
+		centroidSum += interval.SpectralCentroid
+		flatnessSum += interval.SpectralFlatness
+		kurtosisSum += interval.SpectralKurtosis
+		entropySum += interval.SpectralEntropy
+	}
+
+	n := float64(len(regionIntervals))
+
+	return &SpeechCandidateMetrics{
+		Region:           region,
+		RMSLevel:         rmsSum / n,
+		PeakLevel:        peakMax,
+		CrestFactor:      peakMax - (rmsSum / n),
+		SpectralCentroid: centroidSum / n,
+		SpectralFlatness: flatnessSum / n,
+		SpectralKurtosis: kurtosisSum / n,
+		SpectralEntropy:  entropySum / n,
+	}
+}
+
+// findBestSpeechRegionResult contains the selected region and all evaluated candidates.
+type findBestSpeechRegionResult struct {
+	BestRegion *SpeechRegion
+	Candidates []SpeechCandidateMetrics
+}
+
+// findBestSpeechRegion selects the best speech region for measurements.
+// Strategy: prefer longest duration that meets quality threshold.
+// Unlike silence (where earlier is better), speech benefits from longer samples.
+func findBestSpeechRegion(regions []SpeechRegion, intervals []IntervalSample) *findBestSpeechRegionResult {
+	result := &findBestSpeechRegionResult{}
+
+	if len(regions) == 0 {
+		return result
+	}
+
+	var bestCandidate *SpeechRegion
+	var bestDuration time.Duration
+
+	for i := range regions {
+		candidate := &regions[i]
+
+		// Measure speech characteristics from interval data
+		metrics := measureSpeechCandidateFromIntervals(*candidate, intervals)
+		if metrics == nil {
+			continue
+		}
+
+		// Score the candidate
+		score := scoreSpeechCandidate(metrics)
+		metrics.Score = score
+
+		// Store for reporting
+		result.Candidates = append(result.Candidates, *metrics)
+
+		// Selection: longest candidate above minimum quality
+		const minAcceptableSpeechScore = 0.3
+		if score >= minAcceptableSpeechScore && candidate.Duration > bestDuration {
+			bestCandidate = candidate
+			bestDuration = candidate.Duration
+		}
+	}
+
+	result.BestRegion = bestCandidate
+	return result
+}
+
+// scoreSpeechCandidate computes a composite score for a speech region candidate.
+// Higher scores indicate better candidates for speech profiling.
+func scoreSpeechCandidate(m *SpeechCandidateMetrics) float64 {
+	if m == nil {
+		return 0.0
+	}
+
+	// Amplitude score: louder speech = better sample
+	// Range: -30 dBFS (worst) to -12 dBFS (best)
+	ampScore := 0.0
+	if m.RMSLevel > -30.0 {
+		ampScore = clampFloat((m.RMSLevel-(-30.0))/18.0, 0.0, 1.0)
+	}
+
+	// Centroid score: voice range = good
+	centroidScore := 0.0
+	if m.SpectralCentroid >= speechCentroidMin && m.SpectralCentroid <= speechCentroidMax {
+		centroidScore = 1.0
+	}
+
+	// Crest factor score: typical speech crest (12-20 dB) = good
+	crestScore := 0.0
+	if m.CrestFactor >= 10.0 && m.CrestFactor <= 25.0 {
+		// Peak score at 15 dB, decay towards edges
+		distFromIdeal := math.Abs(m.CrestFactor - 15.0)
+		crestScore = clampFloat(1.0-(distFromIdeal/10.0), 0.0, 1.0)
+	}
+
+	// Duration score: longer = better (up to 60s, then plateau)
+	durScore := clampFloat(m.Region.Duration.Seconds()/60.0, 0.0, 1.0)
+
+	// Weighted combination
+	return ampScore*0.3 + centroidScore*0.3 + crestScore*0.2 + durScore*0.2
 }
 
 // MeasureOutputSilenceRegion analyses the same silence region in the output file
