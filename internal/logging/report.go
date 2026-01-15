@@ -1540,19 +1540,24 @@ func writeDiagnosticSilence(f *os.File, measurements *processor.AudioMeasurement
 						measurements.NoiseProfile.Start.Seconds())
 				}
 
-				fmt.Fprintf(f, "    RMS Level:       %.1f dBFS\n", c.RMSLevel)
-				fmt.Fprintf(f, "    Peak Level:      %.1f dBFS\n", c.PeakLevel)
-				fmt.Fprintf(f, "    Crest Factor:    %.1f dB\n", c.CrestFactor)
-				fmt.Fprintf(f, "    Centroid:        %.0f Hz\n", c.SpectralCentroid)
-				fmt.Fprintf(f, "    Flatness:        %.3f\n", c.SpectralFlatness)
-				fmt.Fprintf(f, "    Kurtosis:        %.1f\n", c.SpectralKurtosis)
-				noiseType := "broadband"
-				if c.Entropy < 0.7 {
-					noiseType = "tonal"
-				} else if c.Entropy < 0.9 {
-					noiseType = "mixed"
-				}
-				fmt.Fprintf(f, "    Entropy:         %.3f (%s)\n", c.Entropy, noiseType)
+				fmt.Fprintf(f, "    Amplitude:\n")
+				fmt.Fprintf(f, "      RMS Level:     %.1f dBFS\n", c.RMSLevel)
+				fmt.Fprintf(f, "      Peak Level:    %.1f dBFS\n", c.PeakLevel)
+				fmt.Fprintf(f, "      Crest Factor:  %.1f dB\n", c.CrestFactor)
+				fmt.Fprintf(f, "    Spectral:\n")
+				fmt.Fprintf(f, "      Centroid:      %.0f Hz (%s)\n", c.SpectralCentroid, interpretCentroid(c.SpectralCentroid))
+				fmt.Fprintf(f, "      Spread:        %.0f Hz\n", c.SpectralSpread)
+				fmt.Fprintf(f, "      Rolloff:       %.0f Hz\n", c.SpectralRolloff)
+				fmt.Fprintf(f, "      Flatness:      %.3f (%s)\n", c.SpectralFlatness, interpretFlatness(c.SpectralFlatness))
+				fmt.Fprintf(f, "      Entropy:       %.3f (%s)\n", c.SpectralEntropy, interpretEntropy(c.SpectralEntropy))
+				fmt.Fprintf(f, "      Kurtosis:      %.1f (%s)\n", c.SpectralKurtosis, interpretKurtosis(c.SpectralKurtosis))
+				fmt.Fprintf(f, "      Skewness:      %.2f\n", c.SpectralSkewness)
+				fmt.Fprintf(f, "      Flux:          %.4f\n", c.SpectralFlux)
+				fmt.Fprintf(f, "      Slope:         %.2e\n", c.SpectralSlope)
+				fmt.Fprintf(f, "    Loudness:\n")
+				fmt.Fprintf(f, "      Momentary:     %.1f LUFS\n", c.MomentaryLUFS)
+				fmt.Fprintf(f, "      Short-term:    %.1f LUFS\n", c.ShortTermLUFS)
+				fmt.Fprintf(f, "      True Peak:     %.1f dBTP\n", c.TruePeak)
 			} else {
 				reason := ""
 				if c.Score == 0.0 {
@@ -1606,13 +1611,24 @@ func writeDiagnosticSpeech(f *os.File, measurements *processor.AudioMeasurements
 			if isSelected {
 				fmt.Fprintf(f, "  Candidate %d:       %.1fs at %.1fs (score: %.3f) [SELECTED]\n",
 					i+1, c.Region.Duration.Seconds(), c.Region.Start.Seconds(), c.Score)
-				fmt.Fprintf(f, "    RMS Level:       %.1f dBFS\n", c.RMSLevel)
-				fmt.Fprintf(f, "    Peak Level:      %.1f dBFS\n", c.PeakLevel)
-				fmt.Fprintf(f, "    Crest Factor:    %.1f dB\n", c.CrestFactor)
-				fmt.Fprintf(f, "    Centroid:        %.0f Hz\n", c.SpectralCentroid)
-				fmt.Fprintf(f, "    Flatness:        %.3f\n", c.SpectralFlatness)
-				fmt.Fprintf(f, "    Kurtosis:        %.1f\n", c.SpectralKurtosis)
-				fmt.Fprintf(f, "    Entropy:         %.3f\n", c.SpectralEntropy)
+				fmt.Fprintf(f, "    Amplitude:\n")
+				fmt.Fprintf(f, "      RMS Level:     %.1f dBFS\n", c.RMSLevel)
+				fmt.Fprintf(f, "      Peak Level:    %.1f dBFS\n", c.PeakLevel)
+				fmt.Fprintf(f, "      Crest Factor:  %.1f dB\n", c.CrestFactor)
+				fmt.Fprintf(f, "    Spectral:\n")
+				fmt.Fprintf(f, "      Centroid:      %.0f Hz (%s)\n", c.SpectralCentroid, interpretCentroid(c.SpectralCentroid))
+				fmt.Fprintf(f, "      Spread:        %.0f Hz\n", c.SpectralSpread)
+				fmt.Fprintf(f, "      Rolloff:       %.0f Hz\n", c.SpectralRolloff)
+				fmt.Fprintf(f, "      Flatness:      %.3f (%s)\n", c.SpectralFlatness, interpretFlatness(c.SpectralFlatness))
+				fmt.Fprintf(f, "      Entropy:       %.3f (%s)\n", c.SpectralEntropy, interpretEntropy(c.SpectralEntropy))
+				fmt.Fprintf(f, "      Kurtosis:      %.1f (%s)\n", c.SpectralKurtosis, interpretKurtosis(c.SpectralKurtosis))
+				fmt.Fprintf(f, "      Skewness:      %.2f\n", c.SpectralSkewness)
+				fmt.Fprintf(f, "      Flux:          %.4f\n", c.SpectralFlux)
+				fmt.Fprintf(f, "      Slope:         %.2e\n", c.SpectralSlope)
+				fmt.Fprintf(f, "    Loudness:\n")
+				fmt.Fprintf(f, "      Momentary:     %.1f LUFS\n", c.MomentaryLUFS)
+				fmt.Fprintf(f, "      Short-term:    %.1f LUFS\n", c.ShortTermLUFS)
+				fmt.Fprintf(f, "      True Peak:     %.1f dBTP\n", c.TruePeak)
 			} else {
 				fmt.Fprintf(f, "  Candidate %d:       %.1fs at %.1fs (score: %.3f, RMS %.1f dBFS)\n",
 					i+1, c.Region.Duration.Seconds(), c.Region.Start.Seconds(), c.Score, c.RMSLevel)
