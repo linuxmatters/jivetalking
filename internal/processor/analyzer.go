@@ -2774,12 +2774,16 @@ func findSpeechCandidatesFromIntervals(intervals []IntervalSample, silenceEnd ti
 
 	// Find start index: after silence end + buffer
 	searchStart := silenceEnd + speechSearchStartBuffer
-	startIdx := 0
+	startIdx := -1
 	for i, interval := range intervals {
 		if interval.Timestamp >= searchStart {
 			startIdx = i
 			break
 		}
+	}
+
+	if startIdx < 0 {
+		return nil // No intervals found at or after search start
 	}
 
 	if len(intervals)-startIdx < minimumSpeechIntervals {
