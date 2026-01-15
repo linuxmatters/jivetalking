@@ -44,19 +44,38 @@ type NoiseProfile struct {
 
 // SilenceCandidateMetrics contains measurements for evaluating silence region candidates.
 // These metrics are collected before final selection to enable multi-metric scoring.
+// Includes all measurements available from IntervalSample for future filter tuning.
 type SilenceCandidateMetrics struct {
 	Region SilenceRegion // The silence region being evaluated
 
-	// Amplitude metrics (from astats)
+	// Amplitude metrics
 	RMSLevel    float64 // dBFS, average level (lower = quieter)
-	PeakLevel   float64 // dBFS, peak level (transient indicator)
+	PeakLevel   float64 // dBFS, max peak level across region
 	CrestFactor float64 // Peak - RMS in dB (high = impulsive)
-	Entropy     float64 // 0-1, signal randomness (1.0 = broadband noise)
 
-	// Spectral metrics (from aspectralstats) - key for crosstalk detection
+	// Spectral metrics (averaged across region)
+	SpectralMean     float64 // Average magnitude
+	SpectralVariance float64 // Magnitude spread
 	SpectralCentroid float64 // Hz, where energy is concentrated
-	SpectralFlatness float64 // 0-1, noise-like (high) vs tonal (low)
+	SpectralSpread   float64 // Hz, frequency bandwidth
+	SpectralSkewness float64 // Distribution asymmetry
 	SpectralKurtosis float64 // Peakiness - high values indicate speech harmonics
+	SpectralEntropy  float64 // 0-1, signal randomness (1.0 = broadband noise)
+	SpectralFlatness float64 // 0-1, noise-like (high) vs tonal (low)
+	SpectralCrest    float64 // Spectral peakiness
+	SpectralFlux     float64 // Rate of spectral change
+	SpectralSlope    float64 // High-frequency roll-off rate
+	SpectralDecrease float64 // High-frequency energy decay
+	SpectralRolloff  float64 // Hz, frequency below which 85% energy lies
+
+	// Loudness metrics (averaged/max across region)
+	MomentaryLUFS float64 // LUFS, average momentary loudness
+	ShortTermLUFS float64 // LUFS, average short-term loudness
+	TruePeak      float64 // dBTP, max true peak across region
+	SamplePeak    float64 // dBFS, max sample peak across region
+
+	// Legacy field for compatibility (same as SpectralEntropy)
+	Entropy float64 // Deprecated: use SpectralEntropy instead
 
 	// Scoring (computed after measurement)
 	Score float64 // Composite score for candidate ranking
@@ -72,19 +91,35 @@ type SpeechRegion struct {
 
 // SpeechCandidateMetrics contains measurements for evaluating speech region candidates.
 // These metrics characterise typical speech levels for adaptive filter tuning.
+// Includes all measurements available from IntervalSample for future filter tuning.
 type SpeechCandidateMetrics struct {
 	Region SpeechRegion `json:"region"` // The speech region being evaluated
 
 	// Amplitude metrics
 	RMSLevel    float64 `json:"rms_level"`    // dBFS, average level (higher = louder speech)
-	PeakLevel   float64 `json:"peak_level"`   // dBFS, peak level
+	PeakLevel   float64 `json:"peak_level"`   // dBFS, max peak level across region
 	CrestFactor float64 `json:"crest_factor"` // Peak - RMS in dB (speech typically 12-20 dB)
 
-	// Spectral metrics - used to confirm voice-like characteristics
+	// Spectral metrics (averaged across region)
+	SpectralMean     float64 `json:"spectral_mean"`     // Average magnitude
+	SpectralVariance float64 `json:"spectral_variance"` // Magnitude spread
 	SpectralCentroid float64 `json:"spectral_centroid"` // Hz, voice range: 300-4000 Hz
-	SpectralFlatness float64 `json:"spectral_flatness"` // 0-1, lower for tonal speech
+	SpectralSpread   float64 `json:"spectral_spread"`   // Hz, frequency bandwidth
+	SpectralSkewness float64 `json:"spectral_skewness"` // Distribution asymmetry
 	SpectralKurtosis float64 `json:"spectral_kurtosis"` // Higher for harmonic speech
 	SpectralEntropy  float64 `json:"spectral_entropy"`  // Lower for structured speech than noise
+	SpectralFlatness float64 `json:"spectral_flatness"` // 0-1, lower for tonal speech
+	SpectralCrest    float64 `json:"spectral_crest"`    // Spectral peakiness
+	SpectralFlux     float64 `json:"spectral_flux"`     // Rate of spectral change
+	SpectralSlope    float64 `json:"spectral_slope"`    // High-frequency roll-off rate
+	SpectralDecrease float64 `json:"spectral_decrease"` // High-frequency energy decay
+	SpectralRolloff  float64 `json:"spectral_rolloff"`  // Hz, frequency below which 85% energy lies
+
+	// Loudness metrics (averaged/max across region)
+	MomentaryLUFS float64 `json:"momentary_lufs"`  // LUFS, average momentary loudness
+	ShortTermLUFS float64 `json:"short_term_lufs"` // LUFS, average short-term loudness
+	TruePeak      float64 `json:"true_peak"`       // dBTP, max true peak across region
+	SamplePeak    float64 `json:"sample_peak"`     // dBFS, max sample peak across region
 
 	// Scoring
 	Score float64 `json:"score"` // Composite score for candidate ranking
@@ -592,33 +627,81 @@ func measureSilenceCandidateFromIntervals(region SilenceRegion, intervals []Inte
 		return nil
 	}
 
-	// Accumulate metrics for averaging
-	var rmsSum, peakMax float64
-	var centroidSum, flatnessSum, kurtosisSum, entropySum float64
-	peakMax = -120.0
+	// Accumulate metrics for averaging (sums) and extremes (max)
+	var rmsSum float64
+	var peakMax, truePeakMax, samplePeakMax float64 = -120.0, -120.0, -120.0
+
+	// Spectral metrics sums
+	var meanSum, varianceSum, centroidSum, spreadSum float64
+	var skewnessSum, kurtosisSum, entropySum, flatnessSum float64
+	var crestSum, fluxSum, slopeSum, decreaseSum, rolloffSum float64
+
+	// Loudness metrics sums
+	var momentarySum, shortTermSum float64
 
 	for _, interval := range regionIntervals {
+		// Amplitude
 		rmsSum += interval.RMSLevel
 		if interval.PeakLevel > peakMax {
 			peakMax = interval.PeakLevel
 		}
+
+		// Spectral
+		meanSum += interval.SpectralMean
+		varianceSum += interval.SpectralVariance
 		centroidSum += interval.SpectralCentroid
-		flatnessSum += interval.SpectralFlatness
+		spreadSum += interval.SpectralSpread
+		skewnessSum += interval.SpectralSkewness
 		kurtosisSum += interval.SpectralKurtosis
 		entropySum += interval.SpectralEntropy
+		flatnessSum += interval.SpectralFlatness
+		crestSum += interval.SpectralCrest
+		fluxSum += interval.SpectralFlux
+		slopeSum += interval.SpectralSlope
+		decreaseSum += interval.SpectralDecrease
+		rolloffSum += interval.SpectralRolloff
+
+		// Loudness (average for momentary/short-term, max for peaks)
+		momentarySum += interval.MomentaryLUFS
+		shortTermSum += interval.ShortTermLUFS
+		if interval.TruePeak > truePeakMax {
+			truePeakMax = interval.TruePeak
+		}
+		if interval.SamplePeak > samplePeakMax {
+			samplePeakMax = interval.SamplePeak
+		}
 	}
 
 	n := float64(len(regionIntervals))
+	avgRMS := rmsSum / n
+	avgEntropy := entropySum / n
 
 	return &SilenceCandidateMetrics{
-		Region:           region,
-		RMSLevel:         rmsSum / n,
-		PeakLevel:        peakMax,
-		CrestFactor:      peakMax - (rmsSum / n), // Peak - RMS in dB
-		Entropy:          entropySum / n,
+		Region:      region,
+		RMSLevel:    avgRMS,
+		PeakLevel:   peakMax,
+		CrestFactor: peakMax - avgRMS,
+
+		SpectralMean:     meanSum / n,
+		SpectralVariance: varianceSum / n,
 		SpectralCentroid: centroidSum / n,
-		SpectralFlatness: flatnessSum / n,
+		SpectralSpread:   spreadSum / n,
+		SpectralSkewness: skewnessSum / n,
 		SpectralKurtosis: kurtosisSum / n,
+		SpectralEntropy:  avgEntropy,
+		SpectralFlatness: flatnessSum / n,
+		SpectralCrest:    crestSum / n,
+		SpectralFlux:     fluxSum / n,
+		SpectralSlope:    slopeSum / n,
+		SpectralDecrease: decreaseSum / n,
+		SpectralRolloff:  rolloffSum / n,
+
+		MomentaryLUFS: momentarySum / n,
+		ShortTermLUFS: shortTermSum / n,
+		TruePeak:      truePeakMax,
+		SamplePeak:    samplePeakMax,
+
+		Entropy: avgEntropy, // Legacy field for compatibility
 	}
 }
 
@@ -2791,33 +2874,78 @@ func measureSpeechCandidateFromIntervals(region SpeechRegion, intervals []Interv
 		return nil
 	}
 
-	// Accumulate metrics for averaging
-	var rmsSum, peakMax float64
-	var centroidSum, flatnessSum, kurtosisSum, entropySum float64
-	peakMax = -120.0
+	// Accumulate metrics for averaging (sums) and extremes (max)
+	var rmsSum float64
+	var peakMax, truePeakMax, samplePeakMax float64 = -120.0, -120.0, -120.0
+
+	// Spectral metrics sums
+	var meanSum, varianceSum, centroidSum, spreadSum float64
+	var skewnessSum, kurtosisSum, entropySum, flatnessSum float64
+	var crestSum, fluxSum, slopeSum, decreaseSum, rolloffSum float64
+
+	// Loudness metrics sums
+	var momentarySum, shortTermSum float64
 
 	for _, interval := range regionIntervals {
+		// Amplitude
 		rmsSum += interval.RMSLevel
 		if interval.PeakLevel > peakMax {
 			peakMax = interval.PeakLevel
 		}
+
+		// Spectral
+		meanSum += interval.SpectralMean
+		varianceSum += interval.SpectralVariance
 		centroidSum += interval.SpectralCentroid
-		flatnessSum += interval.SpectralFlatness
+		spreadSum += interval.SpectralSpread
+		skewnessSum += interval.SpectralSkewness
 		kurtosisSum += interval.SpectralKurtosis
 		entropySum += interval.SpectralEntropy
+		flatnessSum += interval.SpectralFlatness
+		crestSum += interval.SpectralCrest
+		fluxSum += interval.SpectralFlux
+		slopeSum += interval.SpectralSlope
+		decreaseSum += interval.SpectralDecrease
+		rolloffSum += interval.SpectralRolloff
+
+		// Loudness (average for momentary/short-term, max for peaks)
+		momentarySum += interval.MomentaryLUFS
+		shortTermSum += interval.ShortTermLUFS
+		if interval.TruePeak > truePeakMax {
+			truePeakMax = interval.TruePeak
+		}
+		if interval.SamplePeak > samplePeakMax {
+			samplePeakMax = interval.SamplePeak
+		}
 	}
 
 	n := float64(len(regionIntervals))
+	avgRMS := rmsSum / n
 
 	return &SpeechCandidateMetrics{
-		Region:           region,
-		RMSLevel:         rmsSum / n,
-		PeakLevel:        peakMax,
-		CrestFactor:      peakMax - (rmsSum / n),
+		Region:      region,
+		RMSLevel:    avgRMS,
+		PeakLevel:   peakMax,
+		CrestFactor: peakMax - avgRMS,
+
+		SpectralMean:     meanSum / n,
+		SpectralVariance: varianceSum / n,
 		SpectralCentroid: centroidSum / n,
-		SpectralFlatness: flatnessSum / n,
+		SpectralSpread:   spreadSum / n,
+		SpectralSkewness: skewnessSum / n,
 		SpectralKurtosis: kurtosisSum / n,
 		SpectralEntropy:  entropySum / n,
+		SpectralFlatness: flatnessSum / n,
+		SpectralCrest:    crestSum / n,
+		SpectralFlux:     fluxSum / n,
+		SpectralSlope:    slopeSum / n,
+		SpectralDecrease: decreaseSum / n,
+		SpectralRolloff:  rolloffSum / n,
+
+		MomentaryLUFS: momentarySum / n,
+		ShortTermLUFS: shortTermSum / n,
+		TruePeak:      truePeakMax,
+		SamplePeak:    samplePeakMax,
 	}
 }
 
