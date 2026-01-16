@@ -334,11 +334,10 @@ func GenerateReport(data ReportData) error {
 	writeSpectralTable(f, inputMeasurements, filteredMeasurements, finalMeasurements)
 
 	// Noise Floor Analysis Table
-	var inputNoise *processor.NoiseProfile
-	if inputMeasurements != nil {
-		inputNoise = inputMeasurements.NoiseProfile
-	}
-	writeNoiseFloorTable(f, inputNoise, getFilteredNoise(data.Result), getFinalNoise(data.Result))
+	writeNoiseFloorTable(f, inputMeasurements, filteredMeasurements, getFinalMeasurements(data.Result))
+
+	// Speech Region Analysis Table
+	writeSpeechRegionTable(f, inputMeasurements, filteredMeasurements, getFinalMeasurements(data.Result))
 
 	return nil
 }
@@ -1337,21 +1336,62 @@ func writeSpectralTable(f *os.File, input *processor.AudioMeasurements, filtered
 }
 
 // writeNoiseFloorTable outputs a three-column comparison table for noise floor metrics.
-// Columns: Input (Pass 1 NoiseProfile), Filtered (Pass 2 SilenceSample), Final (Pass 4 SilenceSample)
-func writeNoiseFloorTable(f *os.File, inputNoise *processor.NoiseProfile, filteredNoise *processor.SilenceCandidateMetrics, finalNoise *processor.SilenceCandidateMetrics) {
+// Columns: Input (Pass 1 elected silence candidate), Filtered (Pass 2 SilenceSample), Final (Pass 4 SilenceSample)
+func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurements, filteredMeasurements *processor.OutputMeasurements, finalMeasurements *processor.OutputMeasurements) {
 	writeSection(f, "Noise Floor Analysis")
 
-	// Skip if no input noise profile
-	if inputNoise == nil {
+	// Skip if no input measurements or noise profile
+	if inputMeasurements == nil || inputMeasurements.NoiseProfile == nil {
 		fmt.Fprintln(f, "No silence detected in input — noise profiling unavailable")
 		fmt.Fprintln(f, "")
 		return
 	}
 
+	// Find the elected silence candidate in SilenceCandidates by matching Region.Start to NoiseProfile.Start
+	// NoiseProfile only has ~10 fields, but we need the full 20+ field SilenceCandidateMetrics
+	var inputNoise *processor.SilenceCandidateMetrics
+	noiseProfile := inputMeasurements.NoiseProfile
+
+	// Handle refined regions - match against OriginalStart if refined, otherwise match against Start
+	targetStart := noiseProfile.Start
+	if noiseProfile.WasRefined {
+		targetStart = noiseProfile.OriginalStart
+	}
+
+	for i := range inputMeasurements.SilenceCandidates {
+		if inputMeasurements.SilenceCandidates[i].Region.Start == targetStart {
+			inputNoise = &inputMeasurements.SilenceCandidates[i]
+			break
+		}
+	}
+
+	// Fall back to NoiseProfile fields if candidate not found (shouldn't happen, but be defensive)
+	if inputNoise == nil {
+		fmt.Fprintln(f, "Warning: Could not find matching silence candidate — using NoiseProfile data")
+		fmt.Fprintln(f, "")
+	}
+
+	// Extract filtered and final silence samples
+	var filteredNoise *processor.SilenceCandidateMetrics
+	var finalNoise *processor.SilenceCandidateMetrics
+	if filteredMeasurements != nil {
+		filteredNoise = filteredMeasurements.SilenceSample
+	}
+	if finalMeasurements != nil {
+		finalNoise = finalMeasurements.SilenceSample
+	}
+
 	table := NewMetricTable()
 
+	// ========== AMPLITUDE METRICS ==========
+
 	// RMS Level (noise floor)
-	inputRMS := inputNoise.MeasuredNoiseFloor
+	inputRMS := math.NaN()
+	if inputNoise != nil {
+		inputRMS = inputNoise.RMSLevel
+	} else {
+		inputRMS = noiseProfile.MeasuredNoiseFloor
+	}
 	filteredRMS := math.NaN()
 	finalRMS := math.NaN()
 	if filteredNoise != nil {
@@ -1363,17 +1403,15 @@ func writeNoiseFloorTable(f *os.File, inputNoise *processor.NoiseProfile, filter
 	table.AddMetricRow("RMS Level", inputRMS, filteredRMS, finalRMS, 1, "dBFS", "")
 
 	// Noise Reduction Delta (input - filtered/final, positive = reduction achieved)
-	// Shows how much the noise floor was lowered by processing
 	filteredDelta := math.NaN()
 	finalDelta := math.NaN()
 	if !math.IsNaN(inputRMS) && !math.IsNaN(filteredRMS) {
-		filteredDelta = inputRMS - filteredRMS // Positive = noise reduced
+		filteredDelta = inputRMS - filteredRMS
 	}
 	if !math.IsNaN(inputRMS) && !math.IsNaN(finalRMS) {
 		finalDelta = inputRMS - finalRMS
 	}
 
-	// Interpret the noise reduction effectiveness
 	var reductionInterp string
 	if !math.IsNaN(filteredDelta) {
 		if filteredDelta < 0 {
@@ -1387,7 +1425,6 @@ func writeNoiseFloorTable(f *os.File, inputNoise *processor.NoiseProfile, filter
 		}
 	}
 
-	// Format with explicit sign to show direction
 	formatDelta := func(delta float64) string {
 		if math.IsNaN(delta) {
 			return MissingValue
@@ -1402,7 +1439,12 @@ func writeNoiseFloorTable(f *os.File, inputNoise *processor.NoiseProfile, filter
 		"dB", reductionInterp)
 
 	// Peak Level
-	inputPeak := inputNoise.PeakLevel
+	inputPeak := math.NaN()
+	if inputNoise != nil {
+		inputPeak = inputNoise.PeakLevel
+	} else {
+		inputPeak = noiseProfile.PeakLevel
+	}
 	filteredPeak := math.NaN()
 	finalPeak := math.NaN()
 	if filteredNoise != nil {
@@ -1414,7 +1456,12 @@ func writeNoiseFloorTable(f *os.File, inputNoise *processor.NoiseProfile, filter
 	table.AddMetricRow("Peak Level", inputPeak, filteredPeak, finalPeak, 1, "dBFS", "")
 
 	// Crest Factor
-	inputCrest := inputNoise.CrestFactor
+	inputCrest := math.NaN()
+	if inputNoise != nil {
+		inputCrest = inputNoise.CrestFactor
+	} else {
+		inputCrest = noiseProfile.CrestFactor
+	}
 	filteredCrest := math.NaN()
 	finalCrest := math.NaN()
 	if filteredNoise != nil {
@@ -1425,17 +1472,266 @@ func writeNoiseFloorTable(f *os.File, inputNoise *processor.NoiseProfile, filter
 	}
 	table.AddMetricRow("Crest Factor", inputCrest, filteredCrest, finalCrest, 1, "dB", "")
 
-	// Entropy
-	inputEntropy := inputNoise.Entropy
-	filteredEntropy := math.NaN()
-	finalEntropy := math.NaN()
+	// ========== SPECTRAL METRICS ==========
+
+	// Spectral Mean
+	inputMean := math.NaN()
+	filteredMean := math.NaN()
+	finalMean := math.NaN()
+	if inputNoise != nil {
+		inputMean = inputNoise.SpectralMean
+	}
 	if filteredNoise != nil {
-		filteredEntropy = filteredNoise.Entropy
+		filteredMean = filteredNoise.SpectralMean
 	}
 	if finalNoise != nil {
-		finalEntropy = finalNoise.Entropy
+		finalMean = finalNoise.SpectralMean
 	}
-	table.AddMetricRow("Entropy", inputEntropy, filteredEntropy, finalEntropy, 3, "", "")
+	table.AddMetricRow("Spectral Mean", inputMean, filteredMean, finalMean, 6, "", "")
+
+	// Spectral Variance
+	inputVar := math.NaN()
+	filteredVar := math.NaN()
+	finalVar := math.NaN()
+	if inputNoise != nil {
+		inputVar = inputNoise.SpectralVariance
+	}
+	if filteredNoise != nil {
+		filteredVar = filteredNoise.SpectralVariance
+	}
+	if finalNoise != nil {
+		finalVar = finalNoise.SpectralVariance
+	}
+	table.AddMetricRow("Spectral Variance", inputVar, filteredVar, finalVar, 6, "", "")
+
+	// Spectral Centroid
+	inputCentroid := math.NaN()
+	filteredCentroid := math.NaN()
+	finalCentroid := math.NaN()
+	if inputNoise != nil {
+		inputCentroid = inputNoise.SpectralCentroid
+	}
+	if filteredNoise != nil {
+		filteredCentroid = filteredNoise.SpectralCentroid
+	}
+	if finalNoise != nil {
+		finalCentroid = finalNoise.SpectralCentroid
+	}
+	table.AddMetricRow("Spectral Centroid", inputCentroid, filteredCentroid, finalCentroid, 0, "Hz", "")
+
+	// Spectral Spread
+	inputSpread := math.NaN()
+	filteredSpread := math.NaN()
+	finalSpread := math.NaN()
+	if inputNoise != nil {
+		inputSpread = inputNoise.SpectralSpread
+	}
+	if filteredNoise != nil {
+		filteredSpread = filteredNoise.SpectralSpread
+	}
+	if finalNoise != nil {
+		finalSpread = finalNoise.SpectralSpread
+	}
+	table.AddMetricRow("Spectral Spread", inputSpread, filteredSpread, finalSpread, 0, "Hz", "")
+
+	// Spectral Skewness
+	inputSkew := math.NaN()
+	filteredSkew := math.NaN()
+	finalSkew := math.NaN()
+	if inputNoise != nil {
+		inputSkew = inputNoise.SpectralSkewness
+	}
+	if filteredNoise != nil {
+		filteredSkew = filteredNoise.SpectralSkewness
+	}
+	if finalNoise != nil {
+		finalSkew = finalNoise.SpectralSkewness
+	}
+	table.AddMetricRow("Spectral Skewness", inputSkew, filteredSkew, finalSkew, 3, "", "")
+
+	// Spectral Kurtosis
+	inputKurt := math.NaN()
+	filteredKurt := math.NaN()
+	finalKurt := math.NaN()
+	if inputNoise != nil {
+		inputKurt = inputNoise.SpectralKurtosis
+	}
+	if filteredNoise != nil {
+		filteredKurt = filteredNoise.SpectralKurtosis
+	}
+	if finalNoise != nil {
+		finalKurt = finalNoise.SpectralKurtosis
+	}
+	table.AddMetricRow("Spectral Kurtosis", inputKurt, filteredKurt, finalKurt, 3, "", "")
+
+	// Spectral Entropy
+	inputEntropy := math.NaN()
+	filteredEntropy := math.NaN()
+	finalEntropy := math.NaN()
+	if inputNoise != nil {
+		inputEntropy = inputNoise.SpectralEntropy
+	} else {
+		inputEntropy = noiseProfile.Entropy // Fall back to NoiseProfile
+	}
+	if filteredNoise != nil {
+		filteredEntropy = filteredNoise.SpectralEntropy
+	}
+	if finalNoise != nil {
+		finalEntropy = finalNoise.SpectralEntropy
+	}
+	table.AddMetricRow("Spectral Entropy", inputEntropy, filteredEntropy, finalEntropy, 6, "", "")
+
+	// Spectral Flatness
+	inputFlat := math.NaN()
+	filteredFlat := math.NaN()
+	finalFlat := math.NaN()
+	if inputNoise != nil {
+		inputFlat = inputNoise.SpectralFlatness
+	}
+	if filteredNoise != nil {
+		filteredFlat = filteredNoise.SpectralFlatness
+	}
+	if finalNoise != nil {
+		finalFlat = finalNoise.SpectralFlatness
+	}
+	table.AddMetricRow("Spectral Flatness", inputFlat, filteredFlat, finalFlat, 6, "", "")
+
+	// Spectral Crest
+	inputSpectralCrest := math.NaN()
+	filteredSpectralCrest := math.NaN()
+	finalSpectralCrest := math.NaN()
+	if inputNoise != nil {
+		inputSpectralCrest = inputNoise.SpectralCrest
+	}
+	if filteredNoise != nil {
+		filteredSpectralCrest = filteredNoise.SpectralCrest
+	}
+	if finalNoise != nil {
+		finalSpectralCrest = finalNoise.SpectralCrest
+	}
+	table.AddMetricRow("Spectral Crest", inputSpectralCrest, filteredSpectralCrest, finalSpectralCrest, 3, "", "")
+
+	// Spectral Flux
+	inputFlux := math.NaN()
+	filteredFlux := math.NaN()
+	finalFlux := math.NaN()
+	if inputNoise != nil {
+		inputFlux = inputNoise.SpectralFlux
+	}
+	if filteredNoise != nil {
+		filteredFlux = filteredNoise.SpectralFlux
+	}
+	if finalNoise != nil {
+		finalFlux = finalNoise.SpectralFlux
+	}
+	table.AddMetricRow("Spectral Flux", inputFlux, filteredFlux, finalFlux, 6, "", "")
+
+	// Spectral Slope
+	inputSlope := math.NaN()
+	filteredSlope := math.NaN()
+	finalSlope := math.NaN()
+	if inputNoise != nil {
+		inputSlope = inputNoise.SpectralSlope
+	}
+	if filteredNoise != nil {
+		filteredSlope = filteredNoise.SpectralSlope
+	}
+	if finalNoise != nil {
+		finalSlope = finalNoise.SpectralSlope
+	}
+	table.AddMetricRow("Spectral Slope", inputSlope, filteredSlope, finalSlope, 9, "", "")
+
+	// Spectral Decrease
+	inputDecrease := math.NaN()
+	filteredDecrease := math.NaN()
+	finalDecrease := math.NaN()
+	if inputNoise != nil {
+		inputDecrease = inputNoise.SpectralDecrease
+	}
+	if filteredNoise != nil {
+		filteredDecrease = filteredNoise.SpectralDecrease
+	}
+	if finalNoise != nil {
+		finalDecrease = finalNoise.SpectralDecrease
+	}
+	table.AddMetricRow("Spectral Decrease", inputDecrease, filteredDecrease, finalDecrease, 6, "", "")
+
+	// Spectral Rolloff
+	inputRolloff := math.NaN()
+	filteredRolloff := math.NaN()
+	finalRolloff := math.NaN()
+	if inputNoise != nil {
+		inputRolloff = inputNoise.SpectralRolloff
+	}
+	if filteredNoise != nil {
+		filteredRolloff = filteredNoise.SpectralRolloff
+	}
+	if finalNoise != nil {
+		finalRolloff = finalNoise.SpectralRolloff
+	}
+	table.AddMetricRow("Spectral Rolloff", inputRolloff, filteredRolloff, finalRolloff, 0, "Hz", "")
+
+	// ========== LOUDNESS METRICS ==========
+
+	// Momentary LUFS
+	inputMomentary := math.NaN()
+	filteredMomentary := math.NaN()
+	finalMomentary := math.NaN()
+	if inputNoise != nil {
+		inputMomentary = inputNoise.MomentaryLUFS
+	}
+	if filteredNoise != nil {
+		filteredMomentary = filteredNoise.MomentaryLUFS
+	}
+	if finalNoise != nil {
+		finalMomentary = finalNoise.MomentaryLUFS
+	}
+	table.AddMetricRow("Momentary LUFS", inputMomentary, filteredMomentary, finalMomentary, 1, "LUFS", "")
+
+	// Short-term LUFS
+	inputShortTerm := math.NaN()
+	filteredShortTerm := math.NaN()
+	finalShortTerm := math.NaN()
+	if inputNoise != nil {
+		inputShortTerm = inputNoise.ShortTermLUFS
+	}
+	if filteredNoise != nil {
+		filteredShortTerm = filteredNoise.ShortTermLUFS
+	}
+	if finalNoise != nil {
+		finalShortTerm = finalNoise.ShortTermLUFS
+	}
+	table.AddMetricRow("Short-term LUFS", inputShortTerm, filteredShortTerm, finalShortTerm, 1, "LUFS", "")
+
+	// True Peak
+	inputTP := math.NaN()
+	filteredTP := math.NaN()
+	finalTP := math.NaN()
+	if inputNoise != nil {
+		inputTP = inputNoise.TruePeak
+	}
+	if filteredNoise != nil {
+		filteredTP = filteredNoise.TruePeak
+	}
+	if finalNoise != nil {
+		finalTP = finalNoise.TruePeak
+	}
+	table.AddMetricRow("True Peak", inputTP, filteredTP, finalTP, 1, "dBTP", "")
+
+	// Sample Peak
+	inputSP := math.NaN()
+	filteredSP := math.NaN()
+	finalSP := math.NaN()
+	if inputNoise != nil {
+		inputSP = inputNoise.SamplePeak
+	}
+	if filteredNoise != nil {
+		filteredSP = filteredNoise.SamplePeak
+	}
+	if finalNoise != nil {
+		finalSP = finalNoise.SamplePeak
+	}
+	table.AddMetricRow("Sample Peak", inputSP, filteredSP, finalSP, 1, "dBFS", "")
 
 	// Character (interpretation row) - based on entropy
 	getNoiseCharacter := func(entropy float64) string {
@@ -1453,6 +1749,341 @@ func writeNoiseFloorTable(f *os.File, inputNoise *processor.NoiseProfile, filter
 	filteredChar := getNoiseCharacter(filteredEntropy)
 	finalChar := getNoiseCharacter(finalEntropy)
 	table.AddRow("Character", []string{inputChar, filteredChar, finalChar}, "", "")
+
+	fmt.Fprint(f, table.String())
+	fmt.Fprintln(f, "")
+}
+
+// writeSpeechRegionTable outputs a three-column comparison table for speech region metrics.
+// Columns: Input (Pass 1 speech profile), Filtered (Pass 2 SpeechSample), Final (Pass 4 SpeechSample)
+func writeSpeechRegionTable(f *os.File, inputMeasurements *processor.AudioMeasurements, filteredMeasurements *processor.OutputMeasurements, finalMeasurements *processor.OutputMeasurements) {
+	writeSection(f, "Speech Region Analysis")
+
+	// Skip if no input measurements or speech profile
+	if inputMeasurements == nil || inputMeasurements.SpeechProfile == nil {
+		fmt.Fprintln(f, "No speech profile available")
+		fmt.Fprintln(f, "")
+		return
+	}
+
+	// Extract speech samples
+	inputSpeech := inputMeasurements.SpeechProfile
+	var filteredSpeech *processor.SpeechCandidateMetrics
+	var finalSpeech *processor.SpeechCandidateMetrics
+	if filteredMeasurements != nil {
+		filteredSpeech = filteredMeasurements.SpeechSample
+	}
+	if finalMeasurements != nil {
+		finalSpeech = finalMeasurements.SpeechSample
+	}
+
+	table := NewMetricTable()
+
+	// ========== AMPLITUDE METRICS ==========
+
+	// RMS Level
+	inputRMS := math.NaN()
+	filteredRMS := math.NaN()
+	finalRMS := math.NaN()
+	if inputSpeech != nil {
+		inputRMS = inputSpeech.RMSLevel
+	}
+	if filteredSpeech != nil {
+		filteredRMS = filteredSpeech.RMSLevel
+	}
+	if finalSpeech != nil {
+		finalRMS = finalSpeech.RMSLevel
+	}
+	table.AddMetricRow("RMS Level", inputRMS, filteredRMS, finalRMS, 1, "dBFS", "")
+
+	// Peak Level
+	inputPeak := math.NaN()
+	filteredPeak := math.NaN()
+	finalPeak := math.NaN()
+	if inputSpeech != nil {
+		inputPeak = inputSpeech.PeakLevel
+	}
+	if filteredSpeech != nil {
+		filteredPeak = filteredSpeech.PeakLevel
+	}
+	if finalSpeech != nil {
+		finalPeak = finalSpeech.PeakLevel
+	}
+	table.AddMetricRow("Peak Level", inputPeak, filteredPeak, finalPeak, 1, "dBFS", "")
+
+	// Crest Factor
+	inputCrest := math.NaN()
+	filteredCrest := math.NaN()
+	finalCrest := math.NaN()
+	if inputSpeech != nil {
+		inputCrest = inputSpeech.CrestFactor
+	}
+	if filteredSpeech != nil {
+		filteredCrest = filteredSpeech.CrestFactor
+	}
+	if finalSpeech != nil {
+		finalCrest = finalSpeech.CrestFactor
+	}
+	table.AddMetricRow("Crest Factor", inputCrest, filteredCrest, finalCrest, 1, "dB", "")
+
+	// ========== SPECTRAL METRICS ==========
+
+	// Spectral Mean
+	inputMean := math.NaN()
+	filteredMean := math.NaN()
+	finalMean := math.NaN()
+	if inputSpeech != nil {
+		inputMean = inputSpeech.SpectralMean
+	}
+	if filteredSpeech != nil {
+		filteredMean = filteredSpeech.SpectralMean
+	}
+	if finalSpeech != nil {
+		finalMean = finalSpeech.SpectralMean
+	}
+	table.AddMetricRow("Spectral Mean", inputMean, filteredMean, finalMean, 6, "", "")
+
+	// Spectral Variance
+	inputVar := math.NaN()
+	filteredVar := math.NaN()
+	finalVar := math.NaN()
+	if inputSpeech != nil {
+		inputVar = inputSpeech.SpectralVariance
+	}
+	if filteredSpeech != nil {
+		filteredVar = filteredSpeech.SpectralVariance
+	}
+	if finalSpeech != nil {
+		finalVar = finalSpeech.SpectralVariance
+	}
+	table.AddMetricRow("Spectral Variance", inputVar, filteredVar, finalVar, 6, "", "")
+
+	// Spectral Centroid
+	inputCentroid := math.NaN()
+	filteredCentroid := math.NaN()
+	finalCentroid := math.NaN()
+	if inputSpeech != nil {
+		inputCentroid = inputSpeech.SpectralCentroid
+	}
+	if filteredSpeech != nil {
+		filteredCentroid = filteredSpeech.SpectralCentroid
+	}
+	if finalSpeech != nil {
+		finalCentroid = finalSpeech.SpectralCentroid
+	}
+	table.AddMetricRow("Spectral Centroid", inputCentroid, filteredCentroid, finalCentroid, 0, "Hz", "")
+
+	// Spectral Spread
+	inputSpread := math.NaN()
+	filteredSpread := math.NaN()
+	finalSpread := math.NaN()
+	if inputSpeech != nil {
+		inputSpread = inputSpeech.SpectralSpread
+	}
+	if filteredSpeech != nil {
+		filteredSpread = filteredSpeech.SpectralSpread
+	}
+	if finalSpeech != nil {
+		finalSpread = finalSpeech.SpectralSpread
+	}
+	table.AddMetricRow("Spectral Spread", inputSpread, filteredSpread, finalSpread, 0, "Hz", "")
+
+	// Spectral Skewness
+	inputSkew := math.NaN()
+	filteredSkew := math.NaN()
+	finalSkew := math.NaN()
+	if inputSpeech != nil {
+		inputSkew = inputSpeech.SpectralSkewness
+	}
+	if filteredSpeech != nil {
+		filteredSkew = filteredSpeech.SpectralSkewness
+	}
+	if finalSpeech != nil {
+		finalSkew = finalSpeech.SpectralSkewness
+	}
+	table.AddMetricRow("Spectral Skewness", inputSkew, filteredSkew, finalSkew, 3, "", "")
+
+	// Spectral Kurtosis
+	inputKurt := math.NaN()
+	filteredKurt := math.NaN()
+	finalKurt := math.NaN()
+	if inputSpeech != nil {
+		inputKurt = inputSpeech.SpectralKurtosis
+	}
+	if filteredSpeech != nil {
+		filteredKurt = filteredSpeech.SpectralKurtosis
+	}
+	if finalSpeech != nil {
+		finalKurt = finalSpeech.SpectralKurtosis
+	}
+	table.AddMetricRow("Spectral Kurtosis", inputKurt, filteredKurt, finalKurt, 3, "", "")
+
+	// Spectral Entropy
+	inputEntropy := math.NaN()
+	filteredEntropy := math.NaN()
+	finalEntropy := math.NaN()
+	if inputSpeech != nil {
+		inputEntropy = inputSpeech.SpectralEntropy
+	}
+	if filteredSpeech != nil {
+		filteredEntropy = filteredSpeech.SpectralEntropy
+	}
+	if finalSpeech != nil {
+		finalEntropy = finalSpeech.SpectralEntropy
+	}
+	table.AddMetricRow("Spectral Entropy", inputEntropy, filteredEntropy, finalEntropy, 6, "", "")
+
+	// Spectral Flatness
+	inputFlat := math.NaN()
+	filteredFlat := math.NaN()
+	finalFlat := math.NaN()
+	if inputSpeech != nil {
+		inputFlat = inputSpeech.SpectralFlatness
+	}
+	if filteredSpeech != nil {
+		filteredFlat = filteredSpeech.SpectralFlatness
+	}
+	if finalSpeech != nil {
+		finalFlat = finalSpeech.SpectralFlatness
+	}
+	table.AddMetricRow("Spectral Flatness", inputFlat, filteredFlat, finalFlat, 6, "", "")
+
+	// Spectral Crest
+	inputSpectralCrest := math.NaN()
+	filteredSpectralCrest := math.NaN()
+	finalSpectralCrest := math.NaN()
+	if inputSpeech != nil {
+		inputSpectralCrest = inputSpeech.SpectralCrest
+	}
+	if filteredSpeech != nil {
+		filteredSpectralCrest = filteredSpeech.SpectralCrest
+	}
+	if finalSpeech != nil {
+		finalSpectralCrest = finalSpeech.SpectralCrest
+	}
+	table.AddMetricRow("Spectral Crest", inputSpectralCrest, filteredSpectralCrest, finalSpectralCrest, 3, "", "")
+
+	// Spectral Flux
+	inputFlux := math.NaN()
+	filteredFlux := math.NaN()
+	finalFlux := math.NaN()
+	if inputSpeech != nil {
+		inputFlux = inputSpeech.SpectralFlux
+	}
+	if filteredSpeech != nil {
+		filteredFlux = filteredSpeech.SpectralFlux
+	}
+	if finalSpeech != nil {
+		finalFlux = finalSpeech.SpectralFlux
+	}
+	table.AddMetricRow("Spectral Flux", inputFlux, filteredFlux, finalFlux, 6, "", "")
+
+	// Spectral Slope
+	inputSlope := math.NaN()
+	filteredSlope := math.NaN()
+	finalSlope := math.NaN()
+	if inputSpeech != nil {
+		inputSlope = inputSpeech.SpectralSlope
+	}
+	if filteredSpeech != nil {
+		filteredSlope = filteredSpeech.SpectralSlope
+	}
+	if finalSpeech != nil {
+		finalSlope = finalSpeech.SpectralSlope
+	}
+	table.AddMetricRow("Spectral Slope", inputSlope, filteredSlope, finalSlope, 9, "", "")
+
+	// Spectral Decrease
+	inputDecrease := math.NaN()
+	filteredDecrease := math.NaN()
+	finalDecrease := math.NaN()
+	if inputSpeech != nil {
+		inputDecrease = inputSpeech.SpectralDecrease
+	}
+	if filteredSpeech != nil {
+		filteredDecrease = filteredSpeech.SpectralDecrease
+	}
+	if finalSpeech != nil {
+		finalDecrease = finalSpeech.SpectralDecrease
+	}
+	table.AddMetricRow("Spectral Decrease", inputDecrease, filteredDecrease, finalDecrease, 6, "", "")
+
+	// Spectral Rolloff
+	inputRolloff := math.NaN()
+	filteredRolloff := math.NaN()
+	finalRolloff := math.NaN()
+	if inputSpeech != nil {
+		inputRolloff = inputSpeech.SpectralRolloff
+	}
+	if filteredSpeech != nil {
+		filteredRolloff = filteredSpeech.SpectralRolloff
+	}
+	if finalSpeech != nil {
+		finalRolloff = finalSpeech.SpectralRolloff
+	}
+	table.AddMetricRow("Spectral Rolloff", inputRolloff, filteredRolloff, finalRolloff, 0, "Hz", "")
+
+	// ========== LOUDNESS METRICS ==========
+
+	// Momentary LUFS
+	inputMomentary := math.NaN()
+	filteredMomentary := math.NaN()
+	finalMomentary := math.NaN()
+	if inputSpeech != nil {
+		inputMomentary = inputSpeech.MomentaryLUFS
+	}
+	if filteredSpeech != nil {
+		filteredMomentary = filteredSpeech.MomentaryLUFS
+	}
+	if finalSpeech != nil {
+		finalMomentary = finalSpeech.MomentaryLUFS
+	}
+	table.AddMetricRow("Momentary LUFS", inputMomentary, filteredMomentary, finalMomentary, 1, "LUFS", "")
+
+	// Short-term LUFS
+	inputShortTerm := math.NaN()
+	filteredShortTerm := math.NaN()
+	finalShortTerm := math.NaN()
+	if inputSpeech != nil {
+		inputShortTerm = inputSpeech.ShortTermLUFS
+	}
+	if filteredSpeech != nil {
+		filteredShortTerm = filteredSpeech.ShortTermLUFS
+	}
+	if finalSpeech != nil {
+		finalShortTerm = finalSpeech.ShortTermLUFS
+	}
+	table.AddMetricRow("Short-term LUFS", inputShortTerm, filteredShortTerm, finalShortTerm, 1, "LUFS", "")
+
+	// True Peak
+	inputTP := math.NaN()
+	filteredTP := math.NaN()
+	finalTP := math.NaN()
+	if inputSpeech != nil {
+		inputTP = inputSpeech.TruePeak
+	}
+	if filteredSpeech != nil {
+		filteredTP = filteredSpeech.TruePeak
+	}
+	if finalSpeech != nil {
+		finalTP = finalSpeech.TruePeak
+	}
+	table.AddMetricRow("True Peak", inputTP, filteredTP, finalTP, 1, "dBTP", "")
+
+	// Sample Peak
+	inputSP := math.NaN()
+	filteredSP := math.NaN()
+	finalSP := math.NaN()
+	if inputSpeech != nil {
+		inputSP = inputSpeech.SamplePeak
+	}
+	if filteredSpeech != nil {
+		filteredSP = filteredSpeech.SamplePeak
+	}
+	if finalSpeech != nil {
+		finalSP = finalSpeech.SamplePeak
+	}
+	table.AddMetricRow("Sample Peak", inputSP, filteredSP, finalSP, 1, "dBFS", "")
 
 	fmt.Fprint(f, table.String())
 	fmt.Fprintln(f, "")
