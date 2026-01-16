@@ -14,6 +14,18 @@ import (
 	"github.com/linuxmatters/jivetalking/internal/audio"
 )
 
+// DebugLog is a package-level function for debug logging.
+// When set (non-nil), diagnostic output is written via this function.
+// Set by main.go when --debug flag is enabled.
+var DebugLog func(format string, args ...interface{})
+
+// debugLog writes to the debug log if enabled, otherwise does nothing.
+func debugLog(format string, args ...interface{}) {
+	if DebugLog != nil {
+		DebugLog(format, args...)
+	}
+}
+
 // SilenceRegion represents a detected silence period in the audio
 type SilenceRegion struct {
 	Start    time.Duration `json:"start"`
@@ -3053,8 +3065,16 @@ func scoreSpeechCandidate(m *SpeechCandidateMetrics) float64 {
 //
 // Returns full SilenceCandidateMetrics with all amplitude, spectral, and loudness measurements.
 func MeasureOutputSilenceRegion(outputPath string, region SilenceRegion) (*SilenceCandidateMetrics, error) {
-	if region.Duration == 0 {
-		return nil, fmt.Errorf("invalid silence region: zero duration")
+	// Diagnostic logging: function entry with region details
+	debugLog("=== MeasureOutputSilenceRegion: start=%.3fs, duration=%.3fs ===",
+		region.Start.Seconds(), region.Duration.Seconds())
+
+	// Validate region boundaries
+	if region.Start < 0 {
+		return nil, fmt.Errorf("invalid region: negative start time")
+	}
+	if region.Duration <= 0 {
+		return nil, fmt.Errorf("invalid region: non-positive duration")
 	}
 
 	// Open the processed audio file
@@ -3074,7 +3094,7 @@ func MeasureOutputSilenceRegion(outputPath string, region SilenceRegion) (*Silen
 	// Note: No aformat needed here - the output file is already processed and in final format.
 	// The key is measuring on identical audio data, not forcing format conversion.
 	filterSpec := fmt.Sprintf(
-		"atrim=start=%f:duration=%f,astats=metadata=1:measure_perchannel=0,aspectralstats=measure=all,ebur128=peak=true",
+		"atrim=start=%f:duration=%f,asetpts=PTS-STARTPTS,astats=metadata=1:measure_perchannel=0,aspectralstats=measure=all,ebur128=metadata=1:peak=sample+true",
 		region.Start.Seconds(),
 		region.Duration.Seconds(),
 	)
@@ -3304,10 +3324,38 @@ func MeasureOutputSilenceRegion(outputPath string, region SilenceRegion) (*Silen
 		return nil, fmt.Errorf("no frames processed in silence region")
 	}
 
+	// Diagnostic summary
+	debugLog("=== MeasureOutputSilenceRegion SUMMARY ===")
+	debugLog("  Frames processed: %d", framesProcessed)
+	debugLog("  Final ebur128 values:")
+	debugLog("    momentaryLUFS: %f", momentaryLUFS)
+	debugLog("    shortTermLUFS: %f", shortTermLUFS)
+	debugLog("    truePeak: %f", truePeak)
+	debugLog("    samplePeak: %f", samplePeak)
+	debugLog("  Final astats values:")
+	debugLog("    rmsLevel: %f (found: %v)", rmsLevel, rmsLevelFound)
+	debugLog("    peakLevel: %f", peakLevel)
+	debugLog("  Final spectral values:")
+	debugLog("    spectralCentroid: %f", spectralCentroid)
+	debugLog("    spectralRolloff: %f", spectralRolloff)
+
+	// Validate ebur128 measurements were captured
+	ebur128Valid := momentaryLUFS != 0.0 || shortTermLUFS != 0.0 || truePeak != 0.0
+
+	if !ebur128Valid {
+		// Log warning but don't fail - amplitude/spectral measurements are still valid
+		debugLog("Warning: ebur128 measurements not captured for silence region (insufficient duration or warmup time)")
+	}
+
 	// Use crest factor from astats if available, otherwise calculate from peak and RMS
 	if crestFactor == 0.0 && rmsLevelFound && peakLevel != 0 {
 		crestFactor = peakLevel - rmsLevel
 	}
+
+	// Convert ebur128 peak values from linear to dB (matches Pass 1 extraction in extractIntervalFromFrame)
+	// ebur128 reports true_peak and sample_peak as linear ratios (0.0 to ~1.0+)
+	truePeakDB := linearRatioToDB(truePeak)
+	samplePeakDB := linearRatioToDB(samplePeak)
 
 	// Map all extracted measurements to SilenceCandidateMetrics
 	metrics := &SilenceCandidateMetrics{
@@ -3333,11 +3381,11 @@ func MeasureOutputSilenceRegion(outputPath string, region SilenceRegion) (*Silen
 		SpectralDecrease: spectralDecrease,
 		SpectralRolloff:  spectralRolloff,
 
-		// Loudness metrics from ebur128
+		// Loudness metrics from ebur128 (converted to dB)
 		MomentaryLUFS: momentaryLUFS,
 		ShortTermLUFS: shortTermLUFS,
-		TruePeak:      truePeak,
-		SamplePeak:    samplePeak,
+		TruePeak:      truePeakDB,
+		SamplePeak:    samplePeakDB,
 
 		// Legacy entropy field from astats (for compatibility)
 		Entropy: entropy,
@@ -3358,8 +3406,16 @@ func MeasureOutputSilenceRegion(outputPath string, region SilenceRegion) (*Silen
 //
 // Returns full SpeechCandidateMetrics with all amplitude, spectral, and loudness measurements.
 func MeasureOutputSpeechRegion(outputPath string, region SpeechRegion) (*SpeechCandidateMetrics, error) {
-	if region.Duration == 0 {
-		return nil, fmt.Errorf("invalid speech region: zero duration")
+	// Diagnostic logging: function entry with region details
+	debugLog("=== MeasureOutputSpeechRegion: start=%.3fs, duration=%.3fs ===",
+		region.Start.Seconds(), region.Duration.Seconds())
+
+	// Validate region boundaries
+	if region.Start < 0 {
+		return nil, fmt.Errorf("invalid region: negative start time")
+	}
+	if region.Duration <= 0 {
+		return nil, fmt.Errorf("invalid region: non-positive duration")
 	}
 
 	// Open the processed audio file
@@ -3379,7 +3435,7 @@ func MeasureOutputSpeechRegion(outputPath string, region SpeechRegion) (*SpeechC
 	// Note: No aformat needed here - the output file is already processed and in final format.
 	// The key is measuring on identical audio data, not forcing format conversion.
 	filterSpec := fmt.Sprintf(
-		"atrim=start=%f:duration=%f,astats=metadata=1:measure_perchannel=0,aspectralstats=measure=all,ebur128=peak=true",
+		"atrim=start=%f:duration=%f,asetpts=PTS-STARTPTS,astats=metadata=1:measure_perchannel=0,aspectralstats=measure=all,ebur128=metadata=1:peak=sample+true",
 		region.Start.Seconds(),
 		region.Duration.Seconds(),
 	)
@@ -3518,11 +3574,15 @@ func MeasureOutputSpeechRegion(outputPath string, region SpeechRegion) (*SpeechC
 	}
 
 	// Flush filter graph
+	debugLog("=== Flushing filter graph ===")
 	if _, err := ffmpeg.AVBuffersrcAddFrameFlags(bufferSrcCtx, nil, 0); err == nil {
+		flushFrameCount := 0
 		for {
 			if _, err := ffmpeg.AVBuffersinkGetFrame(bufferSinkCtx, filteredFrame); err != nil {
 				break
 			}
+
+			flushFrameCount++
 
 			if metadata := filteredFrame.Metadata(); metadata != nil {
 				// astats amplitude measurements (using Overall keys for measure_perchannel=0)
@@ -3602,10 +3662,38 @@ func MeasureOutputSpeechRegion(outputPath string, region SpeechRegion) (*SpeechC
 		return nil, fmt.Errorf("no frames processed in speech region")
 	}
 
+	// Diagnostic summary
+	debugLog("=== MeasureOutputSpeechRegion SUMMARY ===")
+	debugLog("  Frames processed: %d", framesProcessed)
+	debugLog("  Final ebur128 values:")
+	debugLog("    momentaryLUFS: %f", momentaryLUFS)
+	debugLog("    shortTermLUFS: %f", shortTermLUFS)
+	debugLog("    truePeak: %f", truePeak)
+	debugLog("    samplePeak: %f", samplePeak)
+	debugLog("  Final astats values:")
+	debugLog("    rmsLevel: %f (found: %v)", rmsLevel, rmsLevelFound)
+	debugLog("    peakLevel: %f", peakLevel)
+	debugLog("  Final spectral values:")
+	debugLog("    spectralCentroid: %f", spectralCentroid)
+	debugLog("    spectralRolloff: %f", spectralRolloff)
+
+	// Validate ebur128 measurements were captured
+	ebur128Valid := momentaryLUFS != 0.0 || shortTermLUFS != 0.0 || truePeak != 0.0
+
+	if !ebur128Valid {
+		// Log warning but don't fail - amplitude/spectral measurements are still valid
+		debugLog("Warning: ebur128 measurements not captured for speech region (insufficient duration or warmup time)")
+	}
+
 	// Use crest factor from astats if available, otherwise calculate from peak and RMS
 	if crestFactor == 0.0 && rmsLevelFound && peakLevel != 0 {
 		crestFactor = peakLevel - rmsLevel
 	}
+
+	// Convert ebur128 peak values from linear to dB (matches Pass 1 extraction in extractIntervalFromFrame)
+	// ebur128 reports true_peak and sample_peak as linear ratios (0.0 to ~1.0+)
+	truePeakDB := linearRatioToDB(truePeak)
+	samplePeakDB := linearRatioToDB(samplePeak)
 
 	// Map all extracted measurements to SpeechCandidateMetrics
 	metrics := &SpeechCandidateMetrics{
@@ -3631,11 +3719,11 @@ func MeasureOutputSpeechRegion(outputPath string, region SpeechRegion) (*SpeechC
 		SpectralDecrease: spectralDecrease,
 		SpectralRolloff:  spectralRolloff,
 
-		// Loudness metrics from ebur128
+		// Loudness metrics from ebur128 (converted to dB)
 		MomentaryLUFS: momentaryLUFS,
 		ShortTermLUFS: shortTermLUFS,
-		TruePeak:      truePeak,
-		SamplePeak:    samplePeak,
+		TruePeak:      truePeakDB,
+		SamplePeak:    samplePeakDB,
 	}
 
 	if !rmsLevelFound {

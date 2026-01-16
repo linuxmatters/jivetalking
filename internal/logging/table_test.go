@@ -204,3 +204,103 @@ func TestMetricTableAlignment(t *testing.T) {
 		}
 	}
 }
+
+func TestIsDigitalSilence(t *testing.T) {
+	tests := []struct {
+		name  string
+		value float64
+		want  bool
+	}{
+		{"negative_infinity", math.Inf(-1), true},
+		{"below_threshold", -150.0, true},
+		{"at_threshold", -120.0, true},
+		{"just_above_threshold", -119.9, false},
+		{"normal_value", -60.0, false},
+		{"positive_infinity", math.Inf(1), false}, // +Inf is not digital silence
+		{"nan", math.NaN(), false},                // NaN is handled separately
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isDigitalSilence(tt.value)
+			if got != tt.want {
+				t.Errorf("isDigitalSilence(%v) = %v, want %v", tt.value, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatMetricDB(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    float64
+		decimals int
+		want     string
+	}{
+		{"normal_value", -50.0, 1, "-50.0"},
+		{"digital_silence_inf", math.Inf(-1), 1, "< -120"},
+		{"digital_silence_threshold", -120.0, 1, "< -120"},
+		{"digital_silence_below", -150.0, 1, "< -120"},
+		{"just_above_threshold", -119.9, 1, "-119.9"},
+		{"nan", math.NaN(), 1, MissingValue},
+		{"positive_inf", math.Inf(1), 1, MissingValue},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatMetricDB(tt.value, tt.decimals)
+			if got != tt.want {
+				t.Errorf("formatMetricDB(%v, %d) = %q, want %q", tt.value, tt.decimals, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatMetricLUFS(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    float64
+		decimals int
+		want     string
+	}{
+		{"normal_value", -23.0, 1, "-23.0"},
+		{"at_floor", -70.0, 1, "-70.0"},
+		{"below_floor", -163.0, 1, "< -70"},
+		{"way_below_floor", -171.9, 1, "< -70"},
+		{"nan", math.NaN(), 1, MissingValue},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatMetricLUFS(tt.value, tt.decimals)
+			if got != tt.want {
+				t.Errorf("formatMetricLUFS(%v, %d) = %q, want %q", tt.value, tt.decimals, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatMetricPeak(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    float64
+		decimals int
+		want     string
+	}{
+		{"full_scale", 1.0, 1, "0.0"},
+		{"half_scale", 0.5, 1, "-6.0"},
+		{"low_level", 0.01, 1, "-40.0"},
+		{"digital_silence_zero", 0.0, 1, "< -120"},
+		{"digital_silence_negative", -0.001, 1, "< -120"}, // Invalid, but handle gracefully
+		{"nan", math.NaN(), 1, MissingValue},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatMetricPeak(tt.value, tt.decimals)
+			if got != tt.want {
+				t.Errorf("formatMetricPeak(%v, %d) = %q, want %q", tt.value, tt.decimals, got, tt.want)
+			}
+		})
+	}
+}

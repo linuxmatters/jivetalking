@@ -132,6 +132,15 @@ func (t *MetricTable) String() string {
 // MissingValue is the placeholder for unavailable measurements
 const MissingValue = "-"
 
+// DigitalSilenceThreshold is the dBFS level below which we consider the signal to be digital silence.
+// FFmpeg reports -Inf for true digital zero; anything below -120 dBFS is effectively silent.
+const DigitalSilenceThreshold = -120.0
+
+// isDigitalSilence returns true if the value represents digital silence (true zero or below threshold).
+func isDigitalSilence(value float64) bool {
+	return math.IsInf(value, -1) || value <= DigitalSilenceThreshold
+}
+
 // formatMetric formats a numeric value with appropriate precision.
 // Handles:
 // - Regular floats: formatted to specified decimal places
@@ -152,6 +161,70 @@ func formatMetric(value float64, decimals int) string {
 	// Standard formatting
 	format := fmt.Sprintf("%%.%df", decimals)
 	return fmt.Sprintf(format, value)
+}
+
+// formatMetricDB formats a dB value with special handling for digital silence.
+// Shows "< -120" for values at or below the measurement floor (-Inf or very low values).
+func formatMetricDB(value float64, decimals int) string {
+	if math.IsNaN(value) || math.IsInf(value, 1) {
+		return MissingValue
+	}
+	if isDigitalSilence(value) {
+		return "< -120"
+	}
+	format := fmt.Sprintf("%%.%df", decimals)
+	return fmt.Sprintf(format, value)
+}
+
+// LUFSMeasurementFloor is the lowest reliable LUFS measurement from ebur128.
+// Values below this indicate signal too quiet to measure reliably.
+const LUFSMeasurementFloor = -70.0
+
+// formatMetricLUFS formats a LUFS value with special handling for values below measurement floor.
+// Shows "< -70" for values below the ebur128 measurement threshold.
+func formatMetricLUFS(value float64, decimals int) string {
+	if math.IsNaN(value) {
+		return MissingValue
+	}
+	// ebur128 can report values well below -70 for near-silent signals
+	// These are unreliable, so we show them as below threshold
+	if value < LUFSMeasurementFloor {
+		return "< -70"
+	}
+	format := fmt.Sprintf("%%.%df", decimals)
+	return fmt.Sprintf(format, value)
+}
+
+// formatMetricPeak formats a linear peak value (0.0-1.0 scale) with dB conversion.
+// For digital silence (peak = 0), shows "< -120" instead of -Inf.
+func formatMetricPeak(value float64, decimals int) string {
+	if math.IsNaN(value) {
+		return MissingValue
+	}
+	// Linear peak of 0.0 means true digital silence
+	if value <= 0 {
+		return "< -120"
+	}
+	// Convert linear to dB
+	dB := 20.0 * math.Log10(value)
+	if dB < DigitalSilenceThreshold {
+		return "< -120"
+	}
+	format := fmt.Sprintf("%%.%df", decimals)
+	return fmt.Sprintf(format, dB)
+}
+
+// SpectralSilenceValue is the placeholder for spectral metrics when digital silence is detected.
+// Spectral analysis is undefined for zero-signal audio - there's no spectrum to analyse.
+const SpectralSilenceValue = "n/a"
+
+// formatMetricSpectral formats a spectral metric value with special handling for digital silence.
+// When isDigitalSilence is true, returns "n/a" since spectral metrics are undefined for zero signal.
+func formatMetricSpectral(value float64, decimals int, isDigitalSilence bool) string {
+	if isDigitalSilence {
+		return SpectralSilenceValue
+	}
+	return formatMetric(value, decimals)
 }
 
 // formatMetricSigned formats a value with explicit sign for positive values.

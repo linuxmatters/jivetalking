@@ -65,10 +65,14 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 	if filteredMeasurements != nil && measurements.NoiseProfile != nil {
 		silenceRegion := SilenceRegion{
 			Start:    measurements.NoiseProfile.Start,
+			End:      measurements.NoiseProfile.Start + measurements.NoiseProfile.Duration,
 			Duration: measurements.NoiseProfile.Duration,
 		}
 		if silenceSample, err := MeasureOutputSilenceRegion(outputPath, silenceRegion); err == nil {
 			filteredMeasurements.SilenceSample = silenceSample
+		} else {
+			// Log the error for debugging but don't fail the entire processing
+			debugLog("Warning: Failed to measure Pass 2 silence region: %v", err)
 		}
 		// Non-fatal if measurement fails - we still have the other output measurements
 	}
@@ -77,10 +81,14 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 	if filteredMeasurements != nil && measurements.SpeechProfile != nil {
 		speechRegion := SpeechRegion{
 			Start:    measurements.SpeechProfile.Region.Start,
+			End:      measurements.SpeechProfile.Region.End,
 			Duration: measurements.SpeechProfile.Region.Duration,
 		}
 		if speechSample, err := MeasureOutputSpeechRegion(outputPath, speechRegion); err == nil {
 			filteredMeasurements.SpeechSample = speechSample
+		} else {
+			// Log the error for debugging but don't fail the entire processing
+			debugLog("Warning: Failed to measure Pass 2 speech region: %v", err)
 		}
 		// Non-fatal if measurement fails - we still have the other output measurements
 	}
