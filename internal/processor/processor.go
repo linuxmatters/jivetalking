@@ -77,8 +77,21 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 			Start:    measurements.NoiseProfile.Start,
 			Duration: measurements.NoiseProfile.Duration,
 		}
-		if silenceAnalysis, err := MeasureOutputSilenceRegion(outputPath, silenceRegion); err == nil {
-			filteredMeasurements.SilenceSample = silenceAnalysis
+		if silenceSample, err := MeasureOutputSilenceRegion(outputPath, silenceRegion); err == nil {
+			filteredMeasurements.SilenceSample = silenceSample
+		}
+		// Non-fatal if measurement fails - we still have the other output measurements
+	}
+
+	// Measure speech region in output file (same region as Pass 1) for processing comparison
+	// NOTE: This is done AFTER normalisation so we measure the final output
+	if filteredMeasurements != nil && measurements.SpeechProfile != nil {
+		speechRegion := SpeechRegion{
+			Start:    measurements.SpeechProfile.Region.Start,
+			Duration: measurements.SpeechProfile.Region.Duration,
+		}
+		if speechSample, err := MeasureOutputSpeechRegion(outputPath, speechRegion); err == nil {
+			filteredMeasurements.SpeechSample = speechSample
 		}
 		// Non-fatal if measurement fails - we still have the other output measurements
 	}
