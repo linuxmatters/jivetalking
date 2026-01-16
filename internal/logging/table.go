@@ -183,7 +183,7 @@ const LUFSMeasurementFloor = -70.0
 // formatMetricLUFS formats a LUFS value with special handling for values below measurement floor.
 // Shows "< -70" for values below the ebur128 measurement threshold.
 func formatMetricLUFS(value float64, decimals int) string {
-	if math.IsNaN(value) {
+	if math.IsNaN(value) || math.IsInf(value, 1) {
 		return MissingValue
 	}
 	// ebur128 can report values well below -70 for near-silent signals

@@ -70,7 +70,7 @@ func TestProcessAudio(t *testing.T) {
 		t.Error("ProcessAudio returned nil FilteredMeasurements")
 	} else {
 		// Verify silence sample measurements are captured in Pass 2 output (if NoiseProfile exists)
-		if result.Measurements.NoiseProfile != nil {
+		if result.Measurements != nil && result.Measurements.NoiseProfile != nil {
 			t.Logf("NoiseProfile exists: Start=%v, Duration=%v", result.Measurements.NoiseProfile.Start, result.Measurements.NoiseProfile.Duration)
 			if result.FilteredMeasurements.SilenceSample == nil {
 				t.Error("FilteredMeasurements.SilenceSample is nil despite NoiseProfile existing")
@@ -83,7 +83,7 @@ func TestProcessAudio(t *testing.T) {
 		}
 
 		// Verify speech sample measurements are captured in Pass 2 output (if SpeechProfile exists)
-		if result.Measurements.SpeechProfile != nil {
+		if result.Measurements != nil && result.Measurements.SpeechProfile != nil {
 			t.Logf("SpeechProfile exists: Region=%v", result.Measurements.SpeechProfile.Region)
 			if result.FilteredMeasurements.SpeechSample == nil {
 				t.Error("FilteredMeasurements.SpeechSample is nil despite SpeechProfile existing")
@@ -99,7 +99,7 @@ func TestProcessAudio(t *testing.T) {
 	// Verify final measurements are populated (Pass 4 output analysis after normalisation)
 	if result.NormResult != nil && result.NormResult.FinalMeasurements != nil {
 		// Verify silence sample measurements are captured in Pass 4 output (if NoiseProfile exists)
-		if result.Measurements.NoiseProfile != nil {
+		if result.Measurements != nil && result.Measurements.NoiseProfile != nil {
 			if result.NormResult.FinalMeasurements.SilenceSample == nil {
 				t.Error("FinalMeasurements.SilenceSample is nil despite NoiseProfile existing")
 			} else {
@@ -109,7 +109,7 @@ func TestProcessAudio(t *testing.T) {
 		}
 
 		// Verify speech sample measurements are captured in Pass 4 output (if SpeechProfile exists)
-		if result.Measurements.SpeechProfile != nil {
+		if result.Measurements != nil && result.Measurements.SpeechProfile != nil {
 			if result.NormResult.FinalMeasurements.SpeechSample == nil {
 				t.Error("FinalMeasurements.SpeechSample is nil despite SpeechProfile existing")
 			} else {

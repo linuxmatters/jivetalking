@@ -3727,7 +3727,7 @@ func MeasureOutputSpeechRegion(outputPath string, region SpeechRegion) (*SpeechC
 	}
 
 	if !rmsLevelFound {
-		metrics.RMSLevel = -60.0 // Conservative fallback for silence
+		metrics.RMSLevel = -60.0 // Conservative fallback
 	}
 
 	return metrics, nil
