@@ -378,6 +378,7 @@ type NormalisationResult struct {
 //   - inputPath: Path to Pass 2 output file (the -processed.flac file)
 //   - config: Filter configuration (contains loudnorm targets)
 //   - outputMeasurements: Pass 2 measurements (for reference, not used for loudnorm)
+//   - inputMeasurements: Pass 1 measurements (contains NoiseProfile and SpeechProfile for region capture)
 //   - progressCallback: Optional progress updates
 //
 // Returns:
@@ -387,6 +388,7 @@ func ApplyNormalisation(
 	inputPath string,
 	config *FilterChainConfig,
 	outputMeasurements *OutputMeasurements,
+	inputMeasurements *AudioMeasurements,
 	progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements),
 ) (*NormalisationResult, error) {
 	if !config.LoudnormEnabled {
@@ -453,7 +455,7 @@ func ApplyNormalisation(
 	effectiveConfig.LoudnormTargetI = effectiveTargetI
 
 	// Pass 4: Apply loudnorm with linear=true and the measurements
-	finalLUFS, finalTP, finalMeasurements, loudnormStats, err := applyLoudnormAndMeasure(inputPath, &effectiveConfig, measurement, progressCallback)
+	finalLUFS, finalTP, finalMeasurements, loudnormStats, err := applyLoudnormAndMeasure(inputPath, &effectiveConfig, measurement, inputMeasurements, progressCallback)
 	if err != nil {
 		return nil, fmt.Errorf("loudnorm application failed: %w", err)
 	}
@@ -499,6 +501,7 @@ func applyLoudnormAndMeasure(
 	inputPath string,
 	config *FilterChainConfig,
 	measurement *LoudnormMeasurement,
+	inputMeasurements *AudioMeasurements,
 	progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements),
 ) (float64, float64, *OutputMeasurements, *LoudnormStats, error) {
 	// Start capturing loudnorm's JSON output for diagnostics
@@ -656,6 +659,34 @@ func applyLoudnormAndMeasure(
 
 	// Build complete OutputMeasurements from accumulators
 	finalMeasurements := finalizeOutputMeasurements(&acc)
+
+	// Measure silence region in final output (same region as Pass 1 noise profile)
+	// NOTE: inputPath now contains the normalised output after os.Rename above
+	if inputMeasurements.NoiseProfile != nil {
+		silenceRegion := SilenceRegion{
+			Start:    inputMeasurements.NoiseProfile.Start,
+			End:      inputMeasurements.NoiseProfile.Start + inputMeasurements.NoiseProfile.Duration,
+			Duration: inputMeasurements.NoiseProfile.Duration,
+		}
+		if silenceSample, err := MeasureOutputSilenceRegion(inputPath, silenceRegion); err == nil {
+			finalMeasurements.SilenceSample = silenceSample
+		}
+		// Non-fatal if measurement fails - we still have the other output measurements
+	}
+
+	// Measure speech region in final output (same region as Pass 1 speech profile)
+	// NOTE: inputPath now contains the normalised output after os.Rename above
+	if inputMeasurements.SpeechProfile != nil {
+		speechRegion := SpeechRegion{
+			Start:    inputMeasurements.SpeechProfile.Region.Start,
+			End:      inputMeasurements.SpeechProfile.Region.End,
+			Duration: inputMeasurements.SpeechProfile.Region.Duration,
+		}
+		if speechSample, err := MeasureOutputSpeechRegion(inputPath, speechRegion); err == nil {
+			finalMeasurements.SpeechSample = speechSample
+		}
+		// Non-fatal if measurement fails - we still have the other output measurements
+	}
 
 	return acc.ebur128OutputI, acc.ebur128OutputTP, finalMeasurements, stats, nil
 }

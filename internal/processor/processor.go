@@ -61,17 +61,7 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 		progressCallback(2, "Processing", 1.0, 0.0, measurements)
 	}
 
-	// Pass 3/4: Normalisation (measurement + loudnorm application)
-	var normResult *NormalisationResult
-	if filteredMeasurements != nil {
-		normResult, err = ApplyNormalisation(outputPath, config, filteredMeasurements, progressCallback)
-		if err != nil {
-			return nil, fmt.Errorf("Pass 3 failed: %w", err)
-		}
-	}
-
-	// Measure silence region in output file (same region as Pass 1) for noise comparison
-	// NOTE: This is done AFTER normalisation so we measure the final output
+	// Measure silence region in Pass 2 output (before normalisation) for noise comparison
 	if filteredMeasurements != nil && measurements.NoiseProfile != nil {
 		silenceRegion := SilenceRegion{
 			Start:    measurements.NoiseProfile.Start,
@@ -83,8 +73,7 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 		// Non-fatal if measurement fails - we still have the other output measurements
 	}
 
-	// Measure speech region in output file (same region as Pass 1) for processing comparison
-	// NOTE: This is done AFTER normalisation so we measure the final output
+	// Measure speech region in Pass 2 output (before normalisation) for processing comparison
 	if filteredMeasurements != nil && measurements.SpeechProfile != nil {
 		speechRegion := SpeechRegion{
 			Start:    measurements.SpeechProfile.Region.Start,
@@ -94,6 +83,16 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 			filteredMeasurements.SpeechSample = speechSample
 		}
 		// Non-fatal if measurement fails - we still have the other output measurements
+	}
+
+	// Pass 3/4: Normalisation (measurement + loudnorm application)
+	// The FinalMeasurements in the result include region measurements captured in Pass 4
+	var normResult *NormalisationResult
+	if filteredMeasurements != nil {
+		normResult, err = ApplyNormalisation(outputPath, config, filteredMeasurements, measurements, progressCallback)
+		if err != nil {
+			return nil, fmt.Errorf("Pass 3 failed: %w", err)
+		}
 	}
 
 	// Return the processing result with output measurements for comparison
