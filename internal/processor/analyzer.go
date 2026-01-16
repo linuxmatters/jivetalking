@@ -1648,7 +1648,10 @@ type OutputMeasurements struct {
 	LoudnormMeasured     bool    `json:"loudnorm_measured"`      // True if loudnorm measurement was captured
 
 	// Silence region analysis (same region as Pass 1, for noise reduction comparison)
-	SilenceSample *SilenceAnalysis `json:"silence_sample,omitempty"` // Measurements from same silence region
+	SilenceSample *SilenceCandidateMetrics `json:"silence_sample,omitempty"` // Measurements from same silence region
+
+	// Speech region analysis (same region as Pass 1, for processing comparison)
+	SpeechSample *SpeechCandidateMetrics `json:"speech_sample,omitempty"` // Measurements from same speech region
 }
 
 // outputMetadataAccumulators holds accumulator variables for Pass 2 output measurement extraction.
@@ -3036,15 +3039,14 @@ func scoreSpeechCandidate(m *SpeechCandidateMetrics) float64 {
 }
 
 // MeasureOutputSilenceRegion analyses the same silence region in the output file
-// that was measured during Pass 1, enabling direct comparison of noise characteristics.
-// Unlike extractNoiseProfile, this does NOT create a WAV file - it only measures.
+// that was used for noise profiling in Pass 1. This allows comparing how
+// noise characteristics changed after adaptive processing.
 //
-// Parameters:
-//   - outputPath: path to the processed audio file
-//   - region: the silence region identified during Pass 1 (start time and duration)
+// The region parameter should use the same Start/Duration as the NoiseProfile
+// from Pass 1 analysis. Returns nil if the region cannot be measured.
 //
-// Returns SilenceAnalysis with noise floor, peak level, crest factor, and entropy.
-func MeasureOutputSilenceRegion(outputPath string, region SilenceRegion) (*SilenceAnalysis, error) {
+// Returns full SilenceCandidateMetrics with all amplitude, spectral, and loudness measurements.
+func MeasureOutputSilenceRegion(outputPath string, region SilenceRegion) (*SilenceCandidateMetrics, error) {
 	if region.Duration == 0 {
 		return nil, fmt.Errorf("invalid silence region: zero duration")
 	}
@@ -3164,19 +3166,27 @@ func MeasureOutputSilenceRegion(outputPath string, region SilenceRegion) (*Silen
 		crestFactorDB = peakLevel - noiseFloor
 	}
 
-	analysis := &SilenceAnalysis{
-		Start:       region.Start,
-		Duration:    region.Duration,
+	// Map to SilenceCandidateMetrics with currently measured fields
+	// Phase 2 will expand this to capture all 20+ fields via extended filter graph
+	metrics := &SilenceCandidateMetrics{
+		Region: region,
+
+		// Amplitude metrics from astats
+		RMSLevel:    noiseFloor,
 		PeakLevel:   peakLevel,
 		CrestFactor: crestFactorDB,
-		Entropy:     entropy,
+
+		// Legacy entropy field from astats
+		Entropy:         entropy,
+		SpectralEntropy: entropy, // Use same value for both fields
+
+		// Remaining spectral and loudness fields will be populated in Phase 2
+		// when filter graph is extended to include aspectralstats and ebur128
 	}
 
-	if noiseFloorFound {
-		analysis.NoiseFloor = noiseFloor
-	} else {
-		analysis.NoiseFloor = -60.0 // Conservative fallback
+	if !noiseFloorFound {
+		metrics.RMSLevel = -60.0 // Conservative fallback
 	}
 
-	return analysis, nil
+	return metrics, nil
 }
