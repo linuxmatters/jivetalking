@@ -1338,7 +1338,7 @@ func writeSpectralTable(f *os.File, input *processor.AudioMeasurements, filtered
 
 // writeNoiseFloorTable outputs a three-column comparison table for noise floor metrics.
 // Columns: Input (Pass 1 NoiseProfile), Filtered (Pass 2 SilenceSample), Final (Pass 4 SilenceSample)
-func writeNoiseFloorTable(f *os.File, inputNoise *processor.NoiseProfile, filteredNoise *processor.SilenceAnalysis, finalNoise *processor.SilenceAnalysis) {
+func writeNoiseFloorTable(f *os.File, inputNoise *processor.NoiseProfile, filteredNoise *processor.SilenceCandidateMetrics, finalNoise *processor.SilenceCandidateMetrics) {
 	writeSection(f, "Noise Floor Analysis")
 
 	// Skip if no input noise profile
@@ -1355,10 +1355,10 @@ func writeNoiseFloorTable(f *os.File, inputNoise *processor.NoiseProfile, filter
 	filteredRMS := math.NaN()
 	finalRMS := math.NaN()
 	if filteredNoise != nil {
-		filteredRMS = filteredNoise.NoiseFloor
+		filteredRMS = filteredNoise.RMSLevel
 	}
 	if finalNoise != nil {
-		finalRMS = finalNoise.NoiseFloor
+		finalRMS = finalNoise.RMSLevel
 	}
 	table.AddMetricRow("RMS Level", inputRMS, filteredRMS, finalRMS, 1, "dBFS", "")
 
@@ -1789,7 +1789,7 @@ func getFinalMeasurements(result *processor.ProcessingResult) *processor.OutputM
 }
 
 // getFilteredNoise safely extracts filtered noise profile from the result.
-func getFilteredNoise(result *processor.ProcessingResult) *processor.SilenceAnalysis {
+func getFilteredNoise(result *processor.ProcessingResult) *processor.SilenceCandidateMetrics {
 	if result == nil || result.FilteredMeasurements == nil {
 		return nil
 	}
@@ -1797,7 +1797,7 @@ func getFilteredNoise(result *processor.ProcessingResult) *processor.SilenceAnal
 }
 
 // getFinalNoise safely extracts final noise profile from the result.
-func getFinalNoise(result *processor.ProcessingResult) *processor.SilenceAnalysis {
+func getFinalNoise(result *processor.ProcessingResult) *processor.SilenceCandidateMetrics {
 	if result == nil || result.NormResult == nil || result.NormResult.FinalMeasurements == nil {
 		return nil
 	}
