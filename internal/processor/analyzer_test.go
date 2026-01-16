@@ -874,3 +874,237 @@ func TestScoreSpeechCandidate(t *testing.T) {
 		})
 	}
 }
+func TestMeasureOutputSilenceRegion(t *testing.T) {
+	// Generate processed test audio file with known silence region
+	// Using a simple tone with a substantial silence gap for predictable measurements
+	testFile := generateTestAudio(t, TestAudioOptions{
+		DurationSecs: 5.0,
+		SampleRate:   44100,
+		ToneFreq:     440.0,
+		ToneLevel:    -23.0, // Typical podcast level
+		NoiseLevel:   -60.0, // Light background noise
+		SilenceGap: struct {
+			Start    float64
+			Duration float64
+		}{
+			Start:    1.5, // Silence at 1.5 seconds
+			Duration: 1.0, // 1 second silence gap (long enough for reliable measurements)
+		},
+	})
+	defer cleanupTestAudio(t, testFile)
+
+	// Define the silence region we want to measure
+	silenceRegion := SilenceRegion{
+		Start:    time.Duration(1.5 * float64(time.Second)),
+		End:      time.Duration(2.5 * float64(time.Second)),
+		Duration: time.Duration(1.0 * float64(time.Second)),
+	}
+
+	t.Run("valid_silence_region", func(t *testing.T) {
+		metrics, err := MeasureOutputSilenceRegion(testFile, silenceRegion)
+		if err != nil {
+			t.Fatalf("MeasureOutputSilenceRegion failed: %v", err)
+		}
+
+		if metrics == nil {
+			t.Fatal("metrics is nil")
+		}
+
+		// Log all measurements for inspection
+		t.Logf("Silence Region Measurements:")
+		t.Logf("  RMSLevel: %.2f dBFS", metrics.RMSLevel)
+		t.Logf("  PeakLevel: %.2f dBFS", metrics.PeakLevel)
+		t.Logf("  CrestFactor: %.2f dB", metrics.CrestFactor)
+		t.Logf("  SpectralCentroid: %.2f Hz", metrics.SpectralCentroid)
+		t.Logf("  SpectralEntropy: %.2f", metrics.SpectralEntropy)
+		t.Logf("  SpectralFlatness: %.2f", metrics.SpectralFlatness)
+		t.Logf("  MomentaryLUFS: %.2f LUFS", metrics.MomentaryLUFS)
+		t.Logf("  ShortTermLUFS: %.2f LUFS", metrics.ShortTermLUFS)
+		t.Logf("  TruePeak: %.2f dBTP", metrics.TruePeak)
+
+		// Verify region is captured correctly
+		if metrics.Region.Start != silenceRegion.Start {
+			t.Errorf("Region start mismatch: got %v, want %v", metrics.Region.Start, silenceRegion.Start)
+		}
+		if metrics.Region.Duration != silenceRegion.Duration {
+			t.Errorf("Region duration mismatch: got %v, want %v", metrics.Region.Duration, silenceRegion.Duration)
+		}
+
+		// Amplitude metrics: silence should have very low RMS (< -40 dBFS)
+		// With -60dB noise, we expect RMS around -60dB range
+		if metrics.RMSLevel > -40.0 {
+			t.Errorf("RMSLevel too high for silence: %.2f dBFS (expected < -40)", metrics.RMSLevel)
+		}
+
+		// Peak should also be low for silence region
+		if metrics.PeakLevel > -30.0 {
+			t.Errorf("PeakLevel too high for silence: %.2f dBFS (expected < -30)", metrics.PeakLevel)
+		}
+
+		// Spectral entropy should be relatively high for noise (closer to 1.0 than speech)
+		// We don't enforce strict bounds since synthesis may vary
+		if metrics.SpectralEntropy < 0.0 || metrics.SpectralEntropy > 1.0 {
+			t.Logf("SpectralEntropy out of [0,1] range: %.2f (may be filter-specific)", metrics.SpectralEntropy)
+		}
+
+		// Spectral centroid should be present (non-zero)
+		// Even noise has spectral content
+		if metrics.SpectralCentroid < 0.0 {
+			t.Errorf("SpectralCentroid should be non-negative: %.2f Hz", metrics.SpectralCentroid)
+		}
+
+		// LUFS measurements may be invalid for very quiet regions
+		// Just check they're within plausible dB range
+		if metrics.MomentaryLUFS < -120.0 || metrics.MomentaryLUFS > 0.0 {
+			t.Logf("MomentaryLUFS outside plausible range: %.2f LUFS", metrics.MomentaryLUFS)
+		}
+	})
+
+	t.Run("invalid_path", func(t *testing.T) {
+		metrics, err := MeasureOutputSilenceRegion("/nonexistent/path.wav", silenceRegion)
+		if err == nil {
+			t.Error("Expected error for invalid path, got nil")
+		}
+		if metrics != nil {
+			t.Error("Expected nil metrics for invalid path")
+		}
+	})
+
+	t.Run("zero_duration_region", func(t *testing.T) {
+		zeroRegion := SilenceRegion{
+			Start:    time.Duration(1.0 * float64(time.Second)),
+			End:      time.Duration(1.0 * float64(time.Second)),
+			Duration: 0,
+		}
+		metrics, err := MeasureOutputSilenceRegion(testFile, zeroRegion)
+		if err == nil {
+			t.Error("Expected error for zero duration region, got nil")
+		}
+		if metrics != nil {
+			t.Error("Expected nil metrics for zero duration region")
+		}
+	})
+}
+
+func TestMeasureOutputSpeechRegion(t *testing.T) {
+	// Generate processed test audio file with known speech-like characteristics
+	// Using a sustained tone to represent speech energy
+	testFile := generateTestAudio(t, TestAudioOptions{
+		DurationSecs: 5.0,
+		SampleRate:   44100,
+		ToneFreq:     440.0, // A4 note (speech-like frequency)
+		ToneLevel:    -20.0, // Typical speech level after processing
+		NoiseLevel:   -60.0, // Background noise
+		SilenceGap: struct {
+			Start    float64
+			Duration float64
+		}{
+			Start:    0.0, // No silence gap for speech test
+			Duration: 0.0,
+		},
+	})
+	defer cleanupTestAudio(t, testFile)
+
+	// Define the speech region we want to measure
+	speechRegion := SpeechRegion{
+		Start:    time.Duration(1.0 * float64(time.Second)),
+		End:      time.Duration(3.0 * float64(time.Second)),
+		Duration: time.Duration(2.0 * float64(time.Second)),
+	}
+
+	t.Run("valid_speech_region", func(t *testing.T) {
+		metrics, err := MeasureOutputSpeechRegion(testFile, speechRegion)
+		if err != nil {
+			t.Fatalf("MeasureOutputSpeechRegion failed: %v", err)
+		}
+
+		if metrics == nil {
+			t.Fatal("metrics is nil")
+		}
+
+		// Log all measurements for inspection
+		t.Logf("Speech Region Measurements:")
+		t.Logf("  RMSLevel: %.2f dBFS", metrics.RMSLevel)
+		t.Logf("  PeakLevel: %.2f dBFS", metrics.PeakLevel)
+		t.Logf("  CrestFactor: %.2f dB", metrics.CrestFactor)
+		t.Logf("  SpectralCentroid: %.2f Hz", metrics.SpectralCentroid)
+		t.Logf("  SpectralEntropy: %.2f", metrics.SpectralEntropy)
+		t.Logf("  SpectralFlatness: %.2f", metrics.SpectralFlatness)
+		t.Logf("  MomentaryLUFS: %.2f LUFS", metrics.MomentaryLUFS)
+		t.Logf("  ShortTermLUFS: %.2f LUFS", metrics.ShortTermLUFS)
+		t.Logf("  TruePeak: %.2f dBTP", metrics.TruePeak)
+
+		// Verify region is captured correctly
+		if metrics.Region.Start != speechRegion.Start {
+			t.Errorf("Region start mismatch: got %v, want %v", metrics.Region.Start, speechRegion.Start)
+		}
+		if metrics.Region.Duration != speechRegion.Duration {
+			t.Errorf("Region duration mismatch: got %v, want %v", metrics.Region.Duration, speechRegion.Duration)
+		}
+
+		// Amplitude metrics: speech should have substantial RMS (> -40 dBFS)
+		// With -20dBFS tone, we expect RMS around -20 to -23 dBFS
+		if metrics.RMSLevel < -30.0 || metrics.RMSLevel > -10.0 {
+			t.Errorf("RMSLevel out of expected range for speech: %.2f dBFS (expected -30 to -10)", metrics.RMSLevel)
+		}
+
+		// Peak should be higher than RMS but below 0 dBFS
+		if metrics.PeakLevel < -25.0 || metrics.PeakLevel > 0.0 {
+			t.Errorf("PeakLevel out of expected range: %.2f dBFS (expected -25 to 0)", metrics.PeakLevel)
+		}
+
+		// Crest factor for a sine wave should be around 3dB (peak = RMS + 3dB)
+		// Allow wider range (0-10dB) for measurement variations
+		if metrics.CrestFactor < 0.0 || metrics.CrestFactor > 10.0 {
+			t.Logf("CrestFactor outside expected range: %.2f dB (typical sine wave ~3dB)", metrics.CrestFactor)
+		}
+
+		// Spectral centroid should be near tone frequency (440 Hz)
+		// Allow wide tolerance since FFT window and resolution affect this
+		if metrics.SpectralCentroid < 100.0 || metrics.SpectralCentroid > 2000.0 {
+			t.Logf("SpectralCentroid outside plausible range: %.2f Hz (tone at 440 Hz)", metrics.SpectralCentroid)
+		}
+
+		// Spectral flatness should be low for tonal signal (< 0.5)
+		// Sine wave is very tonal, not noise-like
+		if metrics.SpectralFlatness < 0.0 || metrics.SpectralFlatness > 1.0 {
+			t.Logf("SpectralFlatness out of [0,1] range: %.2f", metrics.SpectralFlatness)
+		}
+
+		// LUFS should reflect the -20dBFS tone level
+		// Momentary LUFS should be roughly in -20 to -18 LUFS range
+		if metrics.MomentaryLUFS < -30.0 || metrics.MomentaryLUFS > -10.0 {
+			t.Logf("MomentaryLUFS outside expected range: %.2f LUFS (expected ~-20)", metrics.MomentaryLUFS)
+		}
+
+		// True peak should be close to sine wave peak (~-17 dBTP for -20dBFS RMS)
+		if metrics.TruePeak < -25.0 || metrics.TruePeak > 0.0 {
+			t.Logf("TruePeak outside plausible range: %.2f dBTP", metrics.TruePeak)
+		}
+	})
+
+	t.Run("invalid_path", func(t *testing.T) {
+		metrics, err := MeasureOutputSpeechRegion("/nonexistent/path.wav", speechRegion)
+		if err == nil {
+			t.Error("Expected error for invalid path, got nil")
+		}
+		if metrics != nil {
+			t.Error("Expected nil metrics for invalid path")
+		}
+	})
+
+	t.Run("zero_duration_region", func(t *testing.T) {
+		zeroRegion := SpeechRegion{
+			Start:    time.Duration(1.0 * float64(time.Second)),
+			End:      time.Duration(1.0 * float64(time.Second)),
+			Duration: 0,
+		}
+		metrics, err := MeasureOutputSpeechRegion(testFile, zeroRegion)
+		if err == nil {
+			t.Error("Expected error for zero duration region, got nil")
+		}
+		if metrics != nil {
+			t.Error("Expected nil metrics for zero duration region")
+		}
+	})
+}
