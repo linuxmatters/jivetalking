@@ -65,6 +65,37 @@ func TestProcessAudio(t *testing.T) {
 		t.Error("ProcessAudio returned nil measurements")
 	}
 
+	// Verify filtered measurements are populated (Pass 2 output analysis)
+	if result.FilteredMeasurements == nil {
+		t.Error("ProcessAudio returned nil FilteredMeasurements")
+	} else {
+		// Verify silence sample measurements are captured (if NoiseProfile exists)
+		if result.Measurements.NoiseProfile != nil {
+			t.Logf("NoiseProfile exists: Start=%v, Duration=%v", result.Measurements.NoiseProfile.Start, result.Measurements.NoiseProfile.Duration)
+			if result.FilteredMeasurements.SilenceSample == nil {
+				t.Error("FilteredMeasurements.SilenceSample is nil despite NoiseProfile existing")
+			} else {
+				t.Logf("Silence sample RMS: %.2f dBFS", result.FilteredMeasurements.SilenceSample.RMSLevel)
+				t.Logf("Silence sample spectral centroid: %.1f Hz", result.FilteredMeasurements.SilenceSample.SpectralCentroid)
+			}
+		} else {
+			t.Logf("NoiseProfile is nil - skipping silence sample validation")
+		}
+
+		// Verify speech sample measurements are captured (if SpeechProfile exists)
+		if result.Measurements.SpeechProfile != nil {
+			t.Logf("SpeechProfile exists: Region=%v", result.Measurements.SpeechProfile.Region)
+			if result.FilteredMeasurements.SpeechSample == nil {
+				t.Error("FilteredMeasurements.SpeechSample is nil despite SpeechProfile existing")
+			} else {
+				t.Logf("Speech sample RMS: %.2f dBFS", result.FilteredMeasurements.SpeechSample.RMSLevel)
+				t.Logf("Speech sample spectral centroid: %.1f Hz", result.FilteredMeasurements.SpeechSample.SpectralCentroid)
+			}
+		} else {
+			t.Logf("SpeechProfile is nil - skipping speech sample validation")
+		}
+	}
+
 	// Log results
 	t.Logf("Input LUFS: %.2f", result.InputLUFS)
 	t.Logf("Output LUFS: %.2f", result.OutputLUFS)
