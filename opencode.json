@@ -1,0 +1,12 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "bash": {
+      "just test": "allow",
+      "just test *": "allow",
+      "just build": "allow",
+      "just build *": "allow",
+      "go test *": "allow"
+    }
+  }
+}

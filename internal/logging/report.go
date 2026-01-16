@@ -1400,22 +1400,49 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	if finalNoise != nil {
 		finalRMS = finalNoise.RMSLevel
 	}
-	table.AddMetricRow("RMS Level", inputRMS, filteredRMS, finalRMS, 1, "dBFS", "")
+
+	// Check if filtered/final are digital silence (complete noise elimination)
+	filteredIsDigitalSilence := isDigitalSilence(filteredRMS)
+	finalIsDigitalSilence := isDigitalSilence(finalRMS)
+
+	// Use special formatting for dB values that handles digital silence
+	table.AddRow("RMS Level",
+		[]string{
+			formatMetricDB(inputRMS, 1),
+			formatMetricDB(filteredRMS, 1),
+			formatMetricDB(finalRMS, 1),
+		},
+		"dBFS", "")
 
 	// Noise Reduction Delta (input - filtered/final, positive = reduction achieved)
-	filteredDelta := math.NaN()
-	finalDelta := math.NaN()
-	if !math.IsNaN(inputRMS) && !math.IsNaN(filteredRMS) {
-		filteredDelta = inputRMS - filteredRMS
-	}
-	if !math.IsNaN(inputRMS) && !math.IsNaN(finalRMS) {
-		finalDelta = inputRMS - finalRMS
+	// For digital silence, show "> 60 dB" since we can't calculate exact reduction
+	formatNoiseReduction := func(inputVal, outputVal float64, isDigSilence bool) string {
+		if math.IsNaN(inputVal) || math.IsNaN(outputVal) {
+			return MissingValue
+		}
+		if isDigSilence {
+			// Can't calculate exact reduction when output is digital zero
+			// Show as "> X dB" where X is the minimum reduction (input - threshold)
+			minReduction := inputVal - DigitalSilenceThreshold
+			if minReduction > 60 {
+				return "> 60"
+			}
+			return fmt.Sprintf("> %.0f", minReduction)
+		}
+		delta := inputVal - outputVal
+		if delta >= 0 {
+			return fmt.Sprintf("+%.1f", delta)
+		}
+		return fmt.Sprintf("%.1f", delta)
 	}
 
 	var reductionInterp string
-	if !math.IsNaN(filteredDelta) {
+	if filteredIsDigitalSilence || finalIsDigitalSilence {
+		reductionInterp = "noise eliminated"
+	} else if !math.IsNaN(inputRMS) && !math.IsNaN(filteredRMS) {
+		filteredDelta := inputRMS - filteredRMS
 		if filteredDelta < 0 {
-			reductionInterp = "🟖 noise increased"
+			reductionInterp = "noise increased"
 		} else if filteredDelta < 3 {
 			reductionInterp = "minimal reduction"
 		} else if filteredDelta < 10 {
@@ -1425,17 +1452,12 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 		}
 	}
 
-	formatDelta := func(delta float64) string {
-		if math.IsNaN(delta) {
-			return MissingValue
-		}
-		if delta >= 0 {
-			return fmt.Sprintf("+%.1f", delta)
-		}
-		return fmt.Sprintf("%.1f", delta)
-	}
 	table.AddRow("Noise Reduction",
-		[]string{MissingValue, formatDelta(filteredDelta), formatDelta(finalDelta)},
+		[]string{
+			MissingValue,
+			formatNoiseReduction(inputRMS, filteredRMS, filteredIsDigitalSilence),
+			formatNoiseReduction(inputRMS, finalRMS, finalIsDigitalSilence),
+		},
 		"dB", reductionInterp)
 
 	// Peak Level
@@ -1453,9 +1475,15 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	if finalNoise != nil {
 		finalPeak = finalNoise.PeakLevel
 	}
-	table.AddMetricRow("Peak Level", inputPeak, filteredPeak, finalPeak, 1, "dBFS", "")
+	table.AddRow("Peak Level",
+		[]string{
+			formatMetricDB(inputPeak, 1),
+			formatMetricDB(filteredPeak, 1),
+			formatMetricDB(finalPeak, 1),
+		},
+		"dBFS", "")
 
-	// Crest Factor
+	// Crest Factor (undefined for digital silence - no peak or RMS to compare)
 	inputCrest := math.NaN()
 	if inputNoise != nil {
 		inputCrest = inputNoise.CrestFactor
@@ -1464,15 +1492,17 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	}
 	filteredCrest := math.NaN()
 	finalCrest := math.NaN()
-	if filteredNoise != nil {
+	if filteredNoise != nil && !filteredIsDigitalSilence {
 		filteredCrest = filteredNoise.CrestFactor
 	}
-	if finalNoise != nil {
+	if finalNoise != nil && !finalIsDigitalSilence {
 		finalCrest = finalNoise.CrestFactor
 	}
 	table.AddMetricRow("Crest Factor", inputCrest, filteredCrest, finalCrest, 1, "dB", "")
 
 	// ========== SPECTRAL METRICS ==========
+	// For digital silence, spectral metrics are undefined (no signal to analyse).
+	// Show "n/a" instead of misleading zeros or arbitrary values.
 
 	// Spectral Mean
 	inputMean := math.NaN()
@@ -1487,7 +1517,12 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	if finalNoise != nil {
 		finalMean = finalNoise.SpectralMean
 	}
-	table.AddMetricRow("Spectral Mean", inputMean, filteredMean, finalMean, 6, "", "")
+	table.AddRow("Spectral Mean",
+		[]string{
+			formatMetric(inputMean, 6),
+			formatMetricSpectral(filteredMean, 6, filteredIsDigitalSilence),
+			formatMetricSpectral(finalMean, 6, finalIsDigitalSilence),
+		}, "", "")
 
 	// Spectral Variance
 	inputVar := math.NaN()
@@ -1502,7 +1537,12 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	if finalNoise != nil {
 		finalVar = finalNoise.SpectralVariance
 	}
-	table.AddMetricRow("Spectral Variance", inputVar, filteredVar, finalVar, 6, "", "")
+	table.AddRow("Spectral Variance",
+		[]string{
+			formatMetric(inputVar, 6),
+			formatMetricSpectral(filteredVar, 6, filteredIsDigitalSilence),
+			formatMetricSpectral(finalVar, 6, finalIsDigitalSilence),
+		}, "", "")
 
 	// Spectral Centroid
 	inputCentroid := math.NaN()
@@ -1517,7 +1557,12 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	if finalNoise != nil {
 		finalCentroid = finalNoise.SpectralCentroid
 	}
-	table.AddMetricRow("Spectral Centroid", inputCentroid, filteredCentroid, finalCentroid, 0, "Hz", "")
+	table.AddRow("Spectral Centroid",
+		[]string{
+			formatMetric(inputCentroid, 0),
+			formatMetricSpectral(filteredCentroid, 0, filteredIsDigitalSilence),
+			formatMetricSpectral(finalCentroid, 0, finalIsDigitalSilence),
+		}, "Hz", "")
 
 	// Spectral Spread
 	inputSpread := math.NaN()
@@ -1532,7 +1577,12 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	if finalNoise != nil {
 		finalSpread = finalNoise.SpectralSpread
 	}
-	table.AddMetricRow("Spectral Spread", inputSpread, filteredSpread, finalSpread, 0, "Hz", "")
+	table.AddRow("Spectral Spread",
+		[]string{
+			formatMetric(inputSpread, 0),
+			formatMetricSpectral(filteredSpread, 0, filteredIsDigitalSilence),
+			formatMetricSpectral(finalSpread, 0, finalIsDigitalSilence),
+		}, "Hz", "")
 
 	// Spectral Skewness
 	inputSkew := math.NaN()
@@ -1547,7 +1597,12 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	if finalNoise != nil {
 		finalSkew = finalNoise.SpectralSkewness
 	}
-	table.AddMetricRow("Spectral Skewness", inputSkew, filteredSkew, finalSkew, 3, "", "")
+	table.AddRow("Spectral Skewness",
+		[]string{
+			formatMetric(inputSkew, 3),
+			formatMetricSpectral(filteredSkew, 3, filteredIsDigitalSilence),
+			formatMetricSpectral(finalSkew, 3, finalIsDigitalSilence),
+		}, "", "")
 
 	// Spectral Kurtosis
 	inputKurt := math.NaN()
@@ -1562,7 +1617,12 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	if finalNoise != nil {
 		finalKurt = finalNoise.SpectralKurtosis
 	}
-	table.AddMetricRow("Spectral Kurtosis", inputKurt, filteredKurt, finalKurt, 3, "", "")
+	table.AddRow("Spectral Kurtosis",
+		[]string{
+			formatMetric(inputKurt, 3),
+			formatMetricSpectral(filteredKurt, 3, filteredIsDigitalSilence),
+			formatMetricSpectral(finalKurt, 3, finalIsDigitalSilence),
+		}, "", "")
 
 	// Spectral Entropy
 	inputEntropy := math.NaN()
@@ -1579,7 +1639,12 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	if finalNoise != nil {
 		finalEntropy = finalNoise.SpectralEntropy
 	}
-	table.AddMetricRow("Spectral Entropy", inputEntropy, filteredEntropy, finalEntropy, 6, "", "")
+	table.AddRow("Spectral Entropy",
+		[]string{
+			formatMetric(inputEntropy, 6),
+			formatMetricSpectral(filteredEntropy, 6, filteredIsDigitalSilence),
+			formatMetricSpectral(finalEntropy, 6, finalIsDigitalSilence),
+		}, "", "")
 
 	// Spectral Flatness
 	inputFlat := math.NaN()
@@ -1594,7 +1659,12 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	if finalNoise != nil {
 		finalFlat = finalNoise.SpectralFlatness
 	}
-	table.AddMetricRow("Spectral Flatness", inputFlat, filteredFlat, finalFlat, 6, "", "")
+	table.AddRow("Spectral Flatness",
+		[]string{
+			formatMetric(inputFlat, 6),
+			formatMetricSpectral(filteredFlat, 6, filteredIsDigitalSilence),
+			formatMetricSpectral(finalFlat, 6, finalIsDigitalSilence),
+		}, "", "")
 
 	// Spectral Crest
 	inputSpectralCrest := math.NaN()
@@ -1609,7 +1679,12 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	if finalNoise != nil {
 		finalSpectralCrest = finalNoise.SpectralCrest
 	}
-	table.AddMetricRow("Spectral Crest", inputSpectralCrest, filteredSpectralCrest, finalSpectralCrest, 3, "", "")
+	table.AddRow("Spectral Crest",
+		[]string{
+			formatMetric(inputSpectralCrest, 3),
+			formatMetricSpectral(filteredSpectralCrest, 3, filteredIsDigitalSilence),
+			formatMetricSpectral(finalSpectralCrest, 3, finalIsDigitalSilence),
+		}, "", "")
 
 	// Spectral Flux
 	inputFlux := math.NaN()
@@ -1624,7 +1699,12 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	if finalNoise != nil {
 		finalFlux = finalNoise.SpectralFlux
 	}
-	table.AddMetricRow("Spectral Flux", inputFlux, filteredFlux, finalFlux, 6, "", "")
+	table.AddRow("Spectral Flux",
+		[]string{
+			formatMetric(inputFlux, 6),
+			formatMetricSpectral(filteredFlux, 6, filteredIsDigitalSilence),
+			formatMetricSpectral(finalFlux, 6, finalIsDigitalSilence),
+		}, "", "")
 
 	// Spectral Slope
 	inputSlope := math.NaN()
@@ -1639,7 +1719,12 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	if finalNoise != nil {
 		finalSlope = finalNoise.SpectralSlope
 	}
-	table.AddMetricRow("Spectral Slope", inputSlope, filteredSlope, finalSlope, 9, "", "")
+	table.AddRow("Spectral Slope",
+		[]string{
+			formatMetric(inputSlope, 9),
+			formatMetricSpectral(filteredSlope, 9, filteredIsDigitalSilence),
+			formatMetricSpectral(finalSlope, 9, finalIsDigitalSilence),
+		}, "", "")
 
 	// Spectral Decrease
 	inputDecrease := math.NaN()
@@ -1654,7 +1739,12 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	if finalNoise != nil {
 		finalDecrease = finalNoise.SpectralDecrease
 	}
-	table.AddMetricRow("Spectral Decrease", inputDecrease, filteredDecrease, finalDecrease, 6, "", "")
+	table.AddRow("Spectral Decrease",
+		[]string{
+			formatMetric(inputDecrease, 6),
+			formatMetricSpectral(filteredDecrease, 6, filteredIsDigitalSilence),
+			formatMetricSpectral(finalDecrease, 6, finalIsDigitalSilence),
+		}, "", "")
 
 	// Spectral Rolloff
 	inputRolloff := math.NaN()
@@ -1669,11 +1759,16 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	if finalNoise != nil {
 		finalRolloff = finalNoise.SpectralRolloff
 	}
-	table.AddMetricRow("Spectral Rolloff", inputRolloff, filteredRolloff, finalRolloff, 0, "Hz", "")
+	table.AddRow("Spectral Rolloff",
+		[]string{
+			formatMetric(inputRolloff, 0),
+			formatMetricSpectral(filteredRolloff, 0, filteredIsDigitalSilence),
+			formatMetricSpectral(finalRolloff, 0, finalIsDigitalSilence),
+		}, "Hz", "")
 
 	// ========== LOUDNESS METRICS ==========
 
-	// Momentary LUFS
+	// Momentary LUFS - use special formatting for values below measurement floor
 	inputMomentary := math.NaN()
 	filteredMomentary := math.NaN()
 	finalMomentary := math.NaN()
@@ -1686,7 +1781,13 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	if finalNoise != nil {
 		finalMomentary = finalNoise.MomentaryLUFS
 	}
-	table.AddMetricRow("Momentary LUFS", inputMomentary, filteredMomentary, finalMomentary, 1, "LUFS", "")
+	table.AddRow("Momentary LUFS",
+		[]string{
+			formatMetricLUFS(inputMomentary, 1),
+			formatMetricLUFS(filteredMomentary, 1),
+			formatMetricLUFS(finalMomentary, 1),
+		},
+		"LUFS", "")
 
 	// Short-term LUFS
 	inputShortTerm := math.NaN()
@@ -1701,9 +1802,15 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	if finalNoise != nil {
 		finalShortTerm = finalNoise.ShortTermLUFS
 	}
-	table.AddMetricRow("Short-term LUFS", inputShortTerm, filteredShortTerm, finalShortTerm, 1, "LUFS", "")
+	table.AddRow("Short-term LUFS",
+		[]string{
+			formatMetricLUFS(inputShortTerm, 1),
+			formatMetricLUFS(filteredShortTerm, 1),
+			formatMetricLUFS(finalShortTerm, 1),
+		},
+		"LUFS", "")
 
-	// True Peak
+	// True Peak - values are now stored in dB (converted during measurement)
 	inputTP := math.NaN()
 	filteredTP := math.NaN()
 	finalTP := math.NaN()
@@ -1716,9 +1823,15 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	if finalNoise != nil {
 		finalTP = finalNoise.TruePeak
 	}
-	table.AddMetricRow("True Peak", inputTP, filteredTP, finalTP, 1, "dBTP", "")
+	table.AddRow("True Peak",
+		[]string{
+			formatMetricDB(inputTP, 1),
+			formatMetricDB(filteredTP, 1),
+			formatMetricDB(finalTP, 1),
+		},
+		"dBTP", "")
 
-	// Sample Peak
+	// Sample Peak - values are now stored in dB (converted during measurement)
 	inputSP := math.NaN()
 	filteredSP := math.NaN()
 	finalSP := math.NaN()
@@ -1731,10 +1844,20 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	if finalNoise != nil {
 		finalSP = finalNoise.SamplePeak
 	}
-	table.AddMetricRow("Sample Peak", inputSP, filteredSP, finalSP, 1, "dBFS", "")
+	table.AddRow("Sample Peak",
+		[]string{
+			formatMetricDB(inputSP, 1),
+			formatMetricDB(filteredSP, 1),
+			formatMetricDB(finalSP, 1),
+		},
+		"dBFS", "")
 
 	// Character (interpretation row) - based on entropy
-	getNoiseCharacter := func(entropy float64) string {
+	// For digital silence, show "silent" instead of attempting to characterise non-existent noise
+	getNoiseCharacter := func(entropy float64, isDigSilence bool) string {
+		if isDigSilence {
+			return "silent"
+		}
 		if math.IsNaN(entropy) {
 			return MissingValue
 		}
@@ -1745,9 +1868,9 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 		}
 		return "broadband"
 	}
-	inputChar := getNoiseCharacter(inputEntropy)
-	filteredChar := getNoiseCharacter(filteredEntropy)
-	finalChar := getNoiseCharacter(finalEntropy)
+	inputChar := getNoiseCharacter(inputEntropy, false) // Input is never digital silence (we have real noise)
+	filteredChar := getNoiseCharacter(filteredEntropy, filteredIsDigitalSilence)
+	finalChar := getNoiseCharacter(finalEntropy, finalIsDigitalSilence)
 	table.AddRow("Character", []string{inputChar, filteredChar, finalChar}, "", "")
 
 	fmt.Fprint(f, table.String())
@@ -2084,6 +2207,35 @@ func writeSpeechRegionTable(f *os.File, inputMeasurements *processor.AudioMeasur
 		finalSP = finalSpeech.SamplePeak
 	}
 	table.AddMetricRow("Sample Peak", inputSP, filteredSP, finalSP, 1, "dBFS", "")
+
+	// Character (interpretation row) - based on spectral centroid and entropy
+	// Speech character describes voice quality: warm, balanced, bright, etc.
+	getSpeechCharacter := func(centroid, entropy float64) string {
+		if math.IsNaN(centroid) || math.IsNaN(entropy) {
+			return MissingValue
+		}
+		// Combine centroid (brightness) with entropy (clarity) for character assessment
+		// Low centroid + low entropy = warm, clear voice
+		// High centroid + low entropy = bright, clear voice
+		// High entropy = noisy/breathy regardless of centroid
+		if entropy > 0.7 {
+			return "noisy/breathy"
+		}
+		if centroid < 1500 {
+			return "warm, full-bodied"
+		} else if centroid < 2500 {
+			return "balanced, natural"
+		} else if centroid < 4000 {
+			return "present, forward"
+		} else if centroid < 6000 {
+			return "bright, crisp"
+		}
+		return "very bright"
+	}
+	inputSpeechChar := getSpeechCharacter(inputCentroid, inputEntropy)
+	filteredSpeechChar := getSpeechCharacter(filteredCentroid, filteredEntropy)
+	finalSpeechChar := getSpeechCharacter(finalCentroid, finalEntropy)
+	table.AddRow("Character", []string{inputSpeechChar, filteredSpeechChar, finalSpeechChar}, "", "")
 
 	fmt.Fprint(f, table.String())
 	fmt.Fprintln(f, "")

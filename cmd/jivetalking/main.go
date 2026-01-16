@@ -72,6 +72,9 @@ func main() {
 		}
 	}
 
+	// Set the processor package's debug log function to use the same log
+	processor.DebugLog = log
+
 	// Create the Bubbletea UI model
 	model := ui.NewModel(cliArgs.Files)
 
