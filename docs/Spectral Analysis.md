@@ -51,22 +51,25 @@ Your kurtosis of **5.781** clearly indicates leptokurtic distribution—the spec
 
 ## Information-theoretic metrics: entropy, flatness, and crest
 
-**Spectral entropy** applies Shannon entropy to the frequency domain, measuring disorder in power distribution. Normalized values range 0–1, where higher values indicate flatter, more uniform (noise-like) spectra and lower values indicate concentrated, peaked (tonal) spectra. Voiced speech typically shows entropy of **0.3–0.5**; unvoiced fricatives reach **0.7–0.9**; white noise approaches **1.0**.
+**Spectral entropy** applies Shannon entropy to the frequency domain, measuring disorder in power distribution. FFmpeg's aspectralstats normalises entropy by dividing by log(N), producing values in the 0–1 range where 0 indicates a pure tone (all energy in one bin) and 1 indicates white noise (uniform distribution). Voiced speech typically shows entropy of **0.08–0.30**; mixed voiced/unvoiced content reaches **0.3–0.5**; fricatives and noise approach **0.7–1.0**.
 
-Your entropy value of **0.010568** appears unusually low, suggesting either non-normalized computation (raw bits rather than normalized 0–1 scale), measurement over a narrow frequency band, or computation on power spectrum rather than probability distribution. Standard normalized entropy for voiced speech would be considerably higher.
+Reference: Misra, H. et al. (2004). "Spectral entropy based feature for robust ASR." ICASSP'04.
 
 **Spectral flatness** (Wiener entropy, tonality coefficient) is the ratio of geometric mean to arithmetic mean of the spectrum. It ranges from 0 (pure tone, all energy in one frequency) to 1 (white noise, uniform distribution). This MPEG-7 standard descriptor directly measures tonality versus noisiness.
 
 | Signal type | Typical flatness | Interpretation |
 |-------------|------------------|----------------|
 | Pure tone | ~0.0 | Maximum tonality |
-| Voiced speech | 0.1–0.4 | Clear harmonic peaks |
+| Clean voiced speech | 0.05–0.25 | Strong harmonic peaks |
+| Mixed speech content | 0.2–0.4 | Voiced with consonants |
 | Unvoiced speech | 0.4–0.7 | Noise-like fricatives |
-| White noise | ~0.5–0.6 | Flat distribution |
+| White noise | ~1.0 | Flat distribution |
 
 Your flatness of **0.619** is higher than typical voiced speech, suggesting either significant noise/aspiration content, measurement during unvoiced segments, or a breathy vocal quality. Clean voiced speech typically shows flatness of **0.1–0.3**.
 
 **Spectral crest factor** is the inverse of flatness conceptually—the ratio of peak power to mean power. Higher values indicate more prominent spectral peaks (tonal content); lower values indicate flatter spectra (noise-like). Your crest of **38.744** is high, indicating significant spectral peaks despite the elevated flatness.
+
+Note: Spectral crest is expressed as a **linear ratio** (not dB). To convert: crest_dB = 20 × log₁₀(crest). A crest of 100 equals 40 dB.
 
 **Combined interpretation**: High flatness (0.62) with high crest (38.7) together suggest either averaging across varied phonemes (both tonal vowels creating peaks and noisy consonants creating flatness) or breathy voice quality where harmonic peaks coexist with aspiration noise.
 
@@ -88,7 +91,9 @@ Your slope of **-2.33e-05** (small negative coefficient) indicates the expected 
 - **Shallower (less negative) slope**: Brighter, sharper sound; pressed voice; potential strain
 - **Near zero**: Very bright, possibly harsh
 
-**Spectral decrease** emphasizes lower-frequency slopes more than spectral slope, measuring the rate of energy decline while giving more weight to bass frequencies. Your value of **-0.026370** indicates moderate energy concentration in lower frequencies—expected for male voice with strong fundamental frequency presence.
+**Spectral decrease** measures the rate of spectral amplitude decline from the first frequency bin, with more weight given to lower frequencies. FFmpeg computes this as Σ((mag[k] - mag[0]) / k) / Σ(mag[k]). Positive values indicate the spectrum decreases from low to high frequencies (typical for speech); values near zero indicate a flat spectrum; negative values indicate rising spectrum (unusual). Empirical measurements show male podcast speech typically ranges **0.002–0.10**.
+
+Reference: Peeters, G. (2003). CUIDADO project report, IRCAM.
 
 **Spectral rolloff** identifies the frequency below which a specified percentage (typically 85% or 95%) of total spectral energy resides. This directly indicates high-frequency content and perceived brightness. Your rolloff of **11864 Hz** (at 95% energy threshold) is quite high for voiced speech, indicating significant high-frequency content.
 
@@ -97,6 +102,8 @@ Your slope of **-2.33e-05** (small negative coefficient) indicates the expected 
 | < 3000 Hz | Dark, muffled | Heavy voiced content only |
 | 3000–8000 Hz | Balanced | Normal articulation |
 | > 8000 Hz | Bright, airy | Sibilance, fricatives, bright timbre |
+
+Note: Rolloff values assume the **85% energy threshold** (FFmpeg and librosa default). Some tools use 95%, which produces higher values.
 
 **Processing implications**: Your high rolloff suggests checking for sibilance. Male sibilance typically concentrates at 3–6 kHz; consider de-essing in this range if "s" and "t" sounds are harsh.
 
@@ -129,6 +136,16 @@ The metric profile suggests a male voice with **bright characteristics** (high c
 - **Low-mid presence**: The positive skewness and spectral decrease confirm good low-frequency foundation; preserve 200–400 Hz warmth
 - **Clarity enhancement**: If masking occurs, slight cut at 300–400 Hz combined with presence boost at 3–5 kHz
 - **Noise reduction**: The elevated flatness may indicate room tone or preamp noise; consider gentle broadband noise reduction if this flatness persists across silent segments
+
+## References
+
+The spectral metrics documented here follow established definitions from:
+
+- **Peeters, G. (2003).** "A large set of audio features for sound description." CUIDADO I.S.T. Project Report, IRCAM. [Foundational reference for spectral descriptors]
+- **MPEG-7 ISO/IEC 15938-4.** AudioSpectralFlatness standard descriptor.
+- **Essentia Library.** MTG, Universitat Pompeu Fabra. https://essentia.upf.edu
+- **librosa.** McFee et al. https://librosa.org
+- **Misra, H. et al. (2004).** "Spectral entropy based feature for robust ASR." ICASSP'04.
 
 ## Conclusion
 

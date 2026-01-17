@@ -21,7 +21,9 @@ import (
 // descriptions of audio characteristics. Based on MATLAB Audio Toolbox
 // documentation and standard audio analysis conventions.
 
-// interpretCentroid describes the spectral "brightness" based on centroid frequency.
+// interpretCentroid describes spectral "brightness" based on centre of gravity.
+// Reference: Grey & Gordon (1978) JASA; Peeters (2003) CUIDADO; librosa.
+//
 // Centroid is the "centre of gravity" of the spectrum - where spectral energy is concentrated.
 //
 // Reference values for speech:
@@ -106,11 +108,9 @@ func interpretKurtosis(kurt float64) string {
 }
 
 // interpretEntropy describes spectral randomness/order.
-// Entropy measures disorder in spectral energy distribution (0 to 1 normalised).
-// Lower entropy: ordered/predictable spectrum (tonal content, harmonic structure).
-// Higher entropy: random/unpredictable spectrum (noise, complex transients).
-//
-// Note: If values appear outside 0-1 range, the metric may be unnormalised (raw bits).
+// FFmpeg aspectralstats outputs normalised entropy (divided by log(size)).
+// Values range 0-1 where 0=pure tone, 1=white noise.
+// Reference: Misra et al. (2004) ICASSP; Essentia Entropy algorithm.
 func interpretEntropy(entropy float64) string {
 	switch {
 	case entropy < 0.3:
@@ -126,10 +126,9 @@ func interpretEntropy(entropy float64) string {
 	}
 }
 
-// interpretFlatness describes the tonality vs noise character.
-// Flatness is the ratio of geometric mean to arithmetic mean of spectrum (0 to 1).
-// Values near 0: tonal/harmonic content with spectral peaks.
-// Values near 1: flat/white noise spectrum.
+// interpretFlatness describes tonality vs noisiness (Wiener entropy).
+// Ratio of geometric mean to arithmetic mean. 0=pure tone, 1=white noise.
+// Reference: MPEG-7 AudioSpectralFlatness; Johnston (1988); Dubnov (2004).
 //
 // Clean voiced speech 0.1-0.3; breathy voice 0.3-0.5; fricatives 0.4-0.7.
 func interpretFlatness(flatness float64) string {
@@ -148,10 +147,15 @@ func interpretFlatness(flatness float64) string {
 }
 
 // interpretCrest describes the peak-to-average ratio of the spectrum.
-// Higher crest: spectrum has prominent peaks (tonal, resonant).
-// Lower crest: spectrum is more uniform (noise-like, broadband).
+// Crest factor = max(spectrum) / mean(spectrum), expressed as LINEAR RATIO (not dB).
+// To convert to dB: crest_dB = 20 * log10(crest).
+// Reference: Peeters (2003) CUIDADO project; Essentia Crest algorithm.
 //
-// Higher crest indicates clearer harmonics; low crest suggests noise contamination.
+// Typical values:
+//   - White noise: ~3-5 (peaks barely exceed mean)
+//   - Distributed harmonics: 8-25 (multiple peaks)
+//   - Clear harmonics: 25-100 (prominent peaks)
+//   - Single dominant frequency: >100 (extreme peakiness)
 func interpretCrest(crest float64) string {
 	switch {
 	case crest < 8:
@@ -188,11 +192,11 @@ func interpretFlux(flux float64) string {
 	}
 }
 
-// interpretDecrease describes low-frequency weighted spectral decrease.
-// Similar to slope but emphasises low-frequency behaviour.
-// Used for characterising bass/warmth in the signal.
-//
-// Male voices typically show more negative decrease than female voices.
+// interpretDecrease describes low-frequency weighted spectral slope.
+// FFmpeg computes: sum((mag[k] - mag[0]) / k) / sum(mag[k])
+// Positive values indicate spectrum decreases from low to high frequencies (typical for speech).
+// Negative values indicate rising spectrum (unusual, HF emphasis).
+// Reference: Peeters (2003) CUIDADO project; Essentia Decrease algorithm.
 func interpretDecrease(decrease float64) string {
 	switch {
 	case decrease < 0:
@@ -206,9 +210,9 @@ func interpretDecrease(decrease float64) string {
 	}
 }
 
-// interpretRolloff describes the effective bandwidth of the signal.
-// Rolloff is the frequency below which 85-95% of spectral energy exists.
-// Higher rolloff indicates more high-frequency content; useful for sibilance detection.
+// interpretRolloff describes effective bandwidth via 85% energy threshold.
+// Returns Hz below which 85% of spectral energy resides.
+// Reference: Peeters (2003) CUIDADO; librosa spectral_rolloff.
 func interpretRolloff(hz float64) string {
 	switch {
 	case hz < 2000:
