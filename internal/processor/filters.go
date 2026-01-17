@@ -295,8 +295,8 @@ func DefaultFilterConfig() *FilterChainConfig {
 		NoiseRemovePatchSec:         0.006,   // 6ms patch (fast-compand validated)
 		NoiseRemoveResearchSec:      0.0058,  // 5.8ms research (fast-compand validated)
 		NoiseRemoveSmooth:           11.0,    // Default smoothing
-		NoiseRemoveCompandThreshold: -50.0,   // Overridden by adaptive tuning
-		NoiseRemoveCompandExpansion: 10.0,    // Overridden by adaptive tuning
+		NoiseRemoveCompandThreshold: -55.0,   // Overridden by adaptive tuning
+		NoiseRemoveCompandExpansion: 6.0,     // Overridden by adaptive tuning
 		NoiseRemoveCompandAttack:    0.005,   // 5ms - fixed, empirically validated for speech
 		NoiseRemoveCompandDecay:     0.100,   // 100ms - fixed, empirically validated for speech
 		NoiseRemoveCompandKnee:      6.0,     // 6dB - fixed, soft knee for transparency
@@ -330,7 +330,7 @@ func DefaultFilterConfig() *FilterChainConfig {
 		LA2AMix:       1.0, // 100% wet (true LA-2A has no parallel compression)
 
 		// De-esser - automatic sibilance reduction
-		DeessEnabled:   false,
+		DeessEnabled:   true,
 		DeessIntensity: 0.0, // 0.0 = disabled by default, will be set adaptively if enabled
 		DeessAmount:    0.5, // 50% ducking on treble (moderate reduction)
 		DeessFreq:      0.5, // Keep 50% of original frequency content (balanced)

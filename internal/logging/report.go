@@ -494,7 +494,7 @@ func formatFilter(f *os.File, filterID processor.FilterID, cfg *processor.Filter
 	case processor.FilterNoiseRemove:
 		formatNoiseRemoveFilter(f, cfg, m, prefix)
 	case processor.FilterDC1Declick:
-		formatDC1DeclickFilter(f, cfg, prefix)
+		formatDC1DeclickFilter(f, cfg, m, prefix)
 	case processor.FilterDS201Gate:
 		formatDS201GateFilter(f, cfg, m, prefix)
 	case processor.FilterLA2ACompressor:
@@ -655,25 +655,26 @@ func formatNoiseRemoveFilter(f *os.File, cfg *processor.FilterChainConfig, m *pr
 		cfg.NoiseRemoveResearchSec,
 		cfg.NoiseRemoveSmooth)
 
-	// compand parameters (adaptive)
-	fmt.Fprintf(f, "        compand: threshold %.0f dB, expansion %.0f dB\n",
-		cfg.NoiseRemoveCompandThreshold,
-		cfg.NoiseRemoveCompandExpansion)
+	// compand parameters and rationale - show noise floor source
+	if m != nil && m.NoiseProfile != nil && m.NoiseProfile.MeasuredNoiseFloor < 0 {
+		fmt.Fprintf(f, "        noise floor: %.1f dBFS (from silence regions)\n",
+			m.NoiseProfile.MeasuredNoiseFloor)
+		fmt.Fprintf(f, "        compand: threshold %.0f dB (floor + 5dB), expansion %.0f dB\n",
+			cfg.NoiseRemoveCompandThreshold,
+			cfg.NoiseRemoveCompandExpansion)
+	} else {
+		fmt.Fprintf(f, "        compand: threshold %.0f dB, expansion %.0f dB (defaults - no noise profile)\n",
+			cfg.NoiseRemoveCompandThreshold,
+			cfg.NoiseRemoveCompandExpansion)
+	}
 	fmt.Fprintf(f, "        timing: attack %.0fms, decay %.0fms, knee %.0f dB\n",
 		cfg.NoiseRemoveCompandAttack*1000,
 		cfg.NoiseRemoveCompandDecay*1000,
 		cfg.NoiseRemoveCompandKnee)
-
-	// Show adaptive rationale if noise profile available
-	if m != nil && m.NoiseProfile != nil && m.NoiseProfile.Duration > 0 {
-		fmt.Fprintf(f, "        Rationale: noise floor %.1f dB → target -90 dB (%.0f dB expansion)\n",
-			m.NoiseProfile.MeasuredNoiseFloor,
-			cfg.NoiseRemoveCompandExpansion)
-	}
 }
 
 // formatDC1DeclickFilter outputs CEDAR DC-1-inspired declicker filter details
-func formatDC1DeclickFilter(f *os.File, cfg *processor.FilterChainConfig, prefix string) {
+func formatDC1DeclickFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
 	if !cfg.DC1DeclickEnabled {
 		if cfg.DC1DeclickReason != "" {
 			fmt.Fprintf(f, "%sDC1 Declick: DISABLED (%s)\n", prefix, cfg.DC1DeclickReason)
@@ -693,6 +694,17 @@ func formatDC1DeclickFilter(f *os.File, cfg *processor.FilterChainConfig, prefix
 	fmt.Fprintf(f, "        Method: %s\n", method)
 	if cfg.DC1DeclickReason != "" {
 		fmt.Fprintf(f, "        Reason: %s\n", cfg.DC1DeclickReason)
+	}
+
+	// Show centroid with measurement source (used for window sizing)
+	if m != nil && m.SpectralCentroid > 0 {
+		centroid := m.SpectralCentroid
+		centroidSource := "full-file"
+		if m.SpeechProfile != nil && m.SpeechProfile.SpectralCentroid > 0 {
+			centroid = m.SpeechProfile.SpectralCentroid
+			centroidSource = "speech region"
+		}
+		fmt.Fprintf(f, "        spectral centroid: %.0f Hz (%s)\n", centroid, centroidSource)
 	}
 }
 
@@ -804,7 +816,7 @@ func formatLA2ACompressorFilter(f *os.File, cfg *processor.FilterChainConfig, m 
 	fmt.Fprintf(f, "        Timing: attack %.0fms, release %.0fms\n", cfg.LA2AAttack, cfg.LA2ARelease)
 	fmt.Fprintf(f, "        Mix: %.0f%%, knee %.1f\n", cfg.LA2AMix*100, cfg.LA2AKnee)
 
-	// Show rationale
+	// Show rationale with measurement sources
 	if m != nil && m.DynamicRange > 0 {
 		dynamicsType := "moderate"
 		if m.DynamicRange > 30 {
@@ -813,29 +825,69 @@ func formatLA2ACompressorFilter(f *os.File, cfg *processor.FilterChainConfig, m 
 			dynamicsType = "already compressed"
 		}
 		fmt.Fprintf(f, "        Rationale: DR %.1f dB (%s), LRA %.1f LU\n", m.DynamicRange, dynamicsType, m.InputLRA)
+
+		// Show kurtosis and flux with sources (used for ratio and release tuning)
+		kurtosis := m.SpectralKurtosis
+		flux := m.SpectralFlux
+		kurtosisSource := "full-file"
+		fluxSource := "full-file"
+		if m.SpeechProfile != nil {
+			if m.SpeechProfile.SpectralKurtosis > 0 {
+				kurtosis = m.SpeechProfile.SpectralKurtosis
+				kurtosisSource = "speech region"
+			}
+			if m.SpeechProfile.SpectralFlux > 0 {
+				flux = m.SpeechProfile.SpectralFlux
+				fluxSource = "speech region"
+			}
+		}
+		fmt.Fprintf(f, "        spectral kurtosis: %.1f (%s)\n", kurtosis, kurtosisSource)
+		fmt.Fprintf(f, "        spectral flux: %.4f (%s)\n", flux, fluxSource)
 	}
 }
 
 // formatDeesserFilter outputs deesser filter details
 func formatDeesserFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
-	if !cfg.DeessEnabled || cfg.DeessIntensity == 0 {
+	if !cfg.DeessEnabled {
 		fmt.Fprintf(f, "%sdeesser: DISABLED\n", prefix)
+		return
+	}
+	if cfg.DeessIntensity == 0 {
+		// Enabled but intensity is 0 - adaptive tuning determined no de-essing needed
+		fmt.Fprintf(f, "%sdeesser: inactive: no sibilance detected\n", prefix)
 		return
 	}
 
 	fmt.Fprintf(f, "%sdeesser: intensity %.0f%%, amount %.0f%%, freq %.0f%%\n",
 		prefix, cfg.DeessIntensity*100, cfg.DeessAmount*100, cfg.DeessFreq*100)
 
-	// Show rationale
+	// Show rationale with measurement source
 	if m != nil && m.SpectralCentroid > 0 {
+		// Determine which values were used and their sources
+		centroid := m.SpectralCentroid
+		rolloff := m.SpectralRolloff
+		centroidSource := "full-file"
+		rolloffSource := "full-file"
+		if m.SpeechProfile != nil {
+			if m.SpeechProfile.SpectralCentroid > 0 {
+				centroid = m.SpeechProfile.SpectralCentroid
+				centroidSource = "speech region"
+			}
+			if m.SpeechProfile.SpectralRolloff > 0 {
+				rolloff = m.SpeechProfile.SpectralRolloff
+				rolloffSource = "speech region"
+			}
+		}
+
 		voiceType := "normal"
-		if m.SpectralCentroid > 7000 {
+		if centroid > 7000 {
 			voiceType = "very bright"
-		} else if m.SpectralCentroid > 6000 {
+		} else if centroid > 6000 {
 			voiceType = "bright"
 		}
-		fmt.Fprintf(f, "        Rationale: %s voice (centroid %.0f Hz, rolloff %.0f Hz)\n",
-			voiceType, m.SpectralCentroid, m.SpectralRolloff)
+		fmt.Fprintf(f, "        Rationale: %s voice\n", voiceType)
+		fmt.Fprintf(f, "        spectral centroid: %.0f Hz (%s)\n", centroid, centroidSource)
+		fmt.Fprintf(f, "        spectral rolloff: %.0f Hz (%s)\n", rolloff, rolloffSource)
 	}
 }
 
