@@ -55,14 +55,14 @@ func interpretCentroid(hz float64) string {
 // Low spread indicates tone dominance; high spread indicates broadband content.
 func interpretSpread(hz float64) string {
 	switch {
-	case hz < 500:
+	case hz < 800:
 		return "narrow, tonal, focused"
-	case hz < 1500:
+	case hz < 2000:
 		return "moderate bandwidth, typical voiced"
-	case hz < 3000:
-		return "wide bandwidth, mixed content"
+	case hz < 3500:
+		return "wide bandwidth, natural speech"
 	default:
-		return "very wide, noise-like or broadband"
+		return "very wide, mixed voiced/unvoiced"
 	}
 }
 
@@ -77,7 +77,7 @@ func interpretSkewness(skew float64) string {
 		return "HF concentrated, sibilant-like"
 	case skew < 0.5:
 		return "symmetric distribution"
-	case skew < 1.5:
+	case skew < 2.5:
 		return "LF emphasis with HF tail (typical voice)"
 	default:
 		return "strongly bass-concentrated"
@@ -154,13 +154,13 @@ func interpretFlatness(flatness float64) string {
 // Higher crest indicates clearer harmonics; low crest suggests noise contamination.
 func interpretCrest(crest float64) string {
 	switch {
-	case crest < 10:
+	case crest < 8:
 		return "flat spectrum, noise-like"
 	case crest < 25:
-		return "moderate peaks, mixed content"
-	case crest < 40:
+		return "moderate peaks, distributed harmonics"
+	case crest < 50:
 		return "prominent peaks, clear harmonics"
-	case crest < 60:
+	case crest < 100:
 		return "strong peaks, very tonal"
 	default:
 		return "extremely peaked, dominant frequency"
@@ -195,14 +195,14 @@ func interpretFlux(flux float64) string {
 // Male voices typically show more negative decrease than female voices.
 func interpretDecrease(decrease float64) string {
 	switch {
-	case decrease < -0.05:
-		return "strong bass concentration, warm foundation"
-	case decrease < -0.02:
-		return "moderate LF emphasis, typical male voice"
 	case decrease < 0:
-		return "balanced low-frequency content"
+		return "rising spectrum, HF emphasis"
+	case decrease < 0.05:
+		return "flat/balanced spectrum"
+	case decrease < 0.10:
+		return "moderate decrease, typical speech"
 	default:
-		return "weak bass, thin, lacking body"
+		return "strong decrease, LF emphasis"
 	}
 }
 
@@ -211,13 +211,13 @@ func interpretDecrease(decrease float64) string {
 // Higher rolloff indicates more high-frequency content; useful for sibilance detection.
 func interpretRolloff(hz float64) string {
 	switch {
-	case hz < 3000:
+	case hz < 2000:
 		return "dark, muffled, heavy filtering"
-	case hz < 5000:
+	case hz < 4000:
 		return "warm, controlled high frequencies"
-	case hz < 8000:
+	case hz < 7000:
 		return "balanced brightness, natural speech"
-	case hz < 12000:
+	case hz < 11000:
 		return "bright, airy, good articulation"
 	default:
 		return "very bright, significant sibilance"
@@ -228,10 +228,12 @@ func interpretRolloff(hz float64) string {
 // Modal speech approximately -6 dB/octave; breathy voice steeper; pressed voice shallower.
 func interpretSlope(slope float64) string {
 	switch {
+	case slope < -5e-04:
+		return "very steep slope, dark/warm"
+	case slope < -2e-04:
+		return "steep slope, warm character"
 	case slope < -5e-05:
-		return "steep negative slope, dark/warm"
-	case slope < -1e-05:
-		return "moderate slope, balanced brightness"
+		return "moderate slope, balanced"
 	case slope < 0:
 		return "shallow slope, bright/energetic"
 	default:
@@ -274,8 +276,8 @@ type ReportData struct {
 // 2. Processing Summary - pass timings
 // 3. Filter Chain Applied - adaptive parameters
 // 4. Loudness Measurements - three-column table (Input/Filtered/Final)
-// 5. Spectral Characteristics - four-column table with interpretations
-// 6. Noise Floor Analysis - three-column table
+// 5. Noise Floor Analysis - three-column table
+// 6. Speech Region Analysis - three-column table with interpretations
 // 7. Diagnostic sections - detailed debug info
 func GenerateReport(data ReportData) error {
 	// Generate report filename: presenter1-processed.flac → presenter1-processed.log
@@ -329,9 +331,6 @@ func GenerateReport(data ReportData) error {
 
 	// Loudness Measurements Table (Input → Filtered → Final)
 	writeLoudnessTable(f, inputMeasurements, filteredMeasurements, finalMeasurements)
-
-	// Spectral Characteristics Table (Input → Filtered → Final → Interpretation)
-	writeSpectralTable(f, inputMeasurements, filteredMeasurements, finalMeasurements)
 
 	// Noise Floor Analysis Table
 	writeNoiseFloorTable(f, inputMeasurements, filteredMeasurements, getFinalMeasurements(data.Result))
@@ -1077,264 +1076,6 @@ func writeLoudnessTable(f *os.File, input *processor.AudioMeasurements, filtered
 	fmt.Fprintln(f, "")
 }
 
-// writeSpectralTable outputs a four-column comparison table for spectral metrics.
-// Columns: Input (Pass 1), Filtered (Pass 2), Final (Pass 4), Interpretation (based on Final)
-func writeSpectralTable(f *os.File, input *processor.AudioMeasurements, filtered *processor.OutputMeasurements, final *processor.OutputMeasurements) {
-	writeSection(f, "Spectral Characteristics")
-
-	// Create a custom table with interpretation column
-	table := &MetricTable{
-		Headers: []string{"Input", "Filtered", "Final"},
-		Rows:    make([]MetricRow, 0),
-	}
-
-	// Helper to get spectral value from appropriate source (prefer final, then filtered, then input)
-	getSpectralForInterp := func(inputVal, filteredVal, finalVal float64) float64 {
-		if final != nil && !math.IsNaN(finalVal) {
-			return finalVal
-		}
-		if filtered != nil && !math.IsNaN(filteredVal) {
-			return filteredVal
-		}
-		return inputVal
-	}
-
-	// Spectral Mean (no interpretation - just a magnitude)
-	inputMean := math.NaN()
-	filteredMean := math.NaN()
-	finalMean := math.NaN()
-	if input != nil {
-		inputMean = input.SpectralMean
-	}
-	if filtered != nil {
-		filteredMean = filtered.SpectralMean
-	}
-	if final != nil {
-		finalMean = final.SpectralMean
-	}
-	table.AddRow("Spectral Mean",
-		[]string{formatMetric(inputMean, 6), formatMetric(filteredMean, 6), formatMetric(finalMean, 6)},
-		"", "")
-
-	// Spectral Variance (no interpretation)
-	inputVar := math.NaN()
-	filteredVar := math.NaN()
-	finalVar := math.NaN()
-	if input != nil {
-		inputVar = input.SpectralVariance
-	}
-	if filtered != nil {
-		filteredVar = filtered.SpectralVariance
-	}
-	if final != nil {
-		finalVar = final.SpectralVariance
-	}
-	table.AddRow("Spectral Variance",
-		[]string{formatMetric(inputVar, 6), formatMetric(filteredVar, 6), formatMetric(finalVar, 6)},
-		"", "")
-
-	// Centroid
-	inputCentroid := math.NaN()
-	filteredCentroid := math.NaN()
-	finalCentroid := math.NaN()
-	if input != nil {
-		inputCentroid = input.SpectralCentroid
-	}
-	if filtered != nil {
-		filteredCentroid = filtered.SpectralCentroid
-	}
-	if final != nil {
-		finalCentroid = final.SpectralCentroid
-	}
-	interp := interpretCentroid(getSpectralForInterp(inputCentroid, filteredCentroid, finalCentroid))
-	table.AddRow("Centroid",
-		[]string{formatMetric(inputCentroid, 0), formatMetric(filteredCentroid, 0), formatMetric(finalCentroid, 0)},
-		"Hz", interp)
-
-	// Spread
-	inputSpread := math.NaN()
-	filteredSpread := math.NaN()
-	finalSpread := math.NaN()
-	if input != nil {
-		inputSpread = input.SpectralSpread
-	}
-	if filtered != nil {
-		filteredSpread = filtered.SpectralSpread
-	}
-	if final != nil {
-		finalSpread = final.SpectralSpread
-	}
-	interp = interpretSpread(getSpectralForInterp(inputSpread, filteredSpread, finalSpread))
-	table.AddRow("Spread",
-		[]string{formatMetric(inputSpread, 0), formatMetric(filteredSpread, 0), formatMetric(finalSpread, 0)},
-		"Hz", interp)
-
-	// Skewness
-	inputSkew := math.NaN()
-	filteredSkew := math.NaN()
-	finalSkew := math.NaN()
-	if input != nil {
-		inputSkew = input.SpectralSkewness
-	}
-	if filtered != nil {
-		filteredSkew = filtered.SpectralSkewness
-	}
-	if final != nil {
-		finalSkew = final.SpectralSkewness
-	}
-	interp = interpretSkewness(getSpectralForInterp(inputSkew, filteredSkew, finalSkew))
-	table.AddRow("Skewness",
-		[]string{formatMetric(inputSkew, 3), formatMetric(filteredSkew, 3), formatMetric(finalSkew, 3)},
-		"", interp)
-
-	// Kurtosis
-	inputKurt := math.NaN()
-	filteredKurt := math.NaN()
-	finalKurt := math.NaN()
-	if input != nil {
-		inputKurt = input.SpectralKurtosis
-	}
-	if filtered != nil {
-		filteredKurt = filtered.SpectralKurtosis
-	}
-	if final != nil {
-		finalKurt = final.SpectralKurtosis
-	}
-	interp = interpretKurtosis(getSpectralForInterp(inputKurt, filteredKurt, finalKurt))
-	table.AddRow("Kurtosis",
-		[]string{formatMetric(inputKurt, 3), formatMetric(filteredKurt, 3), formatMetric(finalKurt, 3)},
-		"", interp)
-
-	// Entropy
-	inputEntropy := math.NaN()
-	filteredEntropy := math.NaN()
-	finalEntropy := math.NaN()
-	if input != nil {
-		inputEntropy = input.SpectralEntropy
-	}
-	if filtered != nil {
-		filteredEntropy = filtered.SpectralEntropy
-	}
-	if final != nil {
-		finalEntropy = final.SpectralEntropy
-	}
-	interp = interpretEntropy(getSpectralForInterp(inputEntropy, filteredEntropy, finalEntropy))
-	table.AddRow("Entropy",
-		[]string{formatMetric(inputEntropy, 6), formatMetric(filteredEntropy, 6), formatMetric(finalEntropy, 6)},
-		"", interp)
-
-	// Flatness
-	inputFlat := math.NaN()
-	filteredFlat := math.NaN()
-	finalFlat := math.NaN()
-	if input != nil {
-		inputFlat = input.SpectralFlatness
-	}
-	if filtered != nil {
-		filteredFlat = filtered.SpectralFlatness
-	}
-	if final != nil {
-		finalFlat = final.SpectralFlatness
-	}
-	interp = interpretFlatness(getSpectralForInterp(inputFlat, filteredFlat, finalFlat))
-	table.AddRow("Flatness",
-		[]string{formatMetric(inputFlat, 6), formatMetric(filteredFlat, 6), formatMetric(finalFlat, 6)},
-		"", interp)
-
-	// Crest
-	inputCrest := math.NaN()
-	filteredCrest := math.NaN()
-	finalCrest := math.NaN()
-	if input != nil {
-		inputCrest = input.SpectralCrest
-	}
-	if filtered != nil {
-		filteredCrest = filtered.SpectralCrest
-	}
-	if final != nil {
-		finalCrest = final.SpectralCrest
-	}
-	interp = interpretCrest(getSpectralForInterp(inputCrest, filteredCrest, finalCrest))
-	table.AddRow("Crest",
-		[]string{formatMetric(inputCrest, 3), formatMetric(filteredCrest, 3), formatMetric(finalCrest, 3)},
-		"", interp)
-
-	// Flux
-	inputFlux := math.NaN()
-	filteredFlux := math.NaN()
-	finalFlux := math.NaN()
-	if input != nil {
-		inputFlux = input.SpectralFlux
-	}
-	if filtered != nil {
-		filteredFlux = filtered.SpectralFlux
-	}
-	if final != nil {
-		finalFlux = final.SpectralFlux
-	}
-	interp = interpretFlux(getSpectralForInterp(inputFlux, filteredFlux, finalFlux))
-	table.AddRow("Flux",
-		[]string{formatMetric(inputFlux, 6), formatMetric(filteredFlux, 6), formatMetric(finalFlux, 6)},
-		"", interp)
-
-	// Slope
-	inputSlope := math.NaN()
-	filteredSlope := math.NaN()
-	finalSlope := math.NaN()
-	if input != nil {
-		inputSlope = input.SpectralSlope
-	}
-	if filtered != nil {
-		filteredSlope = filtered.SpectralSlope
-	}
-	if final != nil {
-		finalSlope = final.SpectralSlope
-	}
-	interp = interpretSlope(getSpectralForInterp(inputSlope, filteredSlope, finalSlope))
-	table.AddRow("Slope",
-		[]string{formatMetric(inputSlope, 9), formatMetric(filteredSlope, 9), formatMetric(finalSlope, 9)},
-		"", interp)
-
-	// Decrease
-	inputDecrease := math.NaN()
-	filteredDecrease := math.NaN()
-	finalDecrease := math.NaN()
-	if input != nil {
-		inputDecrease = input.SpectralDecrease
-	}
-	if filtered != nil {
-		filteredDecrease = filtered.SpectralDecrease
-	}
-	if final != nil {
-		finalDecrease = final.SpectralDecrease
-	}
-	interp = interpretDecrease(getSpectralForInterp(inputDecrease, filteredDecrease, finalDecrease))
-	table.AddRow("Decrease",
-		[]string{formatMetric(inputDecrease, 6), formatMetric(filteredDecrease, 6), formatMetric(finalDecrease, 6)},
-		"", interp)
-
-	// Rolloff
-	inputRolloff := math.NaN()
-	filteredRolloff := math.NaN()
-	finalRolloff := math.NaN()
-	if input != nil {
-		inputRolloff = input.SpectralRolloff
-	}
-	if filtered != nil {
-		filteredRolloff = filtered.SpectralRolloff
-	}
-	if final != nil {
-		finalRolloff = final.SpectralRolloff
-	}
-	interp = interpretRolloff(getSpectralForInterp(inputRolloff, filteredRolloff, finalRolloff))
-	table.AddRow("Rolloff",
-		[]string{formatMetric(inputRolloff, 0), formatMetric(filteredRolloff, 0), formatMetric(finalRolloff, 0)},
-		"Hz", interp)
-
-	fmt.Fprint(f, table.String())
-	fmt.Fprintln(f, "")
-}
-
 // writeNoiseFloorTable outputs a three-column comparison table for noise floor metrics.
 // Columns: Input (Pass 1 elected silence candidate), Filtered (Pass 2 SilenceSample), Final (Pass 4 SilenceSample)
 func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurements, filteredMeasurements *processor.OutputMeasurements, finalMeasurements *processor.OutputMeasurements) {
@@ -1994,7 +1735,7 @@ func writeSpeechRegionTable(f *os.File, inputMeasurements *processor.AudioMeasur
 	if finalSpeech != nil {
 		finalCentroid = finalSpeech.SpectralCentroid
 	}
-	table.AddMetricRow("Spectral Centroid", inputCentroid, filteredCentroid, finalCentroid, 0, "Hz", "")
+	table.AddMetricRow("Spectral Centroid", inputCentroid, filteredCentroid, finalCentroid, 0, "Hz", interpretCentroid(finalCentroid))
 
 	// Spectral Spread
 	inputSpread := math.NaN()
@@ -2009,7 +1750,7 @@ func writeSpeechRegionTable(f *os.File, inputMeasurements *processor.AudioMeasur
 	if finalSpeech != nil {
 		finalSpread = finalSpeech.SpectralSpread
 	}
-	table.AddMetricRow("Spectral Spread", inputSpread, filteredSpread, finalSpread, 0, "Hz", "")
+	table.AddMetricRow("Spectral Spread", inputSpread, filteredSpread, finalSpread, 0, "Hz", interpretSpread(finalSpread))
 
 	// Spectral Skewness
 	inputSkew := math.NaN()
@@ -2024,7 +1765,7 @@ func writeSpeechRegionTable(f *os.File, inputMeasurements *processor.AudioMeasur
 	if finalSpeech != nil {
 		finalSkew = finalSpeech.SpectralSkewness
 	}
-	table.AddMetricRow("Spectral Skewness", inputSkew, filteredSkew, finalSkew, 3, "", "")
+	table.AddMetricRow("Spectral Skewness", inputSkew, filteredSkew, finalSkew, 3, "", interpretSkewness(finalSkew))
 
 	// Spectral Kurtosis
 	inputKurt := math.NaN()
@@ -2039,7 +1780,7 @@ func writeSpeechRegionTable(f *os.File, inputMeasurements *processor.AudioMeasur
 	if finalSpeech != nil {
 		finalKurt = finalSpeech.SpectralKurtosis
 	}
-	table.AddMetricRow("Spectral Kurtosis", inputKurt, filteredKurt, finalKurt, 3, "", "")
+	table.AddMetricRow("Spectral Kurtosis", inputKurt, filteredKurt, finalKurt, 3, "", interpretKurtosis(finalKurt))
 
 	// Spectral Entropy
 	inputEntropy := math.NaN()
@@ -2054,7 +1795,7 @@ func writeSpeechRegionTable(f *os.File, inputMeasurements *processor.AudioMeasur
 	if finalSpeech != nil {
 		finalEntropy = finalSpeech.SpectralEntropy
 	}
-	table.AddMetricRow("Spectral Entropy", inputEntropy, filteredEntropy, finalEntropy, 6, "", "")
+	table.AddMetricRow("Spectral Entropy", inputEntropy, filteredEntropy, finalEntropy, 6, "", interpretEntropy(finalEntropy))
 
 	// Spectral Flatness
 	inputFlat := math.NaN()
@@ -2069,7 +1810,7 @@ func writeSpeechRegionTable(f *os.File, inputMeasurements *processor.AudioMeasur
 	if finalSpeech != nil {
 		finalFlat = finalSpeech.SpectralFlatness
 	}
-	table.AddMetricRow("Spectral Flatness", inputFlat, filteredFlat, finalFlat, 6, "", "")
+	table.AddMetricRow("Spectral Flatness", inputFlat, filteredFlat, finalFlat, 6, "", interpretFlatness(finalFlat))
 
 	// Spectral Crest
 	inputSpectralCrest := math.NaN()
@@ -2084,7 +1825,7 @@ func writeSpeechRegionTable(f *os.File, inputMeasurements *processor.AudioMeasur
 	if finalSpeech != nil {
 		finalSpectralCrest = finalSpeech.SpectralCrest
 	}
-	table.AddMetricRow("Spectral Crest", inputSpectralCrest, filteredSpectralCrest, finalSpectralCrest, 3, "", "")
+	table.AddMetricRow("Spectral Crest", inputSpectralCrest, filteredSpectralCrest, finalSpectralCrest, 3, "", interpretCrest(finalSpectralCrest))
 
 	// Spectral Flux
 	inputFlux := math.NaN()
@@ -2099,7 +1840,7 @@ func writeSpeechRegionTable(f *os.File, inputMeasurements *processor.AudioMeasur
 	if finalSpeech != nil {
 		finalFlux = finalSpeech.SpectralFlux
 	}
-	table.AddMetricRow("Spectral Flux", inputFlux, filteredFlux, finalFlux, 6, "", "")
+	table.AddMetricRow("Spectral Flux", inputFlux, filteredFlux, finalFlux, 6, "", interpretFlux(finalFlux))
 
 	// Spectral Slope
 	inputSlope := math.NaN()
@@ -2114,7 +1855,7 @@ func writeSpeechRegionTable(f *os.File, inputMeasurements *processor.AudioMeasur
 	if finalSpeech != nil {
 		finalSlope = finalSpeech.SpectralSlope
 	}
-	table.AddMetricRow("Spectral Slope", inputSlope, filteredSlope, finalSlope, 9, "", "")
+	table.AddMetricRow("Spectral Slope", inputSlope, filteredSlope, finalSlope, 9, "", interpretSlope(finalSlope))
 
 	// Spectral Decrease
 	inputDecrease := math.NaN()
@@ -2129,7 +1870,7 @@ func writeSpeechRegionTable(f *os.File, inputMeasurements *processor.AudioMeasur
 	if finalSpeech != nil {
 		finalDecrease = finalSpeech.SpectralDecrease
 	}
-	table.AddMetricRow("Spectral Decrease", inputDecrease, filteredDecrease, finalDecrease, 6, "", "")
+	table.AddMetricRow("Spectral Decrease", inputDecrease, filteredDecrease, finalDecrease, 6, "", interpretDecrease(finalDecrease))
 
 	// Spectral Rolloff
 	inputRolloff := math.NaN()
@@ -2144,7 +1885,7 @@ func writeSpeechRegionTable(f *os.File, inputMeasurements *processor.AudioMeasur
 	if finalSpeech != nil {
 		finalRolloff = finalSpeech.SpectralRolloff
 	}
-	table.AddMetricRow("Spectral Rolloff", inputRolloff, filteredRolloff, finalRolloff, 0, "Hz", "")
+	table.AddMetricRow("Spectral Rolloff", inputRolloff, filteredRolloff, finalRolloff, 0, "Hz", interpretRolloff(finalRolloff))
 
 	// ========== LOUDNESS METRICS ==========
 
