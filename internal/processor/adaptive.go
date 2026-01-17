@@ -716,12 +716,18 @@ func tuneDC1Declick(config *FilterChainConfig, measurements *AudioMeasurements) 
 		config.DC1DeclickReason += "; +threshold (compressed)"
 	}
 
+	// Prefer speech-specific centroid for window sizing
+	centroid := measurements.SpectralCentroid
+	if measurements.SpeechProfile != nil {
+		centroid = preferSpeechMetric(centroid, measurements.SpeechProfile.SpectralCentroid)
+	}
+
 	// Window adaptation based on content type
 	switch {
-	case measurements.SpectralCentroid > dc1CentroidFast:
+	case centroid > dc1CentroidFast:
 		// Fast speech/plosives - shorter window preserves transients
 		config.DC1DeclickWindow = dc1WindowShort
-	case measurements.SpectralCentroid < dc1CentroidSlow:
+	case centroid < dc1CentroidSlow:
 		// Bass-heavy content - longer window for better LF reconstruction
 		config.DC1DeclickWindow = dc1WindowLong
 	default:
@@ -729,42 +735,68 @@ func tuneDC1Declick(config *FilterChainConfig, measurements *AudioMeasurements) 
 	}
 }
 
-// tuneNoiseRemove configures NoiseRemove compand parameters for residual suppression.
+// tuneNoiseRemove adjusts compand parameters based on measured noise floor.
+// Uses silence region measurements for accurate noise characterisation.
+//
 // The anlmdn parameters (strength, patch, research, smooth) are kept constant from spike validation.
-//
-// POST-ANLMDN COMPAND STRATEGY (2024-12-24):
-// Since anlmdn now handles the heavy noise reduction (achieving "digital black" for clean
-// sources and 37+ dB reduction for noisy sources), compand's role is now:
-// - Residual noise suppression in silence regions
-// - Breath noise attenuation between speech
-// - NOT primary noise reduction
-//
-// Spike testing (mcompand-spike.sh at 1500s) validated these settings:
-// - Fixed 6 dB expansion: provides ~5-6 dB breath/residual attenuation
-// - Fixed -55 dB threshold: catches breaths without affecting speech
-// - Single-band compand: more transparent than mcompand (0% spectral change)
+// Compand parameters adapt to the measured noise floor:
+// - Threshold: 5dB above noise floor (catches breaths but not speech)
+// - Expansion: scales with noise severity (gentle for clean, aggressive for noisy)
 //
 // anlmdn remains constant because spike testing validated these parameters:
 // - strength: 0.00001 (minimum)
 // - patch: 6ms (context window)
 // - research: 5.8ms (search window)
 // - smooth: 11 (weight smoothing)
-func tuneNoiseRemove(config *FilterChainConfig, measurements *AudioMeasurements) {
+func tuneNoiseRemove(config *FilterChainConfig, m *AudioMeasurements) {
 	if !config.NoiseRemoveEnabled {
 		return
 	}
 
-	// Fixed compand parameters validated in spike testing (mcompand-spike.sh)
-	// These are intentionally NOT adaptive — anlmdn handles the adaptive part
-	const (
-		compandThreshold = -55.0 // dB - catches breaths without affecting speech
-		compandExpansion = 6.0   // dB - gentle push for residual/breath attenuation
-	)
+	// Default values (fallback if no noise profile)
+	threshold := -55.0
+	expansion := 6.0
 
-	config.NoiseRemoveCompandThreshold = compandThreshold
-	config.NoiseRemoveCompandExpansion = compandExpansion
+	if m.NoiseProfile != nil && m.NoiseProfile.MeasuredNoiseFloor < 0 {
+		noiseFloor := m.NoiseProfile.MeasuredNoiseFloor
+
+		// Threshold: 5dB above noise floor (catches breaths but not speech)
+		threshold = noiseFloor + 5.0
+		// Clamp to reasonable range
+		threshold = clamp(threshold, -70.0, -40.0)
+
+		// Expansion: scale with noise severity
+		expansion = scaleExpansion(noiseFloor)
+	}
+
+	config.NoiseRemoveCompandThreshold = threshold
+	config.NoiseRemoveCompandExpansion = expansion
 
 	// attack, decay, knee stay constant (validated in spike testing)
+}
+
+// preferSpeechMetric returns speech-specific measurement if available,
+// otherwise falls back to full-file measurement.
+func preferSpeechMetric(fullFile, speechProfile float64) float64 {
+	if speechProfile > 0 {
+		return speechProfile
+	}
+	return fullFile
+}
+
+// scaleExpansion returns expansion depth based on noise severity.
+// Noisier recordings need more aggressive expansion to suppress residuals.
+func scaleExpansion(noiseFloor float64) float64 {
+	switch {
+	case noiseFloor > -45.0:
+		return 12.0 // Very noisy - aggressive
+	case noiseFloor > -55.0:
+		return 8.0 // Moderate noise
+	case noiseFloor > -65.0:
+		return 6.0 // Typical
+	default:
+		return 4.0 // Very clean - gentle
+	}
 }
 
 // tuneDeesser adapts de-esser intensity based on spectral analysis.
@@ -793,12 +825,20 @@ func tuneDeesser(config *FilterChainConfig, measurements *AudioMeasurements) {
 
 // tuneDeesserFull uses both centroid and rolloff for precise de-esser tuning
 func tuneDeesserFull(config *FilterChainConfig, measurements *AudioMeasurements) {
+	// Prefer speech-specific measurements for sibilance detection
+	centroid := measurements.SpectralCentroid
+	rolloff := measurements.SpectralRolloff
+	if measurements.SpeechProfile != nil {
+		centroid = preferSpeechMetric(centroid, measurements.SpeechProfile.SpectralCentroid)
+		rolloff = preferSpeechMetric(rolloff, measurements.SpeechProfile.SpectralRolloff)
+	}
+
 	// Determine baseline intensity from centroid
 	var baseIntensity float64
 	switch {
-	case measurements.SpectralCentroid > centroidVeryBright:
+	case centroid > centroidVeryBright:
 		baseIntensity = deessIntensityBright // Bright voice
-	case measurements.SpectralCentroid > centroidBright:
+	case centroid > centroidBright:
 		baseIntensity = deessIntensityNormal // Normal voice
 	default:
 		baseIntensity = deessIntensityDark // Dark voice
@@ -806,18 +846,18 @@ func tuneDeesserFull(config *FilterChainConfig, measurements *AudioMeasurements)
 
 	// Refine based on spectral rolloff (HF extension)
 	switch {
-	case measurements.SpectralRolloff < rolloffNoSibilance:
+	case rolloff < rolloffNoSibilance:
 		// Very limited HF content - no sibilance expected
 		config.DeessIntensity = 0.0
 
-	case measurements.SpectralRolloff < rolloffLimited:
+	case rolloff < rolloffLimited:
 		// Limited HF extension - reduce intensity
 		config.DeessIntensity = baseIntensity * 0.7
 		if config.DeessIntensity < deessIntensityMin {
 			config.DeessIntensity = 0.0 // Skip if too low
 		}
 
-	case measurements.SpectralRolloff > rolloffExtensive:
+	case rolloff > rolloffExtensive:
 		// Extensive HF content - likely sibilance
 		config.DeessIntensity = math.Min(baseIntensity*1.2, deessIntensityMax)
 
@@ -1216,6 +1256,12 @@ func tuneLA2AAttack(config *FilterChainConfig, measurements *AudioMeasurements) 
 // - Narrow LRA + low flux = compressed/monotone, faster release OK
 // - Warm voices (high skewness) get extra release to preserve body
 func tuneLA2ARelease(config *FilterChainConfig, measurements *AudioMeasurements) {
+	// Prefer speech-specific flux for timing decisions
+	flux := measurements.SpectralFlux
+	if measurements.SpeechProfile != nil {
+		flux = preferSpeechMetric(flux, measurements.SpeechProfile.SpectralFlux)
+	}
+
 	// Start with standard LA-2A-style release
 	release := la2aReleaseStandard
 
@@ -1230,12 +1276,12 @@ func tuneLA2ARelease(config *FilterChainConfig, measurements *AudioMeasurements)
 	}
 
 	// Adjust based on spectral flux (frame-to-frame variation)
-	if measurements.SpectralFlux > 0 {
+	if flux > 0 {
 		switch {
-		case measurements.SpectralFlux > la2aFluxDynamic:
+		case flux > la2aFluxDynamic:
 			// Dynamic/expressive content - add release time
 			release = math.Max(release, la2aReleaseExpressive)
-		case measurements.SpectralFlux < la2aFluxStatic:
+		case flux < la2aFluxStatic:
 			// Static/monotone content - can use shorter release
 			release = math.Min(release, la2aReleaseCompact)
 		}
@@ -1265,16 +1311,22 @@ func tuneLA2ARelease(config *FilterChainConfig, measurements *AudioMeasurements)
 // - Peaked/tonal content (high kurtosis) = gentler ratio, preserve character
 // - Flat/noise-like content (low kurtosis) = firmer ratio, more levelling
 func tuneLA2ARatio(config *FilterChainConfig, measurements *AudioMeasurements) {
+	// Prefer speech-specific kurtosis for harmonic structure
+	kurtosis := measurements.SpectralKurtosis
+	if measurements.SpeechProfile != nil {
+		kurtosis = preferSpeechMetric(kurtosis, measurements.SpeechProfile.SpectralKurtosis)
+	}
+
 	// Start with LA-2A baseline ratio
 	ratio := la2aRatioBase
 
 	// Adjust based on spectral kurtosis (peakedness)
-	if measurements.SpectralKurtosis > 0 {
+	if kurtosis > 0 {
 		switch {
-		case measurements.SpectralKurtosis > la2aKurtosisHighPeak:
+		case kurtosis > la2aKurtosisHighPeak:
 			// Highly peaked harmonics - gentler ratio preserves character
 			ratio = la2aRatioPeaked
-		case measurements.SpectralKurtosis < la2aKurtosisLowPeak:
+		case kurtosis < la2aKurtosisLowPeak:
 			// Flat spectrum - firmer ratio for consistent levelling
 			ratio = la2aRatioFlat
 		}

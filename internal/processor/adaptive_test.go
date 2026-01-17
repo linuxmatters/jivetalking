@@ -1451,6 +1451,30 @@ func linearToDB(linear float64) float64 {
 	return 20 * math.Log10(linear)
 }
 
+func TestPreferSpeechMetric(t *testing.T) {
+	tests := []struct {
+		name          string
+		fullFile      float64
+		speechProfile float64
+		want          float64
+	}{
+		{"speech profile available", 1000.0, 1500.0, 1500.0},
+		{"speech profile zero", 1000.0, 0.0, 1000.0},
+		{"speech profile negative", 1000.0, -1.0, 1000.0},
+		{"both zero", 0.0, 0.0, 0.0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := preferSpeechMetric(tt.fullFile, tt.speechProfile)
+			if got != tt.want {
+				t.Errorf("preferSpeechMetric(%v, %v) = %v, want %v",
+					tt.fullFile, tt.speechProfile, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSanitizeFloat(t *testing.T) {
 	// Tests for the sanitizeFloat helper function
 	// Returns default value for NaN and Inf, otherwise returns original value
@@ -2017,11 +2041,10 @@ func TestClamp(t *testing.T) {
 
 func TestTuneNoiseRemove(t *testing.T) {
 	// Tests the NoiseRemove (anlmdn+compand) configuration.
-	// Key behavior (post-anlmdn strategy, 2024-12-24):
-	// - Compand now uses FIXED parameters (not adaptive)
-	// - Threshold: -55 dB (catches breaths without affecting speech)
-	// - Expansion: 6 dB (gentle residual/breath attenuation)
-	// - anlmdn handles the adaptive part; compand just cleans up residuals
+	// Compand parameters now adapt to measured noise floor:
+	// - Threshold: noise floor + 5dB (catches breaths but not speech)
+	// - Expansion: scales with noise severity (gentle for clean, aggressive for noisy)
+	// - anlmdn parameters remain constant (validated in spike testing)
 
 	t.Run("disabled filter returns early", func(t *testing.T) {
 		config := newTestConfig()
@@ -2043,7 +2066,7 @@ func TestTuneNoiseRemove(t *testing.T) {
 		}
 	})
 
-	t.Run("missing NoiseProfile uses fixed values", func(t *testing.T) {
+	t.Run("missing NoiseProfile uses default values", func(t *testing.T) {
 		config := newTestConfig()
 		config.NoiseRemoveEnabled = true
 
@@ -2053,56 +2076,56 @@ func TestTuneNoiseRemove(t *testing.T) {
 
 		tuneNoiseRemove(config, measurements)
 
-		// Should remain enabled with fixed values (not adaptive)
+		// Should remain enabled with default values (no noise profile to adapt to)
 		if !config.NoiseRemoveEnabled {
 			t.Errorf("tuneNoiseRemove should keep filter enabled")
 		}
 		if config.NoiseRemoveCompandThreshold != -55.0 {
-			t.Errorf("NoiseRemoveCompandThreshold = %.1f, want -55.0 (fixed)", config.NoiseRemoveCompandThreshold)
+			t.Errorf("NoiseRemoveCompandThreshold = %.1f, want -55.0 (default)", config.NoiseRemoveCompandThreshold)
 		}
 		if config.NoiseRemoveCompandExpansion != 6.0 {
-			t.Errorf("NoiseRemoveCompandExpansion = %.1f, want 6.0 (fixed)", config.NoiseRemoveCompandExpansion)
+			t.Errorf("NoiseRemoveCompandExpansion = %.1f, want 6.0 (default)", config.NoiseRemoveCompandExpansion)
 		}
 	})
 
-	t.Run("zero duration NoiseProfile uses fixed values", func(t *testing.T) {
+	t.Run("positive noise floor uses default values", func(t *testing.T) {
 		config := newTestConfig()
 		config.NoiseRemoveEnabled = true
 
 		measurements := &AudioMeasurements{
 			NoiseProfile: &NoiseProfile{
-				Duration:           0.0,
-				MeasuredNoiseFloor: -60.0,
+				Duration:           2.0,
+				MeasuredNoiseFloor: 0.0, // Invalid - noise floor should be negative
 			},
 		}
 
 		tuneNoiseRemove(config, measurements)
 
-		// Should remain enabled with fixed values
-		if !config.NoiseRemoveEnabled {
-			t.Errorf("tuneNoiseRemove should keep filter enabled")
-		}
+		// Should use default values when noise floor is invalid
 		if config.NoiseRemoveCompandThreshold != -55.0 {
-			t.Errorf("NoiseRemoveCompandThreshold = %.1f, want -55.0 (fixed)", config.NoiseRemoveCompandThreshold)
+			t.Errorf("NoiseRemoveCompandThreshold = %.1f, want -55.0 (default)", config.NoiseRemoveCompandThreshold)
 		}
 		if config.NoiseRemoveCompandExpansion != 6.0 {
-			t.Errorf("NoiseRemoveCompandExpansion = %.1f, want 6.0 (fixed)", config.NoiseRemoveCompandExpansion)
+			t.Errorf("NoiseRemoveCompandExpansion = %.1f, want 6.0 (default)", config.NoiseRemoveCompandExpansion)
 		}
 	})
 
-	t.Run("fixed values regardless of noise floor", func(t *testing.T) {
-		// Post-anlmdn strategy: compand uses fixed values, not adaptive
-		// These values were validated in mcompand-spike.sh at 1500s
+	t.Run("adaptive threshold based on noise floor", func(t *testing.T) {
+		// Threshold = noise floor + 5dB, clamped to [-70, -40]
+		// Expansion tiers: > -45 → 12, > -55 → 8, > -65 → 6, else → 4
 		tests := []struct {
-			name       string
-			noiseFloor float64
+			name              string
+			noiseFloor        float64
+			expectedThreshold float64
+			expectedExpansion float64
 		}{
-			{"typical podcast noise floor", -55.0},
-			{"clean studio recording", -70.0},
-			{"very clean recording", -80.0},
-			{"ultra-clean recording", -90.0},
-			{"noisy recording", -25.0},
-			{"moderately noisy recording", -40.0},
+			{"typical podcast (-55 dB)", -55.0, -50.0, 6.0},    // -55 + 5 = -50, > -65 → 6
+			{"clean studio (-70 dB)", -70.0, -65.0, 4.0},       // -70 + 5 = -65, <= -65 → 4
+			{"very clean (-80 dB)", -80.0, -70.0, 4.0},         // -80 + 5 = -75, clamped to -70, <= -65 → 4
+			{"ultra-clean (-90 dB)", -90.0, -70.0, 4.0},        // -90 + 5 = -85, clamped to -70, <= -65 → 4
+			{"noisy recording (-35 dB)", -35.0, -40.0, 12.0},   // -35 + 5 = -30, clamped to -40, > -45 → 12
+			{"moderately noisy (-50 dB)", -50.0, -45.0, 8.0},   // -50 + 5 = -45, > -55 → 8
+			{"typical room noise (-60 dB)", -60.0, -55.0, 6.0}, // -60 + 5 = -55, > -65 → 6
 		}
 
 		for _, tt := range tests {
@@ -2119,12 +2142,16 @@ func TestTuneNoiseRemove(t *testing.T) {
 
 				tuneNoiseRemove(config, measurements)
 
-				// All cases should get the same fixed values
-				if config.NoiseRemoveCompandThreshold != -55.0 {
-					t.Errorf("NoiseRemoveCompandThreshold = %.1f, want -55.0 (fixed)", config.NoiseRemoveCompandThreshold)
+				// Check threshold is noise floor + 5dB (clamped)
+				if config.NoiseRemoveCompandThreshold != tt.expectedThreshold {
+					t.Errorf("NoiseRemoveCompandThreshold = %.1f, want %.1f (floor %.1f + 5dB, clamped)",
+						config.NoiseRemoveCompandThreshold, tt.expectedThreshold, tt.noiseFloor)
 				}
-				if config.NoiseRemoveCompandExpansion != 6.0 {
-					t.Errorf("NoiseRemoveCompandExpansion = %.1f, want 6.0 (fixed)", config.NoiseRemoveCompandExpansion)
+
+				// Check expansion scales with noise severity
+				if config.NoiseRemoveCompandExpansion != tt.expectedExpansion {
+					t.Errorf("NoiseRemoveCompandExpansion = %.1f, want %.1f",
+						config.NoiseRemoveCompandExpansion, tt.expectedExpansion)
 				}
 			})
 		}
@@ -2189,6 +2216,36 @@ func TestTuneNoiseRemove(t *testing.T) {
 			t.Errorf("NoiseRemoveCompandKnee changed from %v to %v", originalKnee, config.NoiseRemoveCompandKnee)
 		}
 	})
+}
+
+func TestScaleExpansion(t *testing.T) {
+	// Tests the scaleExpansion helper that determines expansion depth
+	// based on noise floor severity.
+	// Thresholds: > -45 → 12, > -55 → 8, > -65 → 6, else → 4
+	tests := []struct {
+		name       string
+		noiseFloor float64
+		want       float64
+	}{
+		{"very noisy (> -45 dB)", -40.0, 12.0},
+		{"at -45 boundary", -45.0, 8.0}, // -45 is NOT > -45, so falls to > -55 → 8
+		{"moderate noise (> -55 dB)", -50.0, 8.0},
+		{"at -55 boundary", -55.0, 6.0}, // -55 is NOT > -55, so falls to > -65 → 6
+		{"typical (> -65 dB)", -60.0, 6.0},
+		{"at -65 boundary", -65.0, 4.0}, // -65 is NOT > -65, so falls to default → 4
+		{"very clean (<= -65 dB)", -70.0, 4.0},
+		{"ultra clean", -90.0, 4.0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := scaleExpansion(tt.noiseFloor)
+			if got != tt.want {
+				t.Errorf("scaleExpansion(%.1f) = %.1f, want %.1f",
+					tt.noiseFloor, got, tt.want)
+			}
+		})
+	}
 }
 
 // containsString checks if substr exists in s
