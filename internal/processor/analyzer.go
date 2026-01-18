@@ -1391,7 +1391,7 @@ func extractFrameMetadata(metadata *ffmpeg.AVDictionary, acc *metadataAccumulato
 	}
 
 	// Extract Max_difference - largest sample-to-sample change
-	// High values indicate impulsive sounds (clicks, pops) - useful for adeclick tuning
+	// High values indicate impulsive sounds (clicks, pops)
 	if value, ok := getFloatMetadata(metadata, metaKeyMaxDifference); ok {
 		acc.astatsMaxDifference = value
 	}

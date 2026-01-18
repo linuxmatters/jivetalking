@@ -493,8 +493,6 @@ func formatFilter(f *os.File, filterID processor.FilterID, cfg *processor.Filter
 		formatDS201LowPassFilter(f, cfg, m, prefix)
 	case processor.FilterNoiseRemove:
 		formatNoiseRemoveFilter(f, cfg, m, prefix)
-	case processor.FilterDC1Declick:
-		formatDC1DeclickFilter(f, cfg, m, prefix)
 	case processor.FilterDS201Gate:
 		formatDS201GateFilter(f, cfg, m, prefix)
 	case processor.FilterLA2ACompressor:
@@ -671,41 +669,6 @@ func formatNoiseRemoveFilter(f *os.File, cfg *processor.FilterChainConfig, m *pr
 		cfg.NoiseRemoveCompandAttack*1000,
 		cfg.NoiseRemoveCompandDecay*1000,
 		cfg.NoiseRemoveCompandKnee)
-}
-
-// formatDC1DeclickFilter outputs CEDAR DC-1-inspired declicker filter details
-func formatDC1DeclickFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
-	if !cfg.DC1DeclickEnabled {
-		if cfg.DC1DeclickReason != "" {
-			fmt.Fprintf(f, "%sDC1 Declick: DISABLED (%s)\n", prefix, cfg.DC1DeclickReason)
-		} else {
-			fmt.Fprintf(f, "%sDC1 Declick: DISABLED\n", prefix)
-		}
-		return
-	}
-
-	method := "overlap-save"
-	if cfg.DC1DeclickMethod == "a" {
-		method = "overlap-add"
-	}
-	fmt.Fprintf(f, "%sDC1 Declick: ENABLED\n", prefix)
-	fmt.Fprintf(f, "        Threshold: %.0f (1=aggressive, 8=conservative)\n", cfg.DC1DeclickThreshold)
-	fmt.Fprintf(f, "        Window: %.0fms, Overlap: %.0f%%, AR Order: %.0f%%\n", cfg.DC1DeclickWindow, cfg.DC1DeclickOverlap, cfg.DC1DeclickAROrder)
-	fmt.Fprintf(f, "        Method: %s\n", method)
-	if cfg.DC1DeclickReason != "" {
-		fmt.Fprintf(f, "        Reason: %s\n", cfg.DC1DeclickReason)
-	}
-
-	// Show centroid with measurement source (used for window sizing)
-	if m != nil && m.SpectralCentroid > 0 {
-		centroid := m.SpectralCentroid
-		centroidSource := "full-file"
-		if m.SpeechProfile != nil && m.SpeechProfile.SpectralCentroid > 0 {
-			centroid = m.SpeechProfile.SpectralCentroid
-			centroidSource = "speech region"
-		}
-		fmt.Fprintf(f, "        spectral centroid: %.0f Hz (%s)\n", centroid, centroidSource)
-	}
 }
 
 // joinWithComma joins string slice with comma separator

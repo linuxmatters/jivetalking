@@ -44,7 +44,7 @@ internal/
 
 **Filter chain order (Pass 2):**
 ```
-highpass → noiseremove → gate → adeclick → acompressor → deesser
+highpass → noiseremove → gate → acompressor → deesser
 ```
 
 Each filter prepares audio for the next. Rumble removal before noise reduction. Denoising before gating. Compression before de-essing (compression emphasises sibilance).
@@ -94,7 +94,6 @@ Filter parameters adapt based on Pass 1 measurements (see `adaptive.go`):
 - **De-esser intensity:** 0.0-0.6 based on spectral centroid + rolloff (prefers `SpeechProfile` metrics when available)
 - **Gate threshold:** Derived from measured noise floor; with breath reduction enabled, positioned at 60% of gap between noise floor and quiet speech level (`SpeechProfile.RMSLevel - CrestFactor`), using firmer ratio (1.5x, clamped 2.0-4.0) and deeper range (+6 dB)
 - **LA-2A ratio/release:** Adapts based on kurtosis and flux from `SpeechProfile` when available
-- **DC-1 declick:** Uses spectral centroid from `SpeechProfile` when available
 
 **Speech-aware metrics:** Filters processing speech content prefer `SpeechProfile` measurements (speech-only regions) over full-file analysis. Graceful fallback when speech metrics unavailable.
 
