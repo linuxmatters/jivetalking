@@ -90,9 +90,15 @@ Processing goroutine communicates via typed messages:
 Filter parameters adapt based on Pass 1 measurements (see `adaptive.go`):
 
 - **Highpass frequency:** 60-120Hz based on spectral centroid and LUFS gap
-- **NoiseRemove compand:** Threshold and expansion derived from measured noise floor
-- **De-esser intensity:** 0.0-0.6 based on spectral centroid + rolloff
-- **Gate threshold:** Derived from measured noise floor
+- **NoiseRemove compand:** Adaptive thresholding (noise floor + 5 dB, clamped [-70, -40]), expansion scales 4-12 dB based on noise severity
+- **De-esser intensity:** 0.0-0.6 based on spectral centroid + rolloff (prefers `SpeechProfile` metrics when available)
+- **Gate threshold:** Derived from measured noise floor; with breath reduction enabled, positioned at 60% of gap between noise floor and quiet speech level (`SpeechProfile.RMSLevel - CrestFactor`), using firmer ratio (1.5x, clamped 2.0-4.0) and deeper range (+6 dB)
+- **LA-2A ratio/release:** Adapts based on kurtosis and flux from `SpeechProfile` when available
+- **DC-1 declick:** Uses spectral centroid from `SpeechProfile` when available
+
+**Speech-aware metrics:** Filters processing speech content prefer `SpeechProfile` measurements (speech-only regions) over full-file analysis. Graceful fallback when speech metrics unavailable.
+
+**Breath reduction:** Enabled by default (`--breath-reduction` / `--no-breath-reduction`). Requires `SpeechProfile` to calculate quiet speech level for adaptive gate threshold.
 
 ## Release workflow
 

@@ -187,6 +187,9 @@ type FilterChainConfig struct {
 	DS201GateDetection  string  // Level detection mode: "rms" (default, smoother) or "peak" (tighter)
 	DS201GateGentleMode bool    // Gentle mode active - for extreme LUFS gap + low LRA recordings
 
+	// Breath reduction mode - adjusts gate threshold to target breath sounds
+	BreathReductionEnabled bool
+
 	// LA-2A Compressor - Teletronix LA-2A style optical compression
 	// The LA-2A is legendary for its gentle, program-dependent character from the T4 optical cell.
 	LA2AEnabled   bool    // Enable LA-2A compressor
@@ -312,6 +315,9 @@ func DefaultFilterConfig() *FilterChainConfig {
 		DS201GateKnee:      3.0,    // Soft knee (adaptive: based on spectral crest)
 		DS201GateMakeup:    1.0,    // Unity gain (loudnorm handles all level adjustment)
 		DS201GateDetection: "rms",  // RMS detection (adaptive: rms for bleed, peak for clean)
+
+		// Breath reduction mode - enabled by default
+		BreathReductionEnabled: true,
 
 		// LA-2A Compressor - Teletronix LA-2A style optical compressor emulation
 		// The Teletronix LA-2A is renowned for its gentle, program-dependent character:
