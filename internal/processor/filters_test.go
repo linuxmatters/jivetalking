@@ -22,7 +22,6 @@ func newTestConfig() *FilterChainConfig {
 
 		// Processing filters (all disabled by default)
 		DS201HPEnabled:     false,
-		DC1DeclickEnabled:  false,
 		NoiseRemoveEnabled: false,
 		DS201GateEnabled:   false,
 		LA2AEnabled:        false,
@@ -35,7 +34,6 @@ func newTestConfig() *FilterChainConfig {
 		DS201HPWidth:       0.707, // Butterworth
 		DS201HPMix:         1.0,   // Full wet
 		DS201HPTransform:   "tdii",
-		DC1DeclickMethod:   "s",
 		DS201GateThreshold: 0.01,
 		DS201GateRatio:     2.0,
 		DS201GateAttack:    20,
@@ -954,7 +952,6 @@ func TestPass2FilterOrder(t *testing.T) {
 			FilterDS201HighPass, // Composite: includes hum notch filters
 			FilterDS201LowPass,
 			FilterNoiseRemove,
-			FilterDC1Declick,
 			FilterDS201Gate,
 			FilterLA2ACompressor,
 			FilterDeesser,
