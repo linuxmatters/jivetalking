@@ -766,20 +766,6 @@ func formatDS201GateFilter(f *os.File, cfg *processor.FilterChainConfig, m *proc
 			fmt.Fprintf(f, "        Rationale: %s\n", strings.Join(rationale, ", "))
 		}
 	}
-
-	// Breath reduction status and threshold derivation
-	if cfg.BreathReductionEnabled {
-		if m != nil && m.SpeechProfile != nil {
-			quietSpeechDB := m.SpeechProfile.RMSLevel - m.SpeechProfile.CrestFactor
-			fmt.Fprintf(f, "        breath reduction: ACTIVE\n")
-			fmt.Fprintf(f, "        quiet speech level: %.1f dBFS (RMS %.1f - crest %.1f)\n",
-				quietSpeechDB, m.SpeechProfile.RMSLevel, m.SpeechProfile.CrestFactor)
-			fmt.Fprintf(f, "        threshold targets breath band between noise (%.1f) and speech (%.1f)\n",
-				m.NoiseFloor, quietSpeechDB)
-		} else {
-			fmt.Fprintf(f, "        breath reduction: INACTIVE (no speech profile)\n")
-		}
-	}
 }
 
 // formatLA2ACompressorFilter outputs LA-2A Compressor filter details

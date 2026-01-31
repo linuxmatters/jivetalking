@@ -22,11 +22,10 @@ var version = "dev"
 
 // CLI defines the command-line interface
 type CLI struct {
-	Version         bool     `short:"v" help:"Show version information"`
-	Debug           bool     `short:"d" help:"Enable debug logging to jivetalking-debug.log"`
-	Logs            bool     `help:"Save detailed analysis logs"`
-	BreathReduction bool     `help:"Enable breath reduction in gate" default:"true" negatable:""`
-	Files           []string `arg:"" name:"files" help:"Audio files to process" type:"existingfile" optional:""`
+	Version bool     `short:"v" help:"Show version information"`
+	Debug   bool     `short:"d" help:"Enable debug logging to jivetalking-debug.log"`
+	Logs    bool     `help:"Save detailed analysis logs"`
+	Files   []string `arg:"" name:"files" help:"Audio files to process" type:"existingfile" optional:""`
 }
 
 func main() {
@@ -60,7 +59,6 @@ func main() {
 
 	// Create default filter configuration
 	config := processor.DefaultFilterConfig()
-	config.BreathReductionEnabled = cliArgs.BreathReduction
 
 	// Open debug log file if --debug flag is set
 	var debugLog *os.File
