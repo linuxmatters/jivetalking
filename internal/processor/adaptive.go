@@ -70,13 +70,6 @@ const (
 	deessIntensityMax    = 0.8 // Maximum intensity limit
 	deessIntensityMin    = 0.3 // Minimum before disabling
 
-	// Breath-aware gate threshold tuning
-	breathThresholdPosition = 0.6 // Position in noise-to-speech gap (0.0=noise, 1.0=speech)
-	breathRatioMultiplier   = 1.5 // Ratio increase for breath reduction mode
-	breathRatioMin          = 2.0 // Minimum ratio when breath reduction active
-	breathRatioMax          = 4.0 // Maximum ratio when breath reduction active
-	breathRangeDeepening    = 6.0 // Additional range (dB) for breath attenuation
-
 	// DS201 Gate tuning constants
 	// Threshold calculation: ensures sufficient gap above noise for effective soft expansion
 	ds201GateThresholdMinDB       = -50.0 // dB - minimum threshold (quiet speech floor)
@@ -805,33 +798,6 @@ func tuneDS201Gate(config *FilterChainConfig, measurements *AudioMeasurements) {
 		lufsGap,
 	)
 
-	// Breath-aware threshold override when enabled and speech profile available
-	if config.BreathReductionEnabled && measurements.SpeechProfile != nil {
-		breathThreshold := calculateBreathAwareThreshold(
-			measurements.NoiseFloor,
-			measurements.SpeechProfile.RMSLevel,
-			measurements.SpeechProfile.CrestFactor,
-		)
-
-		// Use breath threshold if more aggressive (higher) than noise-based threshold
-		existingThresholdDB := LinearToDb(config.DS201GateThreshold)
-		if breathThreshold > existingThresholdDB {
-			config.DS201GateThreshold = DbToLinear(breathThreshold)
-		}
-
-		// Increase ratio for breath reduction (firmer expansion)
-		config.DS201GateRatio = clamp(
-			config.DS201GateRatio*breathRatioMultiplier,
-			breathRatioMin,
-			breathRatioMax,
-		)
-
-		// Deepen range for stronger breath attenuation
-		rangeDB := LinearToDb(config.DS201GateRange)
-		rangeDB = clamp(rangeDB-breathRangeDeepening, float64(ds201GateRangeMinDB)-6.0, float64(ds201GateRangeMaxDB))
-		config.DS201GateRange = DbToLinear(rangeDB)
-	}
-
 	// 3. Attack: based on MaxDifference, SpectralFlux, and SpectralCrest
 	// DS201-inspired: supports sub-millisecond attack for transient preservation
 	config.DS201GateAttack = calculateDS201GateAttack(
@@ -930,15 +896,6 @@ func calculateDS201GateThreshold(noiseFloorDB, silencePeakDB, silenceCrestDB, ra
 	thresholdDB = clamp(thresholdDB, ds201GateThresholdMinDB, ds201GateThresholdMaxDB)
 
 	return DbToLinear(thresholdDB)
-}
-
-// calculateBreathAwareThreshold derives a gate threshold targeting the breath amplitude band.
-// Breaths occupy the space between noise floor and quiet speech level.
-// Position 0.6 = 60% of the way from noise to speech (biased toward catching breaths).
-func calculateBreathAwareThreshold(noiseFloorDB, speechRMS, speechCrest float64) float64 {
-	quietSpeechDB := speechRMS - speechCrest
-	breathThresholdDB := noiseFloorDB + breathThresholdPosition*(quietSpeechDB-noiseFloorDB)
-	return clamp(breathThresholdDB, noiseFloorDB+3.0, quietSpeechDB-3.0)
 }
 
 // calculateDS201GateRatio determines ratio based on LRA (loudness range).
