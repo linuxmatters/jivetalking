@@ -2450,6 +2450,12 @@ const (
 
 	// Candidate selection cutoff
 	candidateCutoffPercent = 0.15 // Only consider silence in first 15% of recording
+
+	// regressionThreshold is the minimum score drop required to trigger early termination.
+	// Prevents minor score fluctuations from prematurely locking in a suboptimal candidate.
+	// Value of 0.05 (5%) matches temporalBiasMax, so drops exceeding the built-in
+	// positional penalty indicate genuine quality degradation rather than noise.
+	regressionThreshold = 0.05
 )
 
 // segmentLongSilenceRegion breaks a long silence region into overlapping segments.
@@ -2573,10 +2579,13 @@ func findBestSilenceRegion(regions []SilenceRegion, intervals []IntervalSample, 
 				selectedCandidate = candidate
 				selectedIdx = len(result.Candidates) - 1
 				bestScore = score
-			} else {
-				// Score regressed - stop searching, keep current best
+			} else if bestScore-score > regressionThreshold {
+				// Significant regression - stop searching, keep current best
 				selectionComplete = true
 			}
+			// Minor fluctuation (regression <= threshold): continue searching
+			// without updating selection. Allows recovery if a better candidate
+			// appears after a brief dip.
 		}
 	}
 
