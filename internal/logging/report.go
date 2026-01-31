@@ -765,6 +765,20 @@ func formatDS201GateFilter(f *os.File, cfg *processor.FilterChainConfig, m *proc
 		if len(rationale) > 0 {
 			fmt.Fprintf(f, "        Rationale: %s\n", strings.Join(rationale, ", "))
 		}
+
+		// Show aggression-based threshold calculation
+		if cfg.DS201GateAggression > 0 {
+			fmt.Fprintf(f, "        Aggression: %.2f (separation %.1f dB)\n",
+				cfg.DS201GateAggression, cfg.DS201GateSpeechSeparation)
+			fmt.Fprintf(f, "        Quiet speech: %.1f dB, Dynamic range: %.1f dB\n",
+				cfg.DS201GateQuietSpeechEstimate, cfg.DS201GateDynamicRange)
+			if cfg.DS201GateClampReason != "none" {
+				fmt.Fprintf(f, "        Clamped by: %s (unclamped: %.1f dB)\n",
+					cfg.DS201GateClampReason, cfg.DS201GateThresholdUnclamped)
+			}
+			fmt.Fprintf(f, "        Headroom above quiet speech: %.1f dB\n",
+				-cfg.DS201GateSpeechHeadroom) // Negative because threshold is above quiet speech
+		}
 	}
 }
 
