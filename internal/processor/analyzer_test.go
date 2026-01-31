@@ -874,6 +874,380 @@ func TestScoreSpeechCandidate(t *testing.T) {
 		})
 	}
 }
+
+// ============================================================================
+// Speech Golden Sub-Region Refinement Tests
+// ============================================================================
+
+// makeSpeechIntervalsScorable creates intervals with specific spectral characteristics for scoring tests.
+// Allows control over kurtosis, flatness, centroid, and RMS for testing scoreSpeechIntervalWindow.
+func makeSpeechIntervalsScorable(startTime time.Duration, count int, kurtosis, flatness, centroid, rms float64) []IntervalSample {
+	intervals := make([]IntervalSample, count)
+	for i := range intervals {
+		intervals[i] = IntervalSample{
+			Timestamp:        startTime + time.Duration(i)*250*time.Millisecond,
+			RMSLevel:         rms,
+			SpectralKurtosis: kurtosis,
+			SpectralFlatness: flatness,
+			SpectralCentroid: centroid,
+		}
+	}
+	return intervals
+}
+
+func TestScoreSpeechIntervalWindow(t *testing.T) {
+	tests := []struct {
+		name    string
+		setup   func() []IntervalSample
+		wantMin float64
+		wantMax float64
+		desc    string
+	}{
+		{
+			name: "continuous speech - high quality",
+			setup: func() []IntervalSample {
+				// High kurtosis (~6), low flatness (~0.1), centroid in voice range (~2000 Hz),
+				// consistent kurtosis (low variance), good RMS (~-15 dBFS)
+				return makeSpeechIntervalsScorable(0, 40, 6.0, 0.1, 2000.0, -15.0)
+			},
+			wantMin: 0.80,
+			wantMax: 1.0,
+			desc:    "ideal speech window should score high",
+		},
+		{
+			name: "pause-heavy window with high variance",
+			setup: func() []IntervalSample {
+				// Create intervals with VERY high kurtosis variance (consistency penalised)
+				// and centroid outside voice range
+				intervals := make([]IntervalSample, 40)
+				for i := range intervals {
+					if i%2 == 0 {
+						intervals[i] = IntervalSample{
+							Timestamp:        time.Duration(i) * 250 * time.Millisecond,
+							RMSLevel:         -35.0,  // Quiet
+							SpectralKurtosis: 15.0,   // High
+							SpectralFlatness: 0.8,    // Noise-like
+							SpectralCentroid: 6000.0, // Outside voice range
+						}
+					} else {
+						intervals[i] = IntervalSample{
+							Timestamp:        time.Duration(i) * 250 * time.Millisecond,
+							RMSLevel:         -35.0,  // Quiet
+							SpectralKurtosis: 1.0,    // Low
+							SpectralFlatness: 0.8,    // Noise-like
+							SpectralCentroid: 6000.0, // Outside voice range
+						}
+					}
+				}
+				return intervals
+			},
+			wantMin: 0.0,
+			wantMax: 0.45,
+			desc:    "inconsistent noisy window should score low",
+		},
+		{
+			name: "empty intervals",
+			setup: func() []IntervalSample {
+				return []IntervalSample{}
+			},
+			wantMin: 0.0,
+			wantMax: 0.0,
+			desc:    "empty input should return 0",
+		},
+		{
+			name: "low kurtosis (flat spectrum)",
+			setup: func() []IntervalSample {
+				// Low kurtosis (~2), high flatness (~0.8), centroid outside range, quiet
+				// This should score quite low across all metrics
+				return makeSpeechIntervalsScorable(0, 40, 2.0, 0.8, 6000.0, -32.0)
+			},
+			wantMin: 0.25,
+			wantMax: 0.50,
+			desc:    "flat noisy spectrum outside voice range should score low",
+		},
+		{
+			name: "centroid at edge of voice range",
+			setup: func() []IntervalSample {
+				// Good kurtosis and flatness, but centroid at edge of range (4400 Hz)
+				// Still within range, so centroid score is about 0.5-0.6
+				return makeSpeechIntervalsScorable(0, 40, 6.0, 0.1, 4400.0, -15.0)
+			},
+			wantMin: 0.75,
+			wantMax: 0.95,
+			desc:    "edge centroid slightly reduces score",
+		},
+		{
+			name: "quiet speech (low RMS)",
+			setup: func() []IntervalSample {
+				// Good spectral characteristics but quiet (-28 dBFS)
+				// RMS score: (-28 - (-30)) / 18 = 2/18 = 0.11
+				return makeSpeechIntervalsScorable(0, 40, 6.0, 0.1, 2000.0, -28.0)
+			},
+			wantMin: 0.75,
+			wantMax: 0.90,
+			desc:    "quiet speech with good spectral should still score well",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			intervals := tt.setup()
+			score := scoreSpeechIntervalWindow(intervals)
+
+			if score < tt.wantMin || score > tt.wantMax {
+				t.Errorf("scoreSpeechIntervalWindow() = %.3f, want [%.2f, %.2f] (%s)",
+					score, tt.wantMin, tt.wantMax, tt.desc)
+			}
+
+			// Verify score is clamped to [0, 1]
+			if score < 0.0 || score > 1.0 {
+				t.Errorf("score %.3f outside [0, 1] range", score)
+			}
+		})
+	}
+}
+
+func TestRefineToGoldenSpeechSubregion(t *testing.T) {
+	tests := []struct {
+		name          string
+		candidate     *SpeechRegion
+		intervals     []IntervalSample
+		wantStart     time.Duration
+		wantDuration  time.Duration
+		wantUnchanged bool
+		wantNil       bool
+		desc          string
+	}{
+		{
+			name: "short region - no refinement needed",
+			candidate: &SpeechRegion{
+				Start:    10 * time.Second,
+				End:      50 * time.Second,
+				Duration: 40 * time.Second, // 40s < 60s threshold
+			},
+			intervals:     makeSpeechIntervalsScorable(10*time.Second, 160, 6.0, 0.1, 2000.0, -15.0), // 40s
+			wantStart:     10 * time.Second,
+			wantDuration:  40 * time.Second,
+			wantUnchanged: true,
+			desc:          "regions <= 60s should pass through unchanged",
+		},
+		{
+			name: "long region with uniform quality",
+			candidate: &SpeechRegion{
+				Start:    0,
+				End:      120 * time.Second,
+				Duration: 120 * time.Second, // 2 minutes
+			},
+			intervals:     makeSpeechIntervalsScorable(0, 480, 6.0, 0.1, 2000.0, -15.0), // 120s uniform
+			wantStart:     0,                                                            // First window when all equal
+			wantDuration:  60 * time.Second,
+			wantUnchanged: false,
+			desc:          "uniform quality should return first 60s window",
+		},
+		{
+			name: "long region with clear best window at end",
+			candidate: &SpeechRegion{
+				Start:    0,
+				End:      120 * time.Second,
+				Duration: 120 * time.Second,
+			},
+			intervals: func() []IntervalSample {
+				// First 60s: lower quality (low kurtosis, high flatness)
+				first := makeSpeechIntervalsScorable(0, 240, 3.0, 0.5, 2000.0, -25.0)
+				// Last 60s: high quality speech
+				second := makeSpeechIntervalsScorable(60*time.Second, 240, 8.0, 0.08, 2000.0, -12.0)
+				return append(first, second...)
+			}(),
+			wantStart:     60 * time.Second, // Should find better region in second half
+			wantDuration:  60 * time.Second,
+			wantUnchanged: false,
+			desc:          "should find the higher quality 60s window",
+		},
+		{
+			name:      "nil candidate",
+			candidate: nil,
+			intervals: makeSpeechIntervalsScorable(0, 480, 6.0, 0.1, 2000.0, -15.0),
+			wantNil:   true,
+			desc:      "nil input should return nil",
+		},
+		{
+			name: "insufficient intervals",
+			candidate: &SpeechRegion{
+				Start:    0,
+				End:      90 * time.Second,
+				Duration: 90 * time.Second,
+			},
+			intervals:     makeSpeechIntervalsScorable(0, 100, 6.0, 0.1, 2000.0, -15.0), // 25s < 30s minimum
+			wantStart:     0,
+			wantDuration:  90 * time.Second,
+			wantUnchanged: true,
+			desc:          "insufficient intervals should return original",
+		},
+		{
+			name: "no intervals in range",
+			candidate: &SpeechRegion{
+				Start:    200 * time.Second,
+				End:      320 * time.Second,
+				Duration: 120 * time.Second,
+			},
+			intervals:     makeSpeechIntervalsScorable(0, 480, 6.0, 0.1, 2000.0, -15.0), // 0-120s only
+			wantStart:     200 * time.Second,
+			wantDuration:  120 * time.Second,
+			wantUnchanged: true,
+			desc:          "should return original when no intervals match range",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := refineToGoldenSpeechSubregion(tt.candidate, tt.intervals)
+
+			if tt.wantNil {
+				if result != nil {
+					t.Errorf("expected nil result, got %+v", result)
+				}
+				return
+			}
+
+			if result == nil {
+				t.Fatal("unexpected nil result")
+			}
+
+			if tt.wantUnchanged {
+				if result.Start != tt.candidate.Start || result.Duration != tt.candidate.Duration {
+					t.Errorf("expected unchanged region, got Start=%v Duration=%v (original Start=%v Duration=%v) [%s]",
+						result.Start, result.Duration, tt.candidate.Start, tt.candidate.Duration, tt.desc)
+				}
+				return
+			}
+
+			if result.Start != tt.wantStart {
+				t.Errorf("Start = %v, want %v [%s]", result.Start, tt.wantStart, tt.desc)
+			}
+			if result.Duration != tt.wantDuration {
+				t.Errorf("Duration = %v, want %v [%s]", result.Duration, tt.wantDuration, tt.desc)
+			}
+		})
+	}
+}
+
+func TestFindBestSpeechRegion_WithRefinement(t *testing.T) {
+	t.Run("refines long speech region", func(t *testing.T) {
+		// Create a 120s speech region (> 60s threshold)
+		regions := []SpeechRegion{
+			{Start: 0, End: 120 * time.Second, Duration: 120 * time.Second},
+		}
+
+		// Create intervals with good speech characteristics
+		// First 60s: moderate quality, Last 60s: high quality
+		intervals := func() []IntervalSample {
+			first := makeSpeechIntervalsScorable(0, 240, 4.0, 0.3, 2000.0, -20.0)
+			second := makeSpeechIntervalsScorable(60*time.Second, 240, 7.0, 0.1, 2000.0, -14.0)
+			return append(first, second...)
+		}()
+
+		result := findBestSpeechRegion(regions, intervals)
+
+		if result.BestRegion == nil {
+			t.Fatal("expected a best region to be selected")
+		}
+
+		// Find the candidate metrics for the selected region
+		if len(result.Candidates) == 0 {
+			t.Fatal("expected candidates to be populated")
+		}
+
+		// The candidate should have WasRefined set to true
+		foundRefined := false
+		for _, c := range result.Candidates {
+			if c.WasRefined {
+				foundRefined = true
+
+				// Verify original metadata is populated
+				if c.OriginalStart != 0 {
+					t.Errorf("OriginalStart = %v, want 0", c.OriginalStart)
+				}
+				if c.OriginalDuration != 120*time.Second {
+					t.Errorf("OriginalDuration = %v, want 120s", c.OriginalDuration)
+				}
+
+				// Verify refined duration is <= 60s
+				if c.Region.Duration > 60*time.Second {
+					t.Errorf("Refined duration %v > 60s", c.Region.Duration)
+				}
+
+				break
+			}
+		}
+
+		if !foundRefined {
+			t.Error("expected WasRefined=true for long region")
+		}
+	})
+
+	t.Run("does not refine short speech region", func(t *testing.T) {
+		// Create a 45s speech region (< 60s threshold)
+		regions := []SpeechRegion{
+			{Start: 0, End: 45 * time.Second, Duration: 45 * time.Second},
+		}
+
+		// Create intervals with good speech characteristics
+		intervals := makeSpeechIntervalsScorable(0, 180, 6.0, 0.1, 2000.0, -15.0)
+
+		result := findBestSpeechRegion(regions, intervals)
+
+		if result.BestRegion == nil {
+			t.Fatal("expected a best region to be selected")
+		}
+
+		// The candidate should NOT have WasRefined set
+		for _, c := range result.Candidates {
+			if c.WasRefined {
+				t.Error("expected WasRefined=false for short region")
+			}
+		}
+
+		// Duration should remain unchanged
+		if result.BestRegion.Duration != 45*time.Second {
+			t.Errorf("Duration = %v, want 45s", result.BestRegion.Duration)
+		}
+	})
+
+	t.Run("selects best window from long region", func(t *testing.T) {
+		// Create a 120s speech region with a clear "golden" 60s section
+		regions := []SpeechRegion{
+			{Start: 0, End: 120 * time.Second, Duration: 120 * time.Second},
+		}
+
+		// Create intervals where the middle section is clearly best
+		intervals := func() []IntervalSample {
+			// 0-30s: poor quality
+			poor1 := makeSpeechIntervalsScorable(0, 120, 2.0, 0.6, 3500.0, -28.0)
+			// 30-90s: excellent quality (this is the golden window)
+			excellent := makeSpeechIntervalsScorable(30*time.Second, 240, 8.0, 0.05, 2000.0, -12.0)
+			// 90-120s: poor quality
+			poor2 := makeSpeechIntervalsScorable(90*time.Second, 120, 2.0, 0.6, 3500.0, -28.0)
+			return append(append(poor1, excellent...), poor2...)
+		}()
+
+		result := findBestSpeechRegion(regions, intervals)
+
+		if result.BestRegion == nil {
+			t.Fatal("expected a best region to be selected")
+		}
+
+		// The refined region should start somewhere in the excellent section (30-60s)
+		if result.BestRegion.Start < 30*time.Second || result.BestRegion.Start > 60*time.Second {
+			t.Errorf("Refined Start = %v, expected in range [30s, 60s]", result.BestRegion.Start)
+		}
+
+		// Refined duration should be 60s
+		if result.BestRegion.Duration != 60*time.Second {
+			t.Errorf("Refined Duration = %v, want 60s", result.BestRegion.Duration)
+		}
+	})
+}
+
 func TestMeasureOutputSilenceRegion(t *testing.T) {
 	// Generate processed test audio file with known silence region
 	// Using a simple tone with a substantial silence gap for predictable measurements

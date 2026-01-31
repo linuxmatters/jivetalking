@@ -2162,12 +2162,29 @@ func writeDiagnosticSpeech(f *os.File, measurements *processor.AudioMeasurements
 
 		for i, c := range measurements.SpeechCandidates {
 			// Check if this candidate was selected
-			isSelected := measurements.SpeechProfile != nil &&
-				c.Region.Start == measurements.SpeechProfile.Region.Start
+			// For refined regions, compare against original start since Region.Start is the refined position
+			isSelected := false
+			if measurements.SpeechProfile != nil {
+				if c.WasRefined {
+					isSelected = c.OriginalStart == measurements.SpeechProfile.OriginalStart
+				} else {
+					isSelected = c.Region.Start == measurements.SpeechProfile.Region.Start
+				}
+			}
 
 			if isSelected {
 				fmt.Fprintf(f, "  Candidate %d:       %.1fs at %.1fs (score: %.3f) [SELECTED]\n",
 					i+1, c.Region.Duration.Seconds(), c.Region.Start.Seconds(), c.Score)
+
+				// Show refinement details if this candidate was refined to a golden sub-region
+				if c.WasRefined {
+					fmt.Fprintf(f, "    Refined:         %.1fs at %.1fs → %.1fs at %.1fs (golden sub-region)\n",
+						c.OriginalDuration.Seconds(),
+						c.OriginalStart.Seconds(),
+						c.Region.Duration.Seconds(),
+						c.Region.Start.Seconds())
+				}
+
 				fmt.Fprintf(f, "    Amplitude:\n")
 				fmt.Fprintf(f, "      RMS Level:     %.1f dBFS\n", c.RMSLevel)
 				fmt.Fprintf(f, "      Peak Level:    %.1f dBFS\n", c.PeakLevel)

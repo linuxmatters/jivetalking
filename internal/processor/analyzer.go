@@ -135,6 +135,11 @@ type SpeechCandidateMetrics struct {
 
 	// Scoring
 	Score float64 `json:"score"` // Composite score for candidate ranking
+
+	// Golden sub-region refinement info (populated when a long candidate is refined)
+	OriginalStart    time.Duration `json:"original_start,omitempty"`    // Original candidate start before refinement
+	OriginalDuration time.Duration `json:"original_duration,omitempty"` // Original candidate duration before refinement
+	WasRefined       bool          `json:"was_refined,omitempty"`       // True if region was refined from a longer candidate
 }
 
 // IntervalSample contains all measurements for a 250ms audio window.
@@ -530,6 +535,12 @@ const (
 	// speechEntropyMax is the maximum entropy for speech (structured signal).
 	// Pure noise approaches 1.0; speech is typically 0.3-0.7.
 	speechEntropyMax = 0.85
+
+	// Golden speech region refinement constants
+	// After selecting the best speech candidate, refine to a representative sub-window
+	// to avoid averaging across pauses that contaminate spectral metrics.
+	goldenSpeechWindowDuration = 60 * time.Second // Target: 60s of representative speech
+	goldenSpeechWindowMinimum  = 30 * time.Second // Minimum acceptable window
 )
 
 // refineToGoldenSubregion finds the cleanest sub-region within a silence candidate.
@@ -786,6 +797,143 @@ func scoreIntervalWindow(intervals []IntervalSample) float64 {
 		sumRMS += interval.RMSLevel
 	}
 	return sumRMS / float64(len(intervals))
+}
+
+// scoreSpeechIntervalWindow calculates a quality score for a contiguous window of speech intervals.
+// Returns a 0-1 score where higher = better quality speech for profiling.
+// Scores based on spectral characteristics that indicate clear, continuous speech:
+//   - Kurtosis (0.20): higher average = clearer harmonics
+//   - Flatness (0.20): lower = more tonal (inverted)
+//   - Centroid (0.20): peak at voice centre (~2000 Hz), decay toward edges
+//   - Consistency (0.25): low kurtosis variance = stable voicing
+//   - RMS (0.15): louder = more active speech
+func scoreSpeechIntervalWindow(intervals []IntervalSample) float64 {
+	if len(intervals) == 0 {
+		return 0 // Should not happen in normal use
+	}
+
+	n := float64(len(intervals))
+
+	// Accumulate metrics
+	var kurtosisSum, flatnessSum, centroidSum, rmsSum float64
+	kurtosisValues := make([]float64, len(intervals))
+
+	for i, interval := range intervals {
+		kurtosisSum += interval.SpectralKurtosis
+		flatnessSum += interval.SpectralFlatness
+		centroidSum += interval.SpectralCentroid
+		rmsSum += interval.RMSLevel
+		kurtosisValues[i] = interval.SpectralKurtosis
+	}
+
+	avgKurtosis := kurtosisSum / n
+	avgFlatness := flatnessSum / n
+	avgCentroid := centroidSum / n
+	avgRMS := rmsSum / n
+
+	// Calculate kurtosis variance for consistency score
+	var kurtosisVarianceSum float64
+	for _, k := range kurtosisValues {
+		diff := k - avgKurtosis
+		kurtosisVarianceSum += diff * diff
+	}
+	kurtosisVariance := kurtosisVarianceSum / n
+
+	// Kurtosis score (0.20): higher kurtosis = clearer harmonics
+	// Typical speech kurtosis ranges 2-10; score peaks around 6
+	kurtosisScore := clampFloat(avgKurtosis/6.0, 0.0, 1.0)
+
+	// Flatness score (0.20): lower flatness = more tonal = better speech
+	// Flatness 0 = pure tone, 1 = white noise; speech typically 0.1-0.4
+	flatnessScore := clampFloat(1.0-avgFlatness, 0.0, 1.0)
+
+	// Centroid score (0.20): peak at voice centre, decay toward edges
+	// Voice range: speechCentroidMin (200 Hz) to speechCentroidMax (4500 Hz)
+	centroidScore := 0.0
+	if avgCentroid >= speechCentroidMin && avgCentroid <= speechCentroidMax {
+		// Calculate distance from ideal centre (~2000 Hz)
+		voiceMid := (speechCentroidMin + speechCentroidMax) / 2
+		voiceHalfWidth := (speechCentroidMax - speechCentroidMin) / 2
+		distFromMid := math.Abs(avgCentroid - voiceMid)
+		// Score decays to 0.5 at edges, 1.0 at centre
+		centroidScore = 1.0 - (distFromMid/voiceHalfWidth)*0.5
+	}
+
+	// Consistency score (0.25): low kurtosis variance = stable voicing
+	// Variance > 100 is very inconsistent; clamp score at that point
+	consistencyScore := clampFloat(1.0-(kurtosisVariance/100.0), 0.0, 1.0)
+
+	// RMS score (0.15): louder = more active speech
+	// Range: -30 dBFS (worst) to -12 dBFS (best)
+	rmsScore := 0.0
+	if avgRMS > -30.0 {
+		rmsScore = clampFloat((avgRMS-(-30.0))/18.0, 0.0, 1.0)
+	}
+
+	// Weighted combination (per plan: consistency elevated to 0.25)
+	return kurtosisScore*0.20 + flatnessScore*0.20 + centroidScore*0.20 + consistencyScore*0.25 + rmsScore*0.15
+}
+
+// refineToGoldenSpeechSubregion finds the most representative sub-region within a speech candidate.
+// Uses existing interval samples to find the window with highest speech quality score.
+// Returns the original region if it's already at or below goldenSpeechWindowDuration,
+// or if refinement fails for any reason (insufficient intervals, etc.).
+//
+// This addresses cases where a long speech region contains pauses that contaminate
+// spectral metrics when averaged. By refining to the best 60s window, we isolate
+// continuous speech for more accurate adaptive filter tuning.
+func refineToGoldenSpeechSubregion(candidate *SpeechRegion, intervals []IntervalSample) *SpeechRegion {
+	if candidate == nil {
+		return nil
+	}
+
+	// No refinement needed if already at or below target duration
+	if candidate.Duration <= goldenSpeechWindowDuration {
+		return candidate
+	}
+
+	// Extract intervals within the candidate's time range
+	candidateIntervals := getIntervalsInRange(intervals, candidate.Start, candidate.End)
+	if candidateIntervals == nil {
+		return candidate
+	}
+
+	// Calculate window size in intervals (60s / 250ms = 240 intervals)
+	windowIntervals := int(goldenSpeechWindowDuration / goldenIntervalSize)
+	minimumIntervals := int(goldenSpeechWindowMinimum / goldenIntervalSize)
+
+	// Need at least minimum window worth of intervals
+	if len(candidateIntervals) < minimumIntervals {
+		return candidate
+	}
+
+	// If we have fewer intervals than target window, use what we have
+	if len(candidateIntervals) < windowIntervals {
+		windowIntervals = len(candidateIntervals)
+	}
+
+	// Slide window across intervals, finding position with highest speech quality score
+	bestStartIdx := 0
+	bestScore := scoreSpeechIntervalWindow(candidateIntervals[:windowIntervals])
+
+	for startIdx := 1; startIdx <= len(candidateIntervals)-windowIntervals; startIdx++ {
+		windowScore := scoreSpeechIntervalWindow(candidateIntervals[startIdx : startIdx+windowIntervals])
+		if windowScore > bestScore {
+			bestScore = windowScore
+			bestStartIdx = startIdx
+		}
+	}
+
+	// Calculate refined region bounds from the best window position
+	refinedStart := candidateIntervals[bestStartIdx].Timestamp
+	refinedDuration := time.Duration(windowIntervals) * goldenIntervalSize
+	refinedEnd := refinedStart + refinedDuration
+
+	return &SpeechRegion{
+		Start:    refinedStart,
+		End:      refinedEnd,
+		Duration: refinedDuration,
+	}
 }
 
 // roomToneScore calculates a 0-1 score indicating how likely an interval is room tone.
@@ -2992,6 +3140,8 @@ type findBestSpeechRegionResult struct {
 // findBestSpeechRegion selects the best speech region for measurements.
 // Strategy: prefer longest duration that meets quality threshold.
 // Unlike silence (where earlier is better), speech benefits from longer samples.
+// For long candidates (>60s), refines to the best 60s sub-region to avoid
+// contaminating spectral metrics with pauses.
 func findBestSpeechRegion(regions []SpeechRegion, intervals []IntervalSample) *findBestSpeechRegionResult {
 	result := &findBestSpeechRegionResult{}
 
@@ -3023,6 +3173,41 @@ func findBestSpeechRegion(regions []SpeechRegion, intervals []IntervalSample) *f
 		if score >= minAcceptableSpeechScore && candidate.Duration > bestDuration {
 			bestCandidate = candidate
 			bestDuration = candidate.Duration
+		}
+	}
+
+	// Refine long candidates to golden sub-region
+	if bestCandidate != nil && bestCandidate.Duration > goldenSpeechWindowDuration {
+		originalRegion := *bestCandidate
+		refined := refineToGoldenSpeechSubregion(bestCandidate, intervals)
+
+		if refined != nil {
+			wasRefined := refined.Start != originalRegion.Start ||
+				refined.Duration != originalRegion.Duration
+
+			if wasRefined {
+				// Re-measure the refined region
+				refinedMetrics := measureSpeechCandidateFromIntervals(*refined, intervals)
+				if refinedMetrics != nil {
+					refinedMetrics.Score = scoreSpeechCandidate(refinedMetrics)
+
+					// Store refinement metadata
+					refinedMetrics.WasRefined = true
+					refinedMetrics.OriginalStart = originalRegion.Start
+					refinedMetrics.OriginalDuration = originalRegion.Duration
+
+					// Replace the unrefined candidate in the list
+					for i := range result.Candidates {
+						if result.Candidates[i].Region.Start == originalRegion.Start {
+							result.Candidates[i] = *refinedMetrics
+							break
+						}
+					}
+
+					// Update best region to refined version
+					bestCandidate = refined
+				}
+			}
 		}
 	}
 
