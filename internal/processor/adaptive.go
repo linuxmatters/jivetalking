@@ -72,11 +72,38 @@ const (
 
 	// DS201 Gate tuning constants
 	// Threshold calculation: ensures sufficient gap above noise for effective soft expansion
-	ds201GateThresholdMinDB       = -50.0 // dB - minimum threshold (quiet speech floor)
+	ds201GateThresholdMinDB       = -80.0 // dB - minimum threshold (allows speech guard to protect quiet content)
 	ds201GateThresholdMaxDB       = -25.0 // dB - never gate above this (would cut speech)
 	ds201GateCrestFactorThreshold = 20.0  // dB - above this, use peak reference instead of RMS
 	ds201GateTargetReductionDB    = 12.0  // dB - target noise reduction from soft expander
 	ds201GateTargetThresholdDB    = -40.0 // dB - target threshold for clean recordings (quiet speech/breath level)
+
+	// Aggression-based threshold positioning
+	// Aggression: 0.0 = at quietSpeech, 1.0 = at speechRMS
+
+	// Base aggression tiers (by separation in dB)
+	ds201GateAggressionSepTight    = 10.0 // dB - below: minimal separation, conservative
+	ds201GateAggressionSepModerate = 15.0 // dB - moderate separation
+	ds201GateAggressionSepGood     = 20.0 // dB - good separation
+
+	ds201GateAggressionTight     = 0.30 // For separation < 10 dB
+	ds201GateAggressionModLow    = 0.35 // Base for 10-15 dB separation
+	ds201GateAggressionModScale  = 0.02 // Per-dB scale in moderate tier
+	ds201GateAggressionGoodLow   = 0.45 // Base for 15-20 dB separation
+	ds201GateAggressionGoodScale = 0.02 // Per-dB scale in good tier
+	ds201GateAggressionWide      = 0.55 // For separation >= 20 dB
+
+	// LRA adjustment to aggression
+	ds201GateAggressionLRAThreshold = 12.0  // LU - above: start reducing aggression
+	ds201GateAggressionLRAScale     = 0.015 // Reduction per LU above threshold
+
+	// Aggression clamps
+	ds201GateAggressionMin = 0.25 // Never too conservative
+	ds201GateAggressionMax = 0.60 // Never too aggressive
+
+	// Safety margins
+	ds201GateThresholdSpeechMargin = 10.0 // dB - minimum gap below speech RMS
+	ds201GateThresholdNoiseMargin  = 5.0  // dB - room for soft expander action
 
 	// Ratio: based on LRA (loudness range)
 	ds201GateLRAWide     = 15.0 // LU - above: wide dynamics, gentle ratio
@@ -788,6 +815,13 @@ func tuneDS201Gate(config *FilterChainConfig, measurements *AudioMeasurements) {
 	// Calculate ratio FIRST since threshold depends on it
 	config.DS201GateRatio = calculateDS201GateRatio(measurements.InputLRA)
 
+	// Extract speech measurements (zero values if no profile)
+	var speechRMS, speechCrest float64
+	if measurements.SpeechProfile != nil {
+		speechRMS = measurements.SpeechProfile.RMSLevel
+		speechCrest = measurements.SpeechProfile.CrestFactor
+	}
+
 	// 1. Threshold: sits above noise/bleed peaks, below quiet speech
 	// Gap is derived from ratio to achieve target reduction
 	config.DS201GateThreshold = calculateDS201GateThreshold(
@@ -796,7 +830,45 @@ func tuneDS201Gate(config *FilterChainConfig, measurements *AudioMeasurements) {
 		silenceCrest,
 		config.DS201GateRatio,
 		lufsGap,
+		measurements.InputLRA,
+		speechRMS,
+		speechCrest,
 	)
+
+	// Track threshold calculation diagnostics
+	if measurements.SpeechProfile != nil {
+		quietSpeech := measurements.SpeechProfile.RMSLevel - measurements.SpeechProfile.CrestFactor
+		separation := quietSpeech - measurements.NoiseFloor
+
+		// Calculate aggression for diagnostics
+		aggression := calculateAggression(separation, measurements.InputLRA)
+		dynamicRange := measurements.SpeechProfile.CrestFactor
+
+		// Calculate unclamped threshold for diagnostics
+		thresholdUnclamped := quietSpeech + (dynamicRange * aggression)
+
+		// Determine clamp reason
+		noiseFloorLimit := measurements.NoiseFloor + ds201GateThresholdNoiseMargin
+		speechRMSLimit := measurements.SpeechProfile.RMSLevel - ds201GateThresholdSpeechMargin
+		actualThreshold := LinearToDb(config.DS201GateThreshold)
+
+		var clampReason string
+		if thresholdUnclamped < noiseFloorLimit && actualThreshold >= noiseFloorLimit {
+			clampReason = "noise_floor"
+		} else if thresholdUnclamped > speechRMSLimit && actualThreshold <= speechRMSLimit {
+			clampReason = "speech_rms"
+		} else {
+			clampReason = "none"
+		}
+
+		config.DS201GateAggression = aggression
+		config.DS201GateDynamicRange = dynamicRange
+		config.DS201GateQuietSpeechEstimate = quietSpeech
+		config.DS201GateSpeechSeparation = separation
+		config.DS201GateThresholdUnclamped = thresholdUnclamped
+		config.DS201GateClampReason = clampReason
+		config.DS201GateSpeechHeadroom = quietSpeech - actualThreshold
+	}
 
 	// 3. Attack: based on MaxDifference, SpectralFlux, and SpectralCrest
 	// DS201-inspired: supports sub-millisecond attack for transient preservation
@@ -843,59 +915,126 @@ func tuneDS201Gate(config *FilterChainConfig, measurements *AudioMeasurements) {
 	}
 }
 
-// calculateDS201GateThreshold determines threshold ensuring sufficient gap above noise
-// for effective soft expansion. The gap is derived from the ratio (which comes from LRA)
-// to achieve a target reduction depth.
+// calculateAggression determines how aggressively to position threshold
+// between quiet speech and speech RMS.
+// Returns 0.0-1.0 where:
+//   - 0.0 = threshold at quiet speech (very conservative)
+//   - 1.0 = threshold at speech RMS (very aggressive, would gate speech)
 //
-// Soft expander math: reduction = gap × (1 - 1/ratio)
-// Solving for gap: gap = targetReduction / (1 - 1/ratio)
-//
-// Examples for 12dB target reduction:
-//   - 1.5:1 ratio (wide LRA)   → gap = 12 / (1 - 1/1.5) = 36 dB
-//   - 2.0:1 ratio (moderate)   → gap = 12 / (1 - 1/2.0) = 24 dB
-//   - 2.5:1 ratio (narrow LRA) → gap = 12 / (1 - 1/2.5) = 20 dB
-//
-// This makes the gate more aggressive when dynamics are narrow (tighter ratio),
-// and more conservative when dynamics are wide (gentler ratio preserves expression).
-//
-// Approach:
-// 1. For high-crest noise (transients/bleed): threshold = silencePeak + small margin
-// 2. For stable noise: threshold = max(noiseFloor + derivedGap, targetThreshold)
-// 3. Clamp to [minThreshold, maxThreshold] to protect quiet speech
-//
-// Special case for extreme LUFS gaps (>25 dB):
-// Very quiet recordings have exaggerated crest factors due to the low signal level.
-// Small peaks in silence appear large relative to the quiet RMS. Using peak-reference
-// in this case places the threshold too close to quiet speech, causing modulation.
-// Instead, use noise-floor-based threshold which is more reliable for quiet recordings.
-func calculateDS201GateThreshold(noiseFloorDB, silencePeakDB, silenceCrestDB, ratio, lufsGap float64) float64 {
+// Uses separation (quietSpeech - noiseFloor) as primary factor,
+// with LRA adjustment for dynamic content.
+func calculateAggression(separation, lra float64) float64 {
+	var baseAggression float64
+
+	switch {
+	case separation < ds201GateAggressionSepTight:
+		// Tight separation: conservative positioning
+		baseAggression = ds201GateAggressionTight
+	case separation < ds201GateAggressionSepModerate:
+		// Moderate separation: scale 0.35-0.45
+		t := separation - ds201GateAggressionSepTight
+		baseAggression = ds201GateAggressionModLow + (t * ds201GateAggressionModScale)
+	case separation < ds201GateAggressionSepGood:
+		// Good separation: scale 0.45-0.55
+		t := separation - ds201GateAggressionSepModerate
+		baseAggression = ds201GateAggressionGoodLow + (t * ds201GateAggressionGoodScale)
+	default:
+		// Excellent separation: maximum aggression
+		baseAggression = ds201GateAggressionWide
+	}
+
+	// LRA adjustment: higher LRA = more dynamic content = reduce aggression
+	// to preserve quiet expressive moments
+	lraAdjustment := 0.0
+	if lra > ds201GateAggressionLRAThreshold {
+		lraAdjustment = (lra - ds201GateAggressionLRAThreshold) * ds201GateAggressionLRAScale
+	}
+
+	return clamp(baseAggression-lraAdjustment, ds201GateAggressionMin, ds201GateAggressionMax)
+}
+
+// calculateDS201GateThresholdLegacy uses the original noise-floor-based approach
+// when SpeechProfile is unavailable.
+func calculateDS201GateThresholdLegacy(
+	noiseFloorDB, silencePeakDB, silenceCrestDB float64,
+	ratio, lufsGap float64,
+) float64 {
 	var thresholdDB float64
 
-	// For extreme LUFS gaps, skip peak-reference approach
-	// Very quiet recordings have exaggerated crest factors; noise floor is more reliable
 	usePeakReference := silenceCrestDB > ds201GateCrestFactorThreshold &&
 		silencePeakDB != 0 &&
 		lufsGap < lufsGapExtreme
 
 	if usePeakReference {
-		// Noise has transients (e.g., bleed from other mics) - threshold must clear peaks
-		// Use peak + small margin to ensure gate opens cleanly
 		thresholdDB = silencePeakDB + 3.0
 	} else {
-		// Derive minimum gap from ratio to achieve target reduction
-		// gap = targetReduction / (1 - 1/ratio)
 		minGapDB := ds201GateTargetReductionDB / (1.0 - 1.0/ratio)
 		minGapThreshold := noiseFloorDB + minGapDB
-
-		// Use whichever is higher: the derived gap threshold or the target threshold
-		// This ensures clean recordings still get effective gating
 		thresholdDB = max(minGapThreshold, ds201GateTargetThresholdDB)
 	}
 
-	// Safety limits - protect quiet speech while ensuring gate can still work
 	thresholdDB = clamp(thresholdDB, ds201GateThresholdMinDB, ds201GateThresholdMaxDB)
 
 	return DbToLinear(thresholdDB)
+}
+
+// calculateDS201GateThreshold determines threshold ensuring sufficient gap above noise
+// for effective soft expansion using aggression-based positioning when SpeechProfile
+// is available, falling back to legacy noise-floor-based approach otherwise.
+//
+// Aggression-based approach:
+//   - Threshold = quietSpeech + (dynamicRange × aggression)
+//   - Aggression scales with noise-to-speech separation and LRA
+//   - Safety clamps ensure threshold stays between noise floor and speech RMS
+//
+// Legacy approach (no SpeechProfile):
+//   - Threshold derived from noise floor + ratio-based gap
+//   - Peak reference used for high-crest noise (bleed, transients)
+func calculateDS201GateThreshold(
+	noiseFloorDB, silencePeakDB, silenceCrestDB float64,
+	ratio, lufsGap, lra float64,
+	speechRMS, speechCrest float64,
+) float64 {
+	// Primary path: aggression-based positioning (requires SpeechProfile)
+	if speechRMS < 0 && speechCrest > 0 {
+		quietSpeechEstimate := speechRMS - speechCrest
+		dynamicRange := speechCrest // Distance from quiet to RMS
+		separation := quietSpeechEstimate - noiseFloorDB
+
+		// Fall back to legacy if separation is too tight for reliable aggression
+		if separation < 5.0 {
+			return calculateDS201GateThresholdLegacy(
+				noiseFloorDB, silencePeakDB, silenceCrestDB,
+				ratio, lufsGap,
+			)
+		}
+
+		aggression := calculateAggression(separation, lra)
+
+		// Position threshold above quiet speech by fraction of dynamic range
+		thresholdDB := quietSpeechEstimate + (dynamicRange * aggression)
+
+		// Safety constraints
+		noiseFloorLimit := noiseFloorDB + ds201GateThresholdNoiseMargin
+		speechRMSLimit := speechRMS - ds201GateThresholdSpeechMargin
+
+		if thresholdDB < noiseFloorLimit {
+			thresholdDB = noiseFloorLimit
+		} else if thresholdDB > speechRMSLimit {
+			thresholdDB = speechRMSLimit
+		}
+
+		// Additional safety: respect global limits
+		thresholdDB = clamp(thresholdDB, ds201GateThresholdMinDB, ds201GateThresholdMaxDB)
+
+		return DbToLinear(thresholdDB)
+	}
+
+	// Fallback: legacy noise-floor-based approach (no SpeechProfile)
+	return calculateDS201GateThresholdLegacy(
+		noiseFloorDB, silencePeakDB, silenceCrestDB,
+		ratio, lufsGap,
+	)
 }
 
 // calculateDS201GateRatio determines ratio based on LRA (loudness range).

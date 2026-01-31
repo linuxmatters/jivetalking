@@ -172,6 +172,15 @@ type FilterChainConfig struct {
 	DS201GateDetection  string  // Level detection mode: "rms" (default, smoother) or "peak" (tighter)
 	DS201GateGentleMode bool    // Gentle mode active - for extreme LUFS gap + low LRA recordings
 
+	// Diagnostic: aggression-based threshold calculation
+	DS201GateAggression          float64 // Final aggression factor (0.25-0.60)
+	DS201GateDynamicRange        float64 // Speech crest factor used (dB)
+	DS201GateQuietSpeechEstimate float64 // speechRMS - speechCrest (dB)
+	DS201GateSpeechSeparation    float64 // Noise-to-speech gap used for aggression calc (dB)
+	DS201GateSpeechHeadroom      float64 // Gap between quiet speech and threshold (dB)
+	DS201GateThresholdUnclamped  float64 // Threshold before safety clamps (dB)
+	DS201GateClampReason         string  // "none", "noise_floor", "speech_rms"
+
 	// LA-2A Compressor - Teletronix LA-2A style optical compression
 	// The LA-2A is legendary for its gentle, program-dependent character from the T4 optical cell.
 	LA2AEnabled   bool    // Enable LA-2A compressor
