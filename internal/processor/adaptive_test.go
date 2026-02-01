@@ -28,9 +28,10 @@ func TestTuneDS201HighPass(t *testing.T) {
 		wantDisabled     bool          // expect highpass to be disabled entirely (legacy, now rarely used)
 	}{
 		// Voice brightness classification (no noise profile - base frequencies only)
+		// Thresholds: centroidNormal=2500 Hz, centroidBright=4000 Hz
 		{
 			name:             "dark voice, no noise profile",
-			centroid:         3500, // below centroidNormal (4000)
+			centroid:         2000, // below centroidNormal (2500)
 			spectralDecrease: 0.0,
 			noiseProfile:     nil,
 			wantFreqMin:      60, // highpassMinFreq
@@ -38,7 +39,7 @@ func TestTuneDS201HighPass(t *testing.T) {
 		},
 		{
 			name:             "normal voice, no noise profile",
-			centroid:         5000, // between centroidNormal (4000) and centroidBright (6000)
+			centroid:         3500, // between centroidNormal (2500) and centroidBright (4000)
 			spectralDecrease: 0.0,
 			noiseProfile:     nil,
 			wantFreqMin:      80, // highpassDefaultFreq
@@ -46,7 +47,7 @@ func TestTuneDS201HighPass(t *testing.T) {
 		},
 		{
 			name:             "bright voice, no noise profile",
-			centroid:         7000, // above centroidBright (6000)
+			centroid:         5000, // above centroidBright (4000)
 			spectralDecrease: 0.0,
 			noiseProfile:     nil,
 			wantFreqMin:      100, // highpassBrightFreq
@@ -55,42 +56,42 @@ func TestTuneDS201HighPass(t *testing.T) {
 
 		// Clean silence sample (< -70 dBFS) - no boost regardless of entropy
 		{
-			name:             "normal voice, clean silence, broadband noise",
+			name:             "bright voice, clean silence, broadband noise",
 			centroid:         5000,
 			spectralDecrease: 0.0,
 			noiseProfile:     makeNoiseProfile(-75.0, 0.8), // clean, broadband
-			wantFreqMin:      80,                           // no boost - too clean
-			wantFreqMax:      80,
+			wantFreqMin:      100,                          // no boost - too clean (bright base)
+			wantFreqMax:      100,
 		},
 
 		// Moderate noise (> -70 dBFS) with broadband character - moderate boost
 		{
-			name:             "normal voice, moderate noise, broadband",
+			name:             "bright voice, moderate noise, broadband",
 			centroid:         5000,
 			spectralDecrease: 0.0,
 			noiseProfile:     makeNoiseProfile(-65.0, 0.7), // moderate, broadband
-			wantFreqMin:      90,                           // 80 + 10 boost
-			wantFreqMax:      90,
+			wantFreqMin:      110,                          // 100 + 10 boost
+			wantFreqMax:      110,
 		},
 
 		// Noisy silence (> -55 dBFS) with broadband character - aggressive boost
 		{
-			name:             "normal voice, noisy silence, broadband",
+			name:             "bright voice, noisy silence, broadband",
 			centroid:         5000,
 			spectralDecrease: 0.0,
 			noiseProfile:     makeNoiseProfile(-50.0, 0.8), // noisy, broadband
-			wantFreqMin:      100,                          // 80 + 20 boost
-			wantFreqMax:      100,
+			wantFreqMin:      120,                          // 100 + 20 boost (capped at max)
+			wantFreqMax:      120,
 		},
 
 		// Tonal noise (low entropy) - no boost, bandreject handles it
 		{
-			name:             "normal voice, noisy silence, tonal (hum)",
+			name:             "bright voice, noisy silence, tonal (hum)",
 			centroid:         5000,
 			spectralDecrease: 0.0,
 			noiseProfile:     makeNoiseProfile(-50.0, 0.25), // noisy but tonal (below 0.30 threshold)
-			wantFreqMin:      80,                            // no boost - tonal noise
-			wantFreqMax:      80,
+			wantFreqMin:      100,                           // no boost - tonal noise (bright base)
+			wantFreqMax:      100,
 		},
 
 		// Warm voice protection (spectral decrease < -0.05, tiered at -0.10)
@@ -99,13 +100,13 @@ func TestTuneDS201HighPass(t *testing.T) {
 			centroid:         5000,
 			spectralDecrease: -0.06, // warm voice (between -0.05 and -0.10)
 			noiseProfile:     makeNoiseProfile(-50.0, 0.8),
-			wantFreqMin:      80, // would be 100, but capped at 80Hz due to warm voice
+			wantFreqMin:      80, // would be 120, but capped at 80Hz due to warm voice
 			wantFreqMax:      80,
 			wantPoles:        0, // standard slope (don't check, defaults to 2)
 		},
 		{
 			name:             "very warm voice - gentle highpass",
-			centroid:         5000,                         // normal voice base = 80Hz
+			centroid:         5000,                         // bright voice base = 100Hz
 			spectralDecrease: -0.12,                        // very warm voice (< -0.10)
 			noiseProfile:     makeNoiseProfile(-50.0, 0.8), // broadband noise
 			wantFreqMin:      60,                           // highpassVeryWarmFreq
@@ -116,7 +117,7 @@ func TestTuneDS201HighPass(t *testing.T) {
 		},
 		{
 			name:             "very warm dark voice - gentle highpass",
-			centroid:         3500,                         // dark voice base = 60Hz
+			centroid:         2000,                         // dark voice base = 60Hz
 			spectralDecrease: -0.15,                        // very warm (< -0.10)
 			noiseProfile:     makeNoiseProfile(-45.0, 0.9), // broadband noise
 			wantFreqMin:      60,                           // highpassVeryWarmFreq
@@ -128,8 +129,8 @@ func TestTuneDS201HighPass(t *testing.T) {
 
 		// Bright voice with warm spectral decrease (unusual but possible)
 		{
-			name:             "bright voice, warm characteristics - capped at 80Hz",
-			centroid:         7000,
+			name:             "very bright voice, warm characteristics - capped at 80Hz",
+			centroid:         5000,
 			spectralDecrease: -0.06, // warm despite bright centroid (between -0.05 and -0.10)
 			noiseProfile:     makeNoiseProfile(-50.0, 0.8),
 			wantFreqMin:      80, // would be 120, but capped at 80Hz due to warm voice
@@ -137,8 +138,8 @@ func TestTuneDS201HighPass(t *testing.T) {
 			wantPoles:        0, // standard slope (don't check)
 		},
 		{
-			name:             "bright voice, very warm characteristics - gentle highpass",
-			centroid:         7000,
+			name:             "very bright voice, very warm characteristics - gentle highpass",
+			centroid:         5000,
 			spectralDecrease: -0.12,                        // very warm despite bright centroid (< -0.10)
 			noiseProfile:     makeNoiseProfile(-50.0, 0.8), // broadband noise
 			wantFreqMin:      60,                           // highpassVeryWarmFreq
@@ -151,7 +152,7 @@ func TestTuneDS201HighPass(t *testing.T) {
 		// Skewness-based protection (moderate decrease but LF emphasis)
 		{
 			name:             "moderate decrease, high skewness - warm highpass",
-			centroid:         5785,                           // bright centroid
+			centroid:         5785,                           // bright centroid (> 4000)
 			spectralDecrease: -0.026,                         // moderate decrease (between -0.05 and 0)
 			spectralSkewness: 1.132,                          // LF emphasis (> 1.0)
 			noiseProfile:     makeNoiseProfile(-80.0, 0.076), // tonal noise
@@ -167,8 +168,8 @@ func TestTuneDS201HighPass(t *testing.T) {
 			spectralDecrease: -0.03,                        // moderate decrease
 			spectralSkewness: 0.8,                          // NOT LF emphasis (< 1.0)
 			noiseProfile:     makeNoiseProfile(-75.0, 0.3), // clean, tonal - no boost
-			wantFreqMin:      80,
-			wantFreqMax:      80,
+			wantFreqMin:      100,                          // bright voice (centroid 5000 > 4000)
+			wantFreqMax:      100,
 			wantPoles:        2,
 			wantDisabled:     false, // skewness < 1.0, highpass at normal settings
 		},
@@ -186,7 +187,7 @@ func TestTuneDS201HighPass(t *testing.T) {
 		},
 		{
 			name:             "thin voice, high skewness - skewness still triggers warm protection",
-			centroid:         6500,                         // > 6000 centroidBright threshold
+			centroid:         6500,                         // > 4000 centroidBright threshold
 			spectralDecrease: 0.02,                         // thin voice (> 0)
 			spectralSkewness: 1.2,                          // > 1.0 triggers warm protection regardless of decrease
 			noiseProfile:     makeNoiseProfile(-75.0, 0.3), // clean, tonal - no boost
@@ -216,7 +217,7 @@ func TestTuneDS201HighPass(t *testing.T) {
 		},
 		{
 			name:             "boundary: exactly at centroidNormal",
-			centroid:         4000, // exactly at centroidNormal threshold
+			centroid:         2500, // exactly at centroidNormal threshold
 			spectralDecrease: 0.0,
 			noiseProfile:     nil,
 			wantFreqMin:      60, // dark voice (not > centroidNormal)
@@ -224,7 +225,7 @@ func TestTuneDS201HighPass(t *testing.T) {
 		},
 		{
 			name:             "boundary: exactly at centroidBright",
-			centroid:         6000, // exactly at centroidBright threshold
+			centroid:         4000, // exactly at centroidBright threshold
 			spectralDecrease: 0.0,
 			noiseProfile:     nil,
 			wantFreqMin:      80, // normal voice (not > centroidBright)
@@ -235,16 +236,16 @@ func TestTuneDS201HighPass(t *testing.T) {
 			centroid:         5000,
 			spectralDecrease: 0.0,
 			noiseProfile:     makeNoiseProfile(-50.0, 0.30), // exactly at threshold
-			wantFreqMin:      100,                           // broadband (>= 0.30), gets boost
-			wantFreqMax:      100,
+			wantFreqMin:      120,                           // broadband (>= 0.30), gets boost (bright base 100 + 20)
+			wantFreqMax:      120,
 		},
 		{
 			name:             "boundary: exactly at silenceNoiseFloorClean",
 			centroid:         5000,
 			spectralDecrease: 0.0,
 			noiseProfile:     makeNoiseProfile(-70.0, 0.8), // exactly at clean threshold
-			wantFreqMin:      80,                           // no boost (not > -70)
-			wantFreqMax:      80,
+			wantFreqMin:      100,                          // no boost (not > -70), bright base
+			wantFreqMax:      100,
 		},
 	}
 
@@ -604,9 +605,9 @@ func TestTuneDS201LowPass(t *testing.T) {
 
 func TestTuneDeesser(t *testing.T) {
 	// Constants from adaptive.go for reference:
-	// centroidVeryBright = 7000 Hz
-	// centroidBright     = 6000 Hz
-	// rolloffNoSibilance = 6000 Hz
+	// centroidVeryBright = 6000 Hz
+	// centroidBright     = 4000 Hz
+	// rolloffNoSibilance = 4000 Hz
 	// rolloffLimited     = 8000 Hz
 	// rolloffExtensive   = 12000 Hz
 	// deessIntensityBright = 0.6
@@ -623,23 +624,23 @@ func TestTuneDeesser(t *testing.T) {
 		tolerance     float64 // acceptable tolerance for floating point
 	}{
 		// Full adaptive logic (both centroid and rolloff available)
-		// Bright voice (centroid > 7000) with extensive HF (rolloff > 12000)
+		// Very bright voice (centroid > 6000) with extensive HF (rolloff > 12000)
 		{
 			name:          "very bright voice, extensive HF",
 			centroid:      7500,
 			rolloff:       14000,
-			wantIntensity: 0.72, // 0.6 * 1.2, capped at 0.8
+			wantIntensity: 0.72, // 0.6 * 1.2 = 0.72, below max 0.8
 			tolerance:     0.01,
 		},
-		// Normal-bright voice (centroid 6000-7000) with extensive HF
+		// Bright voice (centroid 4000-6000) with extensive HF
 		{
-			name:          "normal-bright voice, extensive HF",
-			centroid:      6500,
+			name:          "bright voice, extensive HF",
+			centroid:      5000,
 			rolloff:       14000,
 			wantIntensity: 0.6, // 0.5 * 1.2 = 0.6
 			tolerance:     0.01,
 		},
-		// Dark voice (centroid < 6000) with limited HF (rolloff 6000-8000)
+		// Dark voice (centroid < 4000) with limited HF (rolloff 4000-8000)
 		// Dark voice base is 0.4, limited HF applies 0.7 factor = 0.28
 		// But 0.28 < deessIntensityMin (0.3), so it gets disabled
 		{
@@ -649,47 +650,47 @@ func TestTuneDeesser(t *testing.T) {
 			wantIntensity: 0.0, // 0.4 * 0.7 = 0.28 < 0.3 min, disabled
 			tolerance:     0.0,
 		},
-		// Normal-bright voice with limited HF - above min threshold
+		// Bright voice with limited HF - above min threshold
 		{
-			name:          "normal-bright voice, limited HF",
-			centroid:      6500,
+			name:          "bright voice, limited HF",
+			centroid:      5000,
 			rolloff:       7000,
 			wantIntensity: 0.35, // 0.5 * 0.7 = 0.35 > 0.3 min
 			tolerance:     0.01,
 		},
-		// No HF content (rolloff < 6000) - disabled regardless of centroid
+		// No HF content (rolloff < 4000) - disabled regardless of centroid
 		{
-			name:          "bright voice, no HF content",
+			name:          "very bright voice, no HF content",
 			centroid:      7500,
-			rolloff:       5000,
+			rolloff:       3500,
 			wantIntensity: 0.0, // disabled due to no sibilance expected
 			tolerance:     0.0,
 		},
 		{
-			name:          "normal voice, no HF content",
+			name:          "bright voice, no HF content",
 			centroid:      5000,
-			rolloff:       5500,
+			rolloff:       3500,
 			wantIntensity: 0.0,
 			tolerance:     0.0,
 		},
 		// Normal HF extension (8000-12000)
 		{
-			name:          "bright voice, normal HF",
+			name:          "very bright voice, normal HF",
 			centroid:      7500,
 			rolloff:       10000,
 			wantIntensity: 0.6, // base intensity, no modifier
 			tolerance:     0.01,
 		},
 		{
-			name:          "normal voice, normal HF",
-			centroid:      6500,
+			name:          "bright voice, normal HF",
+			centroid:      5000,
 			rolloff:       10000,
 			wantIntensity: 0.5,
 			tolerance:     0.01,
 		},
 		{
 			name:          "dark voice, normal HF",
-			centroid:      5000,
+			centroid:      3500,
 			rolloff:       10000,
 			wantIntensity: 0.4,
 			tolerance:     0.01,
@@ -698,7 +699,7 @@ func TestTuneDeesser(t *testing.T) {
 		// Limited HF with intensity below minimum - should disable
 		{
 			name:          "dark voice, limited HF, below min threshold",
-			centroid:      5000, // dark voice, base 0.4
+			centroid:      3500, // dark voice, base 0.4
 			rolloff:       7500, // limited HF, * 0.7 = 0.28 < 0.3 min
 			wantIntensity: 0.0,  // disabled because 0.28 < deessIntensityMin
 			tolerance:     0.0,
@@ -713,15 +714,15 @@ func TestTuneDeesser(t *testing.T) {
 			tolerance:     0.01,
 		},
 		{
-			name:          "normal-bright voice, no rolloff data",
-			centroid:      6500,
+			name:          "bright voice, no rolloff data",
+			centroid:      5000,
 			rolloff:       0,
 			wantIntensity: 0.5, // deessIntensityNormal
 			tolerance:     0.01,
 		},
 		{
 			name:          "dark voice, no rolloff data",
-			centroid:      5000,
+			centroid:      3500,
 			rolloff:       0,
 			wantIntensity: 0.4, // deessIntensityDark
 			tolerance:     0.01,
@@ -746,16 +747,16 @@ func TestTuneDeesser(t *testing.T) {
 		// Boundary conditions
 		{
 			name:          "boundary: exactly at centroidVeryBright",
-			centroid:      7000, // exactly at threshold
+			centroid:      6000, // exactly at threshold
 			rolloff:       10000,
-			wantIntensity: 0.5, // not > 7000, so uses deessIntensityNormal
+			wantIntensity: 0.5, // not > 6000, so uses deessIntensityNormal
 			tolerance:     0.01,
 		},
 		{
 			name:          "boundary: exactly at centroidBright",
-			centroid:      6000,
+			centroid:      4000,
 			rolloff:       10000,
-			wantIntensity: 0.4, // not > 6000, so uses deessIntensityDark
+			wantIntensity: 0.4, // not > 4000, so uses deessIntensityDark
 			tolerance:     0.01,
 		},
 		{
@@ -776,7 +777,7 @@ func TestTuneDeesser(t *testing.T) {
 		// Max capping
 		{
 			name:          "intensity capped at max",
-			centroid:      7500,  // bright, base 0.6
+			centroid:      7500,  // very bright, base 0.6
 			rolloff:       15000, // extensive, * 1.2 = 0.72
 			wantIntensity: 0.72,  // below max 0.8, so not capped
 			tolerance:     0.01,

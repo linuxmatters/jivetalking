@@ -43,12 +43,12 @@ const (
 	silenceEntropyTonal = 0.30 // Below: tonal noise (hum), bandreject better than highpass
 
 	// Spectral centroid thresholds (Hz) for voice brightness classification
-	centroidBright     = 6000.0 // Above: bright voice
-	centroidNormal     = 4000.0 // Above: normal voice, below: dark voice
-	centroidVeryBright = 7000.0 // Threshold for de-esser intensity
+	centroidBright     = 4000.0 // Above: bright voice
+	centroidNormal     = 2500.0 // Above: normal voice, below: dark voice
+	centroidVeryBright = 6000.0 // Threshold for de-esser intensity
 
 	// Spectral rolloff thresholds (Hz) for HF content classification
-	rolloffNoSibilance = 6000.0  // Below: no sibilance expected
+	rolloffNoSibilance = 4000.0  // Below: no sibilance expected
 	rolloffLimited     = 8000.0  // Below: limited HF extension
 	rolloffExtensive   = 12000.0 // Above: extensive HF content
 
