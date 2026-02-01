@@ -59,7 +59,7 @@ The DS201 requires manual adjustment. We measure your audio in Pass 1 and tune e
 |-----------|------------------|-------|
 | **Threshold** | Noise floor + headroom for severity | -50dB to -25dB |
 | **Ratio** | Loudness range (expressive → gentle) | 1.5:1–2.5:1 |
-| **Attack** | Transient sharpness indicators | 0.5–17ms |
+| **Attack** | Transient sharpness indicators | 10–17ms |
 | **Release** | Spectral flux + noise character | 150–500ms |
 | **Range** | Silence entropy (tonal → gentle) | -12dB to -36dB |
 | **Knee** | Spectral crest (dynamic → soft) | 2–5dB |
@@ -71,8 +71,7 @@ The DS201's 10µs attack is legendary for preserving the crack of a snare or the
 
 | Transient Type | Attack Time | Detection |
 |----------------|-------------|-----------|
-| Extreme plosives | 0.5ms | MaxDifference >40% or SpectralCrest >40dB |
-| Sharp consonants | 7ms | MaxDifference >25% |
+| Sharp consonants | 10ms | MaxDifference >25% or SpectralCrest >30dB |
 | Normal speech | 12ms | Moderate transients |
 | Soft delivery | 17ms | MaxDifference <10% |
 
@@ -89,7 +88,7 @@ The DS201's dedicated Hold parameter keeps the gate open briefly after signal dr
 | Feature | DS201 | Jivetalking | Rationale |
 |---------|-------|-------------|-----------|
 | Frequency filtering | Side-chain | Audio path | FFmpeg limitation; same result |
-| Ultra-fast attack | 10µs | 500µs | Sufficient for speech transients |
+| Ultra-fast attack | 10µs | 10ms | Prevents click artifacts; speech transients are gentler |
 | Hold parameter | Native | Release compensation | FFmpeg limitation; effective workaround |
 | Hard gate | Available | Never used | Unnatural for speech |
 | Manual tuning | Required | Automatic | Zero-knowledge operation |

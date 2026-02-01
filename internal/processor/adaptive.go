@@ -118,8 +118,8 @@ const (
 	ds201GateMaxDiffMod       = 10.0 // % - moderate transients
 	ds201GateMaxDiffExtreme   = 40.0 // % - threshold for ultra-fast attack
 	ds201GateCrestExtreme     = 40.0 // dB - threshold for ultra-fast attack
-	ds201GateAttackUltraFast  = 0.5  // ms - 500µs for extreme transients
-	ds201GateAttackFast       = 7.0  // ms - for sharp transients
+	ds201GateAttackUltraFast  = 10.0 // ms - minimum attack to avoid click artifacts
+	ds201GateAttackFast       = 10.0 // ms - for sharp transients (minimum to avoid clicks)
 	ds201GateAttackMod        = 12.0 // ms - standard speech
 	ds201GateAttackSlow       = 17.0 // ms - soft onsets
 	ds201GateFluxDynamicThres = 0.05 // SpectralFlux threshold for dynamic content
@@ -1051,15 +1051,15 @@ func calculateDS201GateRatio(lra float64) float64 {
 }
 
 // calculateDS201GateAttack determines attack time based on transient characteristics.
-// Fast transients need fast attack to avoid clipping word onsets.
-// DS201-inspired: supports sub-millisecond attack (0.5ms+) for transient preservation.
+// Fast transients need fast attack to preserve word onsets, but not so fast as to click.
+// Minimum 10ms prevents audible gain discontinuities when gate opens.
 // MaxDifference is expressed as a fraction (0.0-1.0), convert to percentage.
 func calculateDS201GateAttack(maxDiff, spectralFlux, spectralCrest float64) float64 {
 	// MaxDifference is 0.0-1.0 fraction, convert to percentage for comparison
 	maxDiffPercent := maxDiff * 100.0
 
-	// DS201-inspired attack tiers with ultra-fast capability
-	// Sub-millisecond attack preserves hard transients without click artifacts
+	// Attack tiers adapted for speech (minimum 10ms to prevent click artifacts)
+	// Faster attacks would cause audible gain discontinuities when gate opens
 	var baseAttack float64
 	switch {
 	case maxDiffPercent > ds201GateMaxDiffExtreme || spectralCrest > ds201GateCrestExtreme:
