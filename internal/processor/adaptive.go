@@ -26,7 +26,7 @@ const (
 	ds201HPVeryWarmMix   = 0.8  // Wet/dry mix for very warm voices (80% filtered)
 
 	// Spectral decrease thresholds for LF voice content protection
-	spectralDecreaseVeryWarm = -0.08 // Below: very warm voice, needs maximum LF protection
+	spectralDecreaseVeryWarm = -0.10 // Below: very warm voice, needs maximum LF protection
 	spectralDecreaseWarm     = -0.05 // Below: warm voice with significant LF body
 	// Above 0: thin voice, highpass safe
 
@@ -40,7 +40,7 @@ const (
 	silenceNoiseFloorNoisy = -55.0 // dBFS - noisy, may need boost
 
 	// Silence entropy threshold for noise character
-	silenceEntropyTonal = 0.5 // Below: tonal noise (hum), bandreject better than highpass
+	silenceEntropyTonal = 0.30 // Below: tonal noise (hum), bandreject better than highpass
 
 	// Spectral centroid thresholds (Hz) for voice brightness classification
 	centroidBright     = 6000.0 // Above: bright voice
@@ -243,7 +243,7 @@ const (
 	la2aKneeNormal     = 4.0    // Standard LA-2A approximation
 	la2aKneeBright     = 3.5    // For bright voices (slightly firmer)
 	la2aCentroidDark   = 4000.0 // Hz - below: dark voice
-	la2aCentroidBright = 6000.0 // Hz - above: bright voice
+	la2aCentroidBright = 4000.0 // Hz - above: bright voice
 
 	// LA-2A Skewness adaptation (bass-concentrated voices get extra warmth)
 	// Negative skewness = energy concentrated in bass (warm voice)
