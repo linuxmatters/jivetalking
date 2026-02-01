@@ -99,6 +99,14 @@ Filter parameters adapt based on Pass 1 measurements (see `adaptive.go`):
 
 **Breath reduction:** Enabled by default (`--breath-reduction` / `--no-breath-reduction`). Requires `SpeechProfile` to calculate quiet speech level for adaptive gate threshold.
 
+## Spectral metrics reference
+
+When working on audio analysis code (especially `internal/processor/analyzer.go`):
+
+- Consult `docs/Spectral-Metrics-Reference.md` for target ranges and quality thresholds
+- Align threshold values and scoring constants with the documented ranges
+- Cite the reference document when introducing new audio metric thresholds
+
 ## Release workflow
 
 - **Create release:** `just release X.Y.Z` (validates format, checks uncommitted changes, creates annotated tag)
