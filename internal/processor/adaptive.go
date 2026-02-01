@@ -1320,6 +1320,9 @@ func tuneLA2ARelease(config *FilterChainConfig, measurements *AudioMeasurements)
 // We use spectral kurtosis and dynamic range to approximate this:
 // - Peaked/tonal content (high kurtosis) = gentler ratio, preserve character
 // - Flat/noise-like content (low kurtosis) = firmer ratio, more levelling
+//
+// Kurtosis reference: Gaussian distribution has kurtosis=3.
+// Speech typically ranges 5-10 (leptokurtic, clear harmonics).
 func tuneLA2ARatio(config *FilterChainConfig, measurements *AudioMeasurements) {
 	// Prefer speech-specific kurtosis for harmonic structure
 	kurtosis := measurements.SpectralKurtosis

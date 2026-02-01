@@ -110,7 +110,7 @@ type SpeechCandidateMetrics struct {
 	// Amplitude metrics
 	RMSLevel    float64 `json:"rms_level"`    // dBFS, average level (higher = louder speech)
 	PeakLevel   float64 `json:"peak_level"`   // dBFS, max peak level across region
-	CrestFactor float64 `json:"crest_factor"` // Peak - RMS in dB (speech typically 12-20 dB)
+	CrestFactor float64 `json:"crest_factor"` // Peak - RMS in dB (speech typically 9-14 dB, optimal range)
 
 	// Spectral metrics (averaged across region)
 	SpectralMean     float64 `json:"spectral_mean"`     // Average magnitude
@@ -534,7 +534,7 @@ const (
 
 	// speechEntropyMax is the maximum entropy for speech (structured signal).
 	// Pure noise approaches 1.0; speech is typically 0.3-0.7.
-	speechEntropyMax = 0.85
+	speechEntropyMax = 0.70
 
 	// Golden speech region refinement constants
 	// After selecting the best speech candidate, refine to a representative sub-window
@@ -840,8 +840,9 @@ func scoreSpeechIntervalWindow(intervals []IntervalSample) float64 {
 	kurtosisVariance := kurtosisVarianceSum / n
 
 	// Kurtosis score (0.20): higher kurtosis = clearer harmonics
-	// Typical speech kurtosis ranges 2-10; score peaks around 6
-	kurtosisScore := clampFloat(avgKurtosis/6.0, 0.0, 1.0)
+	// Typical speech kurtosis ranges 5-10; score peaks around 7.5 (mid-point)
+	// Reference: Gaussian kurtosis=3; speech harmonic structure produces 5-10
+	kurtosisScore := clampFloat(avgKurtosis/7.5, 0.0, 1.0)
 
 	// Flatness score (0.20): lower flatness = more tonal = better speech
 	// Flatness 0 = pure tone, 1 = white noise; speech typically 0.1-0.4
