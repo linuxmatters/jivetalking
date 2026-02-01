@@ -89,6 +89,9 @@ type SilenceCandidateMetrics struct {
 	// Legacy field for compatibility (same as SpectralEntropy)
 	Entropy float64 // Deprecated: use SpectralEntropy instead
 
+	// Warning flags (populated during scoring)
+	TransientWarning string `json:"transient_warning,omitempty"` // Warning if danger zone signature detected
+
 	// Scoring (computed after measurement)
 	Score float64 // Composite score for candidate ranking
 }
@@ -2786,6 +2789,16 @@ const (
 	crosstalkKurtosisThreshold    = 10.0 // Above this + voice centroid = likely crosstalk
 	crosstalkCrestFactorThreshold = 15.0 // Above this + voice centroid = likely crosstalk
 
+	// Crest factor penalty thresholds for silence candidates.
+	// Context: These apply to SILENCE CANDIDATES (RMS < -70 dBFS).
+	// In silence regions, even modest transients produce extreme crest factors:
+	//   Peak -30 dBFS, RMS -74 dBFS → Crest 44 dB (expected, not pathological)
+	crestFactorSoftThreshold = 30.0  // dB - start mild penalty
+	crestFactorHardThreshold = 35.0  // dB - require peak check
+	peakDangerZoneLow        = -40.0 // dBFS
+	peakDangerZoneHigh       = -25.0 // dBFS
+	rmsSilenceThreshold      = -70.0 // dBFS
+
 	// Scoring weights (must sum to 1.0)
 	amplitudeScoreWeight = 0.4
 	spectralScoreWeight  = 0.5
@@ -2975,7 +2988,20 @@ func scoreSilenceCandidate(m *SilenceCandidateMetrics) float64 {
 	// At t=0: multiplier = 1.0, at t=90s+: multiplier = 0.9
 	temporalMultiplier := applyTemporalBias(m.Region.Start)
 
-	return baseScore * temporalMultiplier
+	score := baseScore * temporalMultiplier
+
+	// Apply crest factor penalty for transient contamination
+	score = applyCrestFactorPenalty(score, m.CrestFactor, m.PeakLevel, m.RMSLevel)
+
+	// Generate warning when danger zone signature is detected
+	if m.CrestFactor > crestFactorHardThreshold && m.PeakLevel > peakDangerZoneLow && m.PeakLevel < peakDangerZoneHigh {
+		m.TransientWarning = fmt.Sprintf(
+			"elevated crest factor (%.1f dB) with peak at %.1f dBFS - noise profile may include transient content",
+			m.CrestFactor, m.PeakLevel,
+		)
+	}
+
+	return score
 }
 
 // isLikelyCrosstalk detects if a silence candidate is likely crosstalk (leaked voice).
@@ -3062,6 +3088,28 @@ func applyTemporalBias(start time.Duration) float64 {
 	// Linear bias: 0s → 1.0, 90s+ → 0.9
 	bias := clampFloat(startSecs/temporalWindowSecs, 0.0, 1.0) * temporalBiasMax
 	return 1.0 - bias
+}
+
+// applyCrestFactorPenalty applies a two-stage penalty for transient contamination.
+// Stage 1: Soft penalty for elevated crest factor (maintains ranking stability).
+// Stage 2: Hard penalty when the "danger zone" signature is detected.
+// See docs/SILENCE-DETECTION-PLAN.md for empirical derivation.
+func applyCrestFactorPenalty(score, crestFactor, peak, rms float64) float64 {
+	// Stage 1: Soft penalty for elevated crest factor
+	if crestFactor > crestFactorSoftThreshold {
+		softPenalty := math.Min(0.2, (crestFactor-crestFactorSoftThreshold)/50)
+		score *= (1 - softPenalty)
+	}
+
+	// Stage 2: Hard penalty for danger zone signature
+	// Catches transients loud enough to mask noise but not obviously speech/clipping
+	if crestFactor > crestFactorHardThreshold &&
+		peak > peakDangerZoneLow && peak < peakDangerZoneHigh &&
+		rms < rmsSilenceThreshold {
+		score *= 0.5 // 50% penalty
+	}
+
+	return score
 }
 
 // calculateDurationScore uses a plateau-with-dropoff curve.
