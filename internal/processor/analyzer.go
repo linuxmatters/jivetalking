@@ -133,6 +133,9 @@ type SpeechCandidateMetrics struct {
 	TruePeak      float64 `json:"true_peak"`       // dBTP, max true peak across region
 	SamplePeak    float64 `json:"sample_peak"`     // dBFS, max sample peak across region
 
+	// Stability metrics (populated during measurement)
+	VoicingDensity float64 `json:"voicing_density,omitempty"` // Proportion of voiced intervals (0-1)
+
 	// Scoring
 	Score float64 `json:"score"` // Composite score for candidate ranking
 
@@ -2579,6 +2582,38 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 	// Store all evaluated candidates for reporting/debugging
 	measurements.SilenceCandidates = silenceResult.Candidates
 
+	// Extract noise profile from best silence region BEFORE speech region selection.
+	// This allows the SNR margin check in findBestSpeechRegion to penalise candidates
+	// that are too close to the noise floor.
+	var noiseProfile *NoiseProfile
+	if silenceResult.BestRegion != nil {
+		// Refine to golden sub-region: find cleanest 10s window within the candidate.
+		// This isolates optimal noise profile from long candidates that may span
+		// both pre-intentional (noisier) and intentional (cleaner) silence.
+		originalRegion := silenceResult.BestRegion
+		refinedRegion := refineToGoldenSubregion(originalRegion, intervals)
+		wasRefined := refinedRegion.Start != originalRegion.Start || refinedRegion.Duration != originalRegion.Duration
+
+		// Extract noise profile from interval data (no file re-read)
+		if profile := extractNoiseProfileFromIntervals(refinedRegion, intervals); profile != nil {
+			noiseProfile = profile
+			measurements.NoiseProfile = profile
+
+			// Store refinement info for logging/debugging
+			if wasRefined {
+				profile.WasRefined = true
+				profile.OriginalStart = originalRegion.Start
+				profile.OriginalDuration = originalRegion.Duration
+			}
+
+			// If we got a noise profile measurement, use it as the primary noise floor
+			// This is more accurate than the overall RMS_trough because it's from pure silence
+			if profile.MeasuredNoiseFloor != 0 && !math.IsInf(profile.MeasuredNoiseFloor, -1) {
+				measurements.NoiseFloor = profile.MeasuredNoiseFloor
+			}
+		}
+	}
+
 	// Detect speech candidates (must come after elected silence)
 	var speechSearchStart time.Duration
 	if silenceResult.BestRegion != nil {
@@ -2593,8 +2628,8 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 
 	measurements.SpeechRegions = findSpeechCandidatesFromIntervals(intervals, speechSearchStart)
 
-	// Select best speech region
-	speechResult := findBestSpeechRegion(measurements.SpeechRegions, intervals)
+	// Select best speech region (passing noiseProfile for SNR margin checking)
+	speechResult := findBestSpeechRegion(measurements.SpeechRegions, intervals, noiseProfile)
 	measurements.SpeechCandidates = speechResult.Candidates
 
 	if speechResult.BestRegion != nil {
@@ -2603,33 +2638,6 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 			if speechResult.Candidates[i].Region.Start == speechResult.BestRegion.Start {
 				measurements.SpeechProfile = &speechResult.Candidates[i]
 				break
-			}
-		}
-	}
-
-	if silenceResult.BestRegion != nil {
-		// Refine to golden sub-region: find cleanest 10s window within the candidate.
-		// This isolates optimal noise profile from long candidates that may span
-		// both pre-intentional (noisier) and intentional (cleaner) silence.
-		originalRegion := silenceResult.BestRegion
-		refinedRegion := refineToGoldenSubregion(originalRegion, intervals)
-		wasRefined := refinedRegion.Start != originalRegion.Start || refinedRegion.Duration != originalRegion.Duration
-
-		// Extract noise profile from interval data (no file re-read)
-		if profile := extractNoiseProfileFromIntervals(refinedRegion, intervals); profile != nil {
-			measurements.NoiseProfile = profile
-
-			// Store refinement info for logging/debugging
-			if wasRefined {
-				profile.WasRefined = true
-				profile.OriginalStart = originalRegion.Start
-				profile.OriginalDuration = originalRegion.Duration
-			}
-
-			// If we got a noise profile measurement, use it as the primary noise floor
-			// This is more accurate than the overall RMS_trough because it's from pure silence
-			if profile.MeasuredNoiseFloor != 0 && !math.IsInf(profile.MeasuredNoiseFloor, -1) {
-				measurements.NoiseFloor = profile.MeasuredNoiseFloor
 			}
 		}
 	}
@@ -3300,6 +3308,15 @@ func measureSpeechCandidateFromIntervals(region SpeechRegion, intervals []Interv
 	n := float64(len(regionIntervals))
 	avgRMS := rmsSum / n
 
+	// Calculate voicing density for stability assessment
+	voicedCount := 0
+	for _, interval := range regionIntervals {
+		if interval.SpectralKurtosis > voicedKurtosisThreshold {
+			voicedCount++
+		}
+	}
+	voicingDensity := float64(voicedCount) / n
+
 	return &SpeechCandidateMetrics{
 		Region:      region,
 		RMSLevel:    avgRMS,
@@ -3324,6 +3341,9 @@ func measureSpeechCandidateFromIntervals(region SpeechRegion, intervals []Interv
 		ShortTermLUFS: shortTermSum / n,
 		TruePeak:      truePeakMax,
 		SamplePeak:    samplePeakMax,
+
+		// Stability metrics
+		VoicingDensity: voicingDensity,
 	}
 }
 
@@ -3338,7 +3358,9 @@ type findBestSpeechRegionResult struct {
 // Unlike silence (where earlier is better), speech benefits from longer samples.
 // For long candidates (>60s), refines to the best 60s sub-region to avoid
 // contaminating spectral metrics with pauses.
-func findBestSpeechRegion(regions []SpeechRegion, intervals []IntervalSample) *findBestSpeechRegionResult {
+// The noiseProfile parameter enables SNR margin checking to penalise candidates
+// too close to the noise floor (where spectral metrics would be unreliable).
+func findBestSpeechRegion(regions []SpeechRegion, intervals []IntervalSample, noiseProfile *NoiseProfile) *findBestSpeechRegionResult {
 	result := &findBestSpeechRegionResult{}
 
 	if len(regions) == 0 {
@@ -3360,6 +3382,24 @@ func findBestSpeechRegion(regions []SpeechRegion, intervals []IntervalSample) *f
 		// Score the candidate
 		score := scoreSpeechCandidate(metrics)
 		metrics.Score = score
+
+		// SNR margin check: penalise candidates too close to noise floor.
+		// These will show dramatic spectral shifts after denoising because
+		// the metrics are measuring noise contribution rather than speech.
+		// Both RMSLevel and MeasuredNoiseFloor are in dBFS.
+		if noiseProfile != nil {
+			snrMargin := metrics.RMSLevel - noiseProfile.MeasuredNoiseFloor
+			if snrMargin < minSNRMargin {
+				debugLog("Speech candidate at %.1fs has low SNR margin: %.1f dB < %.1f dB minimum",
+					candidate.Start.Seconds(), snrMargin, minSNRMargin)
+				// Apply penalty factor rather than rejecting outright
+				// This allows selection if no better candidates exist
+				snrPenalty := snrMargin / minSNRMargin // 0.0 to 1.0
+				metrics.Score *= clampFloat(snrPenalty, 0.1, 1.0)
+			}
+		} else {
+			debugLog("SNR margin check skipped: no noise profile available")
+		}
 
 		// Store for reporting
 		result.Candidates = append(result.Candidates, *metrics)
@@ -3419,7 +3459,6 @@ func scoreSpeechCandidate(m *SpeechCandidateMetrics) float64 {
 	}
 
 	// Amplitude score: louder speech = better sample
-	// Range: -30 dBFS (worst) to -12 dBFS (best)
 	ampScore := 0.0
 	if m.RMSLevel > -30.0 {
 		ampScore = clampFloat((m.RMSLevel-(-30.0))/18.0, 0.0, 1.0)
@@ -3431,19 +3470,38 @@ func scoreSpeechCandidate(m *SpeechCandidateMetrics) float64 {
 		centroidScore = 1.0
 	}
 
-	// Crest factor score: typical speech crest (12-20 dB) = good
+	// Crest factor score: typical speech crest (9-14 dB optimal) = good
+	// Reference: Spectral-Metrics-Reference.md shows spoken word optimal is 9-14 dB
 	crestScore := 0.0
-	if m.CrestFactor >= 10.0 && m.CrestFactor <= 25.0 {
-		// Peak score at 15 dB, decay towards edges
-		distFromIdeal := math.Abs(m.CrestFactor - 15.0)
-		crestScore = clampFloat(1.0-(distFromIdeal/10.0), 0.0, 1.0)
+	if m.CrestFactor >= crestFactorMin && m.CrestFactor <= crestFactorMax {
+		distFromIdeal := math.Abs(m.CrestFactor - crestFactorIdeal)
+		maxDist := max(crestFactorIdeal-crestFactorMin, crestFactorMax-crestFactorIdeal)
+		crestScore = clampFloat(1.0-(distFromIdeal/maxDist), 0.0, 1.0)
 	}
 
 	// Duration score: longer = better (up to 60s, then plateau)
 	durScore := clampFloat(m.Region.Duration.Seconds()/60.0, 0.0, 1.0)
 
-	// Weighted combination
-	return ampScore*0.3 + centroidScore*0.3 + crestScore*0.2 + durScore*0.2
+	// Voicing density score: prefer high voiced content proportion
+	// Uses shared helper function for consistency with scoreSpeechIntervalWindow
+	voicingScore := calculateVoicingScore(m.VoicingDensity)
+
+	// Rolloff score: prefer moderate rolloff for processing stability
+	// Uses shared helper function for consistency with scoreSpeechIntervalWindow
+	rolloffScore := calculateRolloffScore(m.SpectralRolloff)
+
+	// Flux score: prefer low flux for processing stability
+	// Uses shared helper function for consistency with scoreSpeechIntervalWindow
+	fluxScore := calculateFluxScore(m.SpectralFlux)
+
+	// Weighted combination using named constants
+	return ampScore*candidateWeightAmplitude +
+		centroidScore*candidateWeightCentroid +
+		crestScore*candidateWeightCrest +
+		durScore*candidateWeightDuration +
+		voicingScore*candidateWeightVoicing +
+		rolloffScore*candidateWeightRolloff +
+		fluxScore*candidateWeightFlux
 }
 
 // MeasureOutputSilenceRegion analyses the same silence region in the output file
