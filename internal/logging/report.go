@@ -2212,6 +2212,9 @@ func writeDiagnosticSpeech(f *os.File, measurements *processor.AudioMeasurements
 				fmt.Fprintf(f, "      Skewness:      %.2f\n", c.SpectralSkewness)
 				fmt.Fprintf(f, "      Flux:          %.4f\n", c.SpectralFlux)
 				fmt.Fprintf(f, "      Slope:         %.2e\n", c.SpectralSlope)
+				if c.VoicingDensity > 0 {
+					fmt.Fprintf(f, "    Voicing Density: %.1f%%\n", c.VoicingDensity*100)
+				}
 				fmt.Fprintf(f, "    Loudness:\n")
 				fmt.Fprintf(f, "      Momentary:     %.1f LUFS\n", c.MomentaryLUFS)
 				fmt.Fprintf(f, "      Short-term:    %.1f LUFS\n", c.ShortTermLUFS)

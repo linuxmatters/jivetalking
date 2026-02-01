@@ -780,7 +780,7 @@ func TestFindBestSpeechRegion(t *testing.T) {
 			{Start: 95 * time.Second, End: 100 * time.Second, Duration: 5 * time.Second},
 		}
 
-		result := findBestSpeechRegion(regions, intervals)
+		result := findBestSpeechRegion(regions, intervals, nil)
 
 		if result.BestRegion == nil {
 			t.Fatal("expected a best region to be selected")
@@ -794,7 +794,7 @@ func TestFindBestSpeechRegion(t *testing.T) {
 	t.Run("returns nil for empty regions", func(t *testing.T) {
 		intervals := makeSpeechTestIntervals(0, 200, -18.0, 1500.0, 0.5)
 
-		result := findBestSpeechRegion([]SpeechRegion{}, intervals)
+		result := findBestSpeechRegion([]SpeechRegion{}, intervals, nil)
 
 		if result.BestRegion != nil {
 			t.Error("expected nil BestRegion for empty input")
@@ -809,7 +809,7 @@ func TestFindBestSpeechRegion(t *testing.T) {
 			{Start: 40 * time.Second, End: 80 * time.Second, Duration: 40 * time.Second},
 		}
 
-		result := findBestSpeechRegion(regions, intervals)
+		result := findBestSpeechRegion(regions, intervals, nil)
 
 		if len(result.Candidates) != 2 {
 			t.Errorf("expected 2 candidates stored, got %d", len(result.Candidates))
@@ -829,8 +829,11 @@ func TestScoreSpeechCandidate(t *testing.T) {
 			metrics: &SpeechCandidateMetrics{
 				Region:           SpeechRegion{Duration: 60 * time.Second},
 				RMSLevel:         -15.0,
-				CrestFactor:      15.0, // Ideal
+				CrestFactor:      12.0, // Ideal (crestFactorIdeal)
 				SpectralCentroid: 1500.0,
+				VoicingDensity:   0.75,   // High voiced content (above 0.6 threshold)
+				SpectralRolloff:  6000.0, // Ideal range (4000-8000 Hz)
+				SpectralFlux:     0.003,  // Below stable threshold (0.004)
 			},
 			wantMin: 0.8,
 			wantMax: 1.0,
@@ -840,22 +843,28 @@ func TestScoreSpeechCandidate(t *testing.T) {
 			metrics: &SpeechCandidateMetrics{
 				Region:           SpeechRegion{Duration: 30 * time.Second},
 				RMSLevel:         -28.0,
-				CrestFactor:      15.0,
+				CrestFactor:      12.0, // Ideal
 				SpectralCentroid: 1500.0,
+				VoicingDensity:   0.75,   // High voiced content
+				SpectralRolloff:  6000.0, // Ideal range
+				SpectralFlux:     0.003,  // Low flux
 			},
 			wantMin: 0.3,
-			wantMax: 0.7,
+			wantMax: 0.8,
 		},
 		{
 			name: "wrong centroid",
 			metrics: &SpeechCandidateMetrics{
 				Region:           SpeechRegion{Duration: 60 * time.Second},
 				RMSLevel:         -15.0,
-				CrestFactor:      15.0,
+				CrestFactor:      12.0,   // Ideal
 				SpectralCentroid: 8000.0, // Outside voice range
+				VoicingDensity:   0.75,   // High voiced content
+				SpectralRolloff:  6000.0, // Ideal range
+				SpectralFlux:     0.003,  // Low flux
 			},
-			wantMin: 0.4,
-			wantMax: 0.7,
+			wantMin: 0.6,
+			wantMax: 0.9,
 		},
 		{
 			name:    "nil metrics",
@@ -1153,7 +1162,7 @@ func TestFindBestSpeechRegion_WithRefinement(t *testing.T) {
 			return append(first, second...)
 		}()
 
-		result := findBestSpeechRegion(regions, intervals)
+		result := findBestSpeechRegion(regions, intervals, nil)
 
 		if result.BestRegion == nil {
 			t.Fatal("expected a best region to be selected")
@@ -1201,7 +1210,7 @@ func TestFindBestSpeechRegion_WithRefinement(t *testing.T) {
 		// Create intervals with good speech characteristics
 		intervals := makeSpeechIntervalsScorable(0, 180, 6.0, 0.1, 2000.0, -15.0)
 
-		result := findBestSpeechRegion(regions, intervals)
+		result := findBestSpeechRegion(regions, intervals, nil)
 
 		if result.BestRegion == nil {
 			t.Fatal("expected a best region to be selected")
@@ -1237,7 +1246,7 @@ func TestFindBestSpeechRegion_WithRefinement(t *testing.T) {
 			return append(append(poor1, excellent...), poor2...)
 		}()
 
-		result := findBestSpeechRegion(regions, intervals)
+		result := findBestSpeechRegion(regions, intervals, nil)
 
 		if result.BestRegion == nil {
 			t.Fatal("expected a best region to be selected")
@@ -1251,6 +1260,114 @@ func TestFindBestSpeechRegion_WithRefinement(t *testing.T) {
 		// Refined duration should be 60s
 		if result.BestRegion.Duration != 60*time.Second {
 			t.Errorf("Refined Duration = %v, want 60s", result.BestRegion.Duration)
+		}
+	})
+}
+
+func TestFindBestSpeechRegion_SNRMarginCheck(t *testing.T) {
+	t.Run("penalises low SNR margin candidates", func(t *testing.T) {
+		// Create two speech regions with the same quality
+		regions := []SpeechRegion{
+			{Start: 0, End: 30 * time.Second, Duration: 30 * time.Second},
+			{Start: 35 * time.Second, End: 65 * time.Second, Duration: 30 * time.Second},
+		}
+
+		// Create intervals with identical quality for both regions
+		// Both have RMS level at -35 dBFS
+		intervals := makeSpeechTestIntervals(0, 260, -35.0, 1500.0, 0.5)
+
+		// Create noise profile with noise floor at -55 dBFS
+		// SNR margin = -35 - (-55) = 20 dB = exactly minSNRMargin
+		noiseProfileGood := &NoiseProfile{
+			MeasuredNoiseFloor: -55.0, // 20 dB margin - passes
+		}
+
+		// Run with good SNR margin
+		resultGood := findBestSpeechRegion(regions, intervals, noiseProfileGood)
+		if resultGood.BestRegion == nil {
+			t.Fatal("expected a best region to be selected with good SNR")
+		}
+
+		// Create noise profile with noise floor at -45 dBFS
+		// SNR margin = -35 - (-45) = 10 dB < 20 dB minSNRMargin
+		noiseProfileBad := &NoiseProfile{
+			MeasuredNoiseFloor: -45.0, // 10 dB margin - should be penalised
+		}
+
+		// Run with poor SNR margin
+		resultBad := findBestSpeechRegion(regions, intervals, noiseProfileBad)
+		if resultBad.BestRegion == nil {
+			t.Fatal("expected a best region to be selected even with poor SNR")
+		}
+
+		// Find the candidate scores
+		var goodScore, badScore float64
+		for _, c := range resultGood.Candidates {
+			if c.Region.Start == 0 {
+				goodScore = c.Score
+				break
+			}
+		}
+		for _, c := range resultBad.Candidates {
+			if c.Region.Start == 0 {
+				badScore = c.Score
+				break
+			}
+		}
+
+		// The bad SNR score should be lower than the good SNR score
+		if badScore >= goodScore {
+			t.Errorf("expected penalised score %.3f < good score %.3f", badScore, goodScore)
+		}
+
+		// The penalty should be proportional: 10/20 = 0.5
+		// But minimum penalty is 0.1, so score should be between 0.1 and 1.0 times original
+		expectedPenalty := 10.0 / 20.0 // 0.5
+		expectedBadScore := goodScore * expectedPenalty
+		tolerance := 0.01
+		if badScore < expectedBadScore-tolerance || badScore > expectedBadScore+tolerance {
+			t.Errorf("penalised score = %.3f, want ~%.3f (50%% of %.3f)", badScore, expectedBadScore, goodScore)
+		}
+	})
+
+	t.Run("no penalty when noiseProfile is nil", func(t *testing.T) {
+		regions := []SpeechRegion{
+			{Start: 0, End: 30 * time.Second, Duration: 30 * time.Second},
+		}
+
+		// Create intervals with low RMS level
+		intervals := makeSpeechTestIntervals(0, 120, -35.0, 1500.0, 0.5)
+
+		// Run without noise profile
+		resultNoProfile := findBestSpeechRegion(regions, intervals, nil)
+		if resultNoProfile.BestRegion == nil {
+			t.Fatal("expected a best region to be selected without noise profile")
+		}
+
+		// Create a "good" noise profile for comparison
+		noiseProfileGood := &NoiseProfile{
+			MeasuredNoiseFloor: -55.0, // 20 dB margin - passes
+		}
+		resultWithProfile := findBestSpeechRegion(regions, intervals, noiseProfileGood)
+
+		// Scores should be equal when nil (no penalty applied)
+		var scoreNoProfile, scoreWithProfile float64
+		for _, c := range resultNoProfile.Candidates {
+			if c.Region.Start == 0 {
+				scoreNoProfile = c.Score
+				break
+			}
+		}
+		for _, c := range resultWithProfile.Candidates {
+			if c.Region.Start == 0 {
+				scoreWithProfile = c.Score
+				break
+			}
+		}
+
+		if scoreNoProfile != scoreWithProfile {
+			t.Errorf("scores should be equal: nil profile = %.3f, good profile = %.3f",
+				scoreNoProfile, scoreWithProfile)
 		}
 	})
 }
