@@ -499,8 +499,8 @@ func formatFilter(f *os.File, filterID processor.FilterID, cfg *processor.Filter
 		formatLA2ACompressorFilter(f, cfg, m, prefix)
 	case processor.FilterDeesser:
 		formatDeesserFilter(f, cfg, m, prefix)
-	case processor.FilterUREI1176:
-		formatUREI1176Filter(f, cfg, m, prefix)
+	case processor.FilterVolumax:
+		formatVolumaxFilter(f, cfg, m, prefix)
 	default:
 		fmt.Fprintf(f, "%s%s: (unknown filter)\n", prefix, filterID)
 	}
@@ -868,33 +868,33 @@ func formatDeesserFilter(f *os.File, cfg *processor.FilterChainConfig, m *proces
 	}
 }
 
-// formatUREI1176Filter outputs UREI 1176-inspired limiter filter details with rationale
-func formatUREI1176Filter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
-	if !cfg.UREI1176Enabled {
-		fmt.Fprintf(f, "%sUREI 1176 limiter: DISABLED\n", prefix)
+// formatVolumaxFilter outputs CBS Volumax-inspired limiter filter details with rationale
+func formatVolumaxFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
+	if !cfg.VolumaxEnabled {
+		fmt.Fprintf(f, "%sCBS Volumax limiter: DISABLED\n", prefix)
 		return
 	}
 
 	// Header with ceiling
-	fmt.Fprintf(f, "%sUREI 1176 limiter: ceiling %.1f dBTP\n", prefix, cfg.UREI1176Ceiling)
+	fmt.Fprintf(f, "%sCBS Volumax limiter: ceiling %.1f dBTP\n", prefix, cfg.VolumaxCeiling)
 
 	// Timing with classification
-	attackClass := classifyUREI1176Attack(cfg.UREI1176Attack)
-	releaseClass := classifyUREI1176Release(cfg.UREI1176Release)
+	attackClass := classifyVolumaxAttack(cfg.VolumaxAttack)
+	releaseClass := classifyVolumaxRelease(cfg.VolumaxRelease)
 	fmt.Fprintf(f, "        Timing: attack %.1fms (%s), release %.0fms (%s)\n",
-		cfg.UREI1176Attack, attackClass, cfg.UREI1176Release, releaseClass)
+		cfg.VolumaxAttack, attackClass, cfg.VolumaxRelease, releaseClass)
 
 	// ASC mode
-	if cfg.UREI1176ASC {
-		fmt.Fprintf(f, "        ASC: enabled (level %.2f) — program-dependent release\n", cfg.UREI1176ASCLevel)
+	if cfg.VolumaxASC {
+		fmt.Fprintf(f, "        ASC: enabled (level %.2f) — program-dependent release\n", cfg.VolumaxASCLevel)
 	} else {
 		fmt.Fprintln(f, "        ASC: disabled — direct limiting")
 	}
 
 	// Gain staging (only show if not unity)
-	if cfg.UREI1176InputLevel != 1.0 || cfg.UREI1176OutputLevel != 1.0 {
-		inputDB := processor.LinearToDb(cfg.UREI1176InputLevel)
-		outputDB := processor.LinearToDb(cfg.UREI1176OutputLevel)
+	if cfg.VolumaxInputLevel != 1.0 || cfg.VolumaxOutputLevel != 1.0 {
+		inputDB := processor.LinearToDb(cfg.VolumaxInputLevel)
+		outputDB := processor.LinearToDb(cfg.VolumaxOutputLevel)
 		fmt.Fprintf(f, "        Gain: input %.1f dB, output %.1f dB\n", inputDB, outputDB)
 	}
 
@@ -907,29 +907,31 @@ func formatUREI1176Filter(f *os.File, cfg *processor.FilterChainConfig, m *proce
 	}
 }
 
-// classifyUREI1176Attack returns a human-readable attack classification
-func classifyUREI1176Attack(attack float64) string {
+// classifyVolumaxAttack returns a human-readable attack classification
+func classifyVolumaxAttack(attack float64) string {
 	switch {
-	case attack <= 0.1:
-		return "extreme transients"
-	case attack <= 0.5:
-		return "sharp consonants"
-	case attack <= 0.8:
-		return "normal speech"
+	case attack <= 2:
+		return "fast (may introduce artifacts)"
+	case attack <= 5:
+		return "transparent"
+	case attack <= 10:
+		return "very gentle"
 	default:
-		return "soft delivery"
+		return "slow"
 	}
 }
 
-// classifyUREI1176Release returns a human-readable release classification
-func classifyUREI1176Release(release float64) string {
+// classifyVolumaxRelease returns a human-readable release classification
+func classifyVolumaxRelease(release float64) string {
 	switch {
-	case release >= 200:
-		return "expressive"
-	case release <= 100:
-		return "controlled"
+	case release >= 150:
+		return "very smooth"
+	case release >= 100:
+		return "smooth"
+	case release >= 50:
+		return "moderate"
 	default:
-		return "standard"
+		return "fast (may pump)"
 	}
 }
 
@@ -2270,22 +2272,22 @@ func writeDiagnosticPeakLimiter(f *os.File, result *processor.NormalisationResul
 		projectedTPWithoutLimiter-config.LoudnormTargetTP)
 	fmt.Fprintln(f, "")
 
-	fmt.Fprintln(f, "Solution (1176-inspired peak limiting):")
+	fmt.Fprintln(f, "Solution (CBS Volumax-inspired peak limiting):")
 	fmt.Fprintf(f, "  Limiter Ceiling:   %.1f dBTP\n", result.LimiterCeiling)
 	fmt.Fprintf(f, "  Peak Reduction:    %.1f dB (from %.1f to %.1f dBTP)\n",
 		result.InputTP-result.LimiterCeiling, result.InputTP, result.LimiterCeiling)
 	fmt.Fprintln(f, "")
 
 	fmt.Fprintln(f, "Filter parameters:")
-	fmt.Fprintln(f, "  Attack:    0.1 ms   (fast - catches all peaks)")
-	fmt.Fprintln(f, "  Release:   50 ms    (quick recovery, avoids pumping)")
-	fmt.Fprintln(f, "  ASC:       enabled  (Auto Soft Clipping for natural release)")
-	fmt.Fprintln(f, "  ASC Level: 0.5      (moderate smoothing for speech)")
+	fmt.Fprintln(f, "  Attack:    5 ms     (gentle - preserves transient shape)")
+	fmt.Fprintln(f, "  Release:   100 ms   (smooth recovery, eliminates pumping)")
+	fmt.Fprintln(f, "  ASC:       enabled  (Auto Soft Clipping for program-dependent smoothing)")
+	fmt.Fprintln(f, "  ASC Level: 0.8      (high smoothing - Volumax characteristic)")
 	fmt.Fprintln(f, "")
 
 	fmt.Fprintln(f, "Rationale:")
-	fmt.Fprintln(f, "  The UREI 1176 at 20:1 ratio was the broadcast standard for peak limiting.")
-	fmt.Fprintln(f, "  Fast attack provides a \"firm lid\" on peaks; quick release stays transparent.")
+	fmt.Fprintln(f, "  The CBS Volumax was the broadcast standard for transparent limiting.")
+	fmt.Fprintln(f, "  Gentle attack preserves transients; smooth release is essentially inaudible.")
 	fmt.Fprintln(f, "  Only peaks above the ceiling are affected (typically <5% of audio).")
 	fmt.Fprintln(f, "")
 }

@@ -26,7 +26,7 @@ func newTestConfig() *FilterChainConfig {
 		DS201GateEnabled:   false,
 		LA2AEnabled:        false,
 		DeessEnabled:       false,
-		UREI1176Enabled:    false,
+		VolumaxEnabled:     false,
 
 		// Sensible defaults for parameters (used when filter is enabled)
 		DS201HPFreq:        80.0,
@@ -55,13 +55,13 @@ func newTestConfig() *FilterChainConfig {
 		TargetTP:           -0.3,
 		TargetLRA:          7.0,
 
-		UREI1176Ceiling:     -1.0,
-		UREI1176Attack:      0.8,
-		UREI1176Release:     150.0,
-		UREI1176ASC:         true,
-		UREI1176ASCLevel:    0.5,
-		UREI1176InputLevel:  1.0,
-		UREI1176OutputLevel: 1.0,
+		VolumaxCeiling:     -1.0,
+		VolumaxAttack:      5.0,
+		VolumaxRelease:     100.0,
+		VolumaxASC:         true,
+		VolumaxASCLevel:    0.8,
+		VolumaxInputLevel:  1.0,
+		VolumaxOutputLevel: 1.0,
 
 		// NoiseRemove defaults (anlmdn + compand)
 		NoiseRemoveStrength:         0.00001,
@@ -127,7 +127,7 @@ func TestBuildFilterSpec(t *testing.T) {
 		config.DS201GateEnabled = true
 		config.LA2AEnabled = true
 		config.DeessEnabled = true
-		config.UREI1176Enabled = true
+		config.VolumaxEnabled = true
 		config.ResampleEnabled = true // Required for output format filters
 
 		spec := config.BuildFilterSpec()
@@ -141,7 +141,7 @@ func TestBuildFilterSpec(t *testing.T) {
 			{"agate=threshold=", "agate"},
 			{"acompressor=threshold=", "acompressor"},
 			{"deesser=i=", "deesser"},
-			// alimiter (UREI1176) moved to Pass 3 for peak protection after gain normalisation
+			// alimiter (Volumax) moved to Pass 3 for peak protection after gain normalisation
 			{"aformat=sample_rates=44100", "aformat (output)"},
 		}
 
@@ -159,7 +159,7 @@ func TestBuildFilterSpec(t *testing.T) {
 		config.DS201GateEnabled = true
 		config.LA2AEnabled = true
 		config.DeessEnabled = true
-		config.UREI1176Enabled = true
+		config.VolumaxEnabled = true
 
 		spec := config.BuildFilterSpec()
 
@@ -175,7 +175,7 @@ func TestBuildFilterSpec(t *testing.T) {
 		config.DS201GateEnabled = true
 		config.LA2AEnabled = true
 		config.DeessEnabled = true
-		config.UREI1176Enabled = true
+		config.VolumaxEnabled = true
 
 		spec := config.BuildFilterSpec()
 
@@ -635,53 +635,53 @@ func TestBuildNoiseRemoveFilter(t *testing.T) {
 	})
 }
 
-func TestBuildUREI1176Filter(t *testing.T) {
+func TestBuildVolumaxFilter(t *testing.T) {
 	t.Run("typical podcast limiter", func(t *testing.T) {
 		config := newTestConfig()
-		config.UREI1176Enabled = true
-		config.UREI1176Ceiling = -1.0
-		config.UREI1176Attack = 0.8
-		config.UREI1176Release = 150.0
-		config.UREI1176ASC = true
-		config.UREI1176ASCLevel = 0.5
+		config.VolumaxEnabled = true
+		config.VolumaxCeiling = -1.0
+		config.VolumaxAttack = 5.0
+		config.VolumaxRelease = 100.0
+		config.VolumaxASC = true
+		config.VolumaxASCLevel = 0.8
 
-		spec := config.buildUREI1176Filter()
+		spec := config.buildVolumaxFilter()
 
 		wantIn := []string{
 			"alimiter=",
 			"limit=",      // dBTP ceiling converted to linear
-			"attack=0.8",  // attack in ms
-			"release=150", // release in ms
+			"attack=5",    // attack in ms
+			"release=100", // release in ms
 			"asc=1",       // ASC enabled for program-dependent release
-			"asc_level=0.5",
+			"asc_level=0.8",
 		}
 
 		for _, want := range wantIn {
 			if !strings.Contains(spec, want) {
-				t.Errorf("buildUREI1176Filter() = %q, want to contain %q", spec, want)
+				t.Errorf("buildVolumaxFilter() = %q, want to contain %q", spec, want)
 			}
 		}
 	})
 
 	t.Run("ASC disabled", func(t *testing.T) {
 		config := newTestConfig()
-		config.UREI1176Enabled = true
-		config.UREI1176ASC = false
+		config.VolumaxEnabled = true
+		config.VolumaxASC = false
 
-		spec := config.buildUREI1176Filter()
+		spec := config.buildVolumaxFilter()
 
 		if !strings.Contains(spec, "asc=0") {
-			t.Errorf("buildUREI1176Filter() = %q, want to contain asc=0", spec)
+			t.Errorf("buildVolumaxFilter() = %q, want to contain asc=0", spec)
 		}
 	})
 
 	t.Run("disabled returns empty", func(t *testing.T) {
 		config := newTestConfig()
-		config.UREI1176Enabled = false
+		config.VolumaxEnabled = false
 
-		spec := config.buildUREI1176Filter()
+		spec := config.buildVolumaxFilter()
 		if spec != "" {
-			t.Errorf("buildUREI1176Filter() = %q, want empty when disabled", spec)
+			t.Errorf("buildVolumaxFilter() = %q, want empty when disabled", spec)
 		}
 	})
 }
@@ -691,7 +691,7 @@ func TestFilterOrderRespected(t *testing.T) {
 	// Enable filters that appear at start and end
 	config.DS201HPEnabled = true
 	config.DS201GateEnabled = true
-	// UREI1176 moved to Pass 3 for peak protection after gain normalisation
+	// Volumax moved to Pass 3 for peak protection after gain normalisation
 	config.DeessEnabled = true
 	config.DeessIntensity = 0.5
 	config.ResampleEnabled = true // Required for aformat output filter
@@ -706,7 +706,7 @@ func TestFilterOrderRespected(t *testing.T) {
 	aformatPos := strings.Index(spec, "aformat=sample_rates=")
 
 	// Verify order: highpass < gate < deesser < aformat
-	// Note: alimiter (UREI1176) is now in Pass 3, not Pass 2
+	// Note: alimiter (Volumax) is now in Pass 3, not Pass 2
 	if highpassPos >= gatePos {
 		t.Errorf("highpass (pos %d) should come before agate (pos %d)", highpassPos, gatePos)
 	}
@@ -955,7 +955,7 @@ func TestPass2FilterOrder(t *testing.T) {
 			FilterDS201Gate,
 			FilterLA2ACompressor,
 			FilterDeesser,
-			// FilterUREI1176 moved to Pass 3
+			// FilterVolumax moved to Pass 3
 			FilterAnalysis,
 			FilterResample,
 		}
@@ -972,11 +972,11 @@ func TestPass2FilterOrder(t *testing.T) {
 		}
 	})
 
-	t.Run("UREI1176 not in Pass2FilterOrder", func(t *testing.T) {
-		// UREI1176 has been moved to Pass 3 for peak protection after gain normalisation
+	t.Run("Volumax not in Pass2FilterOrder", func(t *testing.T) {
+		// Volumax has been moved to Pass 3 for peak protection after gain normalisation
 		for _, id := range Pass2FilterOrder {
-			if id == FilterUREI1176 {
-				t.Errorf("FilterUREI1176 should not be in Pass2FilterOrder (moved to Pass 3)")
+			if id == FilterVolumax {
+				t.Errorf("FilterVolumax should not be in Pass2FilterOrder (moved to Pass 3)")
 			}
 		}
 	})

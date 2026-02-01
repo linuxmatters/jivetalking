@@ -33,7 +33,7 @@ const (
 	// Processing filters (Pass 2 only)
 	FilterLA2ACompressor FilterID = "la2a_compressor" // Teletronix LA-2A style optical compressor
 	FilterDeesser        FilterID = "deesser"
-	FilterUREI1176       FilterID = "urei1176_limiter" // UREI 1176-inspired safety limiter
+	FilterVolumax        FilterID = "volumax_limiter" // CBS Volumax-inspired transparent limiter
 )
 
 // Pass1FilterOrder defines the filter chain for analysis pass.
@@ -98,7 +98,7 @@ var filterBuilders = map[FilterID]filterBuilderFunc{
 	FilterDS201Gate:      (*FilterChainConfig).buildDS201GateFilter,
 	FilterLA2ACompressor: (*FilterChainConfig).buildLA2ACompressorFilter,
 	FilterDeesser:        (*FilterChainConfig).buildDeesserFilter,
-	FilterUREI1176:       (*FilterChainConfig).buildUREI1176Filter,
+	FilterVolumax:        (*FilterChainConfig).buildVolumaxFilter,
 }
 
 // FilterChainConfig holds configuration for the audio processing filter chain
@@ -203,17 +203,17 @@ type FilterChainConfig struct {
 	TargetTP  float64 // dBTP, true peak ceiling reference
 	TargetLRA float64 // LU, loudness range reference
 
-	// UREI 1176-Inspired Limiter - final brick-wall safety net
-	// Attack/release adapt based on transient and dynamics measurements
-	// ASC provides program-dependent release approximation
-	UREI1176Enabled     bool    // Enable 1176-inspired limiter
-	UREI1176Ceiling     float64 // dBTP - peak ceiling (-1.0 = podcast standard)
-	UREI1176Attack      float64 // ms - attack time (0.1-1.0)
-	UREI1176Release     float64 // ms - release time (100-200)
-	UREI1176ASC         bool    // Enable Auto Soft Clipping (program-dependent release)
-	UREI1176ASCLevel    float64 // 0.0-1.0 - ASC release influence
-	UREI1176InputLevel  float64 // Linear - input gain (default 1.0)
-	UREI1176OutputLevel float64 // Linear - output gain (default 1.0)
+	// CBS Volumax-Inspired Limiter - transparent peak protection
+	// Designed for maximum transparency with gentle, program-dependent limiting
+	// that is essentially inaudible
+	VolumaxEnabled     bool    // Enable Volumax-inspired limiter
+	VolumaxCeiling     float64 // dBTP - peak ceiling (-1.0 = podcast standard)
+	VolumaxAttack      float64 // ms - attack time (5ms for transparency)
+	VolumaxRelease     float64 // ms - release time (100ms for smooth recovery)
+	VolumaxASC         bool    // Enable Auto Soft Clipping (program-dependent release)
+	VolumaxASCLevel    float64 // 0.0-1.0 - ASC release influence (0.8 for high smoothing)
+	VolumaxInputLevel  float64 // Linear - input gain (default 1.0)
+	VolumaxOutputLevel float64 // Linear - output gain (default 1.0)
 
 	// Filter chain order - controls the sequence of filters in the processing chain
 	// Use Pass2FilterOrder or customise for experimentation
@@ -227,7 +227,7 @@ type FilterChainConfig struct {
 	OutputAnalysisEnabled bool
 
 	// Loudnorm (Pass 3) - EBU R128 dynamic loudness normalisation
-	// Replaces simple volume gain + 1176 limiting with integrated dynamic normalisation
+	// Replaces simple volume gain + limiting with integrated dynamic normalisation
 	// Uses two-pass mode with measurements from Pass 2 for optimal transparency
 	LoudnormEnabled   bool    // Enable loudnorm in Pass 3 (default: true)
 	LoudnormTargetI   float64 // Target integrated loudness (LUFS), default: -18.0
@@ -323,15 +323,15 @@ func DefaultFilterConfig() *FilterChainConfig {
 		TargetTP:  -0.3,  // Reference true peak (not enforced, alimiter does real limiting at -1.5)
 		TargetLRA: 7.0,   // Reference loudness range (EBU R128 default)
 
-		// UREI 1176-Inspired Limiter - enabled by default as final safety net
-		UREI1176Enabled:     true,
-		UREI1176Ceiling:     -1.0,  // -1.0 dBTP (podcast standard)
-		UREI1176Attack:      0.8,   // 0.8ms default (normal speech)
-		UREI1176Release:     150.0, // 150ms default (standard)
-		UREI1176ASC:         true,
-		UREI1176ASCLevel:    0.5, // Moderate ASC
-		UREI1176InputLevel:  1.0, // Unity input
-		UREI1176OutputLevel: 1.0, // Unity output
+		// CBS Volumax-Inspired Limiter - enabled by default as final safety net
+		VolumaxEnabled:     true,
+		VolumaxCeiling:     -1.0,  // -1.0 dBTP (podcast standard)
+		VolumaxAttack:      5.0,   // 5ms - gentle attack preserves transient shape
+		VolumaxRelease:     100.0, // 100ms - smooth recovery eliminates pumping
+		VolumaxASC:         true,
+		VolumaxASCLevel:    0.8, // High value = more program-dependent smoothing
+		VolumaxInputLevel:  1.0, // Unity input
+		VolumaxOutputLevel: 1.0, // Unity output
 
 		// Filter chain order - use default order
 		FilterOrder: Pass2FilterOrder,
@@ -667,41 +667,41 @@ func (cfg *FilterChainConfig) buildDeesserFilter() string {
 	)
 }
 
-// buildUREI1176Filter builds the UREI 1176-inspired limiter filter specification.
-// Uses FFmpeg's alimiter with adaptive attack/release and ASC for program-dependent
-// release approximation. The 1176's FET character and harmonic enhancement cannot
-// be replicated, but we capture its timing behaviour for musical peak protection.
-func (cfg *FilterChainConfig) buildUREI1176Filter() string {
-	if !cfg.UREI1176Enabled {
+// buildVolumaxFilter builds the CBS Volumax-inspired limiter filter specification.
+// Uses FFmpeg's alimiter with parameters tuned for maximum transparency.
+// The CBS Volumax was the broadcast standard for transparent, program-dependent
+// limiting that was essentially inaudible.
+func (cfg *FilterChainConfig) buildVolumaxFilter() string {
+	if !cfg.VolumaxEnabled {
 		return ""
 	}
 
 	// Convert ceiling from dBTP to linear (0.0-1.0)
-	ceiling := math.Pow(10, cfg.UREI1176Ceiling/20.0)
+	ceiling := math.Pow(10, cfg.VolumaxCeiling/20.0)
 
 	// Default input/output levels to unity if not set (0.0 would mute audio)
-	inputLevel := cfg.UREI1176InputLevel
+	inputLevel := cfg.VolumaxInputLevel
 	if inputLevel == 0.0 {
 		inputLevel = 1.0
 	}
-	outputLevel := cfg.UREI1176OutputLevel
+	outputLevel := cfg.VolumaxOutputLevel
 	if outputLevel == 0.0 {
 		outputLevel = 1.0
 	}
 
-	// Build filter with adaptive parameters
+	// Build filter with Volumax-style parameters
 	spec := fmt.Sprintf(
 		"alimiter=limit=%.6f:attack=%.1f:release=%.1f:level_in=%.4f:level_out=%.4f:level=0:latency=1",
 		ceiling,
-		cfg.UREI1176Attack,
-		cfg.UREI1176Release,
+		cfg.VolumaxAttack,
+		cfg.VolumaxRelease,
 		inputLevel,
 		outputLevel,
 	)
 
 	// Add ASC parameters
-	if cfg.UREI1176ASC {
-		spec += fmt.Sprintf(":asc=1:asc_level=%.2f", cfg.UREI1176ASCLevel)
+	if cfg.VolumaxASC {
+		spec += fmt.Sprintf(":asc=1:asc_level=%.2f", cfg.VolumaxASCLevel)
 	} else {
 		spec += ":asc=0"
 	}
