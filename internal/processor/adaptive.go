@@ -243,7 +243,7 @@ const (
 	la2aKneeNormal     = 4.0    // Standard LA-2A approximation
 	la2aKneeBright     = 3.5    // For bright voices (slightly firmer)
 	la2aCentroidDark   = 4000.0 // Hz - below: dark voice
-	la2aCentroidBright = 4000.0 // Hz - above: bright voice
+	la2aCentroidBright = 6000.0 // Hz - above: bright voice
 
 	// LA-2A Skewness adaptation (bass-concentrated voices get extra warmth)
 	// Negative skewness = energy concentrated in bass (warm voice)
