@@ -34,6 +34,7 @@ const (
 	FilterLA2ACompressor FilterID = "la2a_compressor" // Teletronix LA-2A style optical compressor
 	FilterDeesser        FilterID = "deesser"
 	FilterVolumax        FilterID = "volumax_limiter" // CBS Volumax-inspired transparent limiter
+	FilterAdeclick       FilterID = "adeclick"        // Click/pop repair via interpolation
 )
 
 // Pass1FilterOrder defines the filter chain for analysis pass.
@@ -99,6 +100,7 @@ var filterBuilders = map[FilterID]filterBuilderFunc{
 	FilterLA2ACompressor: (*FilterChainConfig).buildLA2ACompressorFilter,
 	FilterDeesser:        (*FilterChainConfig).buildDeesserFilter,
 	FilterVolumax:        (*FilterChainConfig).buildVolumaxFilter,
+	FilterAdeclick:       (*FilterChainConfig).buildAdeclickFilter,
 }
 
 // FilterChainConfig holds configuration for the audio processing filter chain
@@ -226,6 +228,14 @@ type FilterChainConfig struct {
 	// When enabled, measurements are extracted from processed audio for comparison with Pass 1
 	OutputAnalysisEnabled bool
 
+	// Adeclick - Click/pop repair filter (Pass 4)
+	// Detects and repairs waveform discontinuities through interpolation
+	// Applied after loudnorm to catch clicks from limiter and gain changes
+	AdeclickEnabled   bool    // Enable adeclick filter (default: true in Pass 4)
+	AdeclickThreshold float64 // Detection sensitivity (0.1-8.0, lower=more sensitive)
+	AdeclickWindow    float64 // Analysis window in ms (10-100)
+	AdeclickOverlap   float64 // Window overlap percentage (50-95)
+
 	// Loudnorm (Pass 3) - EBU R128 dynamic loudness normalisation
 	// Replaces simple volume gain + limiting with integrated dynamic normalisation
 	// Uses two-pass mode with measurements from Pass 2 for optimal transparency
@@ -332,6 +342,13 @@ func DefaultFilterConfig() *FilterChainConfig {
 		VolumaxASCLevel:    0.8, // High value = more program-dependent smoothing
 		VolumaxInputLevel:  1.0, // Unity input
 		VolumaxOutputLevel: 1.0, // Unity output
+
+		// Adeclick - click/pop repair (Pass 4 only)
+		// Conservative parameters for transparent repair
+		AdeclickEnabled:   true,
+		AdeclickThreshold: 1.5,  // Slightly more sensitive than FFmpeg default (2.0)
+		AdeclickWindow:    55.0, // Default window, appropriate for speech
+		AdeclickOverlap:   75.0, // Default overlap, good detection coverage
 
 		// Filter chain order - use default order
 		FilterOrder: Pass2FilterOrder,
@@ -707,6 +724,26 @@ func (cfg *FilterChainConfig) buildVolumaxFilter() string {
 	}
 
 	return spec
+}
+
+// buildAdeclickFilter builds the click/pop repair filter specification.
+// Uses interpolation to repair waveform discontinuities.
+// Applied in Pass 4 after loudnorm to catch clicks from limiter and gain changes.
+//
+// Parameters:
+// - t (threshold): Detection sensitivity (0.1-8.0, lower=more sensitive)
+// - w (window): Analysis window in ms (10-100, default 55)
+// - o (overlap): Window overlap percentage (50-95, default 75)
+func (cfg *FilterChainConfig) buildAdeclickFilter() string {
+	if !cfg.AdeclickEnabled {
+		return ""
+	}
+	return fmt.Sprintf(
+		"adeclick=t=%.1f:w=%.0f:o=%.0f",
+		cfg.AdeclickThreshold,
+		cfg.AdeclickWindow,
+		cfg.AdeclickOverlap,
+	)
 }
 
 // BuildFilterSpec builds the FFmpeg filter specification string for Pass 2 processing.
