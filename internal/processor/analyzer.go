@@ -3564,25 +3564,28 @@ func MeasureOutputSilenceRegion(outputPath string, region SilenceRegion) (*Silen
 	var peakLevel float64
 	var crestFactor float64
 	var entropy float64
-	var spectralMean float64
-	var spectralVariance float64
-	var spectralCentroid float64
-	var spectralSpread float64
-	var spectralSkewness float64
-	var spectralKurtosis float64
-	var spectralEntropy float64
-	var spectralFlatness float64
-	var spectralCrest float64
-	var spectralFlux float64
-	var spectralSlope float64
-	var spectralDecrease float64
-	var spectralRolloff float64
 	var momentaryLUFS float64
 	var shortTermLUFS float64
 	var truePeak float64
 	var samplePeak float64
 	var rmsLevelFound bool
 	var framesProcessed int64
+
+	// Spectral metric accumulators for averaging across frames
+	var spectralMeanSum float64
+	var spectralVarianceSum float64
+	var spectralCentroidSum float64
+	var spectralSpreadSum float64
+	var spectralSkewnessSum float64
+	var spectralKurtosisSum float64
+	var spectralEntropySum float64
+	var spectralFlatnessSum float64
+	var spectralCrestSum float64
+	var spectralFluxSum float64
+	var spectralSlopeSum float64
+	var spectralDecreaseSum float64
+	var spectralRolloffSum float64
+	var spectralFrameCount int64
 
 	for {
 		frame, err := reader.ReadFrame()
@@ -3624,45 +3627,50 @@ func MeasureOutputSilenceRegion(outputPath string, region SilenceRegion) (*Silen
 					entropy = value
 				}
 
-				// aspectralstats spectral measurements
+				// aspectralstats spectral measurements - accumulate for averaging
+				spectralFound := false
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralMean); ok {
-					spectralMean = value
+					spectralMeanSum += value
+					spectralFound = true
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralVariance); ok {
-					spectralVariance = value
+					spectralVarianceSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralCentroid); ok {
-					spectralCentroid = value
+					spectralCentroidSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralSpread); ok {
-					spectralSpread = value
+					spectralSpreadSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralSkewness); ok {
-					spectralSkewness = value
+					spectralSkewnessSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralKurtosis); ok {
-					spectralKurtosis = value
+					spectralKurtosisSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralEntropy); ok {
-					spectralEntropy = value
+					spectralEntropySum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralFlatness); ok {
-					spectralFlatness = value
+					spectralFlatnessSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralCrest); ok {
-					spectralCrest = value
+					spectralCrestSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralFlux); ok {
-					spectralFlux = value
+					spectralFluxSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralSlope); ok {
-					spectralSlope = value
+					spectralSlopeSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralDecrease); ok {
-					spectralDecrease = value
+					spectralDecreaseSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralRolloff); ok {
-					spectralRolloff = value
+					spectralRolloffSum += value
+				}
+				if spectralFound {
+					spectralFrameCount++
 				}
 
 				// ebur128 loudness measurements
@@ -3708,45 +3716,50 @@ func MeasureOutputSilenceRegion(outputPath string, region SilenceRegion) (*Silen
 					entropy = value
 				}
 
-				// aspectralstats spectral measurements
+				// aspectralstats spectral measurements - accumulate for averaging
+				spectralFound := false
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralMean); ok {
-					spectralMean = value
+					spectralMeanSum += value
+					spectralFound = true
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralVariance); ok {
-					spectralVariance = value
+					spectralVarianceSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralCentroid); ok {
-					spectralCentroid = value
+					spectralCentroidSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralSpread); ok {
-					spectralSpread = value
+					spectralSpreadSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralSkewness); ok {
-					spectralSkewness = value
+					spectralSkewnessSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralKurtosis); ok {
-					spectralKurtosis = value
+					spectralKurtosisSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralEntropy); ok {
-					spectralEntropy = value
+					spectralEntropySum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralFlatness); ok {
-					spectralFlatness = value
+					spectralFlatnessSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralCrest); ok {
-					spectralCrest = value
+					spectralCrestSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralFlux); ok {
-					spectralFlux = value
+					spectralFluxSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralSlope); ok {
-					spectralSlope = value
+					spectralSlopeSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralDecrease); ok {
-					spectralDecrease = value
+					spectralDecreaseSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralRolloff); ok {
-					spectralRolloff = value
+					spectralRolloffSum += value
+				}
+				if spectralFound {
+					spectralFrameCount++
 				}
 
 				// ebur128 loudness measurements
@@ -3773,9 +3786,31 @@ func MeasureOutputSilenceRegion(outputPath string, region SilenceRegion) (*Silen
 		return nil, fmt.Errorf("no frames processed in silence region")
 	}
 
+	// Calculate averaged spectral metrics
+	var spectralMean, spectralVariance, spectralCentroid, spectralSpread float64
+	var spectralSkewness, spectralKurtosis, spectralEntropy, spectralFlatness float64
+	var spectralCrest, spectralFlux, spectralSlope, spectralDecrease, spectralRolloff float64
+
+	if spectralFrameCount > 0 {
+		spectralMean = spectralMeanSum / float64(spectralFrameCount)
+		spectralVariance = spectralVarianceSum / float64(spectralFrameCount)
+		spectralCentroid = spectralCentroidSum / float64(spectralFrameCount)
+		spectralSpread = spectralSpreadSum / float64(spectralFrameCount)
+		spectralSkewness = spectralSkewnessSum / float64(spectralFrameCount)
+		spectralKurtosis = spectralKurtosisSum / float64(spectralFrameCount)
+		spectralEntropy = spectralEntropySum / float64(spectralFrameCount)
+		spectralFlatness = spectralFlatnessSum / float64(spectralFrameCount)
+		spectralCrest = spectralCrestSum / float64(spectralFrameCount)
+		spectralFlux = spectralFluxSum / float64(spectralFrameCount)
+		spectralSlope = spectralSlopeSum / float64(spectralFrameCount)
+		spectralDecrease = spectralDecreaseSum / float64(spectralFrameCount)
+		spectralRolloff = spectralRolloffSum / float64(spectralFrameCount)
+	}
+
 	// Diagnostic summary
 	debugLog("=== MeasureOutputSilenceRegion SUMMARY ===")
 	debugLog("  Frames processed: %d", framesProcessed)
+	debugLog("  Spectral frames: %d", spectralFrameCount)
 	debugLog("  Final ebur128 values:")
 	debugLog("    momentaryLUFS: %f", momentaryLUFS)
 	debugLog("    shortTermLUFS: %f", shortTermLUFS)
@@ -3784,7 +3819,7 @@ func MeasureOutputSilenceRegion(outputPath string, region SilenceRegion) (*Silen
 	debugLog("  Final astats values:")
 	debugLog("    rmsLevel: %f (found: %v)", rmsLevel, rmsLevelFound)
 	debugLog("    peakLevel: %f", peakLevel)
-	debugLog("  Final spectral values:")
+	debugLog("  Averaged spectral values:")
 	debugLog("    spectralCentroid: %f", spectralCentroid)
 	debugLog("    spectralRolloff: %f", spectralRolloff)
 
@@ -3815,7 +3850,7 @@ func MeasureOutputSilenceRegion(outputPath string, region SilenceRegion) (*Silen
 		PeakLevel:   peakLevel,
 		CrestFactor: crestFactor,
 
-		// Spectral metrics from aspectralstats
+		// Spectral metrics from aspectralstats (averaged across frames)
 		SpectralMean:     spectralMean,
 		SpectralVariance: spectralVariance,
 		SpectralCentroid: spectralCentroid,
@@ -3904,25 +3939,28 @@ func MeasureOutputSpeechRegion(outputPath string, region SpeechRegion) (*SpeechC
 	var rmsLevel float64
 	var peakLevel float64
 	var crestFactor float64
-	var spectralMean float64
-	var spectralVariance float64
-	var spectralCentroid float64
-	var spectralSpread float64
-	var spectralSkewness float64
-	var spectralKurtosis float64
-	var spectralEntropy float64
-	var spectralFlatness float64
-	var spectralCrest float64
-	var spectralFlux float64
-	var spectralSlope float64
-	var spectralDecrease float64
-	var spectralRolloff float64
 	var momentaryLUFS float64
 	var shortTermLUFS float64
 	var truePeak float64
 	var samplePeak float64
 	var rmsLevelFound bool
 	var framesProcessed int64
+
+	// Spectral metric accumulators for averaging across frames
+	var spectralMeanSum float64
+	var spectralVarianceSum float64
+	var spectralCentroidSum float64
+	var spectralSpreadSum float64
+	var spectralSkewnessSum float64
+	var spectralKurtosisSum float64
+	var spectralEntropySum float64
+	var spectralFlatnessSum float64
+	var spectralCrestSum float64
+	var spectralFluxSum float64
+	var spectralSlopeSum float64
+	var spectralDecreaseSum float64
+	var spectralRolloffSum float64
+	var spectralFrameCount int64
 
 	for {
 		frame, err := reader.ReadFrame()
@@ -3961,45 +3999,50 @@ func MeasureOutputSpeechRegion(outputPath string, region SpeechRegion) (*SpeechC
 					crestFactor = value
 				}
 
-				// aspectralstats spectral measurements
+				// aspectralstats spectral measurements - accumulate for averaging
+				spectralFound := false
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralMean); ok {
-					spectralMean = value
+					spectralMeanSum += value
+					spectralFound = true
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralVariance); ok {
-					spectralVariance = value
+					spectralVarianceSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralCentroid); ok {
-					spectralCentroid = value
+					spectralCentroidSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralSpread); ok {
-					spectralSpread = value
+					spectralSpreadSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralSkewness); ok {
-					spectralSkewness = value
+					spectralSkewnessSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralKurtosis); ok {
-					spectralKurtosis = value
+					spectralKurtosisSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralEntropy); ok {
-					spectralEntropy = value
+					spectralEntropySum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralFlatness); ok {
-					spectralFlatness = value
+					spectralFlatnessSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralCrest); ok {
-					spectralCrest = value
+					spectralCrestSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralFlux); ok {
-					spectralFlux = value
+					spectralFluxSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralSlope); ok {
-					spectralSlope = value
+					spectralSlopeSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralDecrease); ok {
-					spectralDecrease = value
+					spectralDecreaseSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralRolloff); ok {
-					spectralRolloff = value
+					spectralRolloffSum += value
+				}
+				if spectralFound {
+					spectralFrameCount++
 				}
 
 				// ebur128 loudness measurements
@@ -4046,45 +4089,50 @@ func MeasureOutputSpeechRegion(outputPath string, region SpeechRegion) (*SpeechC
 					crestFactor = value
 				}
 
-				// aspectralstats spectral measurements
+				// aspectralstats spectral measurements - accumulate for averaging
+				spectralFound := false
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralMean); ok {
-					spectralMean = value
+					spectralMeanSum += value
+					spectralFound = true
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralVariance); ok {
-					spectralVariance = value
+					spectralVarianceSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralCentroid); ok {
-					spectralCentroid = value
+					spectralCentroidSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralSpread); ok {
-					spectralSpread = value
+					spectralSpreadSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralSkewness); ok {
-					spectralSkewness = value
+					spectralSkewnessSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralKurtosis); ok {
-					spectralKurtosis = value
+					spectralKurtosisSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralEntropy); ok {
-					spectralEntropy = value
+					spectralEntropySum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralFlatness); ok {
-					spectralFlatness = value
+					spectralFlatnessSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralCrest); ok {
-					spectralCrest = value
+					spectralCrestSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralFlux); ok {
-					spectralFlux = value
+					spectralFluxSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralSlope); ok {
-					spectralSlope = value
+					spectralSlopeSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralDecrease); ok {
-					spectralDecrease = value
+					spectralDecreaseSum += value
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeySpectralRolloff); ok {
-					spectralRolloff = value
+					spectralRolloffSum += value
+				}
+				if spectralFound {
+					spectralFrameCount++
 				}
 
 				// ebur128 loudness measurements
@@ -4111,9 +4159,31 @@ func MeasureOutputSpeechRegion(outputPath string, region SpeechRegion) (*SpeechC
 		return nil, fmt.Errorf("no frames processed in speech region")
 	}
 
+	// Calculate averaged spectral metrics
+	var spectralMean, spectralVariance, spectralCentroid, spectralSpread float64
+	var spectralSkewness, spectralKurtosis, spectralEntropy, spectralFlatness float64
+	var spectralCrest, spectralFlux, spectralSlope, spectralDecrease, spectralRolloff float64
+
+	if spectralFrameCount > 0 {
+		spectralMean = spectralMeanSum / float64(spectralFrameCount)
+		spectralVariance = spectralVarianceSum / float64(spectralFrameCount)
+		spectralCentroid = spectralCentroidSum / float64(spectralFrameCount)
+		spectralSpread = spectralSpreadSum / float64(spectralFrameCount)
+		spectralSkewness = spectralSkewnessSum / float64(spectralFrameCount)
+		spectralKurtosis = spectralKurtosisSum / float64(spectralFrameCount)
+		spectralEntropy = spectralEntropySum / float64(spectralFrameCount)
+		spectralFlatness = spectralFlatnessSum / float64(spectralFrameCount)
+		spectralCrest = spectralCrestSum / float64(spectralFrameCount)
+		spectralFlux = spectralFluxSum / float64(spectralFrameCount)
+		spectralSlope = spectralSlopeSum / float64(spectralFrameCount)
+		spectralDecrease = spectralDecreaseSum / float64(spectralFrameCount)
+		spectralRolloff = spectralRolloffSum / float64(spectralFrameCount)
+	}
+
 	// Diagnostic summary
 	debugLog("=== MeasureOutputSpeechRegion SUMMARY ===")
 	debugLog("  Frames processed: %d", framesProcessed)
+	debugLog("  Spectral frames: %d", spectralFrameCount)
 	debugLog("  Final ebur128 values:")
 	debugLog("    momentaryLUFS: %f", momentaryLUFS)
 	debugLog("    shortTermLUFS: %f", shortTermLUFS)
@@ -4122,7 +4192,7 @@ func MeasureOutputSpeechRegion(outputPath string, region SpeechRegion) (*SpeechC
 	debugLog("  Final astats values:")
 	debugLog("    rmsLevel: %f (found: %v)", rmsLevel, rmsLevelFound)
 	debugLog("    peakLevel: %f", peakLevel)
-	debugLog("  Final spectral values:")
+	debugLog("  Averaged spectral values:")
 	debugLog("    spectralCentroid: %f", spectralCentroid)
 	debugLog("    spectralRolloff: %f", spectralRolloff)
 
@@ -4153,7 +4223,7 @@ func MeasureOutputSpeechRegion(outputPath string, region SpeechRegion) (*SpeechC
 		PeakLevel:   peakLevel,
 		CrestFactor: crestFactor,
 
-		// Spectral metrics from aspectralstats
+		// Spectral metrics from aspectralstats (averaged across frames)
 		SpectralMean:     spectralMean,
 		SpectralVariance: spectralVariance,
 		SpectralCentroid: spectralCentroid,
