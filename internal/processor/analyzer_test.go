@@ -1273,13 +1273,14 @@ func TestFindBestSpeechRegion_SNRMarginCheck(t *testing.T) {
 		}
 
 		// Create intervals with identical quality for both regions
-		// Both have RMS level at -35 dBFS
-		intervals := makeSpeechTestIntervals(0, 260, -35.0, 1500.0, 0.5)
+		// Both have RMS level at -20 dBFS (good speech level)
+		// Use makeSpeechIntervalsScorable for realistic spectral values
+		intervals := makeSpeechIntervalsScorable(0, 260, 6.0, 0.1, 1500.0, -20.0)
 
-		// Create noise profile with noise floor at -55 dBFS
-		// SNR margin = -35 - (-55) = 20 dB = exactly minSNRMargin
+		// Create noise profile with noise floor at -40 dBFS
+		// SNR margin = -20 - (-40) = 20 dB = exactly minSNRMargin
 		noiseProfileGood := &NoiseProfile{
-			MeasuredNoiseFloor: -55.0, // 20 dB margin - passes
+			MeasuredNoiseFloor: -40.0, // 20 dB margin - passes
 		}
 
 		// Run with good SNR margin
@@ -1288,10 +1289,10 @@ func TestFindBestSpeechRegion_SNRMarginCheck(t *testing.T) {
 			t.Fatal("expected a best region to be selected with good SNR")
 		}
 
-		// Create noise profile with noise floor at -45 dBFS
-		// SNR margin = -35 - (-45) = 10 dB < 20 dB minSNRMargin
+		// Create noise profile with noise floor at -30 dBFS
+		// SNR margin = -20 - (-30) = 10 dB < 20 dB minSNRMargin
 		noiseProfileBad := &NoiseProfile{
-			MeasuredNoiseFloor: -45.0, // 10 dB margin - should be penalised
+			MeasuredNoiseFloor: -30.0, // 10 dB margin - should be penalised
 		}
 
 		// Run with poor SNR margin
@@ -1335,8 +1336,8 @@ func TestFindBestSpeechRegion_SNRMarginCheck(t *testing.T) {
 			{Start: 0, End: 30 * time.Second, Duration: 30 * time.Second},
 		}
 
-		// Create intervals with low RMS level
-		intervals := makeSpeechTestIntervals(0, 120, -35.0, 1500.0, 0.5)
+		// Create intervals with good speech characteristics
+		intervals := makeSpeechIntervalsScorable(0, 120, 6.0, 0.1, 1500.0, -20.0)
 
 		// Run without noise profile
 		resultNoProfile := findBestSpeechRegion(regions, intervals, nil)
@@ -1345,8 +1346,9 @@ func TestFindBestSpeechRegion_SNRMarginCheck(t *testing.T) {
 		}
 
 		// Create a "good" noise profile for comparison
+		// SNR margin = -20 - (-40) = 20 dB = exactly minSNRMargin
 		noiseProfileGood := &NoiseProfile{
-			MeasuredNoiseFloor: -55.0, // 20 dB margin - passes
+			MeasuredNoiseFloor: -40.0, // 20 dB margin - passes
 		}
 		resultWithProfile := findBestSpeechRegion(regions, intervals, noiseProfileGood)
 

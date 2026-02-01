@@ -3395,7 +3395,8 @@ func findBestSpeechRegion(regions []SpeechRegion, intervals []IntervalSample, no
 				// Apply penalty factor rather than rejecting outright
 				// This allows selection if no better candidates exist
 				snrPenalty := snrMargin / minSNRMargin // 0.0 to 1.0
-				metrics.Score *= clampFloat(snrPenalty, 0.1, 1.0)
+				score *= clampFloat(snrPenalty, 0.1, 1.0)
+				metrics.Score = score
 			}
 		} else {
 			debugLog("SNR margin check skipped: no noise profile available")
