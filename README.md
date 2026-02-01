@@ -29,7 +29,7 @@ That's it. No configuration, no knobs to tweak, no audio knowledge required.
 
 ## The Filter Chain
 
-Jivetalking's processing pipeline draws inspiration from legendary studio hardware: the **Drawmer DS201** noise gate, noise suppressor, **Teletronix LA-2A** optical compressor, and **UREI 1176** limiter. Each filter in the chain prepares the audio for the next.
+Jivetalking's processing pipeline draws inspiration from legendary studio hardware: the **Drawmer DS201** noise gate, noise suppressor, **Teletronix LA-2A** optical compressor, and **CBS Volumax** limiter. Each filter in the chain prepares the audio for the next.
 
 ### Pass 1: Analysis
 
@@ -58,7 +58,7 @@ Two-stage EBU R128 loudness normalisation using FFmpeg's loudnorm filter:
 | Pass | What It Does |
 |------|-------------|
 | **Pass 3: Measure** | Analyses processed audio to get integrated loudness, true peak, LRA, and threshold |
-| **Pass 4: Normalise** | Applies loudnorm with linear mode using Pass 3 measurements; UREI 1176-inspired peak limiter creates headroom for full linear gain |
+| **Pass 4: Normalise** | Applies loudnorm with linear mode using Pass 3 measurements; CBS Volumax-inspired peak limiter creates headroom for full linear gain |
 
 ### Why This Order Matters
 
@@ -211,7 +211,7 @@ internal/
 
 - [Gate: Drawmer DS201](docs/FilterGate-Drawmer%20DS201.md) - Soft expander gate with adaptive threshold
 - [Compressor: LA-2A](docs/FilterCompressor-Teletronix%20LA-2A.md) - Programme-dependent optical compression
-- [Limiter: UREI 1176](docs/FilterLimiter-UREI1176.md) - Adaptive peak limiter
+- [Limiter: CBS Volumax](docs/FilterLimiter-CBS-Volumax.md) - Transparent broadcast limiter
 - [Spectral Analysis](docs/Spectral%20Analysis.md) - How measurements drive adaptive processing
 
 ---

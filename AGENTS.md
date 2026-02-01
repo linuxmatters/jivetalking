@@ -40,7 +40,7 @@ internal/
 1. **Pass 1 (Analysis):** Measures LUFS, true peak, LRA, noise floor, spectral characteristics
 2. **Pass 2 (Processing):** Applies adaptive filter chain tuned to measurements
 3. **Pass 3 (Measuring):** Runs loudnorm in measurement mode to get input stats
-4. **Pass 4 (Normalising):** Applies loudnorm with linear mode; UREI 1176-inspired limiter creates headroom for full linear gain
+4. **Pass 4 (Normalising):** Applies loudnorm with linear mode; CBS Volumax-inspired limiter creates headroom for full linear gain
 
 **Filter chain order (Pass 2):**
 ```

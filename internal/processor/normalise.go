@@ -696,7 +696,7 @@ func applyLoudnormAndMeasure(
 // Chain order: [alimiter] → loudnorm → astats → aspectralstats → ebur128 → resample
 //
 // The alimiter is inserted when needed to create headroom for loudnorm's linear mode.
-// It uses 1176-inspired parameters for transparent peak limiting.
+// It uses CBS Volumax-inspired parameters for transparent peak limiting.
 //
 // The loudnorm filter in second pass mode:
 // - Uses measurements from measureWithLoudnorm() (LoudnormMeasurement)
@@ -719,7 +719,7 @@ func applyLoudnormAndMeasure(
 func buildLoudnormFilterSpec(config *FilterChainConfig, measurement *LoudnormMeasurement) string {
 	var filters []string
 
-	// 1. Pre-limiting with adaptive ceiling (1176-inspired peak limiter)
+	// 1. Pre-limiting with adaptive ceiling (CBS Volumax-inspired peak limiter)
 	// Calculate if limiting is needed to allow loudnorm's full linear gain
 	ceiling, needsLimiting, _ := calculateLimiterCeiling(
 		measurement.InputI,
@@ -728,16 +728,16 @@ func buildLoudnormFilterSpec(config *FilterChainConfig, measurement *LoudnormMea
 		config.LoudnormTargetTP,
 	)
 	if needsLimiting {
-		// 1176-inspired parameters for transparent peak limiting:
-		// - attack=0.1ms: Fast attack catches all peaks (1176's "firm lid")
-		// - release=50ms: Quick recovery avoids pumping on speech
-		// - asc=1: Auto Soft Clipping approximates 1176's two-stage release
-		// - asc_level=0.5: Moderate smoothing for speech
+		// CBS Volumax-inspired parameters for transparent peak limiting:
+		// - attack=5ms: Gentle attack preserves transient shape, avoids click-inducing discontinuities
+		// - release=100ms: Smooth recovery eliminates pumping artifacts
+		// - asc=1: Auto Soft Clipping for program-dependent release
+		// - asc_level=0.8: Higher value = more program-dependent smoothing (Volumax characteristic)
 		// - level_in/level_out=1: Unity gain (no makeup)
 		// - latency=1: Enable lookahead for better transient handling
 		limiterCeilingLinear := math.Pow(10, ceiling/20.0)
 		limiterFilter := fmt.Sprintf(
-			"alimiter=limit=%.6f:attack=0.1:release=50:level_in=1:level_out=1:level=0:latency=1:asc=1:asc_level=0.5",
+			"alimiter=limit=%.6f:attack=5:release=100:level_in=1:level_out=1:level=0:latency=1:asc=1:asc_level=0.8",
 			limiterCeilingLinear,
 		)
 		filters = append(filters, limiterFilter)
