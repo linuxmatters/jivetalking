@@ -535,7 +535,145 @@ const (
 	// speechEntropyMax is the maximum entropy for speech (structured signal).
 	// Pure noise approaches 1.0; speech is typically 0.3-0.7.
 	speechEntropyMax = 0.70
+)
 
+// Speech window stability scoring constants
+const (
+	// voicingDensityThreshold is the target proportion of intervals
+	// that should have kurtosis > voicedKurtosisThreshold (voiced speech indicator).
+	// Used to normalise voicing density score: 60% density = score 1.0.
+	// Regions below this threshold are penalised but can still be compared.
+	voicingDensityThreshold = 0.6
+
+	// voicedKurtosisThreshold is the kurtosis level above which
+	// an interval is considered "voiced" for density calculation.
+	// Reference: Spectral-Metrics-Reference.md shows spoken word target is 4-12,
+	// with 5-10 indicating "Clear harmonics" / "Good voice quality".
+	// Using 4.5 to include the lower end of spoken word range while
+	// excluding "Mixed tonal and noise" content (3-5 range).
+	voicedKurtosisThreshold = 4.5
+
+	// rolloffIdealMin/Max define the ideal rolloff range for stable comparison.
+	// Aligned with Spectral-Metrics-Reference.md vocal targets:
+	//   - Spoken word (male): 4000-8000 Hz
+	//   - Spoken word (female): 5000-10000 Hz
+	// Using male range as ideal since it captures both genders' lower range.
+	rolloffIdealMin = 4000.0 // Hz
+	rolloffIdealMax = 8000.0 // Hz
+
+	// rolloffAcceptableMin/Max define the acceptable rolloff range.
+	// Expanded to accommodate female vocal targets (up to 10000 Hz).
+	// Below 2500 Hz is "Dark, heavy voiced" per reference.
+	rolloffAcceptableMin = 2500.0  // Hz
+	rolloffAcceptableMax = 10000.0 // Hz
+
+	// Flux thresholds aligned with Spectral-Metrics-Reference.md:
+	//   < 0.001: Very stable, sustained (held vowels)
+	//   0.001-0.005: Stable, continuous (sustained phonation)
+	//   0.005-0.02: Moderate variation (natural articulation)
+	//   0.02-0.05: High variation (consonant transitions)
+	//   > 0.05: Very high, transient (plosives)
+	//
+	// Vocal targets from reference:
+	//   - Spoken word (sustained vowels): < 0.005
+	//   - Spoken word (natural speech): 0.005-0.03
+
+	// fluxStableThreshold: within "Stable, continuous" range (sustained phonation).
+	fluxStableThreshold = 0.004
+
+	// fluxNormalThreshold: mid-point of "Moderate variation" (natural articulation).
+	fluxNormalThreshold = 0.010
+
+	// fluxTransientThreshold: boundary of "High variation" (consonant transitions).
+	fluxTransientThreshold = 0.020
+
+	// fluxAcceptableThreshold: natural speech upper bound.
+	fluxAcceptableThreshold = 0.030
+
+	// SNR margin for noise floor separation (see Phase 7)
+	minSNRMargin = 20.0 // dB
+
+	// Crest factor scoring parameters
+	// Reference: Spectral-Metrics-Reference.md shows spoken word optimal is 9-14 dB
+	crestFactorMin   = 9.0  // dB - minimum acceptable
+	crestFactorMax   = 18.0 // dB - maximum acceptable
+	crestFactorIdeal = 12.0 // dB - optimal for spoken word
+)
+
+// Scoring weight constants for scoreSpeechIntervalWindow
+// Weights sum to 1.0, split between stability (0.55) and quality (0.45)
+const (
+	weightKurtosis    = 0.15 // Quality: harmonic clarity
+	weightFlatness    = 0.10 // Quality: tonal quality
+	weightCentroid    = 0.10 // Quality: voice-range frequency
+	weightRMS         = 0.10 // Quality: activity level
+	weightConsistency = 0.10 // Stability: low variance
+	weightVoicing     = 0.15 // Stability: voiced content proportion
+	weightRolloff     = 0.15 // Stability: moderate rolloff
+	weightFlux        = 0.15 // Stability: low spectral change
+)
+
+// Scoring weight constants for scoreSpeechCandidate
+// Weights sum to 1.0, split between stability (0.30) and quality (0.70)
+const (
+	candidateWeightAmplitude = 0.20 // Quality: louder = better sample
+	candidateWeightCentroid  = 0.15 // Quality: voice range
+	candidateWeightCrest     = 0.15 // Quality: typical speech dynamics
+	candidateWeightDuration  = 0.10 // Quality: longer = more representative
+	candidateWeightVoicing   = 0.10 // Stability: voiced content proportion
+	candidateWeightRolloff   = 0.15 // Stability: moderate rolloff
+	candidateWeightFlux      = 0.15 // Stability: low spectral change
+)
+
+// calculateRolloffScore returns a score (0.0-1.0) for spectral rolloff stability.
+// Regions with rolloff in the ideal range (4000-8000 Hz) score 1.0.
+// Regions in the acceptable range (2500-10000 Hz) score 0.5-1.0.
+// Regions outside acceptable range score 0.0.
+func calculateRolloffScore(rolloff float64) float64 {
+	switch {
+	case rolloff >= rolloffIdealMin && rolloff <= rolloffIdealMax:
+		return 1.0
+	case rolloff >= rolloffAcceptableMin && rolloff < rolloffIdealMin:
+		// Below ideal: linear interpolation from 0.5 to 1.0
+		return 0.5 + 0.5*(rolloff-rolloffAcceptableMin)/(rolloffIdealMin-rolloffAcceptableMin)
+	case rolloff > rolloffIdealMax && rolloff <= rolloffAcceptableMax:
+		// Above ideal: linear interpolation from 1.0 to 0.5
+		return 0.5 + 0.5*(rolloffAcceptableMax-rolloff)/(rolloffAcceptableMax-rolloffIdealMax)
+	default:
+		return 0.0
+	}
+}
+
+// calculateFluxScore returns a score (0.0-1.0) for spectral flux stability.
+// Lower flux indicates more stable voicing, which produces more comparable
+// before/after metrics.
+func calculateFluxScore(flux float64) float64 {
+	switch {
+	case flux <= fluxStableThreshold:
+		return 1.0
+	case flux <= fluxNormalThreshold:
+		// Linear decay from 1.0 to 0.7
+		return 1.0 - (flux-fluxStableThreshold)/(fluxNormalThreshold-fluxStableThreshold)*0.3
+	case flux <= fluxTransientThreshold:
+		// Linear decay from 0.7 to 0.4
+		return 0.7 - (flux-fluxNormalThreshold)/(fluxTransientThreshold-fluxNormalThreshold)*0.3
+	case flux <= fluxAcceptableThreshold:
+		// Linear decay from 0.4 to 0.2
+		return 0.4 - (flux-fluxTransientThreshold)/(fluxAcceptableThreshold-fluxTransientThreshold)*0.2
+	default:
+		// Floor score for highly dynamic content
+		return 0.2
+	}
+}
+
+// calculateVoicingScore returns a score (0.0-1.0) for voicing density.
+// Density at or above voicingDensityThreshold (60%) scores 1.0.
+// Lower densities score proportionally less.
+func calculateVoicingScore(voicingDensity float64) float64 {
+	return clampFloat(voicingDensity/voicingDensityThreshold, 0.0, 1.0)
+}
+
+const (
 	// Golden speech region refinement constants
 	// After selecting the best speech candidate, refine to a representative sub-window
 	// to avoid averaging across pauses that contaminate spectral metrics.
@@ -801,12 +939,20 @@ func scoreIntervalWindow(intervals []IntervalSample) float64 {
 
 // scoreSpeechIntervalWindow calculates a quality score for a contiguous window of speech intervals.
 // Returns a 0-1 score where higher = better quality speech for profiling.
-// Scores based on spectral characteristics that indicate clear, continuous speech:
-//   - Kurtosis (0.20): higher average = clearer harmonics
-//   - Flatness (0.20): lower = more tonal (inverted)
-//   - Centroid (0.20): peak at voice centre (~2000 Hz), decay toward edges
-//   - Consistency (0.25): low kurtosis variance = stable voicing
-//   - RMS (0.15): louder = more active speech
+// Scores based on spectral characteristics that indicate clear, continuous speech,
+// with emphasis on stability for reliable before/after comparison:
+//
+// Stability weights (0.55):
+//   - Voicing (0.15): high voiced content = predictable behaviour
+//   - Consistency (0.10): low variance = stable across window
+//   - Rolloff (0.15): moderate rolloff = stable after NR
+//   - Flux (0.15): low flux = sustained voicing
+//
+// Quality weights (0.45):
+//   - Kurtosis (0.15): harmonic clarity
+//   - Flatness (0.10): tonal quality
+//   - Centroid (0.10): voice-range frequency
+//   - RMS (0.10): activity level
 func scoreSpeechIntervalWindow(intervals []IntervalSample) float64 {
 	if len(intervals) == 0 {
 		return 0 // Should not happen in normal use
@@ -816,6 +962,7 @@ func scoreSpeechIntervalWindow(intervals []IntervalSample) float64 {
 
 	// Accumulate metrics
 	var kurtosisSum, flatnessSum, centroidSum, rmsSum float64
+	var rolloffSum, fluxSum float64
 	kurtosisValues := make([]float64, len(intervals))
 
 	for i, interval := range intervals {
@@ -823,6 +970,8 @@ func scoreSpeechIntervalWindow(intervals []IntervalSample) float64 {
 		flatnessSum += interval.SpectralFlatness
 		centroidSum += interval.SpectralCentroid
 		rmsSum += interval.RMSLevel
+		rolloffSum += interval.SpectralRolloff
+		fluxSum += interval.SpectralFlux
 		kurtosisValues[i] = interval.SpectralKurtosis
 	}
 
@@ -830,6 +979,8 @@ func scoreSpeechIntervalWindow(intervals []IntervalSample) float64 {
 	avgFlatness := flatnessSum / n
 	avgCentroid := centroidSum / n
 	avgRMS := rmsSum / n
+	avgRolloff := rolloffSum / n
+	avgFlux := fluxSum / n
 
 	// Calculate kurtosis variance for consistency score
 	var kurtosisVarianceSum float64
@@ -839,16 +990,32 @@ func scoreSpeechIntervalWindow(intervals []IntervalSample) float64 {
 	}
 	kurtosisVariance := kurtosisVarianceSum / n
 
-	// Kurtosis score (0.20): higher kurtosis = clearer harmonics
+	// Voicing density score: prefer regions with high proportion of voiced content.
+	// Regions with low voicing density (< 60% of intervals with kurtosis > 4.5)
+	// contain too much unvoiced content (fricatives, stops, silence) for stable
+	// comparison. Rather than using a hard gate that prevents differentiation
+	// among low-density candidates (e.g., whispered speech, heavily accented speech),
+	// we use a weighted score component that allows relative ranking.
+	voicedCount := 0
+	for _, k := range kurtosisValues {
+		if k > voicedKurtosisThreshold {
+			voicedCount++
+		}
+	}
+	voicingDensity := float64(voicedCount) / n
+	voicingScore := calculateVoicingScore(voicingDensity)
+	// voicingScore: 0.0 at 0% density, 1.0 at 60%+ density
+
+	// Kurtosis score: higher kurtosis = clearer harmonics
 	// Typical speech kurtosis ranges 5-10; score peaks around 7.5 (mid-point)
 	// Reference: Gaussian kurtosis=3; speech harmonic structure produces 5-10
 	kurtosisScore := clampFloat(avgKurtosis/7.5, 0.0, 1.0)
 
-	// Flatness score (0.20): lower flatness = more tonal = better speech
+	// Flatness score: lower flatness = more tonal = better speech
 	// Flatness 0 = pure tone, 1 = white noise; speech typically 0.1-0.4
 	flatnessScore := clampFloat(1.0-avgFlatness, 0.0, 1.0)
 
-	// Centroid score (0.20): peak at voice centre, decay toward edges
+	// Centroid score: peak at voice centre, decay toward edges
 	// Voice range: speechCentroidMin (200 Hz) to speechCentroidMax (4500 Hz)
 	centroidScore := 0.0
 	if avgCentroid >= speechCentroidMin && avgCentroid <= speechCentroidMax {
@@ -860,19 +1027,47 @@ func scoreSpeechIntervalWindow(intervals []IntervalSample) float64 {
 		centroidScore = 1.0 - (distFromMid/voiceHalfWidth)*0.5
 	}
 
-	// Consistency score (0.25): low kurtosis variance = stable voicing
+	// Consistency score: low kurtosis variance = stable voicing
 	// Variance > 100 is very inconsistent; clamp score at that point
 	consistencyScore := clampFloat(1.0-(kurtosisVariance/100.0), 0.0, 1.0)
 
-	// RMS score (0.15): louder = more active speech
+	// RMS score: louder = more active speech
 	// Range: -30 dBFS (worst) to -12 dBFS (best)
 	rmsScore := 0.0
 	if avgRMS > -30.0 {
 		rmsScore = clampFloat((avgRMS-(-30.0))/18.0, 0.0, 1.0)
 	}
 
-	// Weighted combination (per plan: consistency elevated to 0.25)
-	return kurtosisScore*0.20 + flatnessScore*0.20 + centroidScore*0.20 + consistencyScore*0.25 + rmsScore*0.15
+	// Rolloff score: prefer regions with rolloff in typical voiced speech range.
+	// Uses shared helper function for consistency with scoreSpeechCandidate.
+	rolloffScore := calculateRolloffScore(avgRolloff)
+
+	// Flux score: prefer regions with low spectral flux (stable voicing).
+	// Uses shared helper function for consistency with scoreSpeechCandidate.
+	fluxScore := calculateFluxScore(avgFlux)
+
+	// Weighted combination optimised for measurement stability
+	// Weights sum to 1.0
+	//
+	// Stability-focused weights:
+	//   - Voicing (0.15): high voiced content = predictable behaviour
+	//   - Consistency (0.10): low variance = stable across window
+	//   - Rolloff (0.15): moderate rolloff = stable after NR
+	//   - Flux (0.15): low flux = sustained voicing
+	//
+	// Quality weights (reduced from original):
+	//   - Kurtosis (0.15): harmonic clarity
+	//   - Flatness (0.10): tonal quality
+	//   - Centroid (0.10): voice-range frequency
+	//   - RMS (0.10): activity level
+	return kurtosisScore*weightKurtosis +
+		flatnessScore*weightFlatness +
+		centroidScore*weightCentroid +
+		consistencyScore*weightConsistency +
+		rmsScore*weightRMS +
+		voicingScore*weightVoicing +
+		rolloffScore*weightRolloff +
+		fluxScore*weightFlux
 }
 
 // refineToGoldenSpeechSubregion finds the most representative sub-region within a speech candidate.
