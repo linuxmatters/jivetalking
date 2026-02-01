@@ -1,218 +1,194 @@
 # Jivetalking 🕺
 
-*Professional podcast audio preprocessing - broadcast-quality results with zero audio engineering knowledge required*
-
----
-
-## What It Does
-
-Raw microphone recordings are messy: room rumble, background hiss, awkward silences, inconsistent volume, harsh sibilance. Jivetalking fixes all of this automatically, transforming raw voice recordings into broadcast-ready audio at **-18 LUFS** (the broadcast/podcast standard).
+Raw microphone recordings into broadcast-ready audio in one command. No configuration, and no surprises.
 
 ```bash
-jivetalking presenter1.flac presenter2.flac presenter3.flac
+jivetalking presenter1.flac presenter2.flac
 ```
 
-That's it. No configuration, no knobs to tweak, no audio knowledge required.
+Your files emerge at -18 LUFS, the podcast/broadcast standard, with room rumble, background hiss, clicks, and harsh sibilance sorted automatically. Everything needed is embedded in the binary. This is not how audio tools usually work, and that is rather the point.
 
 ---
 
-## Design Philosophy
+## The Four-Pass Pipeline
 
-| Principle | Implementation |
-|-----------|----------------|
-| **Best outcome by default** | Professional results with zero configuration |
-| **Quality over speed** | Four-pass processing for measurement-driven accuracy |
-| **Transparency over depth** | Every filter prioritises natural sound |
-| **Adaptive everything** | Parameters tune automatically to your specific recording |
-
----
-
-## The Filter Chain
-
-Jivetalking's processing pipeline draws inspiration from legendary studio hardware: the **Drawmer DS201** noise gate, noise suppressor, **Teletronix LA-2A** optical compressor, and **CBS Volumax** limiter. Each filter in the chain prepares the audio for the next.
+Jivetalking treats audio processing as measurement science, not guesswork. It analyses your recording first, then adapts every filter parameter to match. A dark-voiced narrator gets gentler de-essing. Pre-compressed audio gets lighter compression. Noisy home offices get different treatment than clean studios.
 
 ### Pass 1: Analysis
 
-Measures your audio's characteristics to drive adaptive processing:
+Measures everything that matters:
 
-- Integrated loudness, true peak, loudness range (EBU R128)
-- Noise floor and silence profile
-- [Spectral characteristics](docs/Spectral%20Analysis.md) (centroid, rolloff, kurtosis, skewness)
-- Dynamic range and transient sharpness
+- **Loudness:** Integrated LUFS, true peak, loudness range (EBU R128)
+- **Noise profile:** Floor level and spectral signature
+- **Speech characteristics:** RMS level, crest factor, and spectral traits when speech is detected
+- **Dynamic behaviour:** Kurtosis and spectral flux for transient analysis
 
 ### Pass 2: Adaptive Processing
 
-| Filter | Inspiration | What It Does |
-|--------|-------------|--------------|
-| **High-pass** | DS201 side-chain | Removes subsonic rumble (50–60 Hz, adaptive to voice) |
-| **Low-pass** | DS201 side-chain | Removes ultrasonic content that triggers false processing |
-| **Noise reduction** | Non-Local Means | Adaptive Non-Local Means (anlmdn) denoiser with compand residual suppression |
-| **Gate** | DS201 expander | Soft expansion for natural inter-phrase cleanup |
-| **Compressor** | LA-2A | Programme-dependent optical compression with ~10ms attack |
-| **De-esser** | - | Tames sibilance (adaptive intensity based on spectral rolloff) |
+Filter chain inspired by studio legends, tuned to your specific audio:
+
+| Filter | Hardware Inspiration | What It Does |
+|--------|---------------------|--------------|
+| **Highpass** | Drawmer DS201 | Removes subsonic rumble (60-120 Hz, adaptive to spectral content) |
+| **Noise reduction** | Non-Local Means | Adaptive anlmdn denoiser with compand residual suppression |
+| **Gate** | DS201 expander | Soft expansion for natural inter-phrase cleanup; breath reduction option positions threshold between noise floor and quiet speech level |
+| **Compressor** | Teletronix LA-2A | Programme-dependent optical compression; ratio and release adapt to kurtosis and flux |
+| **De-esser** | — | Adaptive intensity (0.0-0.6) based on spectral centroid and rolloff |
 
 ### Pass 3 & 4: Loudness Normalisation
 
-Two-stage EBU R128 loudness normalisation using FFmpeg's loudnorm filter:
+Two-stage EBU R128 normalisation with a CBS Volumax-inspired twist:
 
-| Pass | What It Does |
-|------|-------------|
-| **Pass 3: Measure** | Analyses processed audio to get integrated loudness, true peak, LRA, and threshold |
-| **Pass 4: Normalise** | Applies loudnorm with linear mode using Pass 3 measurements; CBS Volumax-inspired peak limiter creates headroom for full linear gain |
+1. **Limiter** creates headroom by reducing true peaks
+2. **Loudnorm** applies linear gain to reach -18 LUFS without clipping or dynamic processing
+
+This order matters. The limiter provides breathing room so loudnorm can use its transparent linear mode rather than falling back to dynamic compression.
 
 ### Why This Order Matters
 
 Each filter prepares audio for the next:
 
-1. **Rumble removal before spectral analysis** - prevents low-frequency artifacts from confusing noise profiling
-2. **Denoising before gating** - lowers the noise floor so the gate threshold can be set optimally
-3. **Gating before compression** - removes silence before dynamics processing amplifies room tone
-4. **Compression before de-essing** - compression emphasises sibilance; de-essing corrects it
-5. **Normalisation last** - sees the fully processed signal for accurate loudness targeting
-6. **Limiter before loudnorm** - creates headroom so loudnorm can apply full linear gain without clipping or falling back to dynamic mode
-
-### Why Adaptive Matters
-
-A dark-voiced narrator doesn't need aggressive de-essing. Pre-compressed audio doesn't need heavy compression. Clean studio recordings need different gating than noisy home offices.
-
-Jivetalking measures your specific audio and adapts every filter automatically. The DS201-inspired gate tunes its threshold to your measured noise floor. The noise reducer adapts its compand expansion based on your measured noise profile. The LA-2A-inspired compressor adjusts ratio and release based on your dynamic range.
-
----
-
-## Workflow
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  1. Record                                                  │
-│     Each presenter records individually → export as FLAC    │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│  2. Process                                                 │
-│     $ jivetalking *.flac                                    │
-│     Output: *-processed.flac (level-matched at -18 LUFS)    │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│  3. Edit in Audacity                                        │
-│     • Import all processed files                            │
-│     • Top/tail and remove flubs                             │
-│     • Select all tracks → Tracks menu → Mix → Mix to Mono   │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│  4. Finalize                                                │
-│     • Analyze → Loudness Normalization (preview to check)   │
-│     • Normalize to -16 LUFS (dual-mono required)            │
-│     • Export as final podcast file                          │
-└─────────────────────────────────────────────────────────────┘
-```
+1. **Rumble removal before denoising** — prevents low-frequency artifacts confusing noise profiling
+2. **Denoising before gating** — lowers noise floor so gate threshold can be optimal
+3. **Gating before compression** — removes silence before dynamics processing amplifies room tone
+4. **Compression before de-essing** — compression emphasises sibilance; de-essing corrects it
+5. **Normalisation last** — sees fully processed signal for accurate loudness targeting
 
 ---
 
 ## Installation
 
-### Pre-built Binaries
+Single binary. Zero external dependencies. FFmpeg is embedded via ffmpeg-statigo.
 
-Single binary with embedded FFmpeg—no external dependencies.
+### bin (Recommended)
 
-Download the latest release for your platform from the [releases page](https://github.com/linuxmatters/jivetalking/releases):
+Install with [bin](https://github.com/marcosnils/bin), a GitHub-aware binary manager:
 
 ```bash
-# Linux (amd64)
-chmod +x jivetalking-linux-amd64
-sudo mv jivetalking-linux-amd64 /usr/local/bin/jivetalking
-
-# Linux (arm64)
-chmod +x jivetalking-linux-arm64
-sudo mv jivetalking-linux-arm64 /usr/local/bin/jivetalking
-
-# macOS (Intel)
-chmod +x jivetalking-darwin-amd64
-sudo mv jivetalking-darwin-amd64 /usr/local/bin/jivetalking
-
-# macOS (Apple Silicon)
-chmod +x jivetalking-darwin-arm64
-sudo mv jivetalking-darwin-arm64 /usr/local/bin/jivetalking
+bin install github.com/linuxmatters/jivetalking
 ```
 
-### Build from Source
+This picks the correct platform and architecture, drops the binary into `~/.local/bin/`, and handles updates via `bin update`. No root required, no path wrangling.
 
-See [Development](#development) section below.
+### Manual Download
+
+Fetch from the [releases page](https://github.com/linuxmatters/jivetalking/releases):
+
+```bash
+# Linux amd64
+chmod +x jivetalking-linux-amd64
+mv jivetalking-linux-amd64 ~/.local/bin/jivetalking
+
+# Linux arm64
+chmod +x jivetalking-linux-arm64
+mv jivetalking-linux-arm64 ~/.local/bin/jivetalking
+
+# macOS Intel
+chmod +x jivetalking-darwin-amd64
+mv jivetalking-darwin-amd64 ~/.local/bin/jivetalking
+
+# macOS Apple Silicon
+chmod +x jivetalking-darwin-arm64
+mv jivetalking-darwin-arm64 ~/.local/bin/jivetalking
+```
 
 ---
 
-## CLI Usage
+## Usage
 
 ```bash
-jivetalking [flags] <files>
+jivetalking [flags] <files...>
 ```
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-v, --version` | Show version information |
+| `-v, --version` | Show version and exit |
 | `-d, --debug` | Enable debug logging to `jivetalking-debug.log` |
-| `--logs` | Save detailed analysis reports |
+| `--logs` | Save detailed analysis reports alongside output |
+
 
 ### Examples
 
 ```bash
-# Process multiple files
-jivetalking presenter1.flac presenter2.flac
+# Process multiple presenters
+jivetalking presenter1.flac presenter2.flac presenter3.flac
 
-# Process with debug logging and analysis reports
-jivetalking -d --logs recording.flac
+# Debug a problematic recording
+jivetalking -d --logs troublesome-recording.flac
 
 # Process all FLAC files in directory
 jivetalking *.flac
 ```
 
-### Output
+Output files are named with `-processed` suffix: `recording.flac` becomes `recording-processed.flac`.
 
-Processed files are saved in the same directory with `-processed` suffix:
-- `recording.flac` → `recording-processed.flac`
+---
+
+## The Typical Workflow
+
+```
+Record → Process → Edit → Finalise
+  │         │         │         │
+  │         │         │         └─ Export at -16 LUFS (dual-mono)
+  │         │         │
+  │         │         └─ Import to Audacity, top/tail, mix to mono
+  │         │
+  │         └─ $ jivetalking *.flac (-18 LUFS, matched levels)
+  │
+  └─ Each presenter records separately, exports FLAC
+```
 
 ---
 
 ## Development
 
-```bash
-# Clone with submodules (ffmpeg-statigo provides embedded FFmpeg)
-git clone --recursive https://github.com/linuxmatters/jivetalking
-cd jivetalking
+Requires Go, Nix, and a tolerance for CGO.
 
-# Or initialise submodules after cloning
+```bash
+# Enter development shell (FFmpeg dependencies provided)
+nix develop
+
+# Initialise submodules (ffmpeg-statigo provides embedded FFmpeg)
 just setup
 
-# Build
+# Download static FFmpeg libraries
+cd third_party/ffmpeg-statigo && go run ./cmd/download-lib
+
+# Build (never use go build directly - requires CGO + version injection)
 just build
 
 # Run tests
 just test
+
+# Install to ~/.local/bin
+just install
 ```
 
 ### Project Structure
 
 ```
-cmd/jivetalking/main.go     # CLI entry point (Kong + Bubbletea)
+cmd/jivetalking/main.go     # CLI entry, Kong flags, Bubbletea TUI
 internal/
-├── audio/                  # FFmpeg demuxer/decoder wrapper
+├── audio/reader.go         # FFmpeg demuxer/decoder wrapper
 ├── processor/
-│   ├── analyzer.go         # Pass 1: ebur128 + astats + spectral analysis
+│   ├── analyzer.go         # Pass 1: ebur128 + astats + aspectralstats
 │   ├── processor.go        # Pass 2: adaptive filter chain execution
-│   ├── filters.go          # Filter chain configuration and building
+│   ├── filters.go          # FilterChainConfig, BuildFilterSpec()
 │   └── adaptive.go         # Measurement-driven parameter tuning
-└── ui/                     # Bubbletea TUI model and views
+├── ui/                     # Bubbletea model, views, messages
+└── cli/                    # Help styling, version output
 ```
 
 ### Design Documentation
 
-- [Gate: Drawmer DS201](docs/FilterGate-Drawmer%20DS201.md) - Soft expander gate with adaptive threshold
-- [Compressor: LA-2A](docs/FilterCompressor-Teletronix%20LA-2A.md) - Programme-dependent optical compression
-- [Limiter: CBS Volumax](docs/FilterLimiter-CBS-Volumax.md) - Transparent broadcast limiter
-- [Spectral Metrics Reference](docs/Spectral-Metrics-Reference.md) - How audio measurements are interpreted
+- [Gate: Drawmer DS201](docs/FilterGate-Drawmer%20DS201.md) — Soft expander with adaptive thresholding
+- [Compressor: LA-2A](docs/FilterCompressor-Teletronix%20LA-2A.md) — Programme-dependent optical compression
+- [Limiter: CBS Volumax](docs/FilterLimiter-CBS-Volumax.md) — Transparent broadcast limiting
+- [Spectral Metrics Reference](docs/Spectral-Metrics-Reference.md) — How measurements drive adaptation
+
+See [AGENTS.md](AGENTS.md) for complete development guidelines, architecture details, and contribution standards.
 
 ---
 
@@ -221,15 +197,8 @@ internal/
 ```bash
 # Run tests before committing
 just test
-
-# Create a release (validates format, creates annotated tag)
-just release X.Y.Z
-
-# Preview changelog
-just changelog
 ```
 
 - Follow [Conventional Commits](https://www.conventionalcommits.org/) format
-- Use `just build` for releases (CGO + version injection required)
-- See [AGENTS.md](AGENTS.md) for full development guidelines
-
+- Use `just build` for any releases (CGO + version injection required)
+- GitHub Actions builds binaries for linux-amd64, linux-arm64, darwin-amd64, darwin-arm64 automatically
