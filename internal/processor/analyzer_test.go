@@ -881,6 +881,7 @@ func TestScoreSpeechCandidate(t *testing.T) {
 
 // makeSpeechIntervalsScorable creates intervals with specific spectral characteristics for scoring tests.
 // Allows control over kurtosis, flatness, centroid, and RMS for testing scoreSpeechIntervalWindow.
+// Sets ideal rolloff (6000 Hz) and low flux (0.003) for stable scoring by default.
 func makeSpeechIntervalsScorable(startTime time.Duration, count int, kurtosis, flatness, centroid, rms float64) []IntervalSample {
 	intervals := make([]IntervalSample, count)
 	for i := range intervals {
@@ -890,6 +891,8 @@ func makeSpeechIntervalsScorable(startTime time.Duration, count int, kurtosis, f
 			SpectralKurtosis: kurtosis,
 			SpectralFlatness: flatness,
 			SpectralCentroid: centroid,
+			SpectralRolloff:  6000.0, // Ideal range (4000-8000 Hz)
+			SpectralFlux:     0.003,  // Below stable threshold (0.004)
 		}
 	}
 	return intervals
@@ -918,31 +921,35 @@ func TestScoreSpeechIntervalWindow(t *testing.T) {
 			name: "pause-heavy window with high variance",
 			setup: func() []IntervalSample {
 				// Create intervals with VERY high kurtosis variance (consistency penalised)
-				// and centroid outside voice range
+				// and centroid outside voice range, with poor rolloff and high flux
 				intervals := make([]IntervalSample, 40)
 				for i := range intervals {
 					if i%2 == 0 {
 						intervals[i] = IntervalSample{
 							Timestamp:        time.Duration(i) * 250 * time.Millisecond,
-							RMSLevel:         -35.0,  // Quiet
-							SpectralKurtosis: 15.0,   // High
-							SpectralFlatness: 0.8,    // Noise-like
-							SpectralCentroid: 6000.0, // Outside voice range
+							RMSLevel:         -35.0,   // Quiet
+							SpectralKurtosis: 15.0,    // High
+							SpectralFlatness: 0.8,     // Noise-like
+							SpectralCentroid: 6000.0,  // Outside voice range
+							SpectralRolloff:  12000.0, // Above acceptable range (max 10000)
+							SpectralFlux:     0.05,    // High variation (transients)
 						}
 					} else {
 						intervals[i] = IntervalSample{
 							Timestamp:        time.Duration(i) * 250 * time.Millisecond,
-							RMSLevel:         -35.0,  // Quiet
-							SpectralKurtosis: 1.0,    // Low
-							SpectralFlatness: 0.8,    // Noise-like
-							SpectralCentroid: 6000.0, // Outside voice range
+							RMSLevel:         -35.0,   // Quiet
+							SpectralKurtosis: 1.0,     // Low
+							SpectralFlatness: 0.8,     // Noise-like
+							SpectralCentroid: 6000.0,  // Outside voice range
+							SpectralRolloff:  12000.0, // Above acceptable range (max 10000)
+							SpectralFlux:     0.05,    // High variation (transients)
 						}
 					}
 				}
 				return intervals
 			},
 			wantMin: 0.0,
-			wantMax: 0.45,
+			wantMax: 0.40,
 			desc:    "inconsistent noisy window should score low",
 		},
 		{
