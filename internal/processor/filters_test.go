@@ -82,6 +82,12 @@ func newTestConfig() *FilterChainConfig {
 		LoudnormDualMono:  true,
 		LoudnormLinear:    true,
 
+		// Adeclick defaults (Pass 4)
+		AdeclickEnabled:   true,
+		AdeclickThreshold: 1.5,
+		AdeclickWindow:    55.0,
+		AdeclickOverlap:   75.0,
+
 		FilterOrder: Pass2FilterOrder,
 	}
 }
@@ -682,6 +688,61 @@ func TestBuildVolumaxFilter(t *testing.T) {
 		spec := config.buildVolumaxFilter()
 		if spec != "" {
 			t.Errorf("buildVolumaxFilter() = %q, want empty when disabled", spec)
+		}
+	})
+}
+
+func TestBuildAdeclickFilter(t *testing.T) {
+	t.Run("default parameters", func(t *testing.T) {
+		config := newTestConfig()
+		config.AdeclickEnabled = true
+		config.AdeclickThreshold = 1.5
+		config.AdeclickWindow = 55.0
+		config.AdeclickOverlap = 75.0
+
+		spec := config.buildAdeclickFilter()
+
+		wantIn := []string{
+			"adeclick=",
+			"t=1.5",
+			"w=55",
+			"o=75",
+		}
+
+		for _, want := range wantIn {
+			if !strings.Contains(spec, want) {
+				t.Errorf("buildAdeclickFilter() = %q, want to contain %q", spec, want)
+			}
+		}
+	})
+
+	t.Run("custom parameters", func(t *testing.T) {
+		config := newTestConfig()
+		config.AdeclickEnabled = true
+		config.AdeclickThreshold = 2.0
+		config.AdeclickWindow = 100.0
+		config.AdeclickOverlap = 50.0
+
+		spec := config.buildAdeclickFilter()
+
+		if !strings.Contains(spec, "t=2.0") {
+			t.Errorf("buildAdeclickFilter() = %q, want to contain t=2.0", spec)
+		}
+		if !strings.Contains(spec, "w=100") {
+			t.Errorf("buildAdeclickFilter() = %q, want to contain w=100", spec)
+		}
+		if !strings.Contains(spec, "o=50") {
+			t.Errorf("buildAdeclickFilter() = %q, want to contain o=50", spec)
+		}
+	})
+
+	t.Run("disabled returns empty", func(t *testing.T) {
+		config := newTestConfig()
+		config.AdeclickEnabled = false
+
+		spec := config.buildAdeclickFilter()
+		if spec != "" {
+			t.Errorf("buildAdeclickFilter() = %q, want empty when disabled", spec)
 		}
 	})
 }

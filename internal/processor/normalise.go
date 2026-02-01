@@ -693,7 +693,7 @@ func applyLoudnormAndMeasure(
 
 // buildLoudnormFilterSpec constructs the filter chain for Pass 4 loudnorm application.
 //
-// Chain order: [alimiter] → loudnorm → astats → aspectralstats → ebur128 → resample
+// Chain order: [alimiter] → loudnorm → [adeclick] → astats → aspectralstats → ebur128 → resample
 //
 // The alimiter is inserted when needed to create headroom for loudnorm's linear mode.
 // It uses CBS Volumax-inspired parameters for transparent peak limiting.
@@ -772,22 +772,33 @@ func buildLoudnormFilterSpec(config *FilterChainConfig, measurement *LoudnormMea
 	)
 	filters = append(filters, loudnormFilter)
 
-	// 3. astats for amplitude measurements (same as Pass 2)
+	// 3. adeclick for click/pop repair
+	// Repairs waveform discontinuities from limiter/loudnorm gain transitions
+	// Must come after loudnorm (catches its clicks) and before measurement filters
+	if config.AdeclickEnabled {
+		filters = append(filters, fmt.Sprintf("adeclick=t=%.1f:w=%.0f:o=%.0f",
+			config.AdeclickThreshold,
+			config.AdeclickWindow,
+			config.AdeclickOverlap,
+		))
+	}
+
+	// 4. astats for amplitude measurements (same as Pass 2)
 	// Provides noise floor, dynamic range, RMS level, peak level, etc.
 	// measure_perchannel=all requests all available per-channel statistics
 	filters = append(filters, "astats=metadata=1:measure_perchannel=all")
 
-	// 4. aspectralstats for spectral analysis (same as Pass 2)
+	// 5. aspectralstats for spectral analysis (same as Pass 2)
 	// Provides centroid, spread, skewness, kurtosis, entropy, flatness, crest, rolloff, etc.
 	// win_size=2048 and win_func=hann match Pass 2 settings for comparable measurements
 	filters = append(filters, "aspectralstats=win_size=2048:win_func=hann:measure=all")
 
-	// 5. ebur128 for loudness validation (metadata only, no audio modification)
+	// 6. ebur128 for loudness validation (metadata only, no audio modification)
 	// dualmono=true ensures accurate mono loudness measurement
 	// Note: ebur128 upsamples to 192kHz internally and outputs f64
 	filters = append(filters, "ebur128=metadata=1:peak=sample+true:dualmono=true")
 
-	// 6. Resample back to output format (44.1kHz/s16/mono)
+	// 7. Resample back to output format (44.1kHz/s16/mono)
 	// Required because ebur128 outputs f64 at 192kHz; encoder expects s16 at 44.1kHz
 	// Temporarily enable resample to get the filter spec, then restore
 	wasEnabled := config.ResampleEnabled
