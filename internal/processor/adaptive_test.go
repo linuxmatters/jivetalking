@@ -963,9 +963,9 @@ func TestTuneDS201Gate(t *testing.T) {
 			tolerance    float64
 			desc         string
 		}{
-			{"fast transients", 0.3, 1.0, 5.6, 1.0, "fast attack (7*0.8) for sharp transients with dynamic flux"},
+			{"fast transients", 0.3, 1.0, 10.0, 1.0, "fast attack (minimum 10ms) for sharp transients"},
 			{"slow transients no flux", 0.05, 0.02, 17.0, 1.0, "slow attack 17ms for gentle speech with low flux"},
-			{"moderate with flux", 0.15, 0.1, 9.6, 1.0, "moderate attack (12*0.8) with dynamic flux"},
+			{"moderate with flux", 0.15, 0.1, 10.0, 1.0, "moderate attack (12*0.8=9.6, clamped to 10ms) with dynamic flux"},
 		}
 
 		for _, tt := range tests {

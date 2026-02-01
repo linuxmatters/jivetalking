@@ -160,11 +160,11 @@ type FilterChainConfig struct {
 
 	// DS201-Inspired Gate (agate) - Drawmer DS201 style soft expander
 	// Uses gentle ratio (2:1-4:1) rather than DS201's hard gate for natural speech transitions.
-	// Sub-millisecond attack capability for transient preservation.
+	// Minimum 10ms attack prevents click artifacts from rapid gain changes.
 	DS201GateEnabled    bool    // Enable DS201-style gate
 	DS201GateThreshold  float64 // Activation threshold (0.0-1.0, linear)
 	DS201GateRatio      float64 // Reduction ratio - soft expander (2:1-4:1), not hard gate
-	DS201GateAttack     float64 // Attack time (ms) - supports 0.5ms+ for transient preservation
+	DS201GateAttack     float64 // Attack time (ms) - minimum 10ms to avoid click artifacts
 	DS201GateRelease    float64 // Release time (ms) - includes +50ms to compensate for no Hold param
 	DS201GateRange      float64 // Level of gain reduction below threshold (0.0-1.0)
 	DS201GateKnee       float64 // Knee curve softness (1.0-8.0) - soft knee for natural transitions
@@ -289,7 +289,7 @@ func DefaultFilterConfig() *FilterChainConfig {
 		DS201GateEnabled:   true,
 		DS201GateThreshold: 0.01,   // -40dBFS default (adaptive: based on silence peak + headroom)
 		DS201GateRatio:     2.0,    // 2:1 ratio - soft expander (adaptive: based on LRA)
-		DS201GateAttack:    12,     // 12ms attack (adaptive: 0.5-25ms based on MaxDifference/Crest)
+		DS201GateAttack:    12,     // 12ms attack (adaptive: 10-25ms based on MaxDifference/Crest)
 		DS201GateRelease:   350,    // 350ms release (adaptive: based on flux/ZCR, +50ms hold compensation)
 		DS201GateRange:     0.0625, // -24dB reduction (adaptive: based on silence entropy)
 		DS201GateKnee:      3.0,    // Soft knee (adaptive: based on spectral crest)
@@ -606,7 +606,7 @@ func (cfg *FilterChainConfig) buildNoiseRemoveCompandFilter() string {
 
 // buildDS201GateFilter builds the DS201-inspired gate filter specification.
 // Uses soft expander approach (2:1-4:1 ratio) rather than hard gate for natural speech.
-// Supports sub-millisecond attack (0.5ms+) for transient preservation.
+// Minimum 10ms attack prevents click artifacts from rapid gain changes.
 // Detection mode is adaptive: RMS for tonal bleed, peak for clean recordings.
 func (cfg *FilterChainConfig) buildDS201GateFilter() string {
 	if !cfg.DS201GateEnabled {
