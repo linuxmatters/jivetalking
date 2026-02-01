@@ -212,7 +212,7 @@ internal/
 - [Gate: Drawmer DS201](docs/FilterGate-Drawmer%20DS201.md) - Soft expander gate with adaptive threshold
 - [Compressor: LA-2A](docs/FilterCompressor-Teletronix%20LA-2A.md) - Programme-dependent optical compression
 - [Limiter: CBS Volumax](docs/FilterLimiter-CBS-Volumax.md) - Transparent broadcast limiter
-- [Spectral Analysis](docs/Spectral%20Analysis.md) - How measurements drive adaptive processing
+- [Spectral Metrics Reference](docs/Spectral-Metrics-Reference.md) - How audio measurements are interpreted
 
 ---
 

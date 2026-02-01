@@ -88,16 +88,16 @@ func TestTuneDS201HighPass(t *testing.T) {
 			name:             "normal voice, noisy silence, tonal (hum)",
 			centroid:         5000,
 			spectralDecrease: 0.0,
-			noiseProfile:     makeNoiseProfile(-50.0, 0.3), // noisy but tonal
-			wantFreqMin:      80,                           // no boost - tonal noise
+			noiseProfile:     makeNoiseProfile(-50.0, 0.25), // noisy but tonal (below 0.30 threshold)
+			wantFreqMin:      80,                            // no boost - tonal noise
 			wantFreqMax:      80,
 		},
 
-		// Warm voice protection (spectral decrease < -0.05, tiered at -0.08)
+		// Warm voice protection (spectral decrease < -0.05, tiered at -0.10)
 		{
 			name:             "warm voice, noisy broadband - capped at 80Hz",
 			centroid:         5000,
-			spectralDecrease: -0.06, // warm voice (between -0.05 and -0.08)
+			spectralDecrease: -0.06, // warm voice (between -0.05 and -0.10)
 			noiseProfile:     makeNoiseProfile(-50.0, 0.8),
 			wantFreqMin:      80, // would be 100, but capped at 80Hz due to warm voice
 			wantFreqMax:      80,
@@ -106,7 +106,7 @@ func TestTuneDS201HighPass(t *testing.T) {
 		{
 			name:             "very warm voice - gentle highpass",
 			centroid:         5000,                         // normal voice base = 80Hz
-			spectralDecrease: -0.095,                       // very warm voice (< -0.08)
+			spectralDecrease: -0.12,                        // very warm voice (< -0.10)
 			noiseProfile:     makeNoiseProfile(-50.0, 0.8), // broadband noise
 			wantFreqMin:      60,                           // highpassVeryWarmFreq
 			wantFreqMax:      60,
@@ -117,7 +117,7 @@ func TestTuneDS201HighPass(t *testing.T) {
 		{
 			name:             "very warm dark voice - gentle highpass",
 			centroid:         3500,                         // dark voice base = 60Hz
-			spectralDecrease: -0.15,                        // very warm (< -0.08)
+			spectralDecrease: -0.15,                        // very warm (< -0.10)
 			noiseProfile:     makeNoiseProfile(-45.0, 0.9), // broadband noise
 			wantFreqMin:      60,                           // highpassVeryWarmFreq
 			wantFreqMax:      60,
@@ -130,7 +130,7 @@ func TestTuneDS201HighPass(t *testing.T) {
 		{
 			name:             "bright voice, warm characteristics - capped at 80Hz",
 			centroid:         7000,
-			spectralDecrease: -0.06, // warm despite bright centroid (between -0.05 and -0.08)
+			spectralDecrease: -0.06, // warm despite bright centroid (between -0.05 and -0.10)
 			noiseProfile:     makeNoiseProfile(-50.0, 0.8),
 			wantFreqMin:      80, // would be 120, but capped at 80Hz due to warm voice
 			wantFreqMax:      80,
@@ -139,7 +139,7 @@ func TestTuneDS201HighPass(t *testing.T) {
 		{
 			name:             "bright voice, very warm characteristics - gentle highpass",
 			centroid:         7000,
-			spectralDecrease: -0.10,                        // very warm despite bright centroid (< -0.08)
+			spectralDecrease: -0.12,                        // very warm despite bright centroid (< -0.10)
 			noiseProfile:     makeNoiseProfile(-50.0, 0.8), // broadband noise
 			wantFreqMin:      60,                           // highpassVeryWarmFreq
 			wantFreqMax:      60,
@@ -234,8 +234,8 @@ func TestTuneDS201HighPass(t *testing.T) {
 			name:             "boundary: exactly at silenceEntropyTonal",
 			centroid:         5000,
 			spectralDecrease: 0.0,
-			noiseProfile:     makeNoiseProfile(-50.0, 0.5), // exactly at threshold
-			wantFreqMin:      100,                          // broadband (>= 0.5), gets boost
+			noiseProfile:     makeNoiseProfile(-50.0, 0.30), // exactly at threshold
+			wantFreqMin:      100,                           // broadband (>= 0.30), gets boost
 			wantFreqMax:      100,
 		},
 		{
