@@ -35,17 +35,17 @@ import (
 func interpretCentroid(hz float64) string {
 	switch {
 	case hz < 500:
-		return "very dark, bass-heavy"
+		return "dark, muffled"
 	case hz < 1500:
-		return "warm, full-bodied"
+		return "warm, present"
 	case hz < 2500:
-		return "balanced, natural voice"
+		return "forward, clear"
 	case hz < 4000:
-		return "present, forward"
+		return "bright, articulate"
 	case hz < 6000:
-		return "bright, crisp"
+		return "very bright, sibilant"
 	default:
-		return "very bright, potentially harsh"
+		return "extremely bright, fricatives or HF noise"
 	}
 }
 
@@ -58,13 +58,13 @@ func interpretCentroid(hz float64) string {
 func interpretSpread(hz float64) string {
 	switch {
 	case hz < 800:
-		return "narrow, tonal, focused"
+		return "narrow, clean voiced"
 	case hz < 2000:
-		return "moderate bandwidth, typical voiced"
+		return "moderate, natural speech"
 	case hz < 3500:
-		return "wide bandwidth, natural speech"
+		return "wide, mixed voiced/unvoiced"
 	default:
-		return "very wide, mixed voiced/unvoiced"
+		return "very wide, broadband"
 	}
 }
 
@@ -76,13 +76,13 @@ func interpretSpread(hz float64) string {
 func interpretSkewness(skew float64) string {
 	switch {
 	case skew < -0.5:
-		return "HF concentrated, sibilant-like"
+		return "HF emphasis, fricatives/sibilants"
 	case skew < 0.5:
 		return "symmetric distribution"
 	case skew < 2.5:
 		return "LF emphasis with HF tail (typical voice)"
 	default:
-		return "strongly bass-concentrated"
+		return "very strong LF bias"
 	}
 }
 
@@ -95,15 +95,15 @@ func interpretSkewness(skew float64) string {
 func interpretKurtosis(kurt float64) string {
 	switch {
 	case kurt < 2.5:
-		return "flat, noise-dominated"
+		return "very flat, noise-dominant"
 	case kurt < 3.5:
 		return "Gaussian-like, mixed content"
 	case kurt < 5.0:
-		return "moderately peaked, good harmonics"
+		return "moderately peaked, mixed tonal/noise"
 	case kurt < 8.0:
-		return "clearly peaked, strong harmonics"
+		return "peaked, clear harmonics"
 	default:
-		return "highly peaked, very tonal"
+		return "highly peaked, excellent harmonics"
 	}
 }
 
@@ -116,13 +116,13 @@ func interpretEntropy(entropy float64) string {
 	case entropy < 0.3:
 		return "highly ordered, clear pitch"
 	case entropy < 0.5:
-		return "moderately ordered, typical voiced"
+		return "ordered, good harmonic content"
 	case entropy < 0.7:
-		return "mixed order, voiced with noise"
+		return "moderate order, mixed content"
 	case entropy < 0.9:
-		return "disordered, noise-like"
+		return "disordered, fricatives/aspiration"
 	default:
-		return "highly disordered, approaching white noise"
+		return "highly disordered, noise-dominant"
 	}
 }
 
@@ -134,15 +134,15 @@ func interpretEntropy(entropy float64) string {
 func interpretFlatness(flatness float64) string {
 	switch {
 	case flatness < 0.1:
-		return "highly tonal, pure harmonics"
+		return "pure tone, maximum tonality"
 	case flatness < 0.25:
-		return "tonal with some noise, clean voiced"
+		return "very tonal, strong harmonics"
 	case flatness < 0.4:
-		return "moderate tonality, typical speech"
+		return "tonal with some noise, clean voiced"
 	case flatness < 0.6:
-		return "mixed tonal/noise, breathy content"
+		return "mixed tonal and noise"
 	default:
-		return "noise-dominant, very breathy"
+		return "noise-like, breathy/unvoiced"
 	}
 }
 
@@ -161,13 +161,13 @@ func interpretCrest(crest float64) string {
 	case crest < 8:
 		return "flat spectrum, noise-like"
 	case crest < 25:
-		return "moderate peaks, distributed harmonics"
+		return "moderate peaks, mixed content"
 	case crest < 50:
-		return "prominent peaks, clear harmonics"
+		return "strong peaks, good tonal content"
 	case crest < 100:
-		return "strong peaks, very tonal"
+		return "very strong peaks, clear harmonics"
 	default:
-		return "extremely peaked, dominant frequency"
+		return "dominant peaks, excellent harmonic clarity"
 	}
 }
 
@@ -180,15 +180,15 @@ func interpretCrest(crest float64) string {
 func interpretFlux(flux float64) string {
 	switch {
 	case flux < 0.001:
-		return "very stable, sustained phonation"
+		return "very stable, held vowels"
 	case flux < 0.01:
-		return "stable, steady speech"
+		return "stable, sustained phonation"
 	case flux < 0.05:
 		return "moderate variation, natural articulation"
 	case flux < 0.2:
-		return "high variation, transients/plosives"
+		return "high variation, consonant transitions"
 	default:
-		return "rapid change, onsets/consonant bursts"
+		return "very high variation, plosives/transients"
 	}
 }
 
@@ -200,13 +200,13 @@ func interpretFlux(flux float64) string {
 func interpretDecrease(decrease float64) string {
 	switch {
 	case decrease < 0:
-		return "rising spectrum, HF emphasis"
+		return "strong bass emphasis"
 	case decrease < 0.05:
-		return "flat/balanced spectrum"
+		return "balanced, typical voice"
 	case decrease < 0.10:
 		return "moderate decrease, typical speech"
 	default:
-		return "strong decrease, LF emphasis"
+		return "strong HF content, bright"
 	}
 }
 
@@ -216,15 +216,15 @@ func interpretDecrease(decrease float64) string {
 func interpretRolloff(hz float64) string {
 	switch {
 	case hz < 2000:
-		return "dark, muffled, heavy filtering"
+		return "very dark, muffled, over-filtered"
 	case hz < 4000:
-		return "warm, controlled high frequencies"
+		return "dark, LF-dominant"
 	case hz < 7000:
-		return "balanced brightness, natural speech"
+		return "warm, balanced, typical voiced"
 	case hz < 11000:
-		return "bright, airy, good articulation"
+		return "balanced, good articulation"
 	default:
-		return "very bright, significant sibilance"
+		return "bright, airy"
 	}
 }
 
