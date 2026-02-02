@@ -1610,6 +1610,52 @@ func TestMeasureOutputSpeechRegion(t *testing.T) {
 }
 
 // ============================================================================
+// Crest Factor Penalty Tests
+// ============================================================================
+
+func TestCrestFactorPenalty(t *testing.T) {
+	tests := []struct {
+		name        string
+		crest       float64
+		peak        float64
+		rms         float64
+		wantPenalty string // "none", "soft", "hard"
+	}{
+		{"clean room tone", 15.0, -60.0, -75.0, "none"},
+		{"elevated crest, safe peak", 35.0, -50.0, -80.0, "soft"},
+		{"danger zone signature", 40.0, -32.0, -74.0, "hard"},
+		{"high crest, clipping peak", 50.0, -10.0, -61.0, "soft"},
+		{"high crest, loud peak outside zone", 60.0, -20.0, -81.0, "soft"},
+		{"boundary: just below soft threshold", 29.9, -35.0, -72.0, "none"},
+		{"boundary: at soft threshold", 30.1, -50.0, -75.0, "soft"},
+		{"boundary: peak at zone low edge", 40.0, -40.0, -74.0, "soft"}, // peak == -40 is NOT > -40
+		{"boundary: peak just inside zone", 40.0, -39.9, -74.0, "hard"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			baseScore := 1.0
+			result := applyCrestFactorPenalty(baseScore, tt.crest, tt.peak, tt.rms)
+
+			var gotPenalty string
+			switch {
+			case result == 1.0:
+				gotPenalty = "none"
+			case result < 0.6: // Hard penalty = 0.5x or less (may compound with soft)
+				gotPenalty = "hard"
+			default:
+				gotPenalty = "soft"
+			}
+
+			if gotPenalty != tt.wantPenalty {
+				t.Errorf("applyCrestFactorPenalty() = %.3f (%s), want %s penalty",
+					result, gotPenalty, tt.wantPenalty)
+			}
+		})
+	}
+}
+
+// ============================================================================
 // Three-Zone Temporal Bias Tests
 // ============================================================================
 
