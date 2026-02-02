@@ -1608,3 +1608,271 @@ func TestMeasureOutputSpeechRegion(t *testing.T) {
 		}
 	})
 }
+
+// ============================================================================
+// Three-Zone Temporal Bias Tests
+// ============================================================================
+
+func TestApplyTemporalBias(t *testing.T) {
+	tests := []struct {
+		name      string
+		timeSecs  float64
+		want      float64
+		tolerance float64
+		zone      string
+	}{
+		{
+			name:      "before golden window (0s)",
+			timeSecs:  0,
+			want:      1.0,
+			tolerance: 0,
+			zone:      "Before golden window",
+		},
+		{
+			name:      "early boundary (15s)",
+			timeSecs:  15,
+			want:      1.10,
+			tolerance: 0.001,
+			zone:      "Early boundary",
+		},
+		{
+			name:      "early midpoint (52.5s)",
+			timeSecs:  52.5,
+			want:      1.05,
+			tolerance: 0.001,
+			zone:      "Early midpoint",
+		},
+		{
+			name:      "early/transition boundary (90s)",
+			timeSecs:  90,
+			want:      1.0,
+			tolerance: 0.001,
+			zone:      "Early/Transition boundary",
+		},
+		{
+			name:      "transition minimum (135s)",
+			timeSecs:  135,
+			want:      0.70,
+			tolerance: 0.001,
+			zone:      "Transition minimum",
+		},
+		{
+			name:      "neutral boundary (180s)",
+			timeSecs:  180,
+			want:      1.0,
+			tolerance: 0.001,
+			zone:      "Neutral boundary",
+		},
+		{
+			name:      "deep neutral (300s)",
+			timeSecs:  300,
+			want:      1.0,
+			tolerance: 0,
+			zone:      "Deep neutral",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			duration := time.Duration(tt.timeSecs * float64(time.Second))
+			got := applyTemporalBias(duration)
+
+			diff := got - tt.want
+			if diff < 0 {
+				diff = -diff
+			}
+
+			if tt.tolerance == 0 {
+				// Exact match required
+				if got != tt.want {
+					t.Errorf("applyTemporalBias(%v) = %.6f, want exactly %.6f [%s]",
+						duration, got, tt.want, tt.zone)
+				}
+			} else {
+				// Tolerance-based comparison
+				if diff > tt.tolerance {
+					t.Errorf("applyTemporalBias(%v) = %.6f, want %.6f ±%.3f [%s]",
+						duration, got, tt.want, tt.tolerance, tt.zone)
+				}
+			}
+		})
+	}
+}
+
+// ============================================================================
+// Silence Region Selection Integration Tests (Temporal Weighting)
+// ============================================================================
+
+// makeSilenceTestIntervals creates synthetic interval samples for silence testing.
+// Populates all fields needed for scoreSilenceCandidate: RMS, peak, spectral centroid,
+// spectral flatness, spectral kurtosis.
+//
+// Parameters control the "quality" of the silence:
+//   - rms: RMS level (lower = quieter = better silence)
+//   - centroid: Spectral centroid (outside voice range 250-4500 Hz = better)
+//   - flatness: Spectral flatness (higher = more noise-like = better)
+//   - kurtosis: Spectral kurtosis (lower = less peaked = better)
+func makeSilenceTestIntervals(startTime time.Duration, count int, rms, centroid, flatness, kurtosis float64) []IntervalSample {
+	intervals := make([]IntervalSample, count)
+	for i := range intervals {
+		intervals[i] = IntervalSample{
+			Timestamp:        startTime + time.Duration(i)*250*time.Millisecond,
+			RMSLevel:         rms,
+			PeakLevel:        rms + 10.0, // Moderate crest factor
+			SpectralCentroid: centroid,
+			SpectralFlatness: flatness,
+			SpectralKurtosis: kurtosis,
+		}
+	}
+	return intervals
+}
+
+func TestFindBestSilenceRegion_PrefersEarlyCandidates(t *testing.T) {
+	// Test that early candidates win when quality is comparable.
+	// Region A at 30s (in early zone) should beat Region B at 135s (in transition zone)
+	// even though B has slightly better raw quality, because temporal weighting
+	// gives A a ~1.08× bonus and B a 0.70× penalty.
+
+	// Region A: 30s into recording (early zone, ~1.08× bonus)
+	// 10-second region needs 40 intervals (10s / 250ms)
+	regionA := SilenceRegion{
+		Start:    30 * time.Second,
+		End:      40 * time.Second,
+		Duration: 10 * time.Second,
+	}
+
+	// Region B: 135s into recording (transition zone midpoint, 0.70× penalty)
+	regionB := SilenceRegion{
+		Start:    135 * time.Second,
+		End:      145 * time.Second,
+		Duration: 10 * time.Second,
+	}
+
+	regions := []SilenceRegion{regionA, regionB}
+
+	// Create intervals for Region A: good quality silence
+	// RMS -65 dBFS, centroid 100 Hz (below voice range), flatness 0.8, kurtosis 2.0
+	intervalsA := makeSilenceTestIntervals(30*time.Second, 40, -65.0, 100.0, 0.8, 2.0)
+
+	// Create intervals for Region B: slightly BETTER raw quality than A
+	// RMS -68 dBFS (quieter), centroid 80 Hz, flatness 0.85, kurtosis 1.5
+	// This should produce a higher base score than A
+	intervalsB := makeSilenceTestIntervals(135*time.Second, 40, -68.0, 80.0, 0.85, 1.5)
+
+	// Combine all intervals
+	intervals := append(intervalsA, intervalsB...)
+
+	// Total duration must be long enough so both regions are within 15% cutoff
+	// 135s + 10s = 145s must be < 0.15 * totalDuration
+	// So totalDuration > 145 / 0.15 = 966.7s, use 3600s (1 hour)
+	totalDuration := 3600.0
+
+	result := findBestSilenceRegion(regions, intervals, totalDuration)
+
+	if result.BestRegion == nil {
+		t.Fatal("expected a best region to be selected")
+	}
+
+	// Verify candidates were scored
+	if len(result.Candidates) != 2 {
+		t.Fatalf("expected 2 candidates, got %d", len(result.Candidates))
+	}
+
+	// Find scores for both candidates
+	var scoreA, scoreB float64
+	for _, c := range result.Candidates {
+		if c.Region.Start == 30*time.Second {
+			scoreA = c.Score
+		} else if c.Region.Start == 135*time.Second {
+			scoreB = c.Score
+		}
+	}
+
+	t.Logf("Region A (30s, early zone): score=%.4f", scoreA)
+	t.Logf("Region B (135s, transition zone): score=%.4f", scoreB)
+
+	// Verify temporal weighting effect:
+	// A's adjusted score should be higher than B's despite B having better raw quality
+	// because A gets ~1.08× bonus and B gets 0.70× penalty
+	if scoreA <= scoreB {
+		t.Errorf("Expected Region A (early zone) to score higher than Region B (transition zone): A=%.4f, B=%.4f", scoreA, scoreB)
+	}
+
+	// Verify A was selected
+	if result.BestRegion.Start != 30*time.Second {
+		t.Errorf("Expected Region A (30s) to be selected, got region at %v", result.BestRegion.Start)
+	}
+}
+
+func TestFindBestSilenceRegion_NeutralZoneFallback(t *testing.T) {
+	// Test that when no early candidates exist, selection is purely quality-based
+	// in the neutral zone (180s+) where temporal multiplier = 1.0.
+
+	// Region C: 200s into recording (neutral zone, multiplier = 1.0)
+	// 10-second region needs 40 intervals
+	regionC := SilenceRegion{
+		Start:    200 * time.Second,
+		End:      210 * time.Second,
+		Duration: 10 * time.Second,
+	}
+
+	// Region D: 250s into recording (neutral zone, multiplier = 1.0)
+	regionD := SilenceRegion{
+		Start:    250 * time.Second,
+		End:      260 * time.Second,
+		Duration: 10 * time.Second,
+	}
+
+	regions := []SilenceRegion{regionC, regionD}
+
+	// Create intervals for Region C: better quality silence
+	// RMS -70 dBFS, centroid 90 Hz (below voice range), flatness 0.9, kurtosis 1.5
+	intervalsC := makeSilenceTestIntervals(200*time.Second, 40, -70.0, 90.0, 0.9, 1.5)
+
+	// Create intervals for Region D: worse quality than C
+	// RMS -62 dBFS (louder), centroid 150 Hz, flatness 0.7, kurtosis 3.0
+	intervalsD := makeSilenceTestIntervals(250*time.Second, 40, -62.0, 150.0, 0.7, 3.0)
+
+	// Combine all intervals
+	intervals := append(intervalsC, intervalsD...)
+
+	// Total duration must be long enough so both regions are within 15% cutoff
+	// 250s + 10s = 260s must be < 0.15 * totalDuration
+	// So totalDuration > 260 / 0.15 = 1733s, use 3600s (1 hour)
+	totalDuration := 3600.0
+
+	result := findBestSilenceRegion(regions, intervals, totalDuration)
+
+	if result.BestRegion == nil {
+		t.Fatal("expected a best region to be selected")
+	}
+
+	// Verify candidates were scored
+	if len(result.Candidates) != 2 {
+		t.Fatalf("expected 2 candidates, got %d", len(result.Candidates))
+	}
+
+	// Find scores for both candidates
+	var scoreC, scoreD float64
+	for _, c := range result.Candidates {
+		if c.Region.Start == 200*time.Second {
+			scoreC = c.Score
+		} else if c.Region.Start == 250*time.Second {
+			scoreD = c.Score
+		}
+	}
+
+	t.Logf("Region C (200s, neutral zone): score=%.4f", scoreC)
+	t.Logf("Region D (250s, neutral zone): score=%.4f", scoreD)
+
+	// Both are in neutral zone, so temporal multiplier = 1.0 for both
+	// Selection should be purely quality-based, and C has better quality
+	if scoreC <= scoreD {
+		t.Errorf("Expected Region C (better quality) to score higher than Region D: C=%.4f, D=%.4f", scoreC, scoreD)
+	}
+
+	// Verify C was selected
+	if result.BestRegion.Start != 200*time.Second {
+		t.Errorf("Expected Region C (200s, better quality) to be selected, got region at %v", result.BestRegion.Start)
+	}
+}

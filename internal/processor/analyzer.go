@@ -2796,17 +2796,22 @@ const (
 	// Set low (0.3) to only reject truly problematic candidates (crosstalk, etc.)
 	minAcceptableScore = 0.3
 
-	// Temporal bias constants (still used in scoring for logging, but not for selection)
-	temporalBiasMax    = 0.05 // Up to 5% penalty for late regions
-	temporalWindowSecs = 90.0 // Regions after 90s get maximum penalty
+	// Three-zone temporal weighting for silence candidate selection
+	// See docs/PREFER_EARLY_PLAN.md for rationale
+	earlyWindowStart     = 15.0  // seconds - after intro/sync count
+	earlyWindowEnd       = 90.0  // seconds - golden window ends
+	earlyWindowBonus     = 0.10  // 10% boost in golden window
+	transitionStart      = 90.0  // seconds - transition zone begins
+	transitionEnd        = 180.0 // seconds - neutral zone begins
+	transitionPenaltyMax = 0.30  // 30% maximum penalty at transition midpoint (135s)
 
 	// Candidate selection cutoff
 	candidateCutoffPercent = 0.15 // Only consider silence in first 15% of recording
 
 	// regressionThreshold is the minimum score drop required to trigger early termination.
 	// Prevents minor score fluctuations from prematurely locking in a suboptimal candidate.
-	// Value of 0.05 (5%) matches temporalBiasMax, so drops exceeding the built-in
-	// positional penalty indicate genuine quality degradation rather than noise.
+	// Value of 0.05 (5%) ensures only significant quality degradation triggers regression,
+	// not minor temporal weighting adjustments from the three-zone system.
 	regressionThreshold = 0.05
 )
 
@@ -2846,8 +2851,16 @@ func segmentLongSilenceRegion(region SilenceRegion) []SilenceRegion {
 // Uses multi-metric scoring to select the best candidate, considering:
 // - Amplitude (quieter = better)
 // - Spectral characteristics (noise-like = better, voice-like = worse)
-// - Temporal position (earlier = slightly better)
+// - Temporal position (three-zone weighting: early bonus, transition penalty, neutral fallback)
 // - Duration (closer to 15s = better)
+//
+// The three-zone temporal weighting favours intentional room tone recorded early:
+// - Early zone (15-90s): 10% score bonus, linearly decaying
+// - Transition zone (90-180s): parabolic penalty up to 30% at midpoint
+// - Neutral zone (180s+): no bias, pure quality-based selection
+//
+// Earlier candidates are preferred when scores are equal (strict > comparison).
+// See docs/PREFER_EARLY_PLAN.md for detailed rationale.
 //
 // Uses pre-collected interval data for measurements - no file re-reading required.
 // Returns nil if no suitable region is found.
@@ -2896,7 +2909,6 @@ func findBestSilenceRegion(regions []SilenceRegion, intervals []IntervalSample, 
 	// lower than the current best — that indicates we've passed the intentional room tone.
 	// Still measure ALL candidates for logging/debugging purposes.
 	var selectedCandidate *SilenceRegion
-	var selectedIdx int = -1
 	var bestScore float64 = -1
 	selectionComplete := false
 
@@ -2923,14 +2935,23 @@ func findBestSilenceRegion(regions []SilenceRegion, intervals []IntervalSample, 
 			if bestScore < 0 {
 				// First acceptable candidate
 				selectedCandidate = candidate
-				selectedIdx = len(result.Candidates) - 1
 				bestScore = score
-			} else if score >= bestScore {
-				// Equal or better than current best - prefer later candidate
-				// (intentional room tone is recorded after brief intro/setup)
+				debugLog("Silence candidate at %.1fs: score=%.3f (first acceptable)",
+					candidate.Start.Seconds(), score)
+			} else if score > bestScore {
+				// Better than current best - update selection
+				// (strict > ensures earlier candidates win on equal scores)
+				prevCandidate := selectedCandidate
+				prevScore := bestScore
 				selectedCandidate = candidate
-				selectedIdx = len(result.Candidates) - 1
 				bestScore = score
+				// Log candidate replacement for debugging
+				if prevCandidate != nil {
+					debugLog("Silence candidate at %.1fs: score=%.3f (selected)",
+						candidate.Start.Seconds(), score)
+					debugLog("  Replaces candidate at %.1fs: score=%.3f",
+						prevCandidate.Start.Seconds(), prevScore)
+				}
 			} else if bestScore-score > regressionThreshold {
 				// Significant regression - stop searching, keep current best
 				selectionComplete = true
@@ -2942,7 +2963,14 @@ func findBestSilenceRegion(regions []SilenceRegion, intervals []IntervalSample, 
 	}
 
 	result.BestRegion = selectedCandidate
-	_ = selectedIdx // Used for debugging if needed
+
+	// Log final selection summary
+	if selectedCandidate != nil {
+		debugLog("Silence selection: %.1fs (score=%.3f) from %d candidates",
+			selectedCandidate.Start.Seconds(), bestScore, len(result.Candidates))
+	} else {
+		debugLog("Silence selection: none found from %d candidates", len(result.Candidates))
+	}
 
 	return result
 }
@@ -3049,19 +3077,39 @@ func calculateSpectralScore(centroid, flatness, kurtosis float64) float64 {
 	return centroidScore*0.5 + flatnessScore*0.3 + kurtosisScore*0.2
 }
 
-// applyTemporalBias returns a multiplicative factor that gives early regions a boost.
-// Formula from Task 4: score *= 1.0 - (startTime / 90s) * 0.1
-// At t=0: returns 1.0 (no penalty), at t=90s+: returns 0.9 (10% reduction)
-// This acts as a tiebreaker for candidates with similar base scores.
+// applyTemporalBias returns a multiplicative factor based on temporal position.
+// Three-zone system:
+//   - Early zone (15-90s): Linear bonus from 1.10 → 1.0 (favours intentional room tone)
+//   - Transition zone (90-180s): Parabolic penalty peaking at 0.70 at midpoint (135s)
+//   - Neutral zone (180s+): Returns 1.0 (pure quality-based selection)
+//
+// See docs/PREFER_EARLY_PLAN.md for detailed rationale.
 func applyTemporalBias(start time.Duration) float64 {
 	startSecs := start.Seconds()
 	if startSecs < 0 {
 		startSecs = 0
 	}
 
-	// Linear bias: 0s → 1.0, 90s+ → 0.9
-	bias := clampFloat(startSecs/temporalWindowSecs, 0.0, 1.0) * temporalBiasMax
-	return 1.0 - bias
+	var multiplier float64 = 1.0
+
+	// Early bonus zone (15-90s)
+	if startSecs >= earlyWindowStart && startSecs <= earlyWindowEnd {
+		// Linear interpolation: 1.10 at 15s, 1.0 at 90s
+		t := (startSecs - earlyWindowStart) / (earlyWindowEnd - earlyWindowStart)
+		multiplier = 1.0 + earlyWindowBonus*(1.0-t)
+	}
+
+	// Transition zone (90-180s) - parabolic penalty valley
+	if startSecs > transitionStart && startSecs < transitionEnd {
+		// Parabolic curve: penalty peaks at midpoint (135s), smooth at boundaries
+		t := (startSecs - transitionStart) / (transitionEnd - transitionStart)
+		penalty := transitionPenaltyMax * 4.0 * t * (1.0 - t)
+		multiplier = 1.0 - penalty
+	}
+
+	// Neutral zone (180s+) - multiplier stays at 1.0
+
+	return multiplier
 }
 
 // calculateDurationScore uses a plateau-with-dropoff curve.
