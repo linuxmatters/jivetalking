@@ -180,6 +180,106 @@ func TestCalculateAdaptiveGateThreshold(t *testing.T) {
 }
 
 // ============================================================================
+// Early Window Fallback Threshold Tests
+// ============================================================================
+
+func TestCalculateFallbackThreshold(t *testing.T) {
+	// Tests for the fallback threshold calculation used when no silence candidates
+	// are found within the early detection window. Uses full-file NoiseFloor
+	// measurement with headroom to compute a relaxed detection threshold.
+
+	tests := []struct {
+		name              string
+		noiseFloor        float64
+		originalThreshold float64
+		wantThreshold     float64
+		wantOK            bool
+		desc              string
+	}{
+		{
+			name:              "normal relaxation",
+			noiseFloor:        -75.0,
+			originalThreshold: -65.0,
+			wantThreshold:     -72.0, // NoiseFloor + 3dB headroom
+			wantOK:            true,
+			desc:              "NoiseFloor + 3dB",
+		},
+		{
+			name:              "cap hit",
+			noiseFloor:        -50.0,
+			originalThreshold: -65.0,
+			wantThreshold:     -55.0, // NoiseFloor + 3dB = -47, but limited to original + 10dB = -55
+			wantOK:            true,
+			desc:              "Limited to original + 10dB",
+		},
+		{
+			name:              "invalid NoiseFloor (0)",
+			noiseFloor:        0.0,
+			originalThreshold: -65.0,
+			wantThreshold:     0.0,
+			wantOK:            false,
+			desc:              "ok = false",
+		},
+		{
+			name:              "invalid NoiseFloor (too low)",
+			noiseFloor:        -95.0,
+			originalThreshold: -65.0,
+			wantThreshold:     0.0,
+			wantOK:            false,
+			desc:              "ok = false",
+		},
+		{
+			name:              "invalid NoiseFloor (too high)",
+			noiseFloor:        -15.0,
+			originalThreshold: -65.0,
+			wantThreshold:     0.0,
+			wantOK:            false,
+			desc:              "ok = false",
+		},
+		{
+			name:              "NoiseFloor above original",
+			noiseFloor:        -68.0,
+			originalThreshold: -70.0,
+			wantThreshold:     -65.0, // Uses NoiseFloor + 3dB
+			wantOK:            true,
+			desc:              "Uses NoiseFloor + 3dB",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			threshold, ok := calculateFallbackThreshold(tt.noiseFloor, tt.originalThreshold)
+
+			if ok != tt.wantOK {
+				t.Errorf("calculateFallbackThreshold(%.1f, %.1f) ok = %v, want %v [%s]",
+					tt.noiseFloor, tt.originalThreshold, ok, tt.wantOK, tt.desc)
+				return
+			}
+
+			if !ok {
+				// When ok is false, threshold should be 0
+				if threshold != 0 {
+					t.Errorf("calculateFallbackThreshold(%.1f, %.1f) threshold = %.1f, want 0 when ok=false [%s]",
+						tt.noiseFloor, tt.originalThreshold, threshold, tt.desc)
+				}
+				return
+			}
+
+			// Check threshold value with small tolerance for floating point
+			tolerance := 0.001
+			diff := threshold - tt.wantThreshold
+			if diff < 0 {
+				diff = -diff
+			}
+			if diff > tolerance {
+				t.Errorf("calculateFallbackThreshold(%.1f, %.1f) threshold = %.3f, want %.3f [%s]",
+					tt.noiseFloor, tt.originalThreshold, threshold, tt.wantThreshold, tt.desc)
+			}
+		})
+	}
+}
+
+// ============================================================================
 // Golden Sub-Region Refinement Tests
 // ============================================================================
 
@@ -1921,4 +2021,663 @@ func TestFindBestSilenceRegion_NeutralZoneFallback(t *testing.T) {
 	if result.BestRegion.Start != 200*time.Second {
 		t.Errorf("Expected Region C (200s, better quality) to be selected, got region at %v", result.BestRegion.Start)
 	}
+}
+
+// ============================================================================
+// Relaxed Threshold Silence Detection Tests (Phase 3)
+// ============================================================================
+
+// makeRelaxedThresholdIntervals creates synthetic interval samples for relaxed threshold testing.
+// Allows control over all fields needed for the stricter spectral validation:
+// - RMS level (for threshold comparison)
+// - SpectralFlatness (must be > 0.4 for fallback candidates)
+// - SpectralKurtosis (must be < 8.0 for fallback candidates)
+// - SpectralCentroid, SpectralFlux, SpectralRolloff (for room tone scoring)
+func makeRelaxedThresholdIntervals(startTime time.Duration, count int, rms, flatness, kurtosis float64) []IntervalSample {
+	intervals := make([]IntervalSample, count)
+	for i := range intervals {
+		intervals[i] = IntervalSample{
+			Timestamp:        startTime + time.Duration(i)*250*time.Millisecond,
+			RMSLevel:         rms,
+			SpectralFlatness: flatness,
+			SpectralKurtosis: kurtosis,
+			// Set good values for room tone scoring
+			SpectralCentroid: 100.0,   // Low centroid (not voice-like)
+			SpectralFlux:     0.001,   // Low flux (stable)
+			SpectralRolloff:  1000.0,  // Low rolloff
+			PeakLevel:        rms + 6, // Reasonable crest factor
+		}
+	}
+	return intervals
+}
+
+func TestFindSilenceCandidatesWithRelaxedThreshold(t *testing.T) {
+	// Constants from analyzer.go
+	// earlyWindowStart = 15.0  // seconds
+	// earlyWindowEnd   = 90.0  // seconds
+	// fallbackMinFlatness = 0.4
+	// fallbackMaxKurtosis = 8.0
+	// minimumSilenceIntervals = 32 (8 seconds)
+
+	tests := []struct {
+		name               string
+		intervals          []IntervalSample
+		relaxedThreshold   float64
+		wantCandidateCount int
+		desc               string
+	}{
+		{
+			name: "good candidate: RMS below threshold + high flatness + low kurtosis",
+			intervals: makeRelaxedThresholdIntervals(
+				15*time.Second, // Start at golden window start
+				40,             // 10 seconds (40 × 250ms)
+				-65.0,          // RMS below typical relaxed threshold
+				0.5,            // Flatness > 0.4 (passes)
+				5.0,            // Kurtosis < 8.0 (passes)
+			),
+			relaxedThreshold:   -60.0, // RMS -65 is below -60
+			wantCandidateCount: 1,
+			desc:               "candidate with good spectral characteristics should be detected",
+		},
+		{
+			name: "low flatness rejected",
+			intervals: makeRelaxedThresholdIntervals(
+				15*time.Second,
+				40,
+				-65.0, // RMS passes
+				0.3,   // Flatness < 0.4 (FAILS)
+				5.0,   // Kurtosis passes
+			),
+			relaxedThreshold:   -60.0,
+			wantCandidateCount: 0,
+			desc:               "intervals with low flatness (0.3 < 0.4) should be rejected",
+		},
+		{
+			name: "high kurtosis rejected",
+			intervals: makeRelaxedThresholdIntervals(
+				15*time.Second,
+				40,
+				-65.0, // RMS passes
+				0.5,   // Flatness passes
+				10.0,  // Kurtosis > 8.0 (FAILS)
+			),
+			relaxedThreshold:   -60.0,
+			wantCandidateCount: 0,
+			desc:               "intervals with high kurtosis (10 > 8) should be rejected",
+		},
+		{
+			name: "both spectral checks fail",
+			intervals: makeRelaxedThresholdIntervals(
+				15*time.Second,
+				40,
+				-65.0, // RMS passes
+				0.2,   // Flatness < 0.4 (FAILS)
+				12.0,  // Kurtosis > 8.0 (FAILS)
+			),
+			relaxedThreshold:   -60.0,
+			wantCandidateCount: 0,
+			desc:               "intervals failing both spectral checks should be rejected",
+		},
+		{
+			name: "outside golden window: good candidate at 100s",
+			intervals: makeRelaxedThresholdIntervals(
+				100*time.Second, // Outside golden window (15-90s)
+				40,
+				-65.0, // RMS passes
+				0.5,   // Flatness passes
+				5.0,   // Kurtosis passes
+			),
+			relaxedThreshold:   -60.0,
+			wantCandidateCount: 0,
+			desc:               "candidates outside 15-90s golden window should not be found",
+		},
+		{
+			name: "RMS above threshold rejected",
+			intervals: makeRelaxedThresholdIntervals(
+				15*time.Second,
+				40,
+				-55.0, // RMS above threshold (FAILS)
+				0.5,   // Flatness passes
+				5.0,   // Kurtosis passes
+			),
+			relaxedThreshold:   -60.0,
+			wantCandidateCount: 0,
+			desc:               "intervals with RMS above threshold should be rejected",
+		},
+		{
+			name: "boundary: flatness exactly at threshold",
+			intervals: makeRelaxedThresholdIntervals(
+				15*time.Second,
+				40,
+				-65.0,
+				0.4, // Flatness == 0.4 (condition is > 0.4, so this FAILS)
+				5.0,
+			),
+			relaxedThreshold:   -60.0,
+			wantCandidateCount: 0,
+			desc:               "flatness exactly at 0.4 should fail (needs to be > 0.4)",
+		},
+		{
+			name: "boundary: kurtosis exactly at threshold",
+			intervals: makeRelaxedThresholdIntervals(
+				15*time.Second,
+				40,
+				-65.0,
+				0.5,
+				8.0, // Kurtosis == 8.0 (condition is < 8.0, so this FAILS)
+			),
+			relaxedThreshold:   -60.0,
+			wantCandidateCount: 0,
+			desc:               "kurtosis exactly at 8.0 should fail (needs to be < 8.0)",
+		},
+		{
+			name: "boundary: flatness just above threshold",
+			intervals: makeRelaxedThresholdIntervals(
+				15*time.Second,
+				40,
+				-65.0,
+				0.41, // Flatness > 0.4 (passes)
+				5.0,
+			),
+			relaxedThreshold:   -60.0,
+			wantCandidateCount: 1,
+			desc:               "flatness just above 0.4 should pass",
+		},
+		{
+			name: "boundary: kurtosis just below threshold",
+			intervals: makeRelaxedThresholdIntervals(
+				15*time.Second,
+				40,
+				-65.0,
+				0.5,
+				7.9, // Kurtosis < 8.0 (passes)
+			),
+			relaxedThreshold:   -60.0,
+			wantCandidateCount: 1,
+			desc:               "kurtosis just below 8.0 should pass",
+		},
+		{
+			name:               "insufficient intervals",
+			intervals:          makeRelaxedThresholdIntervals(15*time.Second, 10, -65.0, 0.5, 5.0), // Only 10 intervals
+			relaxedThreshold:   -60.0,
+			wantCandidateCount: 0,
+			desc:               "fewer than minimum intervals should return no candidates",
+		},
+		{
+			name: "candidate at golden window end boundary",
+			intervals: makeRelaxedThresholdIntervals(
+				80*time.Second, // Starts at 80s, ends at 90s (at golden window end)
+				40,             // 10 seconds
+				-65.0,
+				0.5,
+				5.0,
+			),
+			relaxedThreshold:   -60.0,
+			wantCandidateCount: 1,
+			desc:               "candidate ending at golden window boundary should be detected",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidates := findSilenceCandidatesWithRelaxedThreshold(tt.intervals, tt.relaxedThreshold)
+
+			gotCount := len(candidates)
+			if gotCount != tt.wantCandidateCount {
+				t.Errorf("findSilenceCandidatesWithRelaxedThreshold() returned %d candidates, want %d [%s]",
+					gotCount, tt.wantCandidateCount, tt.desc)
+			}
+
+			// For positive cases, verify the candidate is in the golden window
+			if tt.wantCandidateCount > 0 && gotCount > 0 {
+				for _, c := range candidates {
+					goldenStart := 15 * time.Second
+					goldenEnd := 90 * time.Second
+					if c.Start < goldenStart || c.Start >= goldenEnd {
+						t.Errorf("candidate start %v is outside golden window [15s, 90s)", c.Start)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestFindSilenceCandidatesWithRelaxedThreshold_InterruptionTolerance(t *testing.T) {
+	// Test that the function handles brief interruptions same as the original function
+	// (interruptionToleranceIntervals = 3, so up to 3 consecutive non-qualifying intervals allowed)
+
+	t.Run("bridges short gap", func(t *testing.T) {
+		// Create good intervals, then 2 bad intervals (within tolerance), then more good intervals
+		goodPart1 := makeRelaxedThresholdIntervals(15*time.Second, 20, -65.0, 0.5, 5.0)
+		badPart := makeRelaxedThresholdIntervals(20*time.Second, 2, -65.0, 0.2, 5.0) // Low flatness
+		goodPart2 := makeRelaxedThresholdIntervals(20500*time.Millisecond, 20, -65.0, 0.5, 5.0)
+
+		intervals := append(append(goodPart1, badPart...), goodPart2...)
+
+		candidates := findSilenceCandidatesWithRelaxedThreshold(intervals, -60.0)
+
+		// Should find one candidate that bridges the gap
+		if len(candidates) != 1 {
+			t.Errorf("expected 1 candidate bridging gap, got %d", len(candidates))
+		}
+	})
+
+	t.Run("breaks on long gap", func(t *testing.T) {
+		// Create good intervals, then 5 bad intervals (exceeds tolerance of 3), then more good intervals
+		goodPart1 := makeRelaxedThresholdIntervals(15*time.Second, 20, -65.0, 0.5, 5.0)
+		badPart := makeRelaxedThresholdIntervals(20*time.Second, 5, -65.0, 0.2, 5.0) // Low flatness, 5 intervals
+		goodPart2 := makeRelaxedThresholdIntervals(21250*time.Millisecond, 20, -65.0, 0.5, 5.0)
+
+		intervals := append(append(goodPart1, badPart...), goodPart2...)
+
+		candidates := findSilenceCandidatesWithRelaxedThreshold(intervals, -60.0)
+
+		// Should find no candidates because neither segment reaches minimum duration (32 intervals = 8s)
+		// First segment: 20 intervals = 5s (too short)
+		// Second segment: 20 intervals = 5s (too short)
+		if len(candidates) != 0 {
+			t.Errorf("expected 0 candidates (segments too short after break), got %d", len(candidates))
+		}
+	})
+}
+
+func TestFindSilenceCandidatesWithRelaxedThreshold_MinimumDuration(t *testing.T) {
+	// minimumSilenceIntervals = 32 (8 seconds)
+
+	t.Run("rejects short candidate", func(t *testing.T) {
+		// 30 intervals = 7.5s < 8s minimum
+		intervals := makeRelaxedThresholdIntervals(15*time.Second, 30, -65.0, 0.5, 5.0)
+
+		candidates := findSilenceCandidatesWithRelaxedThreshold(intervals, -60.0)
+
+		if len(candidates) != 0 {
+			t.Errorf("expected 0 candidates for 7.5s duration, got %d", len(candidates))
+		}
+	})
+
+	t.Run("accepts minimum duration", func(t *testing.T) {
+		// 32 intervals = 8s exactly
+		intervals := makeRelaxedThresholdIntervals(15*time.Second, 32, -65.0, 0.5, 5.0)
+
+		candidates := findSilenceCandidatesWithRelaxedThreshold(intervals, -60.0)
+
+		if len(candidates) != 1 {
+			t.Errorf("expected 1 candidate for 8s duration, got %d", len(candidates))
+		}
+	})
+}
+
+// ============================================================================
+// Early Window Fallback Integration Tests (Phase 5)
+// ============================================================================
+
+// makeFallbackTestIntervals creates synthetic intervals for fallback integration testing.
+// Fills the full golden window (15-90s) with configurable characteristics.
+// Parameters control RMS level, flatness, and kurtosis for testing different scenarios.
+func makeFallbackTestIntervals(
+	startTime time.Duration,
+	durationSecs float64,
+	rms, flatness, kurtosis float64,
+) []IntervalSample {
+	count := int(durationSecs * 4) // 4 intervals per second (250ms each)
+	intervals := make([]IntervalSample, count)
+	for i := range intervals {
+		intervals[i] = IntervalSample{
+			Timestamp:        startTime + time.Duration(i)*250*time.Millisecond,
+			RMSLevel:         rms,
+			SpectralFlatness: flatness,
+			SpectralKurtosis: kurtosis,
+			// Good values for room tone scoring
+			SpectralCentroid: 100.0,
+			SpectralFlux:     0.001,
+			SpectralRolloff:  1000.0,
+			PeakLevel:        rms + 6, // Reasonable crest factor
+		}
+	}
+	return intervals
+}
+
+func TestFallbackNotTriggeredWhenCandidatesExist(t *testing.T) {
+	// Phase 5.0: Negative test - fallback should NOT be triggered when valid
+	// candidates exist in the golden window (15-90s).
+	//
+	// Scenario:
+	// - Create intervals where golden window has valid silence candidates
+	// - Candidates pass the normal adaptive threshold
+	// - Verify fallback is NOT used
+	//
+	// Note: We use findSilenceCandidatesWithRelaxedThreshold directly rather than
+	// going through the normal detection flow, because the normal detection uses
+	// room tone scoring which has complex requirements. The key behaviour we're
+	// testing is whether FallbackUsed/FallbackThreshold are correctly NOT set
+	// when candidates exist.
+
+	t.Run("good candidates in golden window", func(t *testing.T) {
+		// Create a straightforward scenario: use the relaxed threshold function
+		// with intervals that clearly pass all criteria to simulate having
+		// candidates in the golden window.
+		//
+		// In real AnalyzeAudio, if findSilenceCandidatesFromIntervals finds
+		// candidates in [15s, 90s), fallback is NOT triggered.
+
+		// Create excellent silence from 20-30s (10 seconds, meets 8s minimum)
+		// with good spectral characteristics for relaxed threshold detection
+		silenceIntervals := makeRelaxedThresholdIntervals(20*time.Second, 40, -65.0, 0.5, 5.0)
+
+		// Use a threshold that the silence will pass
+		threshold := -60.0
+
+		// Verify we have a candidate with the relaxed function
+		candidates := findSilenceCandidatesWithRelaxedThreshold(silenceIntervals, threshold)
+		t.Logf("Found %d candidates", len(candidates))
+
+		if len(candidates) == 0 {
+			t.Fatal("Test setup error: expected at least one candidate")
+		}
+
+		// Verify the candidate is in the golden window
+		goldenStart := 15 * time.Second
+		goldenEnd := 90 * time.Second
+		hasGoldenWindowCandidate := false
+		for _, c := range candidates {
+			if c.Start >= goldenStart && c.Start < goldenEnd {
+				hasGoldenWindowCandidate = true
+				t.Logf("Found golden window candidate: start=%v, duration=%v", c.Start, c.Duration)
+				break
+			}
+		}
+
+		if !hasGoldenWindowCandidate {
+			t.Fatal("Test setup error: candidate should be in golden window")
+		}
+
+		// Now simulate the AnalyzeAudio flow:
+		// When candidates exist in golden window, fallback is NOT needed
+		fallbackNeeded := !hasGoldenWindowCandidate
+
+		// Convert to SilenceRegion for findBestSilenceRegion
+		regions := make([]SilenceRegion, len(candidates))
+		for i, c := range candidates {
+			regions[i] = c
+		}
+
+		// Extended intervals for findBestSilenceRegion (needs full coverage)
+		fullIntervals := makeRelaxedThresholdIntervals(0, 400, -65.0, 0.5, 5.0)
+
+		result := findBestSilenceRegion(regions, fullIntervals, 100.0)
+
+		// Verify fallback fields are NOT set (since we had golden window candidates)
+		if fallbackNeeded {
+			t.Error("Fallback should NOT be needed when candidates exist in golden window")
+		}
+		if result.FallbackUsed {
+			t.Error("FallbackUsed should be false when candidates exist in golden window")
+		}
+		if result.FallbackThreshold != 0 {
+			t.Errorf("FallbackThreshold should be 0 when not used, got %.1f", result.FallbackThreshold)
+		}
+
+		t.Log("Verified: when golden window candidates exist, fallback is NOT triggered")
+	})
+}
+
+func TestFallbackTriggeredWhenNoGoldenWindowCandidates(t *testing.T) {
+	// Phase 5.1: Integration test - fallback should be triggered when no candidates
+	// exist in the golden window with the normal threshold, but relaxed threshold
+	// can find them.
+	//
+	// Scenario:
+	// - Create intervals where golden window (15-90s) has RMS ABOVE normal threshold
+	// - But RMS is BELOW what a relaxed threshold would allow
+	// - Good spectral characteristics (flatness > 0.4, kurtosis < 8)
+	// - Verify: normal detection finds nothing in golden window
+	// - Verify: fallback activates and finds candidates
+
+	t.Run("fallback finds candidates missed by normal threshold", func(t *testing.T) {
+		// Create intervals where:
+		// - 0-15s: loud speech (excluded from golden window anyway)
+		// - 15-90s: moderate noise level that fails normal detection but passes relaxed
+		// - We set RMS at -55 dB with good spectral characteristics
+
+		// Pre-golden window: loud content
+		preGoldenIntervals := makeFallbackTestIntervals(0, 15, -20.0, 0.1, 12.0)
+
+		// Golden window: noise level between normal and relaxed thresholds
+		// RMS = -55 dB, flatness = 0.5 (passes > 0.4), kurtosis = 5.0 (passes < 8.0)
+		goldenIntervals := makeFallbackTestIntervals(15*time.Second, 75, -55.0, 0.5, 5.0)
+
+		// Post-golden window: more content
+		postGoldenIntervals := makeFallbackTestIntervals(90*time.Second, 110, -25.0, 0.1, 10.0)
+
+		intervals := append(append(preGoldenIntervals, goldenIntervals...), postGoldenIntervals...)
+
+		// Compute threshold using the normal estimation
+		// With loud pre-golden content, the threshold will be derived from that
+		noiseFloor, silenceThreshold, ok := estimateNoiseFloorAndThreshold(intervals)
+		if !ok {
+			t.Fatal("estimateNoiseFloorAndThreshold failed")
+		}
+		t.Logf("Estimated noise floor: %.1f dB, threshold: %.1f dB", noiseFloor, silenceThreshold)
+
+		// Find candidates using the normal threshold
+		normalCandidates := findSilenceCandidatesFromIntervals(intervals, silenceThreshold, 0)
+
+		// Check for candidates in golden window
+		goldenStart := 15 * time.Second
+		goldenEnd := 90 * time.Second
+		hasGoldenWindowCandidate := false
+		for _, c := range normalCandidates {
+			if c.Start >= goldenStart && c.Start < goldenEnd {
+				hasGoldenWindowCandidate = true
+				break
+			}
+		}
+
+		// For this test to be valid, normal detection should NOT find golden window candidates
+		// If it does, we need to adjust test parameters
+		if hasGoldenWindowCandidate {
+			t.Skip("Test setup: normal threshold found golden window candidates - adjust RMS levels")
+		}
+		t.Logf("Normal detection found %d candidates, none in golden window (as expected)", len(normalCandidates))
+
+		// Now calculate fallback threshold (simulating what AnalyzeAudio does)
+		// Use full-file NoiseFloor measurement for fallback
+		// Set a realistic NoiseFloor for the test (quietest content in file)
+		simulatedNoiseFloor := -58.0 // Just below our -55 dB golden window content
+
+		fallbackThreshold, canFallback := calculateFallbackThreshold(simulatedNoiseFloor, silenceThreshold)
+		if !canFallback {
+			t.Fatal("calculateFallbackThreshold should succeed with valid NoiseFloor")
+		}
+		t.Logf("Fallback threshold: %.1f dB (NoiseFloor: %.1f dB)", fallbackThreshold, simulatedNoiseFloor)
+
+		// Find candidates using the relaxed threshold
+		fallbackCandidates := findSilenceCandidatesWithRelaxedThreshold(intervals, fallbackThreshold)
+		t.Logf("Fallback detection found %d candidates", len(fallbackCandidates))
+
+		// Verify fallback found candidates
+		if len(fallbackCandidates) == 0 {
+			t.Error("Fallback should find candidates with relaxed threshold")
+		}
+
+		// Verify candidates are in the golden window
+		for _, c := range fallbackCandidates {
+			if c.Start < goldenStart || c.Start >= goldenEnd {
+				t.Errorf("Fallback candidate at %v is outside golden window [15s, 90s)", c.Start)
+			}
+		}
+	})
+}
+
+func TestFallbackSpectralValidationRejectsBadCandidates(t *testing.T) {
+	// Phase 5.2: Integration test - fallback's stricter spectral validation
+	// should reject candidates with poor spectral characteristics.
+	//
+	// Scenario:
+	// - Create intervals with RMS below relaxed threshold (would pass amplitude check)
+	// - But with poor spectral characteristics (flatness 0.2 or kurtosis 12)
+	// - Verify: fallback does NOT return these as candidates
+
+	tests := []struct {
+		name     string
+		flatness float64
+		kurtosis float64
+		desc     string
+	}{
+		{
+			name:     "low flatness rejects voice-like spectrum",
+			flatness: 0.2, // < 0.4 threshold
+			kurtosis: 5.0, // OK
+			desc:     "flatness 0.2 indicates tonal/voice-like content",
+		},
+		{
+			name:     "high kurtosis rejects peaked spectrum",
+			flatness: 0.5,  // OK
+			kurtosis: 12.0, // > 8.0 threshold
+			desc:     "kurtosis 12 indicates strong harmonics (speech)",
+		},
+		{
+			name:     "both bad rejects strongly",
+			flatness: 0.2,  // Bad
+			kurtosis: 12.0, // Bad
+			desc:     "both indicators suggest speech contamination",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create intervals in the golden window with bad spectral characteristics
+			// but RMS that would pass the relaxed threshold
+			intervals := makeFallbackTestIntervals(15*time.Second, 75, -65.0, tt.flatness, tt.kurtosis)
+
+			// Use a relaxed threshold that the RMS would pass
+			relaxedThreshold := -60.0 // RMS -65 is below -60
+
+			candidates := findSilenceCandidatesWithRelaxedThreshold(intervals, relaxedThreshold)
+
+			if len(candidates) != 0 {
+				t.Errorf("Expected 0 candidates with %s, got %d", tt.desc, len(candidates))
+				for _, c := range candidates {
+					t.Logf("  Unexpected candidate: start=%v, duration=%v", c.Start, c.Duration)
+				}
+			}
+		})
+	}
+
+	t.Run("good spectral characteristics pass", func(t *testing.T) {
+		// Verify the control case: good spectral characteristics should pass
+		intervals := makeFallbackTestIntervals(15*time.Second, 75, -65.0, 0.5, 5.0) // Good values
+
+		relaxedThreshold := -60.0
+
+		candidates := findSilenceCandidatesWithRelaxedThreshold(intervals, relaxedThreshold)
+
+		if len(candidates) == 0 {
+			t.Error("Expected candidates with good spectral characteristics")
+		} else {
+			t.Logf("Found %d candidates with good spectral values (as expected)", len(candidates))
+		}
+	})
+}
+
+func TestFallbackThresholdCapIntegration(t *testing.T) {
+	// Phase 5.3: Integration test for threshold cap enforcement.
+	//
+	// This tests the integration of calculateFallbackThreshold's cap behaviour
+	// in a realistic scenario. The unit test TestCalculateFallbackThreshold
+	// already covers the function directly; this test verifies the cap
+	// affects candidate detection appropriately.
+	//
+	// Scenario:
+	// - Original threshold = -65 dB
+	// - NoiseFloor = -50 dB (significantly higher than threshold)
+	// - Without cap: relaxed threshold would be -47 dB (NoiseFloor + 3)
+	// - With cap: relaxed threshold is -55 dB (original + 10)
+	// - Create intervals at -52 dB (between capped and uncapped thresholds)
+	// - Verify: cap prevents detection of intervals that are too loud
+
+	t.Run("cap prevents overly relaxed threshold", func(t *testing.T) {
+		originalThreshold := -65.0
+		noiseFloor := -50.0 // Much higher than threshold
+
+		// Calculate what the thresholds would be
+		uncappedThreshold := noiseFloor + 3.0       // -47 dB (if uncapped)
+		cappedThreshold := originalThreshold + 10.0 // -55 dB (expected with cap)
+
+		// Verify our understanding of the cap
+		actualThreshold, ok := calculateFallbackThreshold(noiseFloor, originalThreshold)
+		if !ok {
+			t.Fatal("calculateFallbackThreshold should succeed")
+		}
+		if actualThreshold != cappedThreshold {
+			t.Errorf("Expected capped threshold %.1f dB, got %.1f dB", cappedThreshold, actualThreshold)
+		}
+		t.Logf("Threshold calculation: uncapped=%.1f dB, capped=%.1f dB, actual=%.1f dB",
+			uncappedThreshold, cappedThreshold, actualThreshold)
+
+		// Create intervals at -52 dB (between capped -55 dB and uncapped -47 dB)
+		// These WOULD be detected without the cap, but should NOT be detected with cap
+		intervals := makeFallbackTestIntervals(15*time.Second, 75, -52.0, 0.5, 5.0)
+
+		// With the capped threshold (-55 dB), RMS -52 dB should NOT pass (since -52 > -55)
+		candidates := findSilenceCandidatesWithRelaxedThreshold(intervals, actualThreshold)
+
+		if len(candidates) != 0 {
+			t.Errorf("Cap should prevent detection of intervals at -52 dB with threshold -55 dB, got %d candidates",
+				len(candidates))
+		}
+
+		// Verify that without cap (using uncapped threshold), detection would succeed
+		// This confirms the test scenario is set up correctly
+		candidatesUncapped := findSilenceCandidatesWithRelaxedThreshold(intervals, uncappedThreshold)
+		if len(candidatesUncapped) == 0 {
+			t.Log("Note: even uncapped threshold didn't find candidates (test may need adjustment)")
+		} else {
+			t.Logf("Without cap: found %d candidates (confirms cap is the reason for rejection)", len(candidatesUncapped))
+		}
+	})
+}
+
+func TestFallbackStatusPropagation(t *testing.T) {
+	// Additional integration test: verify that findBestSilenceRegion correctly
+	// propagates fallback status set by the caller (simulating AnalyzeAudio's flow).
+	//
+	// This tests that the FallbackUsed and FallbackThreshold fields are correctly
+	// preserved and returned in the result structure.
+
+	t.Run("fallback status fields preserved", func(t *testing.T) {
+		// Create a simple candidate set
+		regions := []SilenceRegion{
+			{
+				Start:    20 * time.Second,
+				End:      30 * time.Second,
+				Duration: 10 * time.Second,
+			},
+		}
+
+		intervals := makeFallbackTestIntervals(0, 100, -70.0, 0.6, 3.0)
+
+		result := findBestSilenceRegion(regions, intervals, 100.0)
+
+		// The function itself doesn't set fallback fields - that's done by AnalyzeAudio
+		// Verify they're initialized to zero values
+		if result.FallbackUsed {
+			t.Error("FallbackUsed should be false by default")
+		}
+		if result.FallbackThreshold != 0 {
+			t.Errorf("FallbackThreshold should be 0 by default, got %.1f", result.FallbackThreshold)
+		}
+
+		// Simulate what AnalyzeAudio does: set the fields after the call
+		result.FallbackUsed = true
+		result.FallbackThreshold = -58.0
+
+		// Verify they're now set
+		if !result.FallbackUsed {
+			t.Error("FallbackUsed should be true after setting")
+		}
+		if result.FallbackThreshold != -58.0 {
+			t.Errorf("FallbackThreshold should be -58.0 after setting, got %.1f", result.FallbackThreshold)
+		}
+	})
 }

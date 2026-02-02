@@ -1360,6 +1360,115 @@ func findSilenceCandidatesFromIntervals(intervals []IntervalSample, threshold fl
 	return candidates
 }
 
+// findSilenceCandidatesWithRelaxedThreshold searches for silence candidates using
+// a relaxed threshold but with stricter spectral validation.
+// Only searches the golden window (15-90s).
+// Returns candidates that pass both threshold AND spectral validation.
+//
+// This function is used when the initial silence detection fails to find candidates
+// within the early window. It uses a more lenient amplitude threshold (derived from
+// full-file NoiseFloor) but compensates with stricter spectral checks to avoid
+// picking up contaminated regions.
+func findSilenceCandidatesWithRelaxedThreshold(
+	intervals []IntervalSample,
+	relaxedThreshold float64,
+) []SilenceRegion {
+	if len(intervals) < minimumSilenceIntervals {
+		return nil
+	}
+
+	// Filter to golden window (15-90s) using existing constants
+	goldenStart := time.Duration(earlyWindowStart * float64(time.Second))
+	goldenEnd := time.Duration(earlyWindowEnd * float64(time.Second))
+	goldenIntervals := getIntervalsInRange(intervals, goldenStart, goldenEnd)
+
+	if len(goldenIntervals) < minimumSilenceIntervals {
+		return nil
+	}
+
+	// Calculate medians for room tone scoring (same as findSilenceCandidatesFromIntervals)
+	rmsLevels := make([]float64, len(goldenIntervals))
+	fluxValues := make([]float64, len(goldenIntervals))
+	for i, interval := range goldenIntervals {
+		rmsLevels[i] = interval.RMSLevel
+		fluxValues[i] = interval.SpectralFlux
+	}
+	sort.Float64s(rmsLevels)
+	sort.Float64s(fluxValues)
+
+	rmsP50 := rmsLevels[len(rmsLevels)/2]
+	fluxP50 := fluxValues[len(fluxValues)/2]
+
+	var candidates []SilenceRegion
+	var silenceStart time.Duration
+	var silentIntervalCount int
+	var interruptionCount int // consecutive intervals below score threshold
+	inSilence := false
+
+	for _, interval := range goldenIntervals {
+		// Check ALL criteria:
+		// 1. RMS below relaxed threshold
+		// 2. Room tone score above threshold (same as original function)
+		// 3. Spectral flatness above fallbackMinFlatness (noise-like spectrum)
+		// 4. Spectral kurtosis below fallbackMaxKurtosis (not peaked/harmonic)
+		score := roomToneScore(interval, rmsP50, fluxP50)
+		isSilent := interval.RMSLevel <= relaxedThreshold &&
+			score >= roomToneScoreThreshold &&
+			interval.SpectralFlatness > fallbackMinFlatness &&
+			interval.SpectralKurtosis < fallbackMaxKurtosis
+
+		if isSilent {
+			if !inSilence {
+				// Start of potential silence region
+				silenceStart = interval.Timestamp
+				silentIntervalCount = 1
+				interruptionCount = 0
+				inSilence = true
+			} else {
+				silentIntervalCount++
+				interruptionCount = 0 // reset interruption counter on silent interval
+			}
+		} else if inSilence {
+			// Not room tone - count as interruption
+			interruptionCount++
+
+			if interruptionCount > interruptionToleranceIntervals {
+				// Too many consecutive interruptions - end silence region
+				if silentIntervalCount >= minimumSilenceIntervals {
+					// Find the timestamp of the last qualifying interval
+					// We need to walk back to find it since we're iterating over goldenIntervals
+					endTime := silenceStart + time.Duration(silentIntervalCount)*250*time.Millisecond
+					duration := endTime - silenceStart
+
+					candidates = append(candidates, SilenceRegion{
+						Start:    silenceStart,
+						End:      endTime,
+						Duration: duration,
+					})
+				}
+				inSilence = false
+				silentIntervalCount = 0
+				interruptionCount = 0
+			}
+			// else: within tolerance, continue silence region
+		}
+	}
+
+	// Handle silence that extends to the end of the golden window
+	if inSilence && silentIntervalCount >= minimumSilenceIntervals {
+		endTime := silenceStart + time.Duration(silentIntervalCount)*250*time.Millisecond
+		duration := endTime - silenceStart
+
+		candidates = append(candidates, SilenceRegion{
+			Start:    silenceStart,
+			End:      endTime,
+			Duration: duration,
+		})
+	}
+
+	return candidates
+}
+
 // Cached metadata keys for frame extraction - avoids per-frame C string allocations
 // These use GlobalCStr which maintains an internal cache, so identical strings share the same CStr
 var (
@@ -1978,6 +2087,10 @@ type AudioMeasurements struct {
 	// Derived suggestions for Pass 2 adaptive processing
 	SuggestedGateThreshold float64 `json:"suggested_gate_threshold"` // Suggested gate threshold (linear amplitude)
 	NoiseReductionHeadroom float64 `json:"noise_reduction_headroom"` // dB gap between noise and quiet speech
+
+	// Silence fallback status (set when NoiseFloor-based relaxed threshold was used)
+	SilenceFallbackUsed      bool    `json:"silence_fallback_used,omitempty"`      // True if fallback threshold was used
+	SilenceFallbackThreshold float64 `json:"silence_fallback_threshold,omitempty"` // The relaxed threshold used (0 if not used)
 }
 
 // SilenceAnalysis contains measurements from a silence region.
@@ -2578,9 +2691,49 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 	// The silenceThreshold was calculated above via estimateNoiseFloorAndThreshold()
 	measurements.SilenceRegions = findSilenceCandidatesFromIntervals(intervals, silenceThreshold, 0)
 
+	// Check if we have candidates in the golden window (15-90s)
+	goldenWindowStart := time.Duration(earlyWindowStart * float64(time.Second))
+	goldenWindowEnd := time.Duration(earlyWindowEnd * float64(time.Second))
+	hasGoldenWindowCandidates := false
+	for _, r := range measurements.SilenceRegions {
+		if r.Start >= goldenWindowStart && r.Start < goldenWindowEnd {
+			hasGoldenWindowCandidates = true
+			break
+		}
+	}
+
+	// Fallback: if no candidates in golden window, try NoiseFloor-based relaxed threshold
+	var fallbackUsed bool
+	var fallbackThreshold float64
+	if !hasGoldenWindowCandidates {
+		if threshold, ok := calculateFallbackThreshold(measurements.NoiseFloor, silenceThreshold); ok {
+			fallbackCandidates := findSilenceCandidatesWithRelaxedThreshold(intervals, threshold)
+			if len(fallbackCandidates) > 0 {
+				measurements.SilenceRegions = append(measurements.SilenceRegions, fallbackCandidates...)
+				fallbackUsed = true
+				fallbackThreshold = threshold
+				debugLog("Silence detection fallback: no candidates in golden window (15-90s)")
+				debugLog("  Original threshold: %.1f dB, NoiseFloor: %.1f dB, relaxed threshold: %.1f dB",
+					silenceThreshold, measurements.NoiseFloor, threshold)
+				debugLog("  Found %d candidates with relaxed threshold + spectral validation", len(fallbackCandidates))
+			}
+		}
+	}
+
 	// Extract noise profile from best silence region (if available)
 	// Uses interval data for all measurements - no file re-reading required
 	silenceResult := findBestSilenceRegion(measurements.SilenceRegions, intervals, totalDuration)
+
+	// Propagate fallback status to result and measurements
+	silenceResult.FallbackUsed = fallbackUsed
+	silenceResult.FallbackThreshold = fallbackThreshold
+	measurements.SilenceFallbackUsed = silenceResult.FallbackUsed
+	measurements.SilenceFallbackThreshold = silenceResult.FallbackThreshold
+
+	// Log fallback status if used and a region was selected
+	if measurements.SilenceFallbackUsed && silenceResult.BestRegion != nil {
+		debugLog("  (fallback threshold: %.1f dB)", measurements.SilenceFallbackThreshold)
+	}
 
 	// Store all evaluated candidates for reporting/debugging
 	measurements.SilenceCandidates = silenceResult.Candidates
@@ -2818,6 +2971,14 @@ const (
 	transitionEnd        = 180.0 // seconds - neutral zone begins
 	transitionPenaltyMax = 0.30  // 30% maximum penalty at transition midpoint (135s)
 
+	// Fallback threshold constants (uses full-file NoiseFloor measurement)
+	fallbackHeadroomDB      = 3.0  // dB added to NoiseFloor for detection margin
+	fallbackMaxRelaxationDB = 10.0 // Maximum threshold relaxation from original
+
+	// Stricter spectral validation for fallback candidates
+	fallbackMinFlatness = 0.4 // Higher than normal (noise-like spectrum required)
+	fallbackMaxKurtosis = 8.0 // Lower than normal (reject peaked/harmonic content)
+
 	// Candidate selection cutoff
 	candidateCutoffPercent = 0.15 // Only consider silence in first 15% of recording
 
@@ -2827,6 +2988,26 @@ const (
 	// not minor temporal weighting adjustments from the three-zone system.
 	regressionThreshold = 0.05
 )
+
+// calculateFallbackThreshold computes a relaxed threshold from full-file NoiseFloor.
+// Uses NoiseFloor + headroom, capped at originalThreshold + maxRelaxation.
+// Returns (threshold, ok). ok is false if NoiseFloor is invalid.
+func calculateFallbackThreshold(noiseFloor float64, originalThreshold float64) (float64, bool) {
+	// Validate NoiseFloor
+	if noiseFloor == 0 || noiseFloor < -90.0 || noiseFloor > -20.0 {
+		return 0, false
+	}
+
+	threshold := noiseFloor + fallbackHeadroomDB
+
+	// Cap relaxation to prevent runaway
+	maxThreshold := originalThreshold + fallbackMaxRelaxationDB
+	if threshold > maxThreshold {
+		threshold = maxThreshold
+	}
+
+	return threshold, true
+}
 
 // segmentLongSilenceRegion breaks a long silence region into overlapping segments.
 // This allows finding the cleanest subsection within a long quiet period, as intentional
@@ -2879,8 +3060,10 @@ func segmentLongSilenceRegion(region SilenceRegion) []SilenceRegion {
 // Returns nil if no suitable region is found.
 // findBestSilenceRegionResult contains the selected region and all evaluated candidates
 type findBestSilenceRegionResult struct {
-	BestRegion *SilenceRegion
-	Candidates []SilenceCandidateMetrics
+	BestRegion        *SilenceRegion
+	Candidates        []SilenceCandidateMetrics
+	FallbackUsed      bool    // True if NoiseFloor-based fallback was activated
+	FallbackThreshold float64 // The relaxed threshold used (0 if not used)
 }
 
 func findBestSilenceRegion(regions []SilenceRegion, intervals []IntervalSample, totalDuration float64) *findBestSilenceRegionResult {
