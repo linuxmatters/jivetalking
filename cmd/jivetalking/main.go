@@ -22,10 +22,11 @@ var version = "dev"
 
 // CLI defines the command-line interface
 type CLI struct {
-	Version bool     `short:"v" help:"Show version information"`
-	Debug   bool     `short:"d" help:"Enable debug logging to jivetalking-debug.log"`
-	Logs    bool     `help:"Save detailed analysis logs"`
-	Files   []string `arg:"" name:"files" help:"Audio files to process" type:"existingfile" optional:""`
+	Version      bool     `short:"v" help:"Show version information"`
+	Debug        bool     `short:"d" help:"Enable debug logging to jivetalking-debug.log"`
+	Logs         bool     `help:"Save detailed analysis logs"`
+	AnalysisOnly bool     `short:"a" help:"Run analysis only (Pass 1), display results, skip processing"`
+	Files        []string `arg:"" name:"files" help:"Audio files to process" type:"existingfile" optional:""`
 }
 
 func main() {
@@ -74,6 +75,12 @@ func main() {
 
 	// Set the processor package's debug log function to use the same log
 	processor.DebugLog = log
+
+	// Handle analysis-only mode: run Pass 1 and display results, skip TUI
+	if cliArgs.AnalysisOnly {
+		runAnalysisOnly(cliArgs.Files, log)
+		return
+	}
 
 	// Create the Bubbletea UI model
 	model := ui.NewModel(cliArgs.Files)
@@ -204,4 +211,116 @@ func (ph *progressHandler) callback(pass int, passName string, progress float64,
 		Level:        level,
 		Measurements: measurements,
 	})
+}
+
+// runAnalysisOnly performs Pass 1 analysis on each file with a progress UI,
+// then displays results to console. Skips full 4-pass processing.
+func runAnalysisOnly(files []string, log func(string, ...interface{})) {
+	config := processor.DefaultFilterConfig()
+
+	// Check if we have a TTY for the progress UI
+	hasTTY := isTTY()
+
+	for i, inputPath := range files {
+		// Add separator between multiple files
+		if i > 0 {
+			fmt.Println()
+		}
+
+		log("[ANALYSIS] Starting analysis for %s", inputPath)
+
+		// Get file metadata for duration/sample rate display
+		reader, metadata, err := audio.OpenAudioFile(inputPath)
+		if err != nil {
+			cli.PrintError(fmt.Sprintf("Failed to open %s: %v", inputPath, err))
+			continue
+		}
+		reader.Close()
+
+		var measurements *processor.AudioMeasurements
+		var adaptedConfig *processor.FilterChainConfig
+		var analysisErr error
+
+		if hasTTY {
+			// Run with TUI progress display
+			measurements, adaptedConfig, analysisErr = runAnalysisWithTUI(inputPath, config, log)
+		} else {
+			// Fallback: run without TUI (for non-interactive environments)
+			log("[ANALYSIS] No TTY available, running without progress UI")
+			fmt.Printf("Analysing: %s\n", inputPath)
+			measurements, adaptedConfig, analysisErr = processor.AnalyzeOnly(inputPath, config, nil)
+		}
+
+		if analysisErr != nil {
+			cli.PrintError(fmt.Sprintf("Analysis failed for %s: %v", inputPath, analysisErr))
+			continue
+		}
+
+		log("[ANALYSIS] Analysis complete for %s", inputPath)
+
+		// Display results to console
+		logging.DisplayAnalysisResults(os.Stdout, inputPath, metadata, measurements, adaptedConfig)
+	}
+}
+
+// isTTY checks if stdout is connected to a terminal
+func isTTY() bool {
+	fileInfo, _ := os.Stdout.Stat()
+	return (fileInfo.Mode() & os.ModeCharDevice) != 0
+}
+
+// runAnalysisWithTUI runs analysis with the Bubbletea progress UI
+func runAnalysisWithTUI(inputPath string, config *processor.FilterChainConfig, log func(string, ...interface{})) (*processor.AudioMeasurements, *processor.FilterChainConfig, error) {
+	// Create the analysis UI model
+	model := ui.NewAnalysisModel()
+
+	// Start the TUI (not in alt screen so output remains visible)
+	p := tea.NewProgram(model)
+
+	// Run analysis in background goroutine
+	go func(path string) {
+		// Signal analysis start
+		p.Send(ui.AnalysisStartMsg{
+			FileName: path,
+			FilePath: path,
+		})
+
+		// Create progress callback that sends updates to TUI
+		progressCallback := func(pass int, passName string, progress float64, level float64, measurements *processor.AudioMeasurements) {
+			log("[ANALYSIS] Progress: Pass %d (%s), %.1f%%, Level %.1f dB", pass, passName, progress*100, level)
+			p.Send(ui.AnalysisProgressMsg{
+				Progress: progress,
+				Level:    level,
+			})
+		}
+
+		// Run analysis-only with progress callback
+		measurements, adaptedConfig, err := processor.AnalyzeOnly(path, config, progressCallback)
+
+		// Signal completion
+		p.Send(ui.AnalysisCompleteMsg{
+			Measurements: measurements,
+			Config:       adaptedConfig,
+			Error:        err,
+		})
+	}(inputPath)
+
+	// Run the TUI until analysis completes
+	finalModel, err := p.Run()
+	if err != nil {
+		return nil, nil, fmt.Errorf("UI error: %w", err)
+	}
+
+	// Get the final model state
+	analysisModel, ok := finalModel.(ui.AnalysisModel)
+	if !ok {
+		return nil, nil, fmt.Errorf("unexpected model type")
+	}
+
+	// Check for analysis error
+	if analysisModel.Error != nil {
+		return nil, nil, analysisModel.Error
+	}
+
+	return analysisModel.Measurements, analysisModel.Config, nil
 }
