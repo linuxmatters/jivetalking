@@ -11,6 +11,32 @@ import (
 	"github.com/linuxmatters/jivetalking/internal/audio"
 )
 
+// AnalyzeOnly performs Pass 1 analysis without processing.
+// Returns measurements and the adapted filter configuration.
+// Useful for rapid testing of silence detection algorithms without full processing.
+func AnalyzeOnly(inputPath string, config *FilterChainConfig,
+	progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements),
+) (*AudioMeasurements, *FilterChainConfig, error) {
+	// Pass 1: Analysis
+	if progressCallback != nil {
+		progressCallback(1, "Analyzing", 0.0, 0.0, nil)
+	}
+
+	measurements, err := AnalyzeAudio(inputPath, config, progressCallback)
+	if err != nil {
+		return nil, nil, fmt.Errorf("analysis failed: %w", err)
+	}
+
+	if progressCallback != nil {
+		progressCallback(1, "Analyzing", 1.0, 0.0, measurements)
+	}
+
+	// Adapt config to show what would be used in Pass 2
+	AdaptConfig(config, measurements)
+
+	return measurements, config, nil
+}
+
 // ProcessAudio performs complete two-pass audio processing:
 // - Pass 1: Analyze audio to get measurements and noise floor estimate
 // - Pass 2: Process audio through complete filter chain (afftdn → agate → acompressor → dynaudnorm → alimiter)
