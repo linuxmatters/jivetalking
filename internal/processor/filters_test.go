@@ -118,7 +118,7 @@ func TestBuildFilterSpec(t *testing.T) {
 		}
 
 		// Processing filters should NOT be present when disabled
-		processingFilters := []string{"highpass=", "afftdn=", "agate=", "acompressor=", "alimiter="}
+		processingFilters := []string{"highpass=", "anlmdn=", "agate=", "acompressor=", "alimiter="}
 		for _, pf := range processingFilters {
 			if strings.Contains(spec, pf) {
 				t.Errorf("Disabled filter %q should not appear in spec", pf)

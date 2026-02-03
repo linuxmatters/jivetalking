@@ -33,7 +33,16 @@ type SilenceRegion struct {
 	Duration time.Duration `json:"duration"`
 }
 
-// NoiseProfile contains information about an extracted noise sample
+// NoiseProfile contains measurements from the elected silence region.
+// These measurements serve as a reference baseline for adaptive filter tuning:
+//   - MeasuredNoiseFloor → compand expansion threshold (NoiseRemove)
+//   - Entropy → gate release timing and range adaptation (DS201Gate)
+//     (See docs/Spectral-Metrics-Reference.md for entropy value interpretations:
+//     low entropy 0.08-0.30 = ordered/voiced; high entropy > 0.50 = disordered/noise)
+//   - CrestFactor/PeakLevel → transient detection mode selection
+//
+// Note: The silence region is also re-measured in Pass 2 and Pass 4 for
+// before/after comparison of noise reduction effectiveness.
 type NoiseProfile struct {
 	Start              time.Duration `json:"start"`                        // Start time of silence region used
 	Duration           time.Duration `json:"duration"`                     // Duration of extracted sample
@@ -2768,7 +2777,19 @@ func createAnalysisFilterGraph(
 	return setupFilterGraph(decCtx, config.BuildFilterSpec())
 }
 
-// Silence region scoring constants for noise profile extraction
+// Silence region scoring for measurement reference extraction.
+//
+// The "noise profile" is no longer used for afftdn training (anlmdn is self-adapting).
+// Instead, these measurements serve as:
+// 1. Reference baseline for adaptive filter tuning (gate, compand, highpass)
+// 2. Comparative measurement point (same region re-measured in later passes)
+//
+// Scoring weights are tuned to prefer regions that are:
+//   - Quiet (amplitude) - accurate noise floor measurement
+//   - Noise-like (spectral) - representative of room ambience, not crosstalk
+//     (See docs/Spectral-Metrics-Reference.md for metric interpretations)
+//   - Stable (variance) - intentionally recorded, not accidental gaps
+//   - Duration 8-18s - sufficient data without absorbing content changes
 const (
 	// Duration thresholds (Task 5: adjusted constraints)
 	minimumSilenceDuration = 8 * time.Second  // Minimum 8s (up from 2s) to avoid inter-word gaps

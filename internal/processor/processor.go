@@ -38,8 +38,9 @@ func AnalyzeOnly(inputPath string, config *FilterChainConfig,
 }
 
 // ProcessAudio performs complete two-pass audio processing:
-// - Pass 1: Analyze audio to get measurements and noise floor estimate
-// - Pass 2: Process audio through complete filter chain (afftdn → agate → acompressor → dynaudnorm → alimiter)
+//   - Pass 1: Analyze audio to get measurements and noise floor estimate
+//   - Pass 2: Process audio through filter chain (downmix → ds201_highpass → ds201_lowpass → noiseremove[anlmdn+compand] → agate → la2a → deesser → analysis → resample)
+//     (Pass 3 measures loudnorm; Pass 4 applies alimiter (Volumax) + loudnorm)
 //
 // The output file will be named <basename>-processed.<ext> in the same directory as the input
 // If progressCallback is not nil, it will be called with progress updates
