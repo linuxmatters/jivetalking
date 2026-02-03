@@ -1613,6 +1613,136 @@ func TestMeasureOutputSpeechRegion(t *testing.T) {
 // Crest Factor Penalty Tests
 // ============================================================================
 
+// ============================================================================
+// Stability Score Tests
+// ============================================================================
+
+func TestCalculateStabilityScore(t *testing.T) {
+	tests := []struct {
+		name      string
+		intervals []IntervalSample
+		wantMin   float64
+		wantMax   float64
+		desc      string
+	}{
+		{
+			name:      "empty list returns neutral",
+			intervals: []IntervalSample{},
+			wantMin:   0.5,
+			wantMax:   0.5,
+			desc:      "insufficient data returns 0.5 neutral score",
+		},
+		{
+			name: "single interval returns neutral",
+			intervals: []IntervalSample{
+				{RMSLevel: -50.0, SpectralFlux: 0.0},
+			},
+			wantMin: 0.5,
+			wantMax: 0.5,
+			desc:    "insufficient data (need >= 2) returns 0.5 neutral score",
+		},
+		{
+			name: "uniform intervals - perfect stability",
+			intervals: []IntervalSample{
+				{RMSLevel: -50.0, SpectralFlux: 0.0},
+				{RMSLevel: -50.0, SpectralFlux: 0.0},
+				{RMSLevel: -50.0, SpectralFlux: 0.0},
+				{RMSLevel: -50.0, SpectralFlux: 0.0},
+			},
+			wantMin: 0.99,
+			wantMax: 1.0,
+			desc:    "zero variance, zero flux = perfect stability score",
+		},
+		{
+			name: "uniform RMS with low flux - high stability",
+			intervals: []IntervalSample{
+				{RMSLevel: -60.0, SpectralFlux: 0.001},
+				{RMSLevel: -60.0, SpectralFlux: 0.002},
+				{RMSLevel: -60.0, SpectralFlux: 0.001},
+				{RMSLevel: -60.0, SpectralFlux: 0.002},
+			},
+			wantMin: 0.90,
+			wantMax: 1.0,
+			desc:    "zero RMS variance, low flux = near-perfect stability",
+		},
+		{
+			name: "variable RMS - lower stability",
+			intervals: []IntervalSample{
+				{RMSLevel: -45.0, SpectralFlux: 0.0},
+				{RMSLevel: -55.0, SpectralFlux: 0.0},
+				{RMSLevel: -48.0, SpectralFlux: 0.0},
+				{RMSLevel: -52.0, SpectralFlux: 0.0},
+			},
+			wantMin: 0.35,
+			wantMax: 0.45,
+			desc:    "10dB spread in RMS (variance ~14.5 dB²) exceeds 9 dB² threshold, only flux contributes",
+		},
+		{
+			name: "high spectral flux - lower stability",
+			intervals: []IntervalSample{
+				{RMSLevel: -50.0, SpectralFlux: 0.03},
+				{RMSLevel: -50.0, SpectralFlux: 0.04},
+				{RMSLevel: -50.0, SpectralFlux: 0.025},
+				{RMSLevel: -50.0, SpectralFlux: 0.035},
+			},
+			wantMin: 0.0,
+			wantMax: 0.65,
+			desc:    "zero RMS variance but flux > 0.02 threshold reduces score",
+		},
+		{
+			name: "variable RMS and high flux - poor stability",
+			intervals: []IntervalSample{
+				{RMSLevel: -45.0, SpectralFlux: 0.03},
+				{RMSLevel: -55.0, SpectralFlux: 0.04},
+				{RMSLevel: -48.0, SpectralFlux: 0.025},
+				{RMSLevel: -52.0, SpectralFlux: 0.035},
+			},
+			wantMin: 0.0,
+			wantMax: 0.5,
+			desc:    "both high RMS variance and high flux = poor stability",
+		},
+		{
+			name: "extreme variance - near-zero stability",
+			intervals: []IntervalSample{
+				{RMSLevel: -30.0, SpectralFlux: 0.05},
+				{RMSLevel: -70.0, SpectralFlux: 0.08},
+				{RMSLevel: -35.0, SpectralFlux: 0.06},
+				{RMSLevel: -65.0, SpectralFlux: 0.07},
+			},
+			wantMin: 0.0,
+			wantMax: 0.2,
+			desc:    "40dB spread and very high flux = minimal stability",
+		},
+		{
+			name: "two intervals - minimum valid input",
+			intervals: []IntervalSample{
+				{RMSLevel: -50.0, SpectralFlux: 0.005},
+				{RMSLevel: -50.0, SpectralFlux: 0.005},
+			},
+			wantMin: 0.85,
+			wantMax: 1.0,
+			desc:    "two identical intervals should score high",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			score := calculateStabilityScore(tt.intervals)
+
+			// Verify score is bounded 0-1
+			if score < 0.0 || score > 1.0 {
+				t.Errorf("score %.3f outside [0, 1] range", score)
+			}
+
+			// Verify score is within expected range
+			if score < tt.wantMin || score > tt.wantMax {
+				t.Errorf("calculateStabilityScore() = %.3f, want [%.2f, %.2f] (%s)",
+					score, tt.wantMin, tt.wantMax, tt.desc)
+			}
+		})
+	}
+}
+
 func TestCrestFactorPenalty(t *testing.T) {
 	tests := []struct {
 		name        string
