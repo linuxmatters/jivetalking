@@ -6,7 +6,7 @@ testdata := source_directory()
 
 # Test episode number (change this to test different episodes)
 
-episode := "74"
+episode := "68"
 
 # Get Mark's processed logs
 mark-logs:
@@ -65,5 +65,36 @@ all-episodes:
         done
     done
 
+# Run analysis-only mode on all episodes and presenters
+all-analyse:
+    #!/usr/bin/env bash
+    for ep in 68 69 70 71 72 73 74; do
+        echo "=== Analysing Episode $ep ==="
+        for presenter in mark martin popey; do
+            audio_file="{{ testdata }}/LMP-${ep}-${presenter}.flac"
+            log_file="{{ testdata }}/LMP-${ep}-${presenter}-analysis.log"
+            if [[ -f "$audio_file" ]]; then
+                echo "--- $presenter ---"
+                ./jivetalking -a "$audio_file" | tee "$log_file"
+            else
+                echo "--- $presenter (skipped: file not found) ---"
+            fi
+        done
+    done
+
 # Stash all presenters logs
 stash: mark-log-stash martin-log-stash popey-log-stash
+
+
+# Run analysis-only mode on all episodes and presenters
+stash-analysis:
+    #!/usr/bin/env bash
+    for ep in 68 69 70 71 72 73 74; do
+        for presenter in mark martin popey; do
+            log_file="{{ testdata }}/LMP-${ep}-${presenter}-analysis.log"
+            stash_log_file="{{ testdata }}/LMP-${ep}-${presenter}-analysis-before.log"
+            if [ -e "${log_file}" ]; then
+                cp "${log_file}" "${stash_log_file}"
+            fi
+        done
+    done

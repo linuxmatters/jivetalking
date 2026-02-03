@@ -103,6 +103,12 @@ type SilenceCandidateMetrics struct {
 
 	// Scoring (computed after measurement)
 	Score float64 // Composite score for candidate ranking
+
+	// StabilityScore measures the temporal consistency of the silence region (0-1).
+	// Higher scores indicate more stable measurements across the region, suggesting
+	// intentionally-recorded room tone rather than accidental gaps between speech.
+	// Calculated from RMS variance and average spectral flux across intervals.
+	StabilityScore float64
 }
 
 // SpeechRegion represents a detected continuous speech period in the audio.
@@ -878,6 +884,8 @@ func measureSilenceCandidateFromIntervals(region SilenceRegion, intervals []Inte
 		SamplePeak:    samplePeakMax,
 
 		Entropy: avgEntropy, // Legacy field for compatibility
+
+		StabilityScore: calculateStabilityScore(regionIntervals),
 	}
 }
 
@@ -2821,26 +2829,22 @@ const (
 	rmsSilenceThreshold      = -70.0 // dBFS
 
 	// Scoring weights (must sum to 1.0)
-	amplitudeScoreWeight = 0.4
-	spectralScoreWeight  = 0.5
-	durationScoreWeight  = 0.1
+	stabilityScoreWeight = 0.25
+	amplitudeScoreWeight = 0.30 // was 0.40
+	spectralScoreWeight  = 0.35 // was 0.50
+	durationScoreWeight  = 0.10
 
 	// Minimum acceptable score for "first wins" selection
 	// Candidates below this threshold are skipped in favour of later candidates
 	// Set low (0.3) to only reject truly problematic candidates (crosstalk, etc.)
 	minAcceptableScore = 0.3
 
-	// Temporal bias constants (still used in scoring for logging, but not for selection)
-	temporalBiasMax    = 0.05 // Up to 5% penalty for late regions
-	temporalWindowSecs = 90.0 // Regions after 90s get maximum penalty
-
 	// Candidate selection cutoff
 	candidateCutoffPercent = 0.15 // Only consider silence in first 15% of recording
 
 	// regressionThreshold is the minimum score drop required to trigger early termination.
 	// Prevents minor score fluctuations from prematurely locking in a suboptimal candidate.
-	// Value of 0.05 (5%) matches temporalBiasMax, so drops exceeding the built-in
-	// positional penalty indicate genuine quality degradation rather than noise.
+	// Value of 0.05 (5%) filters out noise while catching genuine quality degradation.
 	regressionThreshold = 0.05
 )
 
@@ -3002,14 +3006,10 @@ func scoreSilenceCandidate(m *SilenceCandidateMetrics) float64 {
 	// Weighted combination (base score)
 	baseScore := ampScore*amplitudeScoreWeight +
 		specScore*spectralScoreWeight +
-		durScore*durationScoreWeight
+		durScore*durationScoreWeight +
+		m.StabilityScore*stabilityScoreWeight
 
-	// Apply temporal bias as multiplicative tiebreaker (Task 4)
-	// Early regions get up to 10% boost: score *= 1.0 - (startTime / 90s) * 0.1
-	// At t=0: multiplier = 1.0, at t=90s+: multiplier = 0.9
-	temporalMultiplier := applyTemporalBias(m.Region.Start)
-
-	score := baseScore * temporalMultiplier
+	score := baseScore
 
 	// Apply crest factor penalty for transient contamination
 	score = applyCrestFactorPenalty(score, m.CrestFactor, m.PeakLevel, m.RMSLevel)
@@ -3023,6 +3023,55 @@ func scoreSilenceCandidate(m *SilenceCandidateMetrics) float64 {
 	}
 
 	return score
+}
+
+// calculateStabilityScore computes a 0-1 score for intra-region stability.
+// Higher stability = more consistent measurements = likely intentional recording.
+//
+// The score combines two factors:
+//   - RMS variance: low variance indicates consistent amplitude (steady room tone)
+//   - Average spectral flux: low flux indicates stable spectral content
+//
+// Thresholds:
+//   - RMS variance: 0 dB² (perfect) to 9 dB² (3 dB std dev, poor)
+//     Note: 9 dB² represents a 3 dB standard deviation — intentional room tone
+//     should show much lower variance (typically < 1 dB²).
+//   - Flux: 0 (perfect) to 0.02 (stability threshold)
+//     Aligned with Spectral-Metrics-Reference.md where < 0.005 = "Stable, continuous"
+//     and > 0.02 = "High variation" (consonant transitions, transients).
+//
+// Weighting: RMS variance 60%, flux stability 40% (RMS is the primary discriminator).
+func calculateStabilityScore(intervals []IntervalSample) float64 {
+	if len(intervals) < 2 {
+		return 0.5 // Insufficient data, neutral score
+	}
+
+	// Calculate variance of RMS levels across intervals
+	var rmsSum, rmsSquaredSum float64
+	for _, iv := range intervals {
+		rmsSum += iv.RMSLevel
+		rmsSquaredSum += iv.RMSLevel * iv.RMSLevel
+	}
+	n := float64(len(intervals))
+	rmsMean := rmsSum / n
+	rmsVariance := (rmsSquaredSum / n) - (rmsMean * rmsMean)
+
+	// Calculate average spectral flux (already a stability indicator)
+	var fluxSum float64
+	for _, iv := range intervals {
+		fluxSum += iv.SpectralFlux
+	}
+	avgFlux := fluxSum / n
+
+	// Stability score: low variance + low flux = high stability
+	//
+	// RMS variance: 0 dB² (perfect) to 9 dB² (3 dB std dev, poor)
+	// Flux: 0 (perfect) to 0.02 (stability threshold)
+	rmsStabilityScore := clampFloat(1.0-(rmsVariance/9.0), 0.0, 1.0)
+	fluxStabilityScore := clampFloat(1.0-(avgFlux/0.02), 0.0, 1.0)
+
+	// Combine: RMS variance more important (direct amplitude stability)
+	return rmsStabilityScore*0.6 + fluxStabilityScore*0.4
 }
 
 // isLikelyCrosstalk detects if a silence candidate is likely crosstalk (leaked voice).
@@ -3094,21 +3143,6 @@ func calculateSpectralScore(centroid, flatness, kurtosis float64) float64 {
 
 	// Combine with weights from the spec
 	return centroidScore*0.5 + flatnessScore*0.3 + kurtosisScore*0.2
-}
-
-// applyTemporalBias returns a multiplicative factor that gives early regions a boost.
-// Formula from Task 4: score *= 1.0 - (startTime / 90s) * 0.1
-// At t=0: returns 1.0 (no penalty), at t=90s+: returns 0.9 (10% reduction)
-// This acts as a tiebreaker for candidates with similar base scores.
-func applyTemporalBias(start time.Duration) float64 {
-	startSecs := start.Seconds()
-	if startSecs < 0 {
-		startSecs = 0
-	}
-
-	// Linear bias: 0s → 1.0, 90s+ → 0.9
-	bias := clampFloat(startSecs/temporalWindowSecs, 0.0, 1.0) * temporalBiasMax
-	return 1.0 - bias
 }
 
 // applyCrestFactorPenalty applies a two-stage penalty for transient contamination.
