@@ -6,7 +6,7 @@ testdata := source_directory()
 
 # Test episode number (change this to test different episodes)
 
-episode := "68"
+episode := "70"
 
 # Get Mark's processed logs
 mark-logs:
@@ -50,8 +50,23 @@ popey:
     @./jivetalking --debug --logs {{ testdata }}/LMP-{{ episode }}-popey.flac
     @just popey-logs
 
+# Analyse Mark's audio
+mark-analysis:
+    @./jivetalking -a {{ testdata }}/LMP-{{ episode }}-mark.flac
+
+# Analyse Martin's audio
+martin-analysis:
+    @./jivetalking -a {{ testdata }}/LMP-{{ episode }}-martin.flac
+
+# Analyse popey's audio
+popey-analysis:
+    @./jivetalking -a {{ testdata }}/LMP-{{ episode }}-popey.flac
+
 # Process all presenters
 presenters: mark martin popey
+
+# Analyse all presenter
+analysis: mark-analysis martin-analysis popey-analysis
 
 # Process all presenters for episodes 70, 71, and 72
 all-episodes:

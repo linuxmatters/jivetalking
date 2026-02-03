@@ -2817,6 +2817,7 @@ const (
 	// Scoring thresholds
 	crosstalkKurtosisThreshold    = 10.0 // Above this + voice centroid = likely crosstalk
 	crosstalkCrestFactorThreshold = 15.0 // Above this + voice centroid = likely crosstalk
+	crosstalkPeakRMSGap           = 45.0 // dB - catches severe transient contamination regardless of spectral content
 
 	// Crest factor penalty thresholds for silence candidates.
 	// Context: These apply to SILENCE CANDIDATES (RMS < -70 dBFS).
@@ -2994,7 +2995,11 @@ func scoreSilenceCandidate(m *SilenceCandidateMetrics) float64 {
 	}
 
 	// Check for crosstalk rejection: voice-range centroid + peaked/impulsive characteristics
-	if isLikelyCrosstalk(m) {
+	isCrosstalk := isLikelyCrosstalk(m)
+	debugLog("scoreSilenceCandidate: start=%.3fs, CrestFactor=%.2f dB, isCrosstalk=%v",
+		m.Region.Start.Seconds(), m.CrestFactor, isCrosstalk)
+	if isCrosstalk {
+		debugLog("scoreSilenceCandidate: REJECTING candidate at %.3fs (returning score=0.0)", m.Region.Start.Seconds())
 		return 0.0 // Reject this candidate
 	}
 
@@ -3075,8 +3080,22 @@ func calculateStabilityScore(intervals []IntervalSample) float64 {
 }
 
 // isLikelyCrosstalk detects if a silence candidate is likely crosstalk (leaked voice).
-// Returns true if centroid is in voice range AND has peaked/impulsive characteristics.
+// Returns true if centroid is in voice range AND has peaked/impulsive characteristics,
+// OR if the crest factor indicates severe transient contamination (centroid-independent).
 func isLikelyCrosstalk(m *SilenceCandidateMetrics) bool {
+	// Peak-RMS gap check (centroid-independent)
+	// A 45 dB gap in silence indicates transient contamination regardless of spectral content.
+	// Normal room tone: 20-30 dB gap (equipment transients, HVAC clicks)
+	// Crosstalk: 40-60 dB gap (speech peaks in otherwise quiet track)
+	crestExceedsThreshold := m.CrestFactor > crosstalkPeakRMSGap
+	debugLog("isLikelyCrosstalk: CrestFactor=%.2f dB, threshold=%.2f dB, exceeds=%v",
+		m.CrestFactor, crosstalkPeakRMSGap, crestExceedsThreshold)
+	if crestExceedsThreshold {
+		debugLog("isLikelyCrosstalk: REJECTING candidate due to crest factor %.2f dB > %.2f dB threshold",
+			m.CrestFactor, crosstalkPeakRMSGap)
+		return true
+	}
+
 	// Check if centroid is in voice frequency range
 	inVoiceRange := m.SpectralCentroid >= voiceCentroidMin && m.SpectralCentroid <= voiceCentroidMax
 
