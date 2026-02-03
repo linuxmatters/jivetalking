@@ -265,7 +265,10 @@ func runAnalysisOnly(files []string, log func(string, ...interface{})) {
 
 // isTTY checks if stdout is connected to a terminal
 func isTTY() bool {
-	fileInfo, _ := os.Stdout.Stat()
+	fileInfo, err := os.Stdout.Stat()
+	if err != nil {
+		return false
+	}
 	return (fileInfo.Mode() & os.ModeCharDevice) != 0
 }
 
