@@ -284,3 +284,16 @@ func (t *MetricTable) AddMetricRow(label string, input, filtered, final float64,
 		Interpretation: interpretation,
 	})
 }
+
+// normaliseForGain compensates a spectral metric value for the gain applied during normalisation.
+// scalingPower is 1 for metrics that scale linearly with gain (Mean, Slope)
+// or 2 for metrics that scale with gain squared (Variance, Flux).
+// Returns math.NaN() if rawValue is NaN, gain is NaN, or gainDB is 0
+// (a zero gain means no normalisation occurred and the caller should use the raw value).
+func normaliseForGain(rawValue, gainDB float64, scalingPower int) float64 {
+	if math.IsNaN(rawValue) || math.IsNaN(gainDB) || gainDB == 0 {
+		return math.NaN()
+	}
+	divisor := math.Pow(10, gainDB*float64(scalingPower)/20.0)
+	return rawValue / divisor
+}
