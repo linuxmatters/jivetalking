@@ -356,88 +356,6 @@ func GenerateReport(data ReportData) error {
 	return nil
 }
 
-// formatNormalisationResult outputs the loudnorm normalisation pass details
-func formatNormalisationResult(f *os.File, result *processor.NormalisationResult, config *processor.FilterChainConfig) {
-	writeSection(f, "Pass 3: Loudnorm Measurement")
-
-	if result == nil || !config.LoudnormEnabled {
-		fmt.Fprintln(f, "Status: DISABLED")
-		return
-	}
-
-	if result.Skipped {
-		fmt.Fprintln(f, "Status: SKIPPED")
-		return
-	}
-
-	fmt.Fprintln(f, "Status: APPLIED")
-	fmt.Fprintln(f, "")
-	fmt.Fprintln(f, "Pre-normalisation (Pass 2 output):")
-	fmt.Fprintf(f, "  Integrated loudness: %.1f LUFS\n", result.InputLUFS)
-	fmt.Fprintf(f, "  True peak:           %.1f dBTP\n", result.InputTP)
-	fmt.Fprintln(f, "")
-
-	writeSection(f, "Pass 4: Loudnorm Normalisation")
-	fmt.Fprintln(f, "")
-	fmt.Fprintln(f, "Loudnorm configuration:")
-	if result.LinearModeForced {
-		fmt.Fprintf(f, "  Target I:   %.1f LUFS (adjusted from %.1f to preserve linear mode)\n",
-			result.EffectiveTargetI, result.RequestedTargetI)
-	} else {
-		fmt.Fprintf(f, "  Target I:   %.1f LUFS\n", config.LoudnormTargetI)
-	}
-	fmt.Fprintf(f, "  Target TP:  %.1f dBTP\n", config.LoudnormTargetTP)
-	fmt.Fprintf(f, "  Target LRA: %.1f LU\n", config.LoudnormTargetLRA)
-	fmt.Fprintf(f, "  Mode:       %s\n", loudnormModeString(config.LoudnormLinear))
-	fmt.Fprintf(f, "  Dual mono:  %v\n", config.LoudnormDualMono)
-	fmt.Fprintf(f, "  Offset:     %+.2f dB\n", result.GainApplied)
-
-	// Display loudnorm measurement (from Pass 3, used for Pass 4 parameters)
-	fmt.Fprintln(f, "")
-	fmt.Fprintln(f, "Loudnorm measurement (from Pass 3):")
-	fmt.Fprintf(f, "  Input I:         %.2f LUFS\n", result.InputLUFS)
-	fmt.Fprintf(f, "  Input TP:        %.2f dBTP\n", result.InputTP)
-	fmt.Fprintf(f, "  Target Offset:   %.2f dB (from loudnorm, used in Pass 4)\n", result.GainApplied)
-
-	// Display loudnorm filter's second pass stats (parsed from JSON output)
-	if result.LoudnormStats != nil {
-		stats := result.LoudnormStats
-		fmt.Fprintln(f, "")
-		fmt.Fprintln(f, "Loudnorm second pass diagnostics:")
-		fmt.Fprintf(f, "  Input I:         %s LUFS\n", stats.InputI)
-		fmt.Fprintf(f, "  Input TP:        %s dBTP\n", stats.InputTP)
-		fmt.Fprintf(f, "  Input LRA:       %s LU\n", stats.InputLRA)
-		fmt.Fprintf(f, "  Input Thresh:    %s LUFS\n", stats.InputThresh)
-		fmt.Fprintf(f, "  Output I:        %s LUFS\n", stats.OutputI)
-		fmt.Fprintf(f, "  Output TP:       %s dBTP\n", stats.OutputTP)
-		fmt.Fprintf(f, "  Output LRA:      %s LU\n", stats.OutputLRA)
-		fmt.Fprintf(f, "  Output Thresh:   %s LUFS\n", stats.OutputThresh)
-		fmt.Fprintf(f, "  Norm Type:       %s\n", stats.NormalizationType)
-		fmt.Fprintf(f, "  Target Offset:   %s dB\n", stats.TargetOffset)
-	}
-
-	fmt.Fprintln(f, "")
-	fmt.Fprintln(f, "Post-normalisation:")
-	fmt.Fprintf(f, "  Integrated loudness: %.1f LUFS\n", result.OutputLUFS)
-	fmt.Fprintf(f, "  True peak:           %.1f dBTP\n", result.OutputTP)
-
-	fmt.Fprintln(f, "")
-	// Calculate deviation from effective target (what loudnorm was actually targeting)
-	effectiveDeviation := math.Abs(result.OutputLUFS - result.EffectiveTargetI)
-	if result.WithinTarget {
-		if result.LinearModeForced {
-			// Target was adjusted to preserve linear mode
-			requestedDeviation := math.Abs(result.OutputLUFS - result.RequestedTargetI)
-			fmt.Fprintf(f, "Result: ✓ Linear mode preserved (%.2f LU from effective target, %.2f LU from requested)\n",
-				effectiveDeviation, requestedDeviation)
-		} else {
-			fmt.Fprintf(f, "Result: ✓ Within target (deviation: %.2f LU)\n", effectiveDeviation)
-		}
-	} else {
-		fmt.Fprintf(f, "Result: ⚠ Outside tolerance (deviation: %.2f LU)\n", effectiveDeviation)
-	}
-}
-
 // loudnormModeString converts linear bool to readable mode string
 func loudnormModeString(linear bool) string {
 	if linear {
@@ -680,18 +598,6 @@ func formatNoiseRemoveFilter(f *os.File, cfg *processor.FilterChainConfig, m *pr
 		cfg.NoiseRemoveCompandAttack*1000,
 		cfg.NoiseRemoveCompandDecay*1000,
 		cfg.NoiseRemoveCompandKnee)
-}
-
-// joinWithComma joins string slice with comma separator
-func joinWithComma(items []string) string {
-	result := ""
-	for i, item := range items {
-		if i > 0 {
-			result += ", "
-		}
-		result += item
-	}
-	return result
 }
 
 // formatDS201GateFilter outputs DS201-inspired gate filter details
@@ -2443,35 +2349,10 @@ func writeDiagnosticLoudnorm(f *os.File, result *processor.NormalisationResult, 
 	fmt.Fprintln(f, "")
 }
 
-// writeDiagnosticAdaptive outputs detailed adaptive parameter diagnostics.
-// This section is filled by the existing formatFilterChain function.
-// For now, we just write a header - the actual content comes from writeFilterChainApplied.
-func writeDiagnosticAdaptive(f *os.File, config *processor.FilterChainConfig, measurements *processor.AudioMeasurements) {
-	// The filter chain section already contains adaptive rationale for each filter.
-	// This function is a placeholder for additional adaptive debugging if needed.
-	// Currently, all adaptive info is in writeFilterChainApplied.
-}
-
 // getFinalMeasurements safely extracts final measurements from the result.
 func getFinalMeasurements(result *processor.ProcessingResult) *processor.OutputMeasurements {
 	if result == nil || result.NormResult == nil {
 		return nil
 	}
 	return result.NormResult.FinalMeasurements
-}
-
-// getFilteredNoise safely extracts filtered noise profile from the result.
-func getFilteredNoise(result *processor.ProcessingResult) *processor.SilenceCandidateMetrics {
-	if result == nil || result.FilteredMeasurements == nil {
-		return nil
-	}
-	return result.FilteredMeasurements.SilenceSample
-}
-
-// getFinalNoise safely extracts final noise profile from the result.
-func getFinalNoise(result *processor.ProcessingResult) *processor.SilenceCandidateMetrics {
-	if result == nil || result.NormResult == nil || result.NormResult.FinalMeasurements == nil {
-		return nil
-	}
-	return result.NormResult.FinalMeasurements.SilenceSample
 }

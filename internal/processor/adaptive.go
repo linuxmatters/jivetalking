@@ -408,15 +408,6 @@ func AdaptConfig(config *FilterChainConfig, measurements *AudioMeasurements) {
 	sanitizeConfig(config)
 }
 
-// calculateLUFSGap returns the dB difference between target and input LUFS.
-// Returns 0.0 if input is not measured.
-func calculateLUFSGap(targetI, inputI float64) float64 {
-	if inputI != 0.0 {
-		return targetI - inputI
-	}
-	return 0.0
-}
-
 // tuneDS201HighPass adapts DS201-inspired highpass composite filter based on:
 // - Spectral centroid (voice brightness/warmth)
 // - Spectral decrease (LF voice content - protects warm voices)
@@ -1550,10 +1541,4 @@ func clamp(val, min, max float64) float64 {
 		return max
 	}
 	return val
-}
-
-// lerp performs linear interpolation between a and b based on t (0-1).
-// When t=0, returns a. When t=1, returns b.
-func lerp(a, b, t float64) float64 {
-	return a + (b-a)*t
 }
