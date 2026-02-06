@@ -833,38 +833,17 @@ func measureSilenceCandidateFromIntervals(region SilenceRegion, intervals []Inte
 	// Accumulate metrics for averaging (sums) and extremes (max)
 	var rmsSum float64
 	var peakMax, truePeakMax, samplePeakMax float64 = -120.0, -120.0, -120.0
-
-	// Spectral metrics sums
-	var meanSum, varianceSum, centroidSum, spreadSum float64
-	var skewnessSum, kurtosisSum, entropySum, flatnessSum float64
-	var crestSum, fluxSum, slopeSum, decreaseSum, rolloffSum float64
-
-	// Loudness metrics sums
+	var spectralSum spectralMetrics
 	var momentarySum, shortTermSum float64
 
 	for _, interval := range regionIntervals {
-		// Amplitude
 		rmsSum += interval.RMSLevel
 		if interval.PeakLevel > peakMax {
 			peakMax = interval.PeakLevel
 		}
 
-		// Spectral
-		meanSum += interval.SpectralMean
-		varianceSum += interval.SpectralVariance
-		centroidSum += interval.SpectralCentroid
-		spreadSum += interval.SpectralSpread
-		skewnessSum += interval.SpectralSkewness
-		kurtosisSum += interval.SpectralKurtosis
-		entropySum += interval.SpectralEntropy
-		flatnessSum += interval.SpectralFlatness
-		crestSum += interval.SpectralCrest
-		fluxSum += interval.SpectralFlux
-		slopeSum += interval.SpectralSlope
-		decreaseSum += interval.SpectralDecrease
-		rolloffSum += interval.SpectralRolloff
+		spectralSum.add(interval.spectralFields())
 
-		// Loudness (average for momentary/short-term, max for peaks)
 		momentarySum += interval.MomentaryLUFS
 		shortTermSum += interval.ShortTermLUFS
 		if interval.TruePeak > truePeakMax {
@@ -877,7 +856,7 @@ func measureSilenceCandidateFromIntervals(region SilenceRegion, intervals []Inte
 
 	n := float64(len(regionIntervals))
 	avgRMS := rmsSum / n
-	avgEntropy := entropySum / n
+	avgSpectral := spectralSum.average(n)
 
 	return &SilenceCandidateMetrics{
 		Region:      region,
@@ -885,19 +864,19 @@ func measureSilenceCandidateFromIntervals(region SilenceRegion, intervals []Inte
 		PeakLevel:   peakMax,
 		CrestFactor: peakMax - avgRMS,
 
-		SpectralMean:     meanSum / n,
-		SpectralVariance: varianceSum / n,
-		SpectralCentroid: centroidSum / n,
-		SpectralSpread:   spreadSum / n,
-		SpectralSkewness: skewnessSum / n,
-		SpectralKurtosis: kurtosisSum / n,
-		SpectralEntropy:  avgEntropy,
-		SpectralFlatness: flatnessSum / n,
-		SpectralCrest:    crestSum / n,
-		SpectralFlux:     fluxSum / n,
-		SpectralSlope:    slopeSum / n,
-		SpectralDecrease: decreaseSum / n,
-		SpectralRolloff:  rolloffSum / n,
+		SpectralMean:     avgSpectral.Mean,
+		SpectralVariance: avgSpectral.Variance,
+		SpectralCentroid: avgSpectral.Centroid,
+		SpectralSpread:   avgSpectral.Spread,
+		SpectralSkewness: avgSpectral.Skewness,
+		SpectralKurtosis: avgSpectral.Kurtosis,
+		SpectralEntropy:  avgSpectral.Entropy,
+		SpectralFlatness: avgSpectral.Flatness,
+		SpectralCrest:    avgSpectral.Crest,
+		SpectralFlux:     avgSpectral.Flux,
+		SpectralSlope:    avgSpectral.Slope,
+		SpectralDecrease: avgSpectral.Decrease,
+		SpectralRolloff:  avgSpectral.Rolloff,
 
 		MomentaryLUFS: momentarySum / n,
 		ShortTermLUFS: shortTermSum / n,
@@ -1648,6 +1627,63 @@ type spectralMetrics struct {
 	Decrease float64 // Average spectral decrease
 	Rolloff  float64 // Spectral rolloff (Hz) - HF energy dropoff point
 	Found    bool    // True if any spectral metric was extracted
+}
+
+// spectralFields returns the 13 spectral measurements from this interval as a spectralMetrics value.
+// This enables struct-level accumulation instead of 13 individual variables.
+func (s *IntervalSample) spectralFields() spectralMetrics {
+	return spectralMetrics{
+		Mean:     s.SpectralMean,
+		Variance: s.SpectralVariance,
+		Centroid: s.SpectralCentroid,
+		Spread:   s.SpectralSpread,
+		Skewness: s.SpectralSkewness,
+		Kurtosis: s.SpectralKurtosis,
+		Entropy:  s.SpectralEntropy,
+		Flatness: s.SpectralFlatness,
+		Crest:    s.SpectralCrest,
+		Flux:     s.SpectralFlux,
+		Slope:    s.SpectralSlope,
+		Decrease: s.SpectralDecrease,
+		Rolloff:  s.SpectralRolloff,
+		Found:    true,
+	}
+}
+
+// add accumulates another spectralMetrics into this one (element-wise sum).
+func (m *spectralMetrics) add(other spectralMetrics) {
+	m.Mean += other.Mean
+	m.Variance += other.Variance
+	m.Centroid += other.Centroid
+	m.Spread += other.Spread
+	m.Skewness += other.Skewness
+	m.Kurtosis += other.Kurtosis
+	m.Entropy += other.Entropy
+	m.Flatness += other.Flatness
+	m.Crest += other.Crest
+	m.Flux += other.Flux
+	m.Slope += other.Slope
+	m.Decrease += other.Decrease
+	m.Rolloff += other.Rolloff
+}
+
+// average returns a new spectralMetrics with all fields divided by n.
+func (m spectralMetrics) average(n float64) spectralMetrics {
+	return spectralMetrics{
+		Mean:     m.Mean / n,
+		Variance: m.Variance / n,
+		Centroid: m.Centroid / n,
+		Spread:   m.Spread / n,
+		Skewness: m.Skewness / n,
+		Kurtosis: m.Kurtosis / n,
+		Entropy:  m.Entropy / n,
+		Flatness: m.Flatness / n,
+		Crest:    m.Crest / n,
+		Flux:     m.Flux / n,
+		Slope:    m.Slope / n,
+		Decrease: m.Decrease / n,
+		Rolloff:  m.Rolloff / n,
+	}
 }
 
 // extractSpectralMetrics extracts all 13 aspectralstats measurements from FFmpeg metadata.
@@ -3211,38 +3247,17 @@ func measureSpeechCandidateFromIntervals(region SpeechRegion, intervals []Interv
 	// Accumulate metrics for averaging (sums) and extremes (max)
 	var rmsSum float64
 	var peakMax, truePeakMax, samplePeakMax float64 = -120.0, -120.0, -120.0
-
-	// Spectral metrics sums
-	var meanSum, varianceSum, centroidSum, spreadSum float64
-	var skewnessSum, kurtosisSum, entropySum, flatnessSum float64
-	var crestSum, fluxSum, slopeSum, decreaseSum, rolloffSum float64
-
-	// Loudness metrics sums
+	var spectralSum spectralMetrics
 	var momentarySum, shortTermSum float64
 
 	for _, interval := range regionIntervals {
-		// Amplitude
 		rmsSum += interval.RMSLevel
 		if interval.PeakLevel > peakMax {
 			peakMax = interval.PeakLevel
 		}
 
-		// Spectral
-		meanSum += interval.SpectralMean
-		varianceSum += interval.SpectralVariance
-		centroidSum += interval.SpectralCentroid
-		spreadSum += interval.SpectralSpread
-		skewnessSum += interval.SpectralSkewness
-		kurtosisSum += interval.SpectralKurtosis
-		entropySum += interval.SpectralEntropy
-		flatnessSum += interval.SpectralFlatness
-		crestSum += interval.SpectralCrest
-		fluxSum += interval.SpectralFlux
-		slopeSum += interval.SpectralSlope
-		decreaseSum += interval.SpectralDecrease
-		rolloffSum += interval.SpectralRolloff
+		spectralSum.add(interval.spectralFields())
 
-		// Loudness (average for momentary/short-term, max for peaks)
 		momentarySum += interval.MomentaryLUFS
 		shortTermSum += interval.ShortTermLUFS
 		if interval.TruePeak > truePeakMax {
@@ -3255,6 +3270,7 @@ func measureSpeechCandidateFromIntervals(region SpeechRegion, intervals []Interv
 
 	n := float64(len(regionIntervals))
 	avgRMS := rmsSum / n
+	avgSpectral := spectralSum.average(n)
 
 	// Calculate voicing density for stability assessment
 	voicedCount := 0
@@ -3271,19 +3287,19 @@ func measureSpeechCandidateFromIntervals(region SpeechRegion, intervals []Interv
 		PeakLevel:   peakMax,
 		CrestFactor: peakMax - avgRMS,
 
-		SpectralMean:     meanSum / n,
-		SpectralVariance: varianceSum / n,
-		SpectralCentroid: centroidSum / n,
-		SpectralSpread:   spreadSum / n,
-		SpectralSkewness: skewnessSum / n,
-		SpectralKurtosis: kurtosisSum / n,
-		SpectralEntropy:  entropySum / n,
-		SpectralFlatness: flatnessSum / n,
-		SpectralCrest:    crestSum / n,
-		SpectralFlux:     fluxSum / n,
-		SpectralSlope:    slopeSum / n,
-		SpectralDecrease: decreaseSum / n,
-		SpectralRolloff:  rolloffSum / n,
+		SpectralMean:     avgSpectral.Mean,
+		SpectralVariance: avgSpectral.Variance,
+		SpectralCentroid: avgSpectral.Centroid,
+		SpectralSpread:   avgSpectral.Spread,
+		SpectralSkewness: avgSpectral.Skewness,
+		SpectralKurtosis: avgSpectral.Kurtosis,
+		SpectralEntropy:  avgSpectral.Entropy,
+		SpectralFlatness: avgSpectral.Flatness,
+		SpectralCrest:    avgSpectral.Crest,
+		SpectralFlux:     avgSpectral.Flux,
+		SpectralSlope:    avgSpectral.Slope,
+		SpectralDecrease: avgSpectral.Decrease,
+		SpectralRolloff:  avgSpectral.Rolloff,
 
 		MomentaryLUFS: momentarySum / n,
 		ShortTermLUFS: shortTermSum / n,
