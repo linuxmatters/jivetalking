@@ -1485,6 +1485,27 @@ type baseMetadataAccumulators struct {
 	astatsFound             bool
 }
 
+// accumulateSpectral adds the given spectral measurements to the running sums.
+func (b *baseMetadataAccumulators) accumulateSpectral(spectral spectralMetrics) {
+	if !spectral.Found {
+		return
+	}
+	b.spectralMeanSum += spectral.Mean
+	b.spectralVarianceSum += spectral.Variance
+	b.spectralCentroidSum += spectral.Centroid
+	b.spectralSpreadSum += spectral.Spread
+	b.spectralSkewnessSum += spectral.Skewness
+	b.spectralKurtosisSum += spectral.Kurtosis
+	b.spectralEntropySum += spectral.Entropy
+	b.spectralFlatnessSum += spectral.Flatness
+	b.spectralCrestSum += spectral.Crest
+	b.spectralFluxSum += spectral.Flux
+	b.spectralSlopeSum += spectral.Slope
+	b.spectralDecreaseSum += spectral.Decrease
+	b.spectralRolloffSum += spectral.Rolloff
+	b.spectralFrameCount++
+}
+
 // metadataAccumulators holds accumulator variables for Pass 1 frame metadata extraction.
 // Uses baseMetadataAccumulators for spectral and astats fields shared with output analysis.
 type metadataAccumulators struct {
@@ -1679,23 +1700,7 @@ func extractFrameMetadata(metadata *ffmpeg.AVDictionary, acc *metadataAccumulato
 
 	// Extract all aspectralstats measurements (averaged across frames)
 	// For mono audio, spectral stats are under channel .1
-	spectral := extractSpectralMetrics(metadata)
-	if spectral.Found {
-		acc.spectralMeanSum += spectral.Mean
-		acc.spectralVarianceSum += spectral.Variance
-		acc.spectralCentroidSum += spectral.Centroid
-		acc.spectralSpreadSum += spectral.Spread
-		acc.spectralSkewnessSum += spectral.Skewness
-		acc.spectralKurtosisSum += spectral.Kurtosis
-		acc.spectralEntropySum += spectral.Entropy
-		acc.spectralFlatnessSum += spectral.Flatness
-		acc.spectralCrestSum += spectral.Crest
-		acc.spectralFluxSum += spectral.Flux
-		acc.spectralSlopeSum += spectral.Slope
-		acc.spectralDecreaseSum += spectral.Decrease
-		acc.spectralRolloffSum += spectral.Rolloff
-		acc.spectralFrameCount++
-	}
+	acc.accumulateSpectral(extractSpectralMetrics(metadata))
 
 	// Extract astats measurements (cumulative, so we keep the latest)
 	// For mono audio, stats are under channel .1
@@ -2040,23 +2045,7 @@ func extractOutputFrameMetadata(metadata *ffmpeg.AVDictionary, acc *outputMetada
 	}
 
 	// Extract all aspectralstats measurements (averaged across frames)
-	spectral := extractSpectralMetrics(metadata)
-	if spectral.Found {
-		acc.spectralMeanSum += spectral.Mean
-		acc.spectralVarianceSum += spectral.Variance
-		acc.spectralCentroidSum += spectral.Centroid
-		acc.spectralSpreadSum += spectral.Spread
-		acc.spectralSkewnessSum += spectral.Skewness
-		acc.spectralKurtosisSum += spectral.Kurtosis
-		acc.spectralEntropySum += spectral.Entropy
-		acc.spectralFlatnessSum += spectral.Flatness
-		acc.spectralCrestSum += spectral.Crest
-		acc.spectralFluxSum += spectral.Flux
-		acc.spectralSlopeSum += spectral.Slope
-		acc.spectralDecreaseSum += spectral.Decrease
-		acc.spectralRolloffSum += spectral.Rolloff
-		acc.spectralFrameCount++
-	}
+	acc.accumulateSpectral(extractSpectralMetrics(metadata))
 
 	// Extract astats measurements (cumulative, so we keep the latest)
 	if value, ok := getFloatMetadata(metadata, metaKeyDynamicRange); ok {
