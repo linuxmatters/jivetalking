@@ -1506,6 +1506,78 @@ func (b *baseMetadataAccumulators) accumulateSpectral(spectral spectralMetrics) 
 	b.spectralFrameCount++
 }
 
+// extractAstatsMetadata extracts all astats measurements from FFmpeg metadata.
+// These are cumulative values, so we keep the latest from each frame.
+// Includes conversions: linearRatioToDB for CrestFactor, linearSampleToDBFS for MinLevel/MaxLevel.
+func (b *baseMetadataAccumulators) extractAstatsMetadata(metadata *ffmpeg.AVDictionary) {
+	if value, ok := getFloatMetadata(metadata, metaKeyDynamicRange); ok {
+		b.astatsDynamicRange = value
+		b.astatsFound = true
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyRMSLevel); ok {
+		b.astatsRMSLevel = value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyPeakLevel); ok {
+		b.astatsPeakLevel = value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyRMSTrough); ok {
+		b.astatsRMSTrough = value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyRMSPeak); ok {
+		b.astatsRMSPeak = value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyDCOffset); ok {
+		b.astatsDCOffset = value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyFlatFactor); ok {
+		b.astatsFlatFactor = value
+	}
+	// CrestFactor: FFmpeg reports as linear ratio (peak/RMS), convert to dB
+	if value, ok := getFloatMetadata(metadata, metaKeyCrestFactor); ok {
+		b.astatsCrestFactor = linearRatioToDB(value)
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyZeroCrossingsRate); ok {
+		b.astatsZeroCrossingsRate = value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyZeroCrossings); ok {
+		b.astatsZeroCrossings = value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyMaxDifference); ok {
+		b.astatsMaxDifference = value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyMinDifference); ok {
+		b.astatsMinDifference = value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyMeanDifference); ok {
+		b.astatsMeanDifference = value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyRMSDifference); ok {
+		b.astatsRMSDifference = value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyEntropy); ok {
+		b.astatsEntropy = value
+	}
+	// MinLevel/MaxLevel: FFmpeg reports as linear sample values, convert to dBFS
+	if value, ok := getFloatMetadata(metadata, metaKeyMinLevel); ok {
+		b.astatsMinLevel = linearSampleToDBFS(value)
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyMaxLevel); ok {
+		b.astatsMaxLevel = linearSampleToDBFS(value)
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyNoiseFloor); ok {
+		b.astatsNoiseFloor = value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyNoiseFloorCount); ok {
+		b.astatsNoiseFloorCount = value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyBitDepth); ok {
+		b.astatsBitDepth = value
+	}
+	if value, ok := getFloatMetadata(metadata, metaKeyNumberOfSamples); ok {
+		b.astatsNumberOfSamples = value
+	}
+}
+
 // metadataAccumulators holds accumulator variables for Pass 1 frame metadata extraction.
 // Uses baseMetadataAccumulators for spectral and astats fields shared with output analysis.
 type metadataAccumulators struct {
@@ -1704,111 +1776,7 @@ func extractFrameMetadata(metadata *ffmpeg.AVDictionary, acc *metadataAccumulato
 
 	// Extract astats measurements (cumulative, so we keep the latest)
 	// For mono audio, stats are under channel .1
-	if value, ok := getFloatMetadata(metadata, metaKeyDynamicRange); ok {
-		acc.astatsDynamicRange = value
-		acc.astatsFound = true
-	}
-
-	if value, ok := getFloatMetadata(metadata, metaKeyRMSLevel); ok {
-		acc.astatsRMSLevel = value
-	}
-
-	if value, ok := getFloatMetadata(metadata, metaKeyPeakLevel); ok {
-		acc.astatsPeakLevel = value
-	}
-
-	// Extract RMS_trough - RMS level of quietest segments (best noise floor indicator for speech)
-	// In speech audio, quiet inter-word periods contain primarily ambient/electronic noise
-	if value, ok := getFloatMetadata(metadata, metaKeyRMSTrough); ok {
-		acc.astatsRMSTrough = value
-	}
-
-	// Extract RMS_peak - RMS level of loudest segments
-	if value, ok := getFloatMetadata(metadata, metaKeyRMSPeak); ok {
-		acc.astatsRMSPeak = value
-	}
-
-	// Extract DC_offset - mean amplitude displacement from zero
-	// High values indicate DC bias that should be removed before processing
-	if value, ok := getFloatMetadata(metadata, metaKeyDCOffset); ok {
-		acc.astatsDCOffset = value
-	}
-
-	// Extract Flat_factor - consecutive samples at peak levels (indicates clipping)
-	// High values suggest pre-existing limiting or clipping damage
-	if value, ok := getFloatMetadata(metadata, metaKeyFlatFactor); ok {
-		acc.astatsFlatFactor = value
-	}
-
-	// Extract Crest_factor - FFmpeg reports as linear ratio (peak/RMS), convert to dB
-	// High values indicate impulsive/dynamic content, low values indicate compressed/limited audio
-	if value, ok := getFloatMetadata(metadata, metaKeyCrestFactor); ok {
-		acc.astatsCrestFactor = linearRatioToDB(value)
-	}
-
-	// Extract Zero_crossings_rate - rate of zero crossings per sample
-	// Low ZCR = bass-heavy/sustained tones, High ZCR = noise/sibilance
-	if value, ok := getFloatMetadata(metadata, metaKeyZeroCrossingsRate); ok {
-		acc.astatsZeroCrossingsRate = value
-	}
-
-	// Extract Zero_crossings - total number of zero crossings
-	if value, ok := getFloatMetadata(metadata, metaKeyZeroCrossings); ok {
-		acc.astatsZeroCrossings = value
-	}
-
-	// Extract Max_difference - largest sample-to-sample change
-	// High values indicate impulsive sounds (clicks, pops)
-	if value, ok := getFloatMetadata(metadata, metaKeyMaxDifference); ok {
-		acc.astatsMaxDifference = value
-	}
-
-	// Extract Min_difference - smallest sample-to-sample change
-	if value, ok := getFloatMetadata(metadata, metaKeyMinDifference); ok {
-		acc.astatsMinDifference = value
-	}
-
-	// Extract Mean_difference - average sample-to-sample change
-	if value, ok := getFloatMetadata(metadata, metaKeyMeanDifference); ok {
-		acc.astatsMeanDifference = value
-	}
-
-	// Extract RMS_difference - RMS of sample-to-sample changes
-	if value, ok := getFloatMetadata(metadata, metaKeyRMSDifference); ok {
-		acc.astatsRMSDifference = value
-	}
-
-	// Extract Entropy - signal randomness (1.0 = white noise, lower = more structured)
-	if value, ok := getFloatMetadata(metadata, metaKeyEntropy); ok {
-		acc.astatsEntropy = value
-	}
-
-	// Extract Min_level and Max_level - FFmpeg reports as linear sample values, convert to dBFS
-	if value, ok := getFloatMetadata(metadata, metaKeyMinLevel); ok {
-		acc.astatsMinLevel = linearSampleToDBFS(value)
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeyMaxLevel); ok {
-		acc.astatsMaxLevel = linearSampleToDBFS(value)
-	}
-
-	// Extract Noise_floor - FFmpeg's own noise floor estimate (dBFS)
-	// Very useful for adaptive gate/noise reduction thresholds
-	if value, ok := getFloatMetadata(metadata, metaKeyNoiseFloor); ok {
-		acc.astatsNoiseFloor = value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeyNoiseFloorCount); ok {
-		acc.astatsNoiseFloorCount = value
-	}
-
-	// Extract Bit_depth - effective bit depth of audio
-	if value, ok := getFloatMetadata(metadata, metaKeyBitDepth); ok {
-		acc.astatsBitDepth = value
-	}
-
-	// Extract Number_of_samples - total samples processed
-	if value, ok := getFloatMetadata(metadata, metaKeyNumberOfSamples); ok {
-		acc.astatsNumberOfSamples = value
-	}
+	acc.extractAstatsMetadata(metadata)
 
 	// Extract ebur128 measurements (cumulative loudness analysis)
 	// ebur128 provides: M (momentary 400ms), S (short-term 3s), I (integrated), LRA, sample_peak, true_peak
@@ -2048,72 +2016,7 @@ func extractOutputFrameMetadata(metadata *ffmpeg.AVDictionary, acc *outputMetada
 	acc.accumulateSpectral(extractSpectralMetrics(metadata))
 
 	// Extract astats measurements (cumulative, so we keep the latest)
-	if value, ok := getFloatMetadata(metadata, metaKeyDynamicRange); ok {
-		acc.astatsDynamicRange = value
-		acc.astatsFound = true
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeyRMSLevel); ok {
-		acc.astatsRMSLevel = value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeyPeakLevel); ok {
-		acc.astatsPeakLevel = value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeyRMSTrough); ok {
-		acc.astatsRMSTrough = value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeyRMSPeak); ok {
-		acc.astatsRMSPeak = value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeyDCOffset); ok {
-		acc.astatsDCOffset = value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeyFlatFactor); ok {
-		acc.astatsFlatFactor = value
-	}
-	// CrestFactor: FFmpeg reports as linear ratio (peak/RMS), convert to dB
-	if value, ok := getFloatMetadata(metadata, metaKeyCrestFactor); ok {
-		acc.astatsCrestFactor = linearRatioToDB(value)
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeyZeroCrossingsRate); ok {
-		acc.astatsZeroCrossingsRate = value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeyZeroCrossings); ok {
-		acc.astatsZeroCrossings = value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeyMaxDifference); ok {
-		acc.astatsMaxDifference = value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeyMinDifference); ok {
-		acc.astatsMinDifference = value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeyMeanDifference); ok {
-		acc.astatsMeanDifference = value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeyRMSDifference); ok {
-		acc.astatsRMSDifference = value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeyEntropy); ok {
-		acc.astatsEntropy = value
-	}
-	// MinLevel/MaxLevel: FFmpeg reports as linear sample values, convert to dBFS
-	if value, ok := getFloatMetadata(metadata, metaKeyMinLevel); ok {
-		acc.astatsMinLevel = linearSampleToDBFS(value)
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeyMaxLevel); ok {
-		acc.astatsMaxLevel = linearSampleToDBFS(value)
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeyNoiseFloor); ok {
-		acc.astatsNoiseFloor = value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeyNoiseFloorCount); ok {
-		acc.astatsNoiseFloorCount = value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeyBitDepth); ok {
-		acc.astatsBitDepth = value
-	}
-	if value, ok := getFloatMetadata(metadata, metaKeyNumberOfSamples); ok {
-		acc.astatsNumberOfSamples = value
-	}
+	acc.extractAstatsMetadata(metadata)
 
 	// Extract ebur128 measurements
 	if value, ok := getFloatMetadata(metadata, metaKeyEbur128I); ok {
