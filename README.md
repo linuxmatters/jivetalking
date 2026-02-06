@@ -140,6 +140,8 @@ Record → Process → Edit → Finalise
   └─ Each presenter records separately, exports FLAC
 ```
 
+**Start each recording with 10-15 seconds of silence.** Just sit quietly and let the room breathe. Jivetalking uses this room tone to build a noise profile, which drives the adaptive noise reduction in Pass 2. Without a clean quiet section near the start, the tool has nothing to calibrate against and denoising results will be noticeably worse.
+
 ---
 
 ## Development
