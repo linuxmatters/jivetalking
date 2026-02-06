@@ -658,32 +658,30 @@ func applyLoudnormAndMeasure(
 	// Build complete OutputMeasurements from accumulators
 	finalMeasurements := finalizeOutputMeasurements(&acc)
 
-	// Measure silence region in final output (same region as Pass 1 noise profile)
+	// Measure silence and speech regions in final output (same regions as Pass 1 profiles)
 	// NOTE: inputPath now contains the normalised output after os.Rename above
-	if inputMeasurements != nil && inputMeasurements.NoiseProfile != nil {
-		silenceRegion := SilenceRegion{
-			Start:    inputMeasurements.NoiseProfile.Start,
-			End:      inputMeasurements.NoiseProfile.Start + inputMeasurements.NoiseProfile.Duration,
-			Duration: inputMeasurements.NoiseProfile.Duration,
+	if inputMeasurements != nil {
+		var silRegion *SilenceRegion
+		var spRegion *SpeechRegion
+		if inputMeasurements.NoiseProfile != nil {
+			silRegion = &SilenceRegion{
+				Start:    inputMeasurements.NoiseProfile.Start,
+				End:      inputMeasurements.NoiseProfile.Start + inputMeasurements.NoiseProfile.Duration,
+				Duration: inputMeasurements.NoiseProfile.Duration,
+			}
 		}
-		if silenceSample, err := MeasureOutputSilenceRegion(inputPath, silenceRegion); err == nil {
-			finalMeasurements.SilenceSample = silenceSample
+		if inputMeasurements.SpeechProfile != nil {
+			spRegion = &SpeechRegion{
+				Start:    inputMeasurements.SpeechProfile.Region.Start,
+				End:      inputMeasurements.SpeechProfile.Region.End,
+				Duration: inputMeasurements.SpeechProfile.Region.Duration,
+			}
 		}
-		// Non-fatal if measurement fails - we still have the other output measurements
-	}
-
-	// Measure speech region in final output (same region as Pass 1 speech profile)
-	// NOTE: inputPath now contains the normalised output after os.Rename above
-	if inputMeasurements != nil && inputMeasurements.SpeechProfile != nil {
-		speechRegion := SpeechRegion{
-			Start:    inputMeasurements.SpeechProfile.Region.Start,
-			End:      inputMeasurements.SpeechProfile.Region.End,
-			Duration: inputMeasurements.SpeechProfile.Region.Duration,
+		if silRegion != nil || spRegion != nil {
+			silSample, spSample := MeasureOutputRegions(inputPath, silRegion, spRegion)
+			finalMeasurements.SilenceSample = silSample
+			finalMeasurements.SpeechSample = spSample
 		}
-		if speechSample, err := MeasureOutputSpeechRegion(inputPath, speechRegion); err == nil {
-			finalMeasurements.SpeechSample = speechSample
-		}
-		// Non-fatal if measurement fails - we still have the other output measurements
 	}
 
 	return acc.ebur128OutputI, acc.ebur128OutputTP, finalMeasurements, stats, nil

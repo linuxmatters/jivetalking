@@ -88,36 +88,29 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 		progressCallback(2, "Processing", 1.0, 0.0, measurements)
 	}
 
-	// Measure silence region in Pass 2 output (before normalisation) for noise comparison
-	if filteredMeasurements != nil && measurements.NoiseProfile != nil {
-		silenceRegion := SilenceRegion{
-			Start:    measurements.NoiseProfile.Start,
-			End:      measurements.NoiseProfile.Start + measurements.NoiseProfile.Duration,
-			Duration: measurements.NoiseProfile.Duration,
+	// Measure silence and speech regions in Pass 2 output (before normalisation) for comparison
+	if filteredMeasurements != nil {
+		var silRegion *SilenceRegion
+		var spRegion *SpeechRegion
+		if measurements.NoiseProfile != nil {
+			silRegion = &SilenceRegion{
+				Start:    measurements.NoiseProfile.Start,
+				End:      measurements.NoiseProfile.Start + measurements.NoiseProfile.Duration,
+				Duration: measurements.NoiseProfile.Duration,
+			}
 		}
-		if silenceSample, err := MeasureOutputSilenceRegion(outputPath, silenceRegion); err == nil {
-			filteredMeasurements.SilenceSample = silenceSample
-		} else {
-			// Log the error for debugging but don't fail the entire processing
-			debugLog("Warning: Failed to measure Pass 2 silence region: %v", err)
+		if measurements.SpeechProfile != nil {
+			spRegion = &SpeechRegion{
+				Start:    measurements.SpeechProfile.Region.Start,
+				End:      measurements.SpeechProfile.Region.End,
+				Duration: measurements.SpeechProfile.Region.Duration,
+			}
 		}
-		// Non-fatal if measurement fails - we still have the other output measurements
-	}
-
-	// Measure speech region in Pass 2 output (before normalisation) for processing comparison
-	if filteredMeasurements != nil && measurements.SpeechProfile != nil {
-		speechRegion := SpeechRegion{
-			Start:    measurements.SpeechProfile.Region.Start,
-			End:      measurements.SpeechProfile.Region.End,
-			Duration: measurements.SpeechProfile.Region.Duration,
+		if silRegion != nil || spRegion != nil {
+			silSample, spSample := MeasureOutputRegions(outputPath, silRegion, spRegion)
+			filteredMeasurements.SilenceSample = silSample
+			filteredMeasurements.SpeechSample = spSample
 		}
-		if speechSample, err := MeasureOutputSpeechRegion(outputPath, speechRegion); err == nil {
-			filteredMeasurements.SpeechSample = speechSample
-		} else {
-			// Log the error for debugging but don't fail the entire processing
-			debugLog("Warning: Failed to measure Pass 2 speech region: %v", err)
-		}
-		// Non-fatal if measurement fails - we still have the other output measurements
 	}
 
 	// Pass 3/4: Normalisation (measurement + loudnorm application)
