@@ -473,6 +473,198 @@ func TestScoreIntervalWindow(t *testing.T) {
 }
 
 // ============================================================================
+// Two-Pass Silence Candidate Selection Tests
+// ============================================================================
+
+// makeSilenceTestIntervals creates interval samples for testing findBestSilenceRegion.
+// All intervals share the same spectral/amplitude values for predictable scoring.
+func makeSilenceTestIntervals(start time.Duration, duration time.Duration, rms, peak, centroid, flatness, kurtosis, flux float64) []IntervalSample {
+	count := int(duration / (250 * time.Millisecond))
+	intervals := make([]IntervalSample, count)
+	for i := range intervals {
+		intervals[i] = IntervalSample{
+			Timestamp:        start + time.Duration(i)*250*time.Millisecond,
+			RMSLevel:         rms,
+			PeakLevel:        peak,
+			SpectralCentroid: centroid,
+			SpectralFlatness: flatness,
+			SpectralKurtosis: kurtosis,
+			SpectralFlux:     flux,
+		}
+	}
+	return intervals
+}
+
+func TestFindBestSilenceRegion_HighestScoreWinsAfterDip(t *testing.T) {
+	// Three candidates: A (~0.77), B (~0.52, dip), C (~0.91, highest).
+	// Under the old single-pass algorithm the dip from A to B would trigger
+	// early termination, electing A. The two-pass algorithm scores all
+	// candidates first and then selects the highest, so C should win.
+
+	regions := []SilenceRegion{
+		{Start: 0, End: 10 * time.Second, Duration: 10 * time.Second},
+		{Start: 15 * time.Second, End: 25 * time.Second, Duration: 10 * time.Second},
+		{Start: 30 * time.Second, End: 40 * time.Second, Duration: 10 * time.Second},
+	}
+
+	// Candidate A intervals: ~0.77 score
+	intervalsA := makeSilenceTestIntervals(0, 10*time.Second,
+		-60.0, -55.0, 100.0, 0.8, 2.0, 0.0)
+	// Candidate B intervals: ~0.52 score (the dip)
+	intervalsB := makeSilenceTestIntervals(15*time.Second, 10*time.Second,
+		-50.0, -45.0, 2375.0, 0.3, 5.0, 0.005)
+	// Candidate C intervals: ~0.91 score (highest)
+	intervalsC := makeSilenceTestIntervals(30*time.Second, 10*time.Second,
+		-75.0, -70.0, 100.0, 0.9, 1.0, 0.0)
+
+	allIntervals := append(append(intervalsA, intervalsB...), intervalsC...)
+
+	result := findBestSilenceRegion(regions, allIntervals, 3600.0)
+
+	if result.BestRegion == nil {
+		t.Fatal("expected a best region to be selected")
+	}
+	if result.BestRegion.Start != 30*time.Second {
+		t.Errorf("BestRegion.Start = %v, want 30s (highest-scoring candidate C)", result.BestRegion.Start)
+	}
+	if len(result.Candidates) != 3 {
+		t.Errorf("len(Candidates) = %d, want 3 (all three scored)", len(result.Candidates))
+	}
+
+	// Log scores for debugging
+	for _, c := range result.Candidates {
+		t.Logf("candidate start=%v score=%.4f", c.Region.Start, c.Score)
+	}
+}
+
+func TestFindBestSilenceRegion_EarlierCandidatePreferredWithinTolerance(t *testing.T) {
+	// Two candidates with scores differing by < 0.02 (within selectionTolerance).
+	// The earlier candidate should be preferred.
+
+	regions := []SilenceRegion{
+		{Start: 5 * time.Second, End: 15 * time.Second, Duration: 10 * time.Second},
+		{Start: 30 * time.Second, End: 40 * time.Second, Duration: 10 * time.Second},
+	}
+
+	// Candidate A intervals: ~0.85
+	intervalsA := makeSilenceTestIntervals(5*time.Second, 10*time.Second,
+		-68.0, -63.0, 100.0, 0.8, 2.0, 0.001)
+	// Candidate B intervals: ~0.86 (slightly higher, within tolerance)
+	intervalsB := makeSilenceTestIntervals(30*time.Second, 10*time.Second,
+		-69.0, -64.0, 100.0, 0.85, 1.5, 0.0)
+
+	allIntervals := append(intervalsA, intervalsB...)
+
+	result := findBestSilenceRegion(regions, allIntervals, 3600.0)
+
+	if result.BestRegion == nil {
+		t.Fatal("expected a best region to be selected")
+	}
+
+	// Log scores to verify the gap is within tolerance
+	for _, c := range result.Candidates {
+		t.Logf("candidate start=%v score=%.4f", c.Region.Start, c.Score)
+	}
+
+	if result.BestRegion.Start != 5*time.Second {
+		t.Errorf("BestRegion.Start = %v, want 5s (earlier candidate preferred within tolerance)", result.BestRegion.Start)
+	}
+}
+
+func TestFindBestSilenceRegion_BelowMinAcceptableScoreNeverElected(t *testing.T) {
+	// Two regions that will score below minAcceptableScore (0.3).
+	// Both have poor characteristics: high RMS, voice-range centroid, etc.
+
+	regions := []SilenceRegion{
+		{Start: 0, End: 10 * time.Second, Duration: 10 * time.Second},
+		{Start: 15 * time.Second, End: 25 * time.Second, Duration: 10 * time.Second},
+	}
+
+	// Both candidates: very poor scores
+	// RMS -40.5 (ampScore ~0.0125), centroid dead-centre voice range (centroidScore 0.0),
+	// flatness 0.0, kurtosis 9.0 (kurtosisScore 0.55, below crosstalk threshold of 10),
+	// high flux 0.03 (fluxStabilityScore 0.0, rmsStabilityScore 1.0, stability ~0.6)
+	// Expected: 0.0125*0.30 + 0.11*0.35 + 1.0*0.10 + 0.6*0.25 ≈ 0.29
+	intervalsA := makeSilenceTestIntervals(0, 10*time.Second,
+		-40.5, -35.5, 2375.0, 0.0, 9.0, 0.03)
+	intervalsB := makeSilenceTestIntervals(15*time.Second, 10*time.Second,
+		-40.5, -35.5, 2375.0, 0.0, 9.0, 0.03)
+
+	allIntervals := append(intervalsA, intervalsB...)
+
+	result := findBestSilenceRegion(regions, allIntervals, 3600.0)
+
+	if result.BestRegion != nil {
+		t.Errorf("expected BestRegion to be nil (all candidates below minAcceptableScore), got start=%v", result.BestRegion.Start)
+	}
+
+	// Log scores for debugging
+	for _, c := range result.Candidates {
+		t.Logf("candidate start=%v score=%.4f", c.Region.Start, c.Score)
+	}
+}
+
+func TestFindBestSilenceRegion_SingleAcceptableCandidateElected(t *testing.T) {
+	// A single region with an acceptable score should be elected.
+
+	regions := []SilenceRegion{
+		{Start: 0, End: 10 * time.Second, Duration: 10 * time.Second},
+	}
+
+	// Acceptable score: RMS -65, centroid outside voice range, good flatness
+	intervals := makeSilenceTestIntervals(0, 10*time.Second,
+		-65.0, -60.0, 100.0, 0.8, 2.0, 0.0)
+
+	result := findBestSilenceRegion(regions, intervals, 3600.0)
+
+	if result.BestRegion == nil {
+		t.Fatal("expected a best region to be selected")
+	}
+	if result.BestRegion.Start != 0 {
+		t.Errorf("BestRegion.Start = %v, want 0", result.BestRegion.Start)
+	}
+	if len(result.Candidates) != 1 {
+		t.Errorf("len(Candidates) = %d, want 1", len(result.Candidates))
+	}
+
+	t.Logf("single candidate score=%.4f", result.Candidates[0].Score)
+}
+
+func TestFindBestSilenceRegion_LaterCandidateWinsWhenGapExceedsTolerance(t *testing.T) {
+	// Two candidates where the score gap far exceeds selectionTolerance (0.02).
+	// The later, higher-scoring candidate should win.
+
+	regions := []SilenceRegion{
+		{Start: 5 * time.Second, End: 15 * time.Second, Duration: 10 * time.Second},
+		{Start: 30 * time.Second, End: 40 * time.Second, Duration: 10 * time.Second},
+	}
+
+	// Candidate A intervals: ~0.77 (same as test 2.1 candidate A)
+	intervalsA := makeSilenceTestIntervals(5*time.Second, 10*time.Second,
+		-60.0, -55.0, 100.0, 0.8, 2.0, 0.0)
+	// Candidate B intervals: ~0.91 (same as test 2.1 candidate C)
+	intervalsB := makeSilenceTestIntervals(30*time.Second, 10*time.Second,
+		-75.0, -70.0, 100.0, 0.9, 1.0, 0.0)
+
+	allIntervals := append(intervalsA, intervalsB...)
+
+	result := findBestSilenceRegion(regions, allIntervals, 3600.0)
+
+	if result.BestRegion == nil {
+		t.Fatal("expected a best region to be selected")
+	}
+
+	// Log scores to verify the gap exceeds tolerance
+	for _, c := range result.Candidates {
+		t.Logf("candidate start=%v score=%.4f", c.Region.Start, c.Score)
+	}
+
+	if result.BestRegion.Start != 30*time.Second {
+		t.Errorf("BestRegion.Start = %v, want 30s (later candidate wins when gap exceeds tolerance)", result.BestRegion.Start)
+	}
+}
+
+// ============================================================================
 // Speech Detection Tests
 // ============================================================================
 
