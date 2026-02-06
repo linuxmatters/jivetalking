@@ -1153,6 +1153,33 @@ func roomToneScore(interval IntervalSample, rmsP50, fluxP50 float64) float64 {
 	return roomToneAmplitudeWeight*amplitudeScore + roomToneFluxWeight*fluxScore
 }
 
+// silenceMedians holds pre-computed median values for silence/room-tone detection.
+// Avoids redundant O(n log n) sorts when the same interval data is used by
+// multiple detection functions.
+type silenceMedians struct {
+	rmsP50  float64
+	fluxP50 float64
+}
+
+// computeSilenceMedians calculates RMS and spectral flux medians from the
+// search interval slice used for silence/room-tone detection. The caller
+// passes the already-sliced searchIntervals (first silenceSearchPercent% of intervals).
+func computeSilenceMedians(searchIntervals []IntervalSample) silenceMedians {
+	rmsLevels := make([]float64, len(searchIntervals))
+	fluxValues := make([]float64, len(searchIntervals))
+	for i, interval := range searchIntervals {
+		rmsLevels[i] = interval.RMSLevel
+		fluxValues[i] = interval.SpectralFlux
+	}
+	sort.Float64s(rmsLevels)
+	sort.Float64s(fluxValues)
+
+	return silenceMedians{
+		rmsP50:  rmsLevels[len(rmsLevels)/2],
+		fluxP50: fluxValues[len(fluxValues)/2],
+	}
+}
+
 // estimateNoiseFloorAndThreshold analyses interval data to estimate noise floor and silence threshold.
 // Returns (noiseFloor, silenceThreshold, ok). If ok is false, fallback values should be used.
 //
@@ -1163,7 +1190,7 @@ func roomToneScore(interval IntervalSample, rmsP50, fluxP50 float64) float64 {
 //
 // The noise floor is the max RMS of high-confidence room tone intervals.
 // The silence threshold adds headroom to the noise floor for detection margin.
-func estimateNoiseFloorAndThreshold(intervals []IntervalSample) (noiseFloor, silenceThreshold float64, ok bool) {
+func estimateNoiseFloorAndThreshold(intervals []IntervalSample, medians silenceMedians) (noiseFloor, silenceThreshold float64, ok bool) {
 	if len(intervals) < silenceThresholdMinIntervals {
 		return 0, 0, false
 	}
@@ -1175,18 +1202,9 @@ func estimateNoiseFloorAndThreshold(intervals []IntervalSample) (noiseFloor, sil
 	}
 	searchIntervals := intervals[:searchLimit]
 
-	// Calculate medians for scoring reference
-	rmsLevels := make([]float64, len(searchIntervals))
-	fluxValues := make([]float64, len(searchIntervals))
-	for i, interval := range searchIntervals {
-		rmsLevels[i] = interval.RMSLevel
-		fluxValues[i] = interval.SpectralFlux
-	}
-	sort.Float64s(rmsLevels)
-	sort.Float64s(fluxValues)
-
-	rmsP50 := rmsLevels[len(rmsLevels)/2]
-	fluxP50 := fluxValues[len(fluxValues)/2]
+	// Use pre-computed medians for scoring reference
+	rmsP50 := medians.rmsP50
+	fluxP50 := medians.fluxP50
 
 	// Score each interval for room tone likelihood
 	type scoredInterval struct {
@@ -1233,7 +1251,7 @@ func estimateNoiseFloorAndThreshold(intervals []IntervalSample) (noiseFloor, sil
 // Uses a room tone score approach that considers both amplitude and spectral stability.
 //
 // Detection algorithm:
-// 1. Calculate reference values (medians) for room tone scoring
+// 1. Use pre-computed reference values (medians) for room tone scoring
 // 2. Score each interval for "room tone likelihood"
 // 3. Use a score threshold (0.5) to identify room tone intervals
 // 4. Find consecutive runs that meet minimum duration (8 seconds)
@@ -1241,7 +1259,7 @@ func estimateNoiseFloorAndThreshold(intervals []IntervalSample) (noiseFloor, sil
 // The RMS threshold parameter is used as a hard ceiling - intervals above it
 // cannot be silence regardless of spectral characteristics.
 // Candidates in the first 15 seconds are excluded (typically contains intro).
-func findSilenceCandidatesFromIntervals(intervals []IntervalSample, threshold float64, _ float64) []SilenceRegion {
+func findSilenceCandidatesFromIntervals(intervals []IntervalSample, threshold float64, medians silenceMedians) []SilenceRegion {
 	if len(intervals) < minimumSilenceIntervals {
 		return nil
 	}
@@ -1251,20 +1269,10 @@ func findSilenceCandidatesFromIntervals(intervals []IntervalSample, threshold fl
 	if searchLimit < minimumSilenceIntervals {
 		searchLimit = minimumSilenceIntervals
 	}
-	searchIntervals := intervals[:searchLimit]
 
-	// Calculate medians for room tone scoring
-	rmsLevels := make([]float64, len(searchIntervals))
-	fluxValues := make([]float64, len(searchIntervals))
-	for i, interval := range searchIntervals {
-		rmsLevels[i] = interval.RMSLevel
-		fluxValues[i] = interval.SpectralFlux
-	}
-	sort.Float64s(rmsLevels)
-	sort.Float64s(fluxValues)
-
-	rmsP50 := rmsLevels[len(rmsLevels)/2]
-	fluxP50 := fluxValues[len(fluxValues)/2]
+	// Use pre-computed medians for room tone scoring
+	rmsP50 := medians.rmsP50
+	fluxP50 := medians.fluxP50
 
 	var candidates []SilenceRegion
 	var silenceStart time.Duration
@@ -2347,7 +2355,18 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 
 	// Estimate noise floor and silence threshold from interval data
 	// This replaces the previous separate pre-scan pass
-	noiseFloorEstimate, silenceThreshold, ok := estimateNoiseFloorAndThreshold(intervals)
+
+	// Pre-compute silence detection medians (shared by noise estimation and candidate detection)
+	silSearchLimit := len(intervals) * silenceSearchPercent / 100
+	if silSearchLimit < silenceThresholdMinIntervals {
+		silSearchLimit = silenceThresholdMinIntervals
+	}
+	if silSearchLimit > len(intervals) {
+		silSearchLimit = len(intervals)
+	}
+	silMedians := computeSilenceMedians(intervals[:silSearchLimit])
+
+	noiseFloorEstimate, silenceThreshold, ok := estimateNoiseFloorAndThreshold(intervals, silMedians)
 	if !ok {
 		// Fallback if insufficient interval data (very short recordings)
 		noiseFloorEstimate = defaultNoiseFloor
@@ -2473,7 +2492,7 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 
 	// Detect silence regions using threshold already computed from interval distribution
 	// The silenceThreshold was calculated above via estimateNoiseFloorAndThreshold()
-	measurements.SilenceRegions = findSilenceCandidatesFromIntervals(intervals, silenceThreshold, 0)
+	measurements.SilenceRegions = findSilenceCandidatesFromIntervals(intervals, silenceThreshold, silMedians)
 
 	// Extract noise profile from best silence region (if available)
 	// Uses interval data for all measurements - no file re-reading required
