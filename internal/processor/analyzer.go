@@ -792,15 +792,12 @@ func getIntervalsInRange(intervals []IntervalSample, start, end time.Duration) [
 		return nil
 	}
 
-	// Find first interval at or after start time
-	startIdx := -1
-	for i, interval := range intervals {
-		if interval.Timestamp >= start {
-			startIdx = i
-			break
-		}
-	}
-	if startIdx < 0 {
+	// Find first interval at or after start time using binary search
+	// (intervals are sorted by timestamp from the collection loop in AnalyzeAudio)
+	startIdx := sort.Search(len(intervals), func(i int) bool {
+		return intervals[i].Timestamp >= start
+	})
+	if startIdx >= len(intervals) {
 		return nil
 	}
 
