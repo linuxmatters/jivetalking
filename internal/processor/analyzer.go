@@ -699,6 +699,65 @@ const (
 	goldenSpeechWindowMinimum  = 30 * time.Second // Minimum acceptable window
 )
 
+// refineToSubregion implements the shared sliding-window refinement logic used by both
+// silence and speech sub-region selection. It finds the best-scoring contiguous window
+// within the given time range, where "best" is determined by the provided scoring function
+// and comparison: isBetter(candidate, current) returns true when candidate should replace current.
+//
+// Returns the refined start, end, and duration. If refinement is not possible (insufficient
+// intervals, already within target), returns the original bounds unchanged and ok=false.
+func refineToSubregion(
+	start, end, duration time.Duration,
+	intervals []IntervalSample,
+	windowDuration, windowMinimum time.Duration,
+	score func([]IntervalSample) float64,
+	isBetter func(candidate, current float64) bool,
+) (refinedStart, refinedEnd, refinedDuration time.Duration, ok bool) {
+	// No refinement needed if already at or below target duration
+	if duration <= windowDuration {
+		return start, end, duration, false
+	}
+
+	// Extract intervals within the candidate's time range
+	candidateIntervals := getIntervalsInRange(intervals, start, end)
+	if candidateIntervals == nil {
+		return start, end, duration, false
+	}
+
+	// Calculate window size in intervals
+	windowIntervals := int(windowDuration / goldenIntervalSize)
+	minimumIntervals := int(windowMinimum / goldenIntervalSize)
+
+	// Need at least minimum window worth of intervals
+	if len(candidateIntervals) < minimumIntervals {
+		return start, end, duration, false
+	}
+
+	// If we have fewer intervals than target window, use what we have
+	if len(candidateIntervals) < windowIntervals {
+		windowIntervals = len(candidateIntervals)
+	}
+
+	// Slide window across intervals, finding the position with the best score
+	bestStartIdx := 0
+	bestScore := score(candidateIntervals[:windowIntervals])
+
+	for startIdx := 1; startIdx <= len(candidateIntervals)-windowIntervals; startIdx++ {
+		windowScore := score(candidateIntervals[startIdx : startIdx+windowIntervals])
+		if isBetter(windowScore, bestScore) {
+			bestScore = windowScore
+			bestStartIdx = startIdx
+		}
+	}
+
+	// Calculate refined region bounds from the best window position
+	refinedStart = candidateIntervals[bestStartIdx].Timestamp
+	refinedDuration = time.Duration(windowIntervals) * goldenIntervalSize
+	refinedEnd = refinedStart + refinedDuration
+
+	return refinedStart, refinedEnd, refinedDuration, true
+}
+
 // refineToGoldenSubregion finds the cleanest sub-region within a silence candidate.
 // Uses existing interval samples to find the window with lowest average RMS.
 // Returns the original region if it's already at or below goldenWindowDuration,
@@ -712,53 +771,18 @@ func refineToGoldenSubregion(candidate *SilenceRegion, intervals []IntervalSampl
 		return nil
 	}
 
-	// No refinement needed if already at or below target duration
-	if candidate.Duration <= goldenWindowDuration {
+	start, end, dur, ok := refineToSubregion(
+		candidate.Start, candidate.End, candidate.Duration,
+		intervals,
+		goldenWindowDuration, goldenWindowMinimum,
+		scoreIntervalWindow,
+		func(candidate, current float64) bool { return candidate < current },
+	)
+	if !ok {
 		return candidate
 	}
 
-	// Extract intervals within the candidate's time range
-	candidateIntervals := getIntervalsInRange(intervals, candidate.Start, candidate.End)
-	if candidateIntervals == nil {
-		return candidate
-	}
-
-	// Calculate window size in intervals (10s / 250ms = 40 intervals)
-	windowIntervals := int(goldenWindowDuration / goldenIntervalSize)
-	minimumIntervals := int(goldenWindowMinimum / goldenIntervalSize)
-
-	// Need at least minimum window worth of intervals
-	if len(candidateIntervals) < minimumIntervals {
-		return candidate
-	}
-
-	// If we have fewer intervals than target window, use what we have
-	if len(candidateIntervals) < windowIntervals {
-		windowIntervals = len(candidateIntervals)
-	}
-
-	// Slide window across intervals, finding position with lowest average RMS
-	bestStartIdx := 0
-	bestRMS := scoreIntervalWindow(candidateIntervals[:windowIntervals])
-
-	for startIdx := 1; startIdx <= len(candidateIntervals)-windowIntervals; startIdx++ {
-		windowRMS := scoreIntervalWindow(candidateIntervals[startIdx : startIdx+windowIntervals])
-		if windowRMS < bestRMS {
-			bestRMS = windowRMS
-			bestStartIdx = startIdx
-		}
-	}
-
-	// Calculate refined region bounds from the best window position
-	refinedStart := candidateIntervals[bestStartIdx].Timestamp
-	refinedDuration := time.Duration(windowIntervals) * goldenIntervalSize
-	refinedEnd := refinedStart + refinedDuration
-
-	return &SilenceRegion{
-		Start:    refinedStart,
-		End:      refinedEnd,
-		Duration: refinedDuration,
-	}
+	return &SilenceRegion{Start: start, End: end, Duration: dur}
 }
 
 // getIntervalsInRange returns intervals that fall within the given time range.
@@ -1101,53 +1125,18 @@ func refineToGoldenSpeechSubregion(candidate *SpeechRegion, intervals []Interval
 		return nil
 	}
 
-	// No refinement needed if already at or below target duration
-	if candidate.Duration <= goldenSpeechWindowDuration {
+	start, end, dur, ok := refineToSubregion(
+		candidate.Start, candidate.End, candidate.Duration,
+		intervals,
+		goldenSpeechWindowDuration, goldenSpeechWindowMinimum,
+		scoreSpeechIntervalWindow,
+		func(candidate, current float64) bool { return candidate > current },
+	)
+	if !ok {
 		return candidate
 	}
 
-	// Extract intervals within the candidate's time range
-	candidateIntervals := getIntervalsInRange(intervals, candidate.Start, candidate.End)
-	if candidateIntervals == nil {
-		return candidate
-	}
-
-	// Calculate window size in intervals (60s / 250ms = 240 intervals)
-	windowIntervals := int(goldenSpeechWindowDuration / goldenIntervalSize)
-	minimumIntervals := int(goldenSpeechWindowMinimum / goldenIntervalSize)
-
-	// Need at least minimum window worth of intervals
-	if len(candidateIntervals) < minimumIntervals {
-		return candidate
-	}
-
-	// If we have fewer intervals than target window, use what we have
-	if len(candidateIntervals) < windowIntervals {
-		windowIntervals = len(candidateIntervals)
-	}
-
-	// Slide window across intervals, finding position with highest speech quality score
-	bestStartIdx := 0
-	bestScore := scoreSpeechIntervalWindow(candidateIntervals[:windowIntervals])
-
-	for startIdx := 1; startIdx <= len(candidateIntervals)-windowIntervals; startIdx++ {
-		windowScore := scoreSpeechIntervalWindow(candidateIntervals[startIdx : startIdx+windowIntervals])
-		if windowScore > bestScore {
-			bestScore = windowScore
-			bestStartIdx = startIdx
-		}
-	}
-
-	// Calculate refined region bounds from the best window position
-	refinedStart := candidateIntervals[bestStartIdx].Timestamp
-	refinedDuration := time.Duration(windowIntervals) * goldenIntervalSize
-	refinedEnd := refinedStart + refinedDuration
-
-	return &SpeechRegion{
-		Start:    refinedStart,
-		End:      refinedEnd,
-		Duration: refinedDuration,
-	}
+	return &SpeechRegion{Start: start, End: end, Duration: dur}
 }
 
 // roomToneScore calculates a 0-1 score indicating how likely an interval is room tone.
