@@ -72,20 +72,22 @@ func TestTipLevelTooQuiet(t *testing.T) {
 	tests := []struct {
 		name          string
 		inputI        float64
+		inputTP       float64
 		speechProfile *processor.SpeechCandidateMetrics
 		wantTip       bool
 		wantRuleID    string
 		wantGain      string // substring to check in message, empty to skip
 	}{
 		// InputI fallback (no SpeechProfile)
-		{"very quiet -35 LUFS fallback", -35.0, nil, true, "level_too_quiet", "17 dB"},
-		{"boundary -30 LUFS fallback", -30.0, nil, false, "", ""},
-		{"moderately quiet -28 LUFS fallback", -28.0, nil, false, "", ""},
-		{"normal -20 LUFS fallback", -20.0, nil, false, "", ""},
+		{"very quiet -35 LUFS fallback", -35.0, -20.0, nil, true, "level_too_quiet", "17 dB"},
+		{"boundary -30 LUFS fallback", -30.0, -20.0, nil, false, "", ""},
+		{"moderately quiet -28 LUFS fallback", -28.0, -20.0, nil, false, "", ""},
+		{"normal -20 LUFS fallback", -20.0, -20.0, nil, false, "", ""},
 		// Speech-aware path
 		{
 			name:          "speech RMS too quiet -45 dBFS",
 			inputI:        -20.0, // InputI would not trigger
+			inputTP:       -30.0,
 			speechProfile: &processor.SpeechCandidateMetrics{RMSLevel: -45.0},
 			wantTip:       true,
 			wantRuleID:    "level_too_quiet",
@@ -94,26 +96,64 @@ func TestTipLevelTooQuiet(t *testing.T) {
 		{
 			name:          "speech RMS at boundary -42 dBFS no tip",
 			inputI:        -35.0, // InputI would trigger fallback
+			inputTP:       -20.0,
 			speechProfile: &processor.SpeechCandidateMetrics{RMSLevel: -42.0},
 			wantTip:       false,
 		},
 		{
 			name:          "speech RMS acceptable -38 dBFS suppresses InputI",
 			inputI:        -35.0, // InputI would trigger fallback
+			inputTP:       -20.0,
 			speechProfile: &processor.SpeechCandidateMetrics{RMSLevel: -38.0},
 			wantTip:       false,
 		},
 		{
 			name:          "speech RMS good -30 dBFS no tip",
 			inputI:        -35.0,
+			inputTP:       -20.0,
 			speechProfile: &processor.SpeechCandidateMetrics{RMSLevel: -30.0},
 			wantTip:       false,
+		},
+		// Gain clamping: peaks near ceiling
+		{
+			name:       "gain clamped by peak headroom",
+			inputI:     -35.0,
+			inputTP:    -4.0,
+			wantTip:    true,
+			wantRuleID: "level_too_quiet",
+			wantGain:   "3 dB", // maxSafeGain = -1.0 - (-4.0) = 3.0, gainNeeded = 17 clamped to 3
+		},
+		{
+			name:       "gain clamped with accounting note",
+			inputI:     -35.0,
+			inputTP:    -6.0,
+			wantTip:    true,
+			wantRuleID: "level_too_quiet",
+			wantGain:   "accounting for", // clamped from 17 to 5
+		},
+		{
+			name:       "peaks near ceiling switches to crest message",
+			inputI:     -35.0,
+			inputTP:    -0.5,
+			wantTip:    true,
+			wantRuleID: "level_too_quiet",
+			wantGain:   "plosives", // maxSafeGain = -1.0 - (-0.5) = -0.5, < 2.0 → crest message
+		},
+		{
+			name:          "speech RMS clamped by peak headroom",
+			inputI:        -20.0,
+			inputTP:       -4.0,
+			speechProfile: &processor.SpeechCandidateMetrics{RMSLevel: -45.0},
+			wantTip:       true,
+			wantRuleID:    "level_too_quiet",
+			wantGain:      "3 dB", // gainNeeded=21, maxSafeGain=3, clamped to 3
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := &processor.AudioMeasurements{}
 			m.InputI = tt.inputI
+			m.InputTP = tt.inputTP
 			m.SpeechProfile = tt.speechProfile
 			tip := tipLevelTooQuiet(m, nil)
 			if (tip != nil) != tt.wantTip {
@@ -135,27 +175,30 @@ func TestTipLevelQuiet(t *testing.T) {
 	tests := []struct {
 		name          string
 		inputI        float64
+		inputTP       float64
 		speechProfile *processor.SpeechCandidateMetrics
 		wantTip       bool
 		wantRuleID    string
 		wantGain      string
 	}{
 		// InputI fallback (no SpeechProfile)
-		{"very quiet handled by too_quiet fallback", -35.0, nil, false, "", ""},
-		{"boundary -30 LUFS triggers quiet fallback", -30.0, nil, true, "level_quiet", "12 dB"},
-		{"moderately quiet -28 LUFS fallback", -28.0, nil, true, "level_quiet", "10 dB"},
-		{"boundary -24 LUFS no tip fallback", -24.0, nil, false, "", ""},
-		{"normal -20 LUFS fallback", -20.0, nil, false, "", ""},
+		{"very quiet handled by too_quiet fallback", -35.0, -30.0, nil, false, "", ""},
+		{"boundary -30 LUFS triggers quiet fallback", -30.0, -30.0, nil, true, "level_quiet", "12 dB"},
+		{"moderately quiet -28 LUFS fallback", -28.0, -30.0, nil, true, "level_quiet", "10 dB"},
+		{"boundary -24 LUFS no tip fallback", -24.0, -30.0, nil, false, "", ""},
+		{"normal -20 LUFS fallback", -20.0, -30.0, nil, false, "", ""},
 		// Speech-aware path
 		{
 			name:          "speech RMS too quiet for level_quiet handled by too_quiet",
 			inputI:        -20.0,
+			inputTP:       -30.0,
 			speechProfile: &processor.SpeechCandidateMetrics{RMSLevel: -45.0},
 			wantTip:       false, // < -42 is level_too_quiet territory
 		},
 		{
 			name:          "speech RMS moderately quiet -40 dBFS",
 			inputI:        -20.0, // InputI would not trigger
+			inputTP:       -30.0,
 			speechProfile: &processor.SpeechCandidateMetrics{RMSLevel: -40.0},
 			wantTip:       true,
 			wantRuleID:    "level_quiet",
@@ -164,6 +207,7 @@ func TestTipLevelQuiet(t *testing.T) {
 		{
 			name:          "speech RMS at boundary -42 dBFS triggers quiet",
 			inputI:        -20.0,
+			inputTP:       -30.0,
 			speechProfile: &processor.SpeechCandidateMetrics{RMSLevel: -42.0},
 			wantTip:       true,
 			wantRuleID:    "level_quiet",
@@ -172,20 +216,40 @@ func TestTipLevelQuiet(t *testing.T) {
 		{
 			name:          "speech RMS at boundary -36 dBFS no tip",
 			inputI:        -28.0, // InputI would trigger fallback
+			inputTP:       -30.0,
 			speechProfile: &processor.SpeechCandidateMetrics{RMSLevel: -36.0},
 			wantTip:       false,
 		},
 		{
 			name:          "speech RMS acceptable -34 dBFS suppresses InputI",
 			inputI:        -28.0, // InputI would trigger fallback
+			inputTP:       -30.0,
 			speechProfile: &processor.SpeechCandidateMetrics{RMSLevel: -34.0},
 			wantTip:       false,
+		},
+		// Gain clamping: peaks near ceiling
+		{
+			name:       "gain clamped by peak headroom",
+			inputI:     -28.0,
+			inputTP:    -4.0,
+			wantTip:    true,
+			wantRuleID: "level_quiet",
+			wantGain:   "3 dB", // maxSafeGain = 3.0, gainNeeded = 10 clamped to 3
+		},
+		{
+			name:       "peaks near ceiling switches to crest message",
+			inputI:     -28.0,
+			inputTP:    -0.5,
+			wantTip:    true,
+			wantRuleID: "level_quiet",
+			wantGain:   "plosives", // maxSafeGain = -1.0 - (-0.5) = -0.5, < 2.0 → crest message
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := &processor.AudioMeasurements{}
 			m.InputI = tt.inputI
+			m.InputTP = tt.inputTP
 			m.SpeechProfile = tt.speechProfile
 			tip := tipLevelQuiet(m, nil)
 			if (tip != nil) != tt.wantTip {
@@ -207,19 +271,55 @@ func TestTipLevelTooHot(t *testing.T) {
 	tests := []struct {
 		name       string
 		inputTP    float64
+		inputI     float64
 		wantTip    bool
 		wantRuleID string
+		wantMsg    string // substring to check (empty to skip)
 	}{
-		{"clipping +0.5 dBTP", 0.5, true, "level_clipping"},
-		{"boundary 0.0 dBTP near clipping", 0.0, true, "level_near_clipping"},
-		{"near clipping -0.5 dBTP", -0.5, true, "level_near_clipping"},
-		{"boundary -1.0 dBTP no tip", -1.0, false, ""},
-		{"safe -3.0 dBTP", -3.0, false, ""},
+		{"clipping +0.5 dBTP", 0.5, -18.0, true, "level_clipping", ""},
+		{"boundary 0.0 dBTP near clipping", 0.0, -18.0, true, "level_near_clipping", ""},
+		{"near clipping -0.5 dBTP", -0.5, -18.0, true, "level_near_clipping", ""},
+		{"boundary -1.0 dBTP no tip", -1.0, -18.0, false, "", ""},
+		{"safe -3.0 dBTP", -3.0, -18.0, false, "", ""},
+		// Context-aware clipping tests
+		{
+			name:       "clipping while very quiet compound message",
+			inputTP:    0.5,
+			inputI:     -35.0,
+			wantTip:    true,
+			wantRuleID: "level_clipping",
+			wantMsg:    "otherwise very quiet",
+		},
+		{
+			name:       "clipping with normal level computed reduction",
+			inputTP:    2.0,
+			inputI:     -18.0,
+			wantTip:    true,
+			wantRuleID: "level_clipping",
+			wantMsg:    "5 dB", // reduction = 2.0 + 3.0 = 5.0
+		},
+		{
+			name:       "near clipping small reduction says slightly",
+			inputTP:    -0.8,
+			inputI:     -18.0,
+			wantTip:    true,
+			wantRuleID: "level_near_clipping",
+			wantMsg:    "slightly", // reduction = -0.8 + 3.0 = 2.2 < 3.0
+		},
+		{
+			name:       "near clipping larger reduction gives number",
+			inputTP:    0.0,
+			inputI:     -18.0,
+			wantTip:    true,
+			wantRuleID: "level_near_clipping",
+			wantMsg:    "3 dB", // reduction = 0.0 + 3.0 = 3.0
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := &processor.AudioMeasurements{}
 			m.InputTP = tt.inputTP
+			m.InputI = tt.inputI
 			tip := tipLevelTooHot(m, nil)
 			if (tip != nil) != tt.wantTip {
 				t.Errorf("tipLevelTooHot() returned tip=%v, want tip=%v", tip != nil, tt.wantTip)
@@ -227,6 +327,9 @@ func TestTipLevelTooHot(t *testing.T) {
 			if tip != nil {
 				if tip.RuleID != tt.wantRuleID {
 					t.Errorf("RuleID = %q, want %q", tip.RuleID, tt.wantRuleID)
+				}
+				if tt.wantMsg != "" && !strings.Contains(tip.Message, tt.wantMsg) {
+					t.Errorf("Message %q should contain %q", tip.Message, tt.wantMsg)
 				}
 			}
 		})
@@ -668,6 +771,53 @@ func TestTipPoorSNR(t *testing.T) {
 	}
 }
 
+func TestTipHighCrestFactor(t *testing.T) {
+	tests := []struct {
+		name          string
+		crestFactor   float64
+		speechProfile *processor.SpeechCandidateMetrics
+		wantTip       bool
+	}{
+		{"high crest factor fires", 25.0, nil, true},
+		{"boundary crest 20 no tip", 20.0, nil, false},
+		{"just above boundary", 20.1, nil, true},
+		{"normal crest", 12.0, nil, false},
+		{"crest zero unmeasured", 0, nil, false},
+		{
+			name:          "speech crest overrides full-file fires",
+			crestFactor:   12.0,
+			speechProfile: &processor.SpeechCandidateMetrics{CrestFactor: 25.0},
+			wantTip:       true,
+		},
+		{
+			name:          "speech crest overrides full-file no tip",
+			crestFactor:   25.0,
+			speechProfile: &processor.SpeechCandidateMetrics{CrestFactor: 12.0},
+			wantTip:       false,
+		},
+		{
+			name:          "speech crest zero uses full-file",
+			crestFactor:   25.0,
+			speechProfile: &processor.SpeechCandidateMetrics{CrestFactor: 0},
+			wantTip:       true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &processor.AudioMeasurements{}
+			m.CrestFactor = tt.crestFactor
+			m.SpeechProfile = tt.speechProfile
+			tip := tipHighCrestFactor(m, nil)
+			if (tip != nil) != tt.wantTip {
+				t.Errorf("tipHighCrestFactor() returned tip=%v, want tip=%v", tip != nil, tt.wantTip)
+			}
+			if tip != nil && tip.RuleID != "high_crest_factor" {
+				t.Errorf("RuleID = %q, want %q", tip.RuleID, "high_crest_factor")
+			}
+		})
+	}
+}
+
 // hasRuleID checks whether any tip in the slice has the given RuleID.
 func hasRuleID(tips []RecordingTip, ruleID string) bool {
 	for _, tip := range tips {
@@ -813,6 +963,64 @@ func TestGenerateRecordingTips(t *testing.T) {
 				return m
 			}(),
 			wantExact: 5,
+		},
+		{
+			name: "regression case A: Mark quiet with peaks near ceiling",
+			measurements: func() *processor.AudioMeasurements {
+				m := &processor.AudioMeasurements{}
+				m.InputI = -20.0
+				m.InputTP = -4.2
+				m.CrestFactor = 25.9
+				m.SpeechProfile = &processor.SpeechCandidateMetrics{
+					RMSLevel:    -38.5,
+					CrestFactor: 25.9,
+				}
+				return m
+			}(),
+			wantRuleIDs:    []string{"level_quiet", "high_crest_factor"},
+			excludeRuleIDs: []string{"level_clipping", "level_near_clipping"},
+		},
+		{
+			name: "regression case B: Martin very quiet with moderate peaks",
+			measurements: func() *processor.AudioMeasurements {
+				m := &processor.AudioMeasurements{}
+				m.InputI = -20.0
+				m.InputTP = -9.8
+				m.CrestFactor = 29.8
+				m.SpeechProfile = &processor.SpeechCandidateMetrics{
+					RMSLevel:    -41.6,
+					CrestFactor: 29.8,
+				}
+				return m
+			}(),
+			wantRuleIDs:    []string{"level_quiet", "high_crest_factor"},
+			excludeRuleIDs: []string{"level_clipping", "level_too_quiet"},
+		},
+		{
+			name: "regression case C: Popey clipping while quiet",
+			measurements: func() *processor.AudioMeasurements {
+				m := &processor.AudioMeasurements{}
+				m.InputI = -31.3
+				m.InputTP = 0.1
+				m.CrestFactor = 29.2
+				m.SpeechProfile = &processor.SpeechCandidateMetrics{
+					RMSLevel:    -40.2,
+					CrestFactor: 29.2,
+				}
+				return m
+			}(),
+			wantRuleIDs: []string{"level_clipping", "level_quiet", "high_crest_factor"},
+		},
+		{
+			name: "high crest factor prevents quiet suppression by clipping",
+			measurements: func() *processor.AudioMeasurements {
+				m := &processor.AudioMeasurements{}
+				m.InputI = -35.0
+				m.InputTP = 0.5
+				m.CrestFactor = 25.0
+				return m
+			}(),
+			wantRuleIDs: []string{"level_clipping", "level_too_quiet", "high_crest_factor"},
 		},
 	}
 	for _, tt := range tests {
