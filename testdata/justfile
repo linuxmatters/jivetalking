@@ -6,7 +6,7 @@ testdata := source_directory()
 
 # Test episode number (change this to test different episodes)
 
-episode := "70"
+episode := "75"
 
 # Get Mark's processed logs
 mark-logs:
@@ -52,15 +52,15 @@ popey:
 
 # Analyse Mark's audio
 mark-analysis:
-    @./jivetalking -a {{ testdata }}/LMP-{{ episode }}-mark.flac
+    @./jivetalking -a {{ testdata }}/LMP-{{ episode }}-mark.flac | tee {{ testdata }}/LMP-{{ episode }}-mark-analysis.log
 
 # Analyse Martin's audio
 martin-analysis:
-    @./jivetalking -a {{ testdata }}/LMP-{{ episode }}-martin.flac
+    @./jivetalking -a {{ testdata }}/LMP-{{ episode }}-martin.flac | tee {{ testdata }}/LMP-{{ episode }}-martin-analysis.log
 
 # Analyse popey's audio
 popey-analysis:
-    @./jivetalking -a {{ testdata }}/LMP-{{ episode }}-popey.flac
+    @./jivetalking -a {{ testdata }}/LMP-{{ episode }}-popey.flac | tee {{ testdata }}/LMP-{{ episode }}-popey-analysis.log
 
 # Process all presenters
 presenters: mark martin popey
@@ -83,7 +83,7 @@ all-episodes:
 # Run analysis-only mode on all episodes and presenters
 all-analyse:
     #!/usr/bin/env bash
-    for ep in 68 69 70 71 72 73 74; do
+    for ep in 68 69 70 71 72 73 74 75; do
         echo "=== Analysing Episode $ep ==="
         for presenter in mark martin popey; do
             audio_file="{{ testdata }}/LMP-${ep}-${presenter}.flac"
@@ -104,7 +104,7 @@ stash: mark-log-stash martin-log-stash popey-log-stash
 # Run analysis-only mode on all episodes and presenters
 stash-analysis:
     #!/usr/bin/env bash
-    for ep in 68 69 70 71 72 73 74; do
+    for ep in 68 69 70 71 72 73 74 75; do
         for presenter in mark martin popey; do
             log_file="{{ testdata }}/LMP-${ep}-${presenter}-analysis.log"
             stash_log_file="{{ testdata }}/LMP-${ep}-${presenter}-analysis-before.log"
