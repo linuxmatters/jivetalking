@@ -165,6 +165,10 @@ func measureWithLoudnorm(inputPath string, config *FilterChainConfig, progressCa
 	}
 	// Note: We free the filter graph explicitly to trigger loudnorm JSON output
 
+	// Allocate frame for pulling filtered output (reused across all iterations)
+	filteredFrame := ffmpeg.AVFrameAlloc()
+	defer ffmpeg.AVFrameFree(&filteredFrame)
+
 	// Process all frames through loudnorm (no encoding - just measurement)
 	for {
 		frame, err := reader.ReadFrame()
@@ -181,14 +185,12 @@ func measureWithLoudnorm(inputPath string, config *FilterChainConfig, progressCa
 		}
 
 		// Pull filtered frames (discard - we only want the measurements)
-		filteredFrame := ffmpeg.AVFrameAlloc()
 		for {
 			if _, err := ffmpeg.AVBuffersinkGetFrame(bufferSinkCtx, filteredFrame); err != nil {
 				break
 			}
 			ffmpeg.AVFrameUnref(filteredFrame)
 		}
-		ffmpeg.AVFrameFree(&filteredFrame)
 
 		// Progress update periodically (every N frames for smooth updates)
 		frameCount++
@@ -200,14 +202,12 @@ func measureWithLoudnorm(inputPath string, config *FilterChainConfig, progressCa
 
 	// Flush filter graph
 	if _, err := ffmpeg.AVBuffersrcAddFrameFlags(bufferSrcCtx, nil, 0); err == nil {
-		filteredFrame := ffmpeg.AVFrameAlloc()
 		for {
 			if _, err := ffmpeg.AVBuffersinkGetFrame(bufferSinkCtx, filteredFrame); err != nil {
 				break
 			}
 			ffmpeg.AVFrameUnref(filteredFrame)
 		}
-		ffmpeg.AVFrameFree(&filteredFrame)
 	}
 
 	// Free filter graph to trigger loudnorm JSON output
@@ -559,6 +559,10 @@ func applyLoudnormAndMeasure(
 	var samplesProcessed int64
 	const progressUpdateInterval = 100 // Send progress update every N frames
 
+	// Allocate frame for pulling filtered output (reused across all iterations)
+	filteredFrame := ffmpeg.AVFrameAlloc()
+	defer ffmpeg.AVFrameFree(&filteredFrame)
+
 	for {
 		frame, err := reader.ReadFrame()
 		if err != nil {
@@ -577,7 +581,6 @@ func applyLoudnormAndMeasure(
 		}
 
 		// Pull filtered frames
-		filteredFrame := ffmpeg.AVFrameAlloc()
 		for {
 			if _, err := ffmpeg.AVBuffersinkGetFrame(bufferSinkCtx, filteredFrame); err != nil {
 				if errors.Is(err, ffmpeg.EAgain) || errors.Is(err, ffmpeg.AVErrorEOF) {
@@ -593,7 +596,6 @@ func applyLoudnormAndMeasure(
 			// Encode frame
 			if err := encoder.WriteFrame(filteredFrame); err != nil {
 				ffmpeg.AVFrameUnref(filteredFrame)
-				ffmpeg.AVFrameFree(&filteredFrame)
 				ffmpeg.AVFilterGraphFree(&filterGraph)
 				return 0.0, 0.0, nil, getLoudnormStats(), fmt.Errorf("encoding failed: %w", err)
 			}
@@ -601,7 +603,6 @@ func applyLoudnormAndMeasure(
 			framesProcessed++
 			ffmpeg.AVFrameUnref(filteredFrame)
 		}
-		ffmpeg.AVFrameFree(&filteredFrame)
 
 		// Progress update periodically (every N input frames for smooth updates)
 		if progressCallback != nil && framesProcessed%progressUpdateInterval == 0 {
@@ -612,7 +613,6 @@ func applyLoudnormAndMeasure(
 
 	// Flush filter graph
 	if _, err := ffmpeg.AVBuffersrcAddFrameFlags(bufferSrcCtx, nil, 0); err == nil {
-		filteredFrame := ffmpeg.AVFrameAlloc()
 		for {
 			if _, err := ffmpeg.AVBuffersinkGetFrame(bufferSinkCtx, filteredFrame); err != nil {
 				break
@@ -623,14 +623,12 @@ func applyLoudnormAndMeasure(
 
 			if err := encoder.WriteFrame(filteredFrame); err != nil {
 				ffmpeg.AVFrameUnref(filteredFrame)
-				ffmpeg.AVFrameFree(&filteredFrame)
 				ffmpeg.AVFilterGraphFree(&filterGraph)
 				return 0.0, 0.0, nil, getLoudnormStats(), fmt.Errorf("encoding failed during flush: %w", err)
 			}
 
 			ffmpeg.AVFrameUnref(filteredFrame)
 		}
-		ffmpeg.AVFrameFree(&filteredFrame)
 	}
 
 	// Flush encoder
