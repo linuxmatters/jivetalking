@@ -231,6 +231,19 @@ func DisplayAnalysisResults(w io.Writer, inputPath string, metadata *audio.Metad
 	// Dynamics and disorder metrics
 	fmt.Fprintf(w, "  Entropy:        %.3f (%s)\n", measurements.SpectralEntropy, interpretEntropy(measurements.SpectralEntropy))
 	fmt.Fprintf(w, "  Flux:           %.4f (%s)\n", measurements.SpectralFlux, interpretFlux(measurements.SpectralFlux))
+
+	// Recording tips section
+	tips := GenerateRecordingTips(measurements, config)
+	fmt.Fprintln(w)
+	writeAnalysisSection(w, "RECORDING TIPS")
+	if len(tips) == 0 {
+		fmt.Fprintln(w, "  ✓ Your recording setup looks good. No issues detected.")
+	} else {
+		for _, tip := range tips {
+			wrapped := wrapText(tip.Message, 66, "    ")
+			fmt.Fprintf(w, "  ⚠ %s\n", wrapped)
+		}
+	}
 }
 
 // writeAnalysisSection writes a section header for analysis output.
