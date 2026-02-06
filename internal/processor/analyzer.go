@@ -95,9 +95,6 @@ type SilenceCandidateMetrics struct {
 	TruePeak      float64 // dBTP, max true peak across region
 	SamplePeak    float64 // dBFS, max sample peak across region
 
-	// Legacy field for compatibility (same as SpectralEntropy)
-	Entropy float64 // Deprecated: use SpectralEntropy instead
-
 	// Warning flags (populated during scoring)
 	TransientWarning string `json:"transient_warning,omitempty"` // Warning if danger zone signature detected
 
@@ -691,7 +688,7 @@ func calculateFluxScore(flux float64) float64 {
 // Density at or above voicingDensityThreshold (60%) scores 1.0.
 // Lower densities score proportionally less.
 func calculateVoicingScore(voicingDensity float64) float64 {
-	return clampFloat(voicingDensity/voicingDensityThreshold, 0.0, 1.0)
+	return clamp(voicingDensity/voicingDensityThreshold, 0.0, 1.0)
 }
 
 const (
@@ -883,8 +880,6 @@ func measureSilenceCandidateFromIntervals(region SilenceRegion, intervals []Inte
 		TruePeak:      truePeakMax,
 		SamplePeak:    samplePeakMax,
 
-		Entropy: avgEntropy, // Legacy field for compatibility
-
 		StabilityScore: calculateStabilityScore(regionIntervals),
 	}
 }
@@ -1032,11 +1027,11 @@ func scoreSpeechIntervalWindow(intervals []IntervalSample) float64 {
 	// Kurtosis score: higher kurtosis = clearer harmonics
 	// Typical speech kurtosis ranges 5-10; score peaks around 7.5 (mid-point)
 	// Reference: Gaussian kurtosis=3; speech harmonic structure produces 5-10
-	kurtosisScore := clampFloat(avgKurtosis/7.5, 0.0, 1.0)
+	kurtosisScore := clamp(avgKurtosis/7.5, 0.0, 1.0)
 
 	// Flatness score: lower flatness = more tonal = better speech
 	// Flatness 0 = pure tone, 1 = white noise; speech typically 0.1-0.4
-	flatnessScore := clampFloat(1.0-avgFlatness, 0.0, 1.0)
+	flatnessScore := clamp(1.0-avgFlatness, 0.0, 1.0)
 
 	// Centroid score: peak at voice centre, decay toward edges
 	// Voice range: speechCentroidMin (200 Hz) to speechCentroidMax (4500 Hz)
@@ -1052,13 +1047,13 @@ func scoreSpeechIntervalWindow(intervals []IntervalSample) float64 {
 
 	// Consistency score: low kurtosis variance = stable voicing
 	// Variance > 100 is very inconsistent; clamp score at that point
-	consistencyScore := clampFloat(1.0-(kurtosisVariance/100.0), 0.0, 1.0)
+	consistencyScore := clamp(1.0-(kurtosisVariance/100.0), 0.0, 1.0)
 
 	// RMS score: louder = more active speech
 	// Range: -30 dBFS (worst) to -12 dBFS (best)
 	rmsScore := 0.0
 	if avgRMS > -30.0 {
-		rmsScore = clampFloat((avgRMS-(-30.0))/18.0, 0.0, 1.0)
+		rmsScore = clamp((avgRMS-(-30.0))/18.0, 0.0, 1.0)
 	}
 
 	// Rolloff score: prefer regions with rolloff in typical voiced speech range.
@@ -1829,22 +1824,11 @@ func extractFrameMetadata(metadata *ffmpeg.AVDictionary, acc *metadataAccumulato
 	}
 
 	if value, ok := getFloatMetadata(metadata, metaKeyEbur128TruePeak); ok {
-		// ebur128 reports true_peak as linear ratio, convert to dBTP
-		// dBTP = 20 * log10(linear)
-		if value > 0 {
-			acc.ebur128InputTP = 20 * math.Log10(value)
-		} else {
-			acc.ebur128InputTP = -120.0 // Floor for zero/negative values
-		}
+		acc.ebur128InputTP = linearRatioToDB(value)
 	}
 
-	// Sample peak (linear ratio, convert to dB)
 	if value, ok := getFloatMetadata(metadata, metaKeyEbur128SamplePeak); ok {
-		if value > 0 {
-			acc.ebur128InputSP = 20 * math.Log10(value)
-		} else {
-			acc.ebur128InputSP = -120.0
-		}
+		acc.ebur128InputSP = linearRatioToDB(value)
 	}
 
 	if value, ok := getFloatMetadata(metadata, metaKeyEbur128LRA); ok {
@@ -1995,17 +1979,6 @@ type AudioMeasurements struct {
 	// Derived suggestions for Pass 2 adaptive processing
 	SuggestedGateThreshold float64 `json:"suggested_gate_threshold"` // Suggested gate threshold (linear amplitude)
 	NoiseReductionHeadroom float64 `json:"noise_reduction_headroom"` // dB gap between noise and quiet speech
-}
-
-// SilenceAnalysis contains measurements from a silence region.
-// Used for comparing noise characteristics between input and output.
-type SilenceAnalysis struct {
-	Start       time.Duration `json:"start"`        // Start time of silence region
-	Duration    time.Duration `json:"duration"`     // Duration of silence region
-	NoiseFloor  float64       `json:"noise_floor"`  // dBFS, RMS level of silence (average noise)
-	PeakLevel   float64       `json:"peak_level"`   // dBFS, peak level in silence
-	CrestFactor float64       `json:"crest_factor"` // Peak - RMS in dB
-	Entropy     float64       `json:"entropy"`      // Signal randomness (1.0 = white noise, lower = tonal)
 }
 
 // OutputMeasurements contains the measurements from Pass 2 output analysis.
@@ -2165,20 +2138,10 @@ func extractOutputFrameMetadata(metadata *ffmpeg.AVDictionary, acc *outputMetada
 		acc.ebur128OutputS = value
 	}
 	if value, ok := getFloatMetadata(metadata, metaKeyEbur128TruePeak); ok {
-		// ebur128 reports true_peak as linear ratio, convert to dBTP
-		// dBTP = 20 * log10(linear)
-		if value > 0 {
-			acc.ebur128OutputTP = 20 * math.Log10(value)
-		} else {
-			acc.ebur128OutputTP = -120.0 // Floor for zero/negative values
-		}
+		acc.ebur128OutputTP = linearRatioToDB(value)
 	}
 	if value, ok := getFloatMetadata(metadata, metaKeyEbur128SamplePeak); ok {
-		if value > 0 {
-			acc.ebur128OutputSP = 20 * math.Log10(value)
-		} else {
-			acc.ebur128OutputSP = -120.0
-		}
+		acc.ebur128OutputSP = linearRatioToDB(value)
 	}
 	if value, ok := getFloatMetadata(metadata, metaKeyEbur128LRA); ok {
 		acc.ebur128OutputLRA = value
@@ -3065,8 +3028,8 @@ func calculateStabilityScore(intervals []IntervalSample) float64 {
 	//
 	// RMS variance: 0 dB² (perfect) to 9 dB² (3 dB std dev, poor)
 	// Flux: 0 (perfect) to 0.02 (stability threshold)
-	rmsStabilityScore := clampFloat(1.0-(rmsVariance/9.0), 0.0, 1.0)
-	fluxStabilityScore := clampFloat(1.0-(avgFlux/0.02), 0.0, 1.0)
+	rmsStabilityScore := clamp(1.0-(rmsVariance/9.0), 0.0, 1.0)
+	fluxStabilityScore := clamp(1.0-(avgFlux/0.02), 0.0, 1.0)
 
 	// Combine: RMS variance more important (direct amplitude stability)
 	return rmsStabilityScore*0.6 + fluxStabilityScore*0.4
@@ -3151,7 +3114,7 @@ func calculateSpectralScore(centroid, flatness, kurtosis float64) float64 {
 
 	// Kurtosis score: lower = less peaked = better
 	// Normalise: 0 → 1.0, 20+ → 0.0
-	kurtosisScore := 1.0 - clampFloat(kurtosis/20.0, 0.0, 1.0)
+	kurtosisScore := 1.0 - clamp(kurtosis/20.0, 0.0, 1.0)
 
 	// Combine with weights from the spec
 	return centroidScore*0.5 + flatnessScore*0.3 + kurtosisScore*0.2
@@ -3204,17 +3167,6 @@ func calculateDurationScore(duration time.Duration) float64 {
 	return math.Exp(-0.5 * (diff / sigmaSecs) * (diff / sigmaSecs))
 }
 
-// clampFloat clamps a value to the range [min, max].
-func clampFloat(value, min, max float64) float64 {
-	if value < min {
-		return min
-	}
-	if value > max {
-		return max
-	}
-	return value
-}
-
 // speechScore calculates how speech-like an interval is.
 // Returns 0.0-1.0 where higher = more likely to be speech.
 // Inverts silence detection criteria: rewards amplitude, voice-range centroid, low entropy.
@@ -3230,7 +3182,7 @@ func speechScore(interval IntervalSample, rmsP50, centroidP50 float64) float64 {
 	if interval.RMSLevel >= rmsP50 {
 		// Above median: score increases up to +6dB
 		boost := interval.RMSLevel - rmsP50
-		ampScore = clampFloat(boost/6.0, 0.0, 1.0)
+		ampScore = clamp(boost/6.0, 0.0, 1.0)
 	}
 
 	// Centroid score: voice range (200-4500 Hz) = good
@@ -3510,7 +3462,7 @@ func findBestSpeechRegion(regions []SpeechRegion, intervals []IntervalSample, no
 				// Apply penalty factor rather than rejecting outright
 				// This allows selection if no better candidates exist
 				snrPenalty := snrMargin / minSNRMargin // 0.0 to 1.0
-				score *= clampFloat(snrPenalty, 0.1, 1.0)
+				score *= clamp(snrPenalty, 0.1, 1.0)
 				metrics.Score = score
 			}
 		} else {
@@ -3577,7 +3529,7 @@ func scoreSpeechCandidate(m *SpeechCandidateMetrics) float64 {
 	// Amplitude score: louder speech = better sample
 	ampScore := 0.0
 	if m.RMSLevel > -30.0 {
-		ampScore = clampFloat((m.RMSLevel-(-30.0))/18.0, 0.0, 1.0)
+		ampScore = clamp((m.RMSLevel-(-30.0))/18.0, 0.0, 1.0)
 	}
 
 	// Centroid score: voice range = good
@@ -3592,11 +3544,11 @@ func scoreSpeechCandidate(m *SpeechCandidateMetrics) float64 {
 	if m.CrestFactor >= crestFactorMin && m.CrestFactor <= crestFactorMax {
 		distFromIdeal := math.Abs(m.CrestFactor - crestFactorIdeal)
 		maxDist := max(crestFactorIdeal-crestFactorMin, crestFactorMax-crestFactorIdeal)
-		crestScore = clampFloat(1.0-(distFromIdeal/maxDist), 0.0, 1.0)
+		crestScore = clamp(1.0-(distFromIdeal/maxDist), 0.0, 1.0)
 	}
 
 	// Duration score: longer = better (up to 60s, then plateau)
-	durScore := clampFloat(m.Region.Duration.Seconds()/60.0, 0.0, 1.0)
+	durScore := clamp(m.Region.Duration.Seconds()/60.0, 0.0, 1.0)
 
 	// Voicing density score: prefer high voiced content proportion
 	// Uses shared helper function for consistency with scoreSpeechIntervalWindow
@@ -3678,7 +3630,6 @@ func MeasureOutputSilenceRegion(outputPath string, region SilenceRegion) (*Silen
 	var rmsLevel float64
 	var peakLevel float64
 	var crestFactor float64
-	var entropy float64
 	var momentaryLUFS float64
 	var shortTermLUFS float64
 	var truePeak float64
@@ -3737,9 +3688,6 @@ func MeasureOutputSilenceRegion(outputPath string, region SilenceRegion) (*Silen
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeyOverallCrestFactor); ok {
 					crestFactor = value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeyOverallEntropy); ok {
-					entropy = value
 				}
 
 				// aspectralstats spectral measurements - accumulate for averaging
@@ -3826,9 +3774,6 @@ func MeasureOutputSilenceRegion(outputPath string, region SilenceRegion) (*Silen
 				}
 				if value, ok := getFloatMetadata(metadata, metaKeyOverallCrestFactor); ok {
 					crestFactor = value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeyOverallEntropy); ok {
-					entropy = value
 				}
 
 				// aspectralstats spectral measurements - accumulate for averaging
@@ -3985,9 +3930,6 @@ func MeasureOutputSilenceRegion(outputPath string, region SilenceRegion) (*Silen
 		ShortTermLUFS: shortTermLUFS,
 		TruePeak:      truePeakDB,
 		SamplePeak:    samplePeakDB,
-
-		// Legacy entropy field from astats (for compatibility)
-		Entropy: entropy,
 	}
 
 	if !rmsLevelFound {
