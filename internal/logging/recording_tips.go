@@ -73,8 +73,8 @@ func applyExclusions(tips []RecordingTip, fired map[string]bool) []RecordingTip 
 	var result []RecordingTip
 	for _, tip := range tips {
 		switch tip.RuleID {
-		case "level_quiet":
-			if fired["too_far_from_mic"] {
+		case "level_too_quiet", "level_quiet":
+			if fired["level_clipping"] || fired["level_near_clipping"] || fired["too_far_from_mic"] {
 				continue
 			}
 		case "poor_snr":
@@ -111,10 +111,24 @@ func wrapText(text string, maxWidth int, indent string) string {
 	return strings.Join(lines, "\n"+indent)
 }
 
-// tipLevelTooQuiet fires when input is very quiet (InputI < -30 LUFS).
-// At this level, 12+ dB of gain is needed to reach -18 LUFS target,
-// which raises the noise floor significantly.
+// tipLevelTooQuiet fires when recording level is very quiet.
+// Uses SpeechProfile.RMSLevel when available (speech RMS < -42 dBFS),
+// falling back to InputI < -30 LUFS when no speech profile exists.
+// Gain target is -24 dBFS for speech RMS, -18 LUFS for InputI fallback.
 func tipLevelTooQuiet(m *processor.AudioMeasurements, _ *processor.FilterChainConfig) *RecordingTip {
+	if m.SpeechProfile != nil {
+		speechRMS := m.SpeechProfile.RMSLevel
+		if speechRMS >= -42.0 {
+			return nil
+		}
+		gainNeeded := -24.0 - speechRMS
+		return &RecordingTip{
+			Priority: 10,
+			RuleID:   "level_too_quiet",
+			Message:  fmt.Sprintf("Your microphone gain is too low - try increasing it by about %.0f dB.", gainNeeded),
+		}
+	}
+	// Fallback: no speech profile, use integrated LUFS
 	if m.InputI >= -30.0 {
 		return nil
 	}
@@ -126,9 +140,24 @@ func tipLevelTooQuiet(m *processor.AudioMeasurements, _ *processor.FilterChainCo
 	}
 }
 
-// tipLevelQuiet fires when input is moderately quiet (InputI between -30 and -24 LUFS).
-// Still needs noticeable gain to reach target, worth mentioning but less urgent.
+// tipLevelQuiet fires when recording level is moderately quiet.
+// Uses SpeechProfile.RMSLevel when available (speech RMS between -42 and -36 dBFS),
+// falling back to InputI between -30 and -24 LUFS when no speech profile exists.
+// Gain target is -24 dBFS for speech RMS, -18 LUFS for InputI fallback.
 func tipLevelQuiet(m *processor.AudioMeasurements, _ *processor.FilterChainConfig) *RecordingTip {
+	if m.SpeechProfile != nil {
+		speechRMS := m.SpeechProfile.RMSLevel
+		if speechRMS < -42.0 || speechRMS >= -36.0 {
+			return nil
+		}
+		gainNeeded := -24.0 - speechRMS
+		return &RecordingTip{
+			Priority: 8,
+			RuleID:   "level_quiet",
+			Message:  fmt.Sprintf("Your recording is a bit quiet - increasing your microphone gain by about %.0f dB would improve quality.", gainNeeded),
+		}
+	}
+	// Fallback: no speech profile, use integrated LUFS
 	if m.InputI < -30.0 || m.InputI >= -24.0 {
 		return nil
 	}
@@ -280,22 +309,10 @@ func tipSibilance(m *processor.AudioMeasurements, config *processor.FilterChainC
 	}
 }
 
-// tipDynamicRange fires when the loudness range is very wide, indicating
-// inconsistent speaking volume or microphone distance.
-// Thresholds: InputLRA > 18 LU (very wide) or InputLRA > 14 LU with
-// CrestFactor > 18 dB (wide with extreme dynamics).
-// References: adaptive.go la2aLRAExpressive = 14.0 LU,
-// Spectral-Metrics-Reference.md crest > 18 dB = extreme dynamics.
+// tipDynamicRange fires when the loudness range is very wide (InputLRA > 18 LU),
+// indicating inconsistent speaking volume or microphone distance.
 func tipDynamicRange(m *processor.AudioMeasurements, _ *processor.FilterChainConfig) *RecordingTip {
-	crest := m.CrestFactor
-	if m.SpeechProfile != nil && m.SpeechProfile.CrestFactor > 0 {
-		crest = m.SpeechProfile.CrestFactor
-	}
-
-	veryWide := m.InputLRA > 18.0
-	wideWithCrest := m.InputLRA > 14.0 && crest > 18.0
-
-	if !veryWide && !wideWithCrest {
+	if m.InputLRA <= 18.0 {
 		return nil
 	}
 	return &RecordingTip{
