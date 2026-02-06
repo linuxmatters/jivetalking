@@ -105,6 +105,7 @@ jivetalking [flags] <files...>
 | Flag | Description |
 |------|-------------|
 | `-v, --version` | Show version and exit |
+| `-a, --analysis-only` | Run analysis only (Pass 1), display results, skip processing |
 | `-d, --debug` | Enable debug logging to `jivetalking-debug.log` |
 | `--logs` | Save detailed analysis reports alongside output |
 
@@ -115,11 +116,62 @@ jivetalking [flags] <files...>
 # Process multiple presenters
 jivetalking presenter1.flac presenter2.flac presenter3.flac
 
+# Inspect recordings without processing
+jivetalking -a presenter1.flac presenter2.flac
+
 # Debug a problematic recording
 jivetalking -d --logs troublesome-recording.flac
 
 # Process all FLAC files in directory
 jivetalking *.flac
+```
+
+### Analysis-Only Mode
+
+Pass `-a` to run only Pass 1 analysis, printing a detailed report to the console without creating any output files. Useful for quickly understanding what jivetalking sees in your recordings, diagnosing setup problems, or checking whether a file needs processing at all.
+
+The report covers:
+
+- **Loudness & dynamics** — integrated LUFS, true peak, loudness range, crest factor
+- **Silence & speech detection** — candidate regions scored and elected for noise profiling and speech-aware metrics
+- **Derived measurements** — noise floor, gate baseline, noise-to-speech headroom
+- **Filter adaptation** — the exact parameters jivetalking would apply: highpass frequency, gate threshold, NR settings, de-esser intensity, LA-2A configuration
+- **Spectral summary** — full spectral characterisation with human-readable interpretations
+- **Recording tips** — actionable advice based on your measurements (e.g. "increase your microphone gain by 14 dB" or "your recording is clipping")
+
+Example output (trimmed):
+
+```
+======================================================================
+ANALYSIS: presenter1.flac
+======================================================================
+Duration:    5m 23s
+Sample Rate: 48000 Hz
+Channels:    mono
+
+LOUDNESS
+  Integrated:     -32.4 LUFS
+  True Peak:      -8.1 dBTP
+  Loudness Range: 18.2 LU
+
+DERIVED MEASUREMENTS
+  Noise Floor:    -52.3 dBFS (from elected silence)
+  Gate Baseline:  -46.0 dB (noise floor + margin)
+  NR Headroom:    19.9 dB (noise-to-speech gap)
+
+FILTER ADAPTATION
+  Highpass:       80 Hz (from spectral analysis)
+  Gate Threshold: -40.2 dB (with breath reduction)
+  Gate Ratio:     2.0:1
+  NR Threshold:   -47 dB
+  NR Expansion:   8 dB
+  De-esser:       32% intensity
+  LA-2A Thresh:   -28 dB
+  LA-2A Ratio:    3.2:1
+
+RECORDING TIPS
+  ⚠ Your recording is a bit quiet - increasing your microphone gain
+    by about 14 dB would improve quality
 ```
 
 Output files are named with `-processed` suffix: `recording.flac` becomes `recording-processed.flac`.

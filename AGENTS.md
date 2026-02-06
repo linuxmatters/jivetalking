@@ -27,11 +27,17 @@ internal/
 │   ├── analyzer.go         # Pass 1: ebur128 + astats + aspectralstats analysis
 │   ├── processor.go        # Pass 2: adaptive filter chain execution
 │   └── filters.go          # FilterChainConfig, BuildFilterSpec(), defaults
+├── logging/
+│   ├── analysis_display.go # Console output for --analysis-only mode
+│   ├── recording_tips.go   # Actionable recording advice from measurements
+│   └── report.go           # Detailed analysis log files (--logs)
 ├── ui/                     # Bubbletea model, views, messages
 └── cli/                    # Help styling, version output
 ```
 
-**Data flow:** `main.go` spawns goroutine → `ProcessAudio()` → Pass 1 (`AnalyzeAudio`) → Pass 2 (applies filters) → sends `ui.*Msg` to TUI via `tea.Program.Send()`.
+**Data flow (processing):** `main.go` spawns goroutine → `ProcessAudio()` → Pass 1 (`AnalyzeAudio`) → Pass 2 (applies filters) → sends `ui.*Msg` to TUI via `tea.Program.Send()`.
+
+**Data flow (analysis-only):** `main.go` → `runAnalysisOnly()` → Pass 1 only → `AnalysisModel` TUI shows progress → `DisplayAnalysisResults()` prints report to console. No output files created.
 
 ## Audio processing pipeline
 
