@@ -341,11 +341,17 @@ func GenerateReport(data ReportData) error {
 	// Loudness Measurements Table (Input → Filtered → Final)
 	writeLoudnessTable(f, inputMeasurements, filteredMeasurements, finalMeasurements)
 
+	// Extract normalisation result for gain-dependent metric compensation
+	var normResult *processor.NormalisationResult
+	if data.Result != nil {
+		normResult = data.Result.NormResult
+	}
+
 	// Noise Floor Analysis Table
-	writeNoiseFloorTable(f, inputMeasurements, filteredMeasurements, getFinalMeasurements(data.Result))
+	writeNoiseFloorTable(f, inputMeasurements, filteredMeasurements, getFinalMeasurements(data.Result), normResult)
 
 	// Speech Region Analysis Table
-	writeSpeechRegionTable(f, inputMeasurements, filteredMeasurements, getFinalMeasurements(data.Result))
+	writeSpeechRegionTable(f, inputMeasurements, filteredMeasurements, getFinalMeasurements(data.Result), normResult)
 
 	return nil
 }
@@ -1118,7 +1124,7 @@ func writeLoudnessTable(f *os.File, input *processor.AudioMeasurements, filtered
 
 // writeNoiseFloorTable outputs a three-column comparison table for noise floor metrics.
 // Columns: Input (Pass 1 elected silence candidate), Filtered (Pass 2 SilenceSample), Final (Pass 4 SilenceSample)
-func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurements, filteredMeasurements *processor.OutputMeasurements, finalMeasurements *processor.OutputMeasurements) {
+func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurements, filteredMeasurements *processor.OutputMeasurements, finalMeasurements *processor.OutputMeasurements, normResult *processor.NormalisationResult) {
 	writeSection(f, "Noise Floor Analysis")
 
 	// Skip if no input measurements or noise profile
@@ -1127,6 +1133,13 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 		fmt.Fprintln(f, "")
 		return
 	}
+
+	// Compute effective normalisation gain for spectral metric compensation
+	var effectiveGainDB float64
+	if normResult != nil && !normResult.Skipped {
+		effectiveGainDB = normResult.OutputLUFS - normResult.InputLUFS
+	}
+	gainNormalise := effectiveGainDB != 0
 
 	// Find the elected silence candidate in SilenceCandidates by matching Region.Start to NoiseProfile.Start
 	// NoiseProfile only has ~10 fields, but we need the full 20+ field SilenceCandidateMetrics
@@ -1298,7 +1311,14 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	if finalNoise != nil {
 		finalMean = finalNoise.SpectralMean
 	}
-	table.AddRow("Spectral Mean",
+	if gainNormalise && !finalIsDigitalSilence {
+		finalMean = normaliseForGain(finalMean, effectiveGainDB, 1)
+	}
+	meanLabel := "Spectral Mean"
+	if gainNormalise {
+		meanLabel = "Spectral Mean †"
+	}
+	table.AddRow(meanLabel,
 		[]string{
 			formatMetric(inputMean, 6),
 			formatMetricSpectral(filteredMean, 6, filteredIsDigitalSilence),
@@ -1318,7 +1338,14 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	if finalNoise != nil {
 		finalVar = finalNoise.SpectralVariance
 	}
-	table.AddRow("Spectral Variance",
+	if gainNormalise && !finalIsDigitalSilence {
+		finalVar = normaliseForGain(finalVar, effectiveGainDB, 2)
+	}
+	varLabel := "Spectral Variance"
+	if gainNormalise {
+		varLabel = "Spectral Variance †"
+	}
+	table.AddRow(varLabel,
 		[]string{
 			formatMetric(inputVar, 6),
 			formatMetricSpectral(filteredVar, 6, filteredIsDigitalSilence),
@@ -1480,7 +1507,14 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	if finalNoise != nil {
 		finalFlux = finalNoise.SpectralFlux
 	}
-	table.AddRow("Spectral Flux",
+	if gainNormalise && !finalIsDigitalSilence {
+		finalFlux = normaliseForGain(finalFlux, effectiveGainDB, 2)
+	}
+	fluxLabel := "Spectral Flux"
+	if gainNormalise {
+		fluxLabel = "Spectral Flux †"
+	}
+	table.AddRow(fluxLabel,
 		[]string{
 			formatMetric(inputFlux, 6),
 			formatMetricSpectral(filteredFlux, 6, filteredIsDigitalSilence),
@@ -1500,7 +1534,14 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	if finalNoise != nil {
 		finalSlope = finalNoise.SpectralSlope
 	}
-	table.AddRow("Spectral Slope",
+	if gainNormalise && !finalIsDigitalSilence {
+		finalSlope = normaliseForGain(finalSlope, effectiveGainDB, 1)
+	}
+	slopeLabel := "Spectral Slope"
+	if gainNormalise {
+		slopeLabel = "Spectral Slope †"
+	}
+	table.AddRow(slopeLabel,
 		[]string{
 			formatMetric(inputSlope, 9),
 			formatMetricSpectral(filteredSlope, 9, filteredIsDigitalSilence),
@@ -1659,12 +1700,15 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	table.AddRow("Character", []string{inputChar, filteredChar, finalChar}, "", "")
 
 	fmt.Fprint(f, table.String())
+	if gainNormalise {
+		fmt.Fprintf(f, "† Final values gain-normalised (÷ %.1f dB) for cross-stage comparison\n", effectiveGainDB)
+	}
 	fmt.Fprintln(f, "")
 }
 
 // writeSpeechRegionTable outputs a three-column comparison table for speech region metrics.
 // Columns: Input (Pass 1 speech profile), Filtered (Pass 2 SpeechSample), Final (Pass 4 SpeechSample)
-func writeSpeechRegionTable(f *os.File, inputMeasurements *processor.AudioMeasurements, filteredMeasurements *processor.OutputMeasurements, finalMeasurements *processor.OutputMeasurements) {
+func writeSpeechRegionTable(f *os.File, inputMeasurements *processor.AudioMeasurements, filteredMeasurements *processor.OutputMeasurements, finalMeasurements *processor.OutputMeasurements, normResult *processor.NormalisationResult) {
 	writeSection(f, "Speech Region Analysis")
 
 	// Skip if no input measurements or speech profile
@@ -1673,6 +1717,13 @@ func writeSpeechRegionTable(f *os.File, inputMeasurements *processor.AudioMeasur
 		fmt.Fprintln(f, "")
 		return
 	}
+
+	// Compute effective normalisation gain for spectral metric compensation
+	var effectiveGainDB float64
+	if normResult != nil && !normResult.Skipped {
+		effectiveGainDB = normResult.OutputLUFS - normResult.InputLUFS
+	}
+	gainNormalise := effectiveGainDB != 0
 
 	// Extract speech samples
 	inputSpeech := inputMeasurements.SpeechProfile
@@ -1749,7 +1800,14 @@ func writeSpeechRegionTable(f *os.File, inputMeasurements *processor.AudioMeasur
 	if finalSpeech != nil {
 		finalMean = finalSpeech.SpectralMean
 	}
-	table.AddMetricRow("Spectral Mean", inputMean, filteredMean, finalMean, 6, "", "")
+	if gainNormalise {
+		finalMean = normaliseForGain(finalMean, effectiveGainDB, 1)
+	}
+	meanLabel := "Spectral Mean"
+	if gainNormalise {
+		meanLabel = "Spectral Mean †"
+	}
+	table.AddMetricRow(meanLabel, inputMean, filteredMean, finalMean, 6, "", "")
 
 	// Spectral Variance
 	inputVar := math.NaN()
@@ -1764,7 +1822,14 @@ func writeSpeechRegionTable(f *os.File, inputMeasurements *processor.AudioMeasur
 	if finalSpeech != nil {
 		finalVar = finalSpeech.SpectralVariance
 	}
-	table.AddMetricRow("Spectral Variance", inputVar, filteredVar, finalVar, 6, "", "")
+	if gainNormalise {
+		finalVar = normaliseForGain(finalVar, effectiveGainDB, 2)
+	}
+	varLabel := "Spectral Variance"
+	if gainNormalise {
+		varLabel = "Spectral Variance †"
+	}
+	table.AddMetricRow(varLabel, inputVar, filteredVar, finalVar, 6, "", "")
 
 	// Spectral Centroid
 	inputCentroid := math.NaN()
@@ -1884,7 +1949,14 @@ func writeSpeechRegionTable(f *os.File, inputMeasurements *processor.AudioMeasur
 	if finalSpeech != nil {
 		finalFlux = finalSpeech.SpectralFlux
 	}
-	table.AddMetricRow("Spectral Flux", inputFlux, filteredFlux, finalFlux, 6, "", interpretFlux(finalFlux))
+	if gainNormalise {
+		finalFlux = normaliseForGain(finalFlux, effectiveGainDB, 2)
+	}
+	fluxLabel := "Spectral Flux"
+	if gainNormalise {
+		fluxLabel = "Spectral Flux †"
+	}
+	table.AddMetricRow(fluxLabel, inputFlux, filteredFlux, finalFlux, 6, "", interpretFlux(finalFlux))
 
 	// Spectral Slope
 	inputSlope := math.NaN()
@@ -1899,7 +1971,14 @@ func writeSpeechRegionTable(f *os.File, inputMeasurements *processor.AudioMeasur
 	if finalSpeech != nil {
 		finalSlope = finalSpeech.SpectralSlope
 	}
-	table.AddMetricRow("Spectral Slope", inputSlope, filteredSlope, finalSlope, 9, "", interpretSlope(finalSlope))
+	if gainNormalise {
+		finalSlope = normaliseForGain(finalSlope, effectiveGainDB, 1)
+	}
+	slopeLabel := "Spectral Slope"
+	if gainNormalise {
+		slopeLabel = "Spectral Slope †"
+	}
+	table.AddMetricRow(slopeLabel, inputSlope, filteredSlope, finalSlope, 9, "", interpretSlope(finalSlope))
 
 	// Spectral Decrease
 	inputDecrease := math.NaN()
@@ -2025,6 +2104,9 @@ func writeSpeechRegionTable(f *os.File, inputMeasurements *processor.AudioMeasur
 	table.AddRow("Character", []string{inputSpeechChar, filteredSpeechChar, finalSpeechChar}, "", "")
 
 	fmt.Fprint(f, table.String())
+	if gainNormalise {
+		fmt.Fprintf(f, "† Final values gain-normalised (÷ %.1f dB) for cross-stage comparison\n", effectiveGainDB)
+	}
 	fmt.Fprintln(f, "")
 }
 

@@ -2,8 +2,11 @@ package logging
 
 import (
 	"math"
+	"os"
 	"strings"
 	"testing"
+
+	"github.com/linuxmatters/jivetalking/internal/processor"
 )
 
 func TestFormatMetric(t *testing.T) {
@@ -303,4 +306,190 @@ func TestFormatMetricPeak(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNormaliseForGain(t *testing.T) {
+	tests := []struct {
+		name         string
+		rawValue     float64
+		gainDB       float64
+		scalingPower int
+		wantNaN      bool
+		wantApprox   float64 // only checked if wantNaN is false
+		tolerance    float64 // relative tolerance for comparison
+	}{
+		{
+			name:         "+18 dB gain on xG metric",
+			rawValue:     0.004812,
+			gainDB:       18.0,
+			scalingPower: 1,
+			wantApprox:   0.000606, // 0.004812 / 10^(18/20) = 0.004812 / 7.943
+			tolerance:    0.001,
+		},
+		{
+			name:         "+18 dB gain on xG2 metric",
+			rawValue:     0.018876,
+			gainDB:       18.0,
+			scalingPower: 2,
+			wantApprox:   0.000299, // 0.018876 / 10^(36/20) = 0.018876 / 63.096
+			tolerance:    0.001,
+		},
+		{
+			name:         "0 dB gain returns NaN",
+			rawValue:     0.005,
+			gainDB:       0.0,
+			scalingPower: 1,
+			wantNaN:      true,
+		},
+		{
+			name:         "NaN input returns NaN",
+			rawValue:     math.NaN(),
+			gainDB:       18.0,
+			scalingPower: 1,
+			wantNaN:      true,
+		},
+		{
+			name:         "NaN gain returns NaN",
+			rawValue:     0.005,
+			gainDB:       math.NaN(),
+			scalingPower: 1,
+			wantNaN:      true,
+		},
+		{
+			name:         "negative gain (attenuation)",
+			rawValue:     0.001,
+			gainDB:       -6.0,
+			scalingPower: 1,
+			wantApprox:   0.001995, // 0.001 / 10^(-6/20) = 0.001 / 0.5012
+			tolerance:    0.001,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := normaliseForGain(tt.rawValue, tt.gainDB, tt.scalingPower)
+			if tt.wantNaN {
+				if !math.IsNaN(got) {
+					t.Errorf("normaliseForGain() = %v, want NaN", got)
+				}
+				return
+			}
+			if math.IsNaN(got) {
+				t.Errorf("normaliseForGain() = NaN, want %v", tt.wantApprox)
+				return
+			}
+			// Check relative error
+			relErr := math.Abs(got-tt.wantApprox) / math.Abs(tt.wantApprox)
+			if relErr > tt.tolerance {
+				t.Errorf("normaliseForGain() = %v, want approx %v (relative error %.4f > %.4f)", got, tt.wantApprox, relErr, tt.tolerance)
+			}
+		})
+	}
+}
+
+func TestWriteSpeechRegionTableGainNormalisation(t *testing.T) {
+	// Helper to create minimal speech metrics with plausible values
+	makeSpeechMetrics := func() *processor.SpeechCandidateMetrics {
+		return &processor.SpeechCandidateMetrics{
+			RMSLevel:         -24.0,
+			PeakLevel:        -12.0,
+			CrestFactor:      12.0,
+			SpectralMean:     0.004812,
+			SpectralVariance: 0.018876,
+			SpectralCentroid: 1500.0,
+			SpectralSpread:   800.0,
+			SpectralSkewness: 2.5,
+			SpectralKurtosis: 8.0,
+			SpectralEntropy:  0.65,
+			SpectralFlatness: 0.15,
+			SpectralCrest:    12.0,
+			SpectralFlux:     0.003200,
+			SpectralSlope:    -0.000045,
+			SpectralDecrease: -0.00012,
+			SpectralRolloff:  4500.0,
+		}
+	}
+
+	t.Run("with_normalisation_result", func(t *testing.T) {
+		tmpFile, err := os.CreateTemp("", "speech-table-test-*.txt")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(tmpFile.Name())
+
+		input := &processor.AudioMeasurements{
+			SpeechProfile: makeSpeechMetrics(),
+		}
+		filtered := &processor.OutputMeasurements{
+			SpeechSample: makeSpeechMetrics(),
+		}
+		final := &processor.OutputMeasurements{
+			SpeechSample: makeSpeechMetrics(),
+		}
+		normResult := &processor.NormalisationResult{
+			OutputLUFS: -18.0,
+			InputLUFS:  -36.0,
+			Skipped:    false,
+		}
+
+		writeSpeechRegionTable(tmpFile, input, filtered, final, normResult)
+		tmpFile.Close()
+
+		data, err := os.ReadFile(tmpFile.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		output := string(data)
+
+		// Verify † markers appear on the 4 gain-dependent metrics
+		for _, label := range []string{"Spectral Mean †", "Spectral Variance †", "Spectral Flux †", "Spectral Slope †"} {
+			if !strings.Contains(output, label) {
+				t.Errorf("expected gain-normalised label %q in output", label)
+			}
+		}
+
+		// Verify footnote appears
+		if !strings.Contains(output, "† Final values gain-normalised") {
+			t.Error("expected gain-normalisation footnote in output")
+		}
+		if !strings.Contains(output, "18.0 dB") {
+			t.Error("expected effective gain value '18.0 dB' in footnote")
+		}
+	})
+
+	t.Run("without_normalisation_result", func(t *testing.T) {
+		tmpFile, err := os.CreateTemp("", "speech-table-test-*.txt")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(tmpFile.Name())
+
+		input := &processor.AudioMeasurements{
+			SpeechProfile: makeSpeechMetrics(),
+		}
+		filtered := &processor.OutputMeasurements{
+			SpeechSample: makeSpeechMetrics(),
+		}
+		final := &processor.OutputMeasurements{
+			SpeechSample: makeSpeechMetrics(),
+		}
+
+		writeSpeechRegionTable(tmpFile, input, filtered, final, nil)
+		tmpFile.Close()
+
+		data, err := os.ReadFile(tmpFile.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		output := string(data)
+
+		// Verify NO † markers appear
+		if strings.Contains(output, "†") {
+			t.Error("expected no † markers when normalisation result is nil")
+		}
+
+		// Verify NO footnote
+		if strings.Contains(output, "gain-normalised") {
+			t.Error("expected no gain-normalisation footnote when normalisation result is nil")
+		}
+	})
 }
