@@ -41,7 +41,13 @@ func DisplayAnalysisResults(w io.Writer, inputPath string, metadata *audio.Metad
 	fmt.Fprintf(w, "  RMS Level:      %.1f dBFS\n", measurements.RMSLevel)
 	fmt.Fprintf(w, "  Peak Level:     %.1f dBFS\n", measurements.PeakLevel)
 	fmt.Fprintf(w, "  Dynamic Range:  %.1f dB\n", measurements.DynamicRange)
-	fmt.Fprintf(w, "  Crest Factor:   %.1f dB\n", measurements.PeakLevel-measurements.RMSLevel)
+	crestFactor := measurements.PeakLevel - measurements.RMSLevel
+	crestSource := "full-file"
+	if measurements.SpeechProfile != nil && measurements.SpeechProfile.CrestFactor > 0 {
+		crestFactor = measurements.SpeechProfile.CrestFactor
+		crestSource = "speech"
+	}
+	fmt.Fprintf(w, "  Crest Factor:   %.1f dB (%s)\n", crestFactor, crestSource)
 	fmt.Fprintln(w)
 
 	// Silence detection section
