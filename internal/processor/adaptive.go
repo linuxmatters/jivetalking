@@ -444,14 +444,29 @@ func tuneDS201HighPass(config *FilterChainConfig, measurements *AudioMeasurement
 		return
 	}
 
+	// Prefer speech-specific spectral metrics when available.
+	// Full-file averages are diluted by silence in multi-track recordings.
+	hasSpeech := measurements.SpeechProfile != nil
+	centroid := measurements.SpectralCentroid
+	if hasSpeech {
+		centroid = preferSpeechMetric(centroid, measurements.SpeechProfile.SpectralCentroid)
+	}
+	var speechDecrease, speechSkewness float64
+	if hasSpeech {
+		speechDecrease = measurements.SpeechProfile.SpectralDecrease
+		speechSkewness = measurements.SpeechProfile.SpectralSkewness
+	}
+	decrease := preferSpeechMetricSigned(measurements.SpectralDecrease, speechDecrease, hasSpeech)
+	skewness := preferSpeechMetricSigned(measurements.SpectralSkewness, speechSkewness, hasSpeech)
+
 	// Determine base frequency from spectral centroid
 	var baseFreq float64
 	switch {
-	case measurements.SpectralCentroid > centroidBright:
+	case centroid > centroidBright:
 		// Bright voice with high-frequency energy concentration
 		// Safe to use higher cutoff - voice energy is well above 100Hz
 		baseFreq = ds201HPBrightFreq
-	case measurements.SpectralCentroid > centroidNormal:
+	case centroid > centroidNormal:
 		// Normal voice with balanced frequency distribution
 		// Use standard cutoff for podcast speech
 		baseFreq = ds201HPDefaultFreq
@@ -504,21 +519,21 @@ func tuneDS201HighPass(config *FilterChainConfig, measurements *AudioMeasurement
 	// - Reduced mix (blend filtered with dry signal)
 	//
 	// This removes subsonic rumble while preserving bass character.
-	if measurements.SpectralDecrease < spectralDecreaseVeryWarm {
+	if decrease < spectralDecreaseVeryWarm {
 		// Very warm voice
 		// Use minimal settings: 30Hz cutoff, gentle Q, 50% mix
 		config.DS201HPFreq = ds201HPVeryWarmFreq
 		config.DS201HPWidth = ds201HPVeryWarmWidth
 		config.DS201HPMix = ds201HPVeryWarmMix
 		config.DS201HPPoles = 1 // Gentle 6dB/oct slope
-	} else if measurements.SpectralSkewness > spectralSkewnessLFEmphasis {
+	} else if skewness > spectralSkewnessLFEmphasis {
 		// Significant LF emphasis
 		// Use warm settings: 40Hz cutoff, gentle Q, 70% mix
 		config.DS201HPFreq = ds201HPWarmFreq
 		config.DS201HPWidth = ds201HPWarmWidth
 		config.DS201HPMix = ds201HPWarmMix
 		config.DS201HPPoles = 1 // Gentle 6dB/oct slope
-	} else if measurements.SpectralDecrease < spectralDecreaseWarm {
+	} else if decrease < spectralDecreaseWarm {
 		// Warm voice - cap at default with gentle slope to preserve body
 		if config.DS201HPFreq > ds201HPDefaultFreq {
 			config.DS201HPFreq = ds201HPDefaultFreq
@@ -553,8 +568,14 @@ func tuneDS201LowPass(config *FilterChainConfig, m *AudioMeasurements) {
 	config.DS201LPContentType = contentType
 
 	// Calculate rolloff/centroid ratio for logging
-	if m.SpectralCentroid > 0 {
-		config.DS201LPRolloffRatio = m.SpectralRolloff / m.SpectralCentroid
+	rolloff := m.SpectralRolloff
+	centroid := m.SpectralCentroid
+	if m.SpeechProfile != nil {
+		rolloff = preferSpeechMetric(rolloff, m.SpeechProfile.SpectralRolloff)
+		centroid = preferSpeechMetric(centroid, m.SpeechProfile.SpectralCentroid)
+	}
+	if centroid > 0 {
+		config.DS201LPRolloffRatio = rolloff / centroid
 	}
 
 	switch contentType {
@@ -596,17 +617,26 @@ func tuneDS201LowPassForSpeech(config *FilterChainConfig, m *AudioMeasurements) 
 	config.DS201LPMix = 1.0
 	config.DS201LPReason = "no HF issues detected"
 
+	// Prefer speech-specific spectral metrics when available.
+	// Full-file averages are diluted by silence in multi-track recordings.
+	rolloff := m.SpectralRolloff
+	centroid := m.SpectralCentroid
+	if m.SpeechProfile != nil {
+		rolloff = preferSpeechMetric(rolloff, m.SpeechProfile.SpectralRolloff)
+		centroid = preferSpeechMetric(centroid, m.SpeechProfile.SpectralCentroid)
+	}
+
 	// Condition 1: Voice already dark (rolloff < 8kHz)
 	// No benefit from lowpass — would only remove wanted content
-	if m.SpectralRolloff < lpRolloffDarkVoice {
+	if rolloff < lpRolloffDarkVoice {
 		config.DS201LPReason = "voice already dark (rolloff < 8kHz)"
 		return
 	}
 
 	// Condition 2: High rolloff (> 14kHz) — ultrasonic content present
 	// Enable at rolloff + 2kHz to clean up ultrasonics while preserving audible content
-	if m.SpectralRolloff > lpRolloffEnableThreshold {
-		cutoff := m.SpectralRolloff + lpRolloffHeadroom
+	if rolloff > lpRolloffEnableThreshold {
+		cutoff := rolloff + lpRolloffHeadroom
 		// Clamp to reasonable maximum
 		if cutoff > 20000 {
 			cutoff = 20000
@@ -621,7 +651,7 @@ func tuneDS201LowPassForSpeech(config *FilterChainConfig, m *AudioMeasurements) 
 
 	// Condition 3: High ZCR with low centroid (HF noise, not sibilance)
 	// Sibilance has high ZCR AND high centroid; noise has high ZCR with low centroid
-	if m.ZeroCrossingsRate > lpZCRHigh && m.SpectralCentroid < lpZCRCentroidThreshold {
+	if m.ZeroCrossingsRate > lpZCRHigh && centroid < lpZCRCentroidThreshold {
 		config.DS201LPEnabled = true
 		config.DS201LPFreq = lpZCRCutoff
 		config.DS201LPPoles = 1 // 6dB/oct - gentle
@@ -678,6 +708,18 @@ func tuneNoiseRemove(config *FilterChainConfig, m *AudioMeasurements) {
 func preferSpeechMetric(fullFile, speechProfile float64) float64 {
 	if speechProfile > 0 {
 		return speechProfile
+	}
+	return fullFile
+}
+
+// preferSpeechMetricSigned returns speech-specific measurement if speech data
+// exists, otherwise falls back to full-file measurement. Unlike preferSpeechMetric,
+// this variant uses an explicit flag rather than checking value > 0, making it
+// safe for metrics that can legitimately be zero or negative (e.g. SpectralDecrease,
+// SpectralSkewness).
+func preferSpeechMetricSigned(fullFile, speechValue float64, hasSpeech bool) float64 {
+	if hasSpeech {
+		return speechValue
 	}
 	return fullFile
 }
@@ -767,10 +809,17 @@ func tuneDeesserFull(config *FilterChainConfig, measurements *AudioMeasurements)
 
 // tuneDeesserCentroidOnly provides fallback when rolloff is unavailable
 func tuneDeesserCentroidOnly(config *FilterChainConfig, measurements *AudioMeasurements) {
+	// Prefer speech-specific centroid when available.
+	// Full-file averages are diluted by silence in multi-track recordings.
+	centroid := measurements.SpectralCentroid
+	if measurements.SpeechProfile != nil {
+		centroid = preferSpeechMetric(centroid, measurements.SpeechProfile.SpectralCentroid)
+	}
+
 	switch {
-	case measurements.SpectralCentroid > centroidVeryBright:
+	case centroid > centroidVeryBright:
 		config.DeessIntensity = deessIntensityBright
-	case measurements.SpectralCentroid > centroidBright:
+	case centroid > centroidBright:
 		config.DeessIntensity = deessIntensityNormal
 	default:
 		config.DeessIntensity = deessIntensityDark
@@ -1272,6 +1321,13 @@ func tuneLA2ARelease(config *FilterChainConfig, measurements *AudioMeasurements)
 		flux = preferSpeechMetric(flux, measurements.SpeechProfile.SpectralFlux)
 	}
 
+	// Prefer speech-specific skewness for warm voice detection
+	var speechSkewness float64
+	if measurements.SpeechProfile != nil {
+		speechSkewness = measurements.SpeechProfile.SpectralSkewness
+	}
+	skewness := preferSpeechMetricSigned(measurements.SpectralSkewness, speechSkewness, measurements.SpeechProfile != nil)
+
 	// Start with standard LA-2A-style release
 	release := la2aReleaseStandard
 
@@ -1299,7 +1355,7 @@ func tuneLA2ARelease(config *FilterChainConfig, measurements *AudioMeasurements)
 
 	// Warm voices (positive skewness = bass-concentrated) get extra release
 	// This preserves the body and warmth that LA-2A is known for
-	if measurements.SpectralSkewness > la2aSkewnessWarm {
+	if skewness > la2aSkewnessWarm {
 		release += la2aReleaseWarmBoost
 	}
 
@@ -1397,20 +1453,33 @@ func tuneLA2AKnee(config *FilterChainConfig, measurements *AudioMeasurements) {
 	// Start with standard LA-2A soft knee
 	knee := la2aKneeNormal
 
+	// Prefer speech-specific spectral metrics when available.
+	// Full-file averages are diluted by silence in multi-track recordings.
+	hasSpeech := measurements.SpeechProfile != nil
+	centroid := measurements.SpectralCentroid
+	if hasSpeech {
+		centroid = preferSpeechMetric(centroid, measurements.SpeechProfile.SpectralCentroid)
+	}
+	var speechSkewness float64
+	if hasSpeech {
+		speechSkewness = measurements.SpeechProfile.SpectralSkewness
+	}
+	skewness := preferSpeechMetricSigned(measurements.SpectralSkewness, speechSkewness, hasSpeech)
+
 	// Adjust based on spectral centroid (voice brightness)
-	if measurements.SpectralCentroid > 0 {
+	if centroid > 0 {
 		switch {
-		case measurements.SpectralCentroid < la2aCentroidDark:
+		case centroid < la2aCentroidDark:
 			// Dark/warm voice - extra soft knee preserves warmth
 			knee = la2aKneeDark
-		case measurements.SpectralCentroid > la2aCentroidBright:
+		case centroid > la2aCentroidBright:
 			// Bright voice - slightly firmer knee
 			knee = la2aKneeBright
 		}
 	}
 
 	// Warm/bass-concentrated voices get extra soft knee
-	if measurements.SpectralSkewness > la2aSkewnessWarm {
+	if skewness > la2aSkewnessWarm {
 		knee += la2aKneeWarmBoost
 	}
 

@@ -1292,6 +1292,34 @@ func TestPreferSpeechMetric(t *testing.T) {
 	}
 }
 
+func TestPreferSpeechMetricSigned(t *testing.T) {
+	tests := []struct {
+		name        string
+		fullFile    float64
+		speechValue float64
+		hasSpeech   bool
+		want        float64
+	}{
+		{"speech available positive", 1000.0, 1500.0, true, 1500.0},
+		{"speech available negative", -0.05, -0.12, true, -0.12},
+		{"speech available zero", -0.05, 0.0, true, 0.0},
+		{"no speech falls back", 1000.0, 0.0, false, 1000.0},
+		{"no speech with negative fallback", -0.05, 0.0, false, -0.05},
+		{"both zero with speech", 0.0, 0.0, true, 0.0},
+		{"both zero without speech", 0.0, 0.0, false, 0.0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := preferSpeechMetricSigned(tt.fullFile, tt.speechValue, tt.hasSpeech)
+			if got != tt.want {
+				t.Errorf("preferSpeechMetricSigned(%v, %v, %v) = %v, want %v",
+					tt.fullFile, tt.speechValue, tt.hasSpeech, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSanitizeFloat(t *testing.T) {
 	// Tests for the sanitizeFloat helper function
 	// Returns default value for NaN and Inf, otherwise returns original value
