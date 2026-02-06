@@ -229,8 +229,15 @@ func tipTooFarFromMic(m *processor.AudioMeasurements, _ *processor.FilterChainCo
 // spectralDecreaseWarm = -0.05. Skewness > 2.5 is tip-specific (stricter
 // than adaptive.go's spectralSkewnessLFEmphasis = 1.0).
 func tipProximityEffect(m *processor.AudioMeasurements, _ *processor.FilterChainConfig) *RecordingTip {
-	veryWarm := m.SpectralDecrease < -0.10
-	warmWithSkew := m.SpectralDecrease < -0.05 && m.SpectralSkewness > 2.5
+	decrease := m.SpectralDecrease
+	skewness := m.SpectralSkewness
+	if m.SpeechProfile != nil {
+		decrease = m.SpeechProfile.SpectralDecrease
+		skewness = m.SpeechProfile.SpectralSkewness
+	}
+
+	veryWarm := decrease < -0.10
+	warmWithSkew := decrease < -0.05 && skewness > 2.5
 
 	if !veryWarm && !warmWithSkew {
 		return nil
@@ -280,8 +287,13 @@ func tipSibilance(m *processor.AudioMeasurements, config *processor.FilterChainC
 // References: adaptive.go la2aLRAExpressive = 14.0 LU,
 // Spectral-Metrics-Reference.md crest > 18 dB = extreme dynamics.
 func tipDynamicRange(m *processor.AudioMeasurements, _ *processor.FilterChainConfig) *RecordingTip {
+	crest := m.CrestFactor
+	if m.SpeechProfile != nil && m.SpeechProfile.CrestFactor > 0 {
+		crest = m.SpeechProfile.CrestFactor
+	}
+
 	veryWide := m.InputLRA > 18.0
-	wideWithCrest := m.InputLRA > 14.0 && m.CrestFactor > 18.0
+	wideWithCrest := m.InputLRA > 14.0 && crest > 18.0
 
 	if !veryWide && !wideWithCrest {
 		return nil
@@ -298,7 +310,12 @@ func tipDynamicRange(m *processor.AudioMeasurements, _ *processor.FilterChainCon
 // Threshold: CrestFactor < 6 dB (brickwalled per Spectral-Metrics-Reference.md).
 // CrestFactor == 0 is treated as unmeasured and skipped.
 func tipOverCompressed(m *processor.AudioMeasurements, _ *processor.FilterChainConfig) *RecordingTip {
-	if m.CrestFactor >= 6.0 || m.CrestFactor == 0 {
+	crest := m.CrestFactor
+	if m.SpeechProfile != nil && m.SpeechProfile.CrestFactor > 0 {
+		crest = m.SpeechProfile.CrestFactor
+	}
+
+	if crest >= 6.0 || crest == 0 {
 		return nil
 	}
 	return &RecordingTip{

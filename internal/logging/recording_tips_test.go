@@ -363,20 +363,43 @@ func TestTipProximityEffect(t *testing.T) {
 		name             string
 		spectralDecrease float64
 		spectralSkewness float64
+		speechProfile    *processor.SpeechCandidateMetrics
 		wantTip          bool
 	}{
-		{"very warm spectral decrease", -0.15, 1.0, true},
-		{"warm with high skewness", -0.07, 3.0, true},
-		{"warm without skewness", -0.07, 1.5, false},
-		{"normal spectral decrease", -0.03, 1.0, false},
-		{"boundary decrease -0.10 fires", -0.101, 0.0, true},
-		{"boundary decrease -0.05 with skew", -0.051, 2.6, true},
+		{"very warm spectral decrease", -0.15, 1.0, nil, true},
+		{"warm with high skewness", -0.07, 3.0, nil, true},
+		{"warm without skewness", -0.07, 1.5, nil, false},
+		{"normal spectral decrease", -0.03, 1.0, nil, false},
+		{"boundary decrease -0.10 fires", -0.101, 0.0, nil, true},
+		{"boundary decrease -0.05 with skew", -0.051, 2.6, nil, true},
+		{
+			name:             "speech profile overrides full-file no tip",
+			spectralDecrease: -0.15,
+			spectralSkewness: 1.0,
+			speechProfile:    &processor.SpeechCandidateMetrics{SpectralDecrease: -0.03, SpectralSkewness: 0.5},
+			wantTip:          false,
+		},
+		{
+			name:             "speech profile triggers when full-file would not",
+			spectralDecrease: -0.03,
+			spectralSkewness: 0.5,
+			speechProfile:    &processor.SpeechCandidateMetrics{SpectralDecrease: -0.15, SpectralSkewness: 1.0},
+			wantTip:          true,
+		},
+		{
+			name:             "nil speech profile uses full-file",
+			spectralDecrease: -0.15,
+			spectralSkewness: 1.0,
+			speechProfile:    nil,
+			wantTip:          true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := &processor.AudioMeasurements{}
 			m.SpectralDecrease = tt.spectralDecrease
 			m.SpectralSkewness = tt.spectralSkewness
+			m.SpeechProfile = tt.speechProfile
 			tip := tipProximityEffect(m, nil)
 			if (tip != nil) != tt.wantTip {
 				t.Errorf("tipProximityEffect() returned tip=%v, want tip=%v", tip != nil, tt.wantTip)
@@ -481,23 +504,46 @@ func TestTipSibilance(t *testing.T) {
 
 func TestTipDynamicRange(t *testing.T) {
 	tests := []struct {
-		name        string
-		inputLRA    float64
-		crestFactor float64
-		wantTip     bool
+		name          string
+		inputLRA      float64
+		crestFactor   float64
+		speechProfile *processor.SpeechCandidateMetrics
+		wantTip       bool
 	}{
-		{"very wide LRA", 20.0, 12.0, true},
-		{"wide LRA with high crest", 15.0, 20.0, true},
-		{"wide LRA with normal crest", 15.0, 12.0, false},
-		{"normal LRA", 10.0, 12.0, false},
-		{"boundary LRA 18 no tip", 18.0, 12.0, false},
-		{"boundary LRA 14 with crest 18 no tip", 14.0, 18.0, false},
+		{"very wide LRA", 20.0, 12.0, nil, true},
+		{"wide LRA with high crest", 15.0, 20.0, nil, true},
+		{"wide LRA with normal crest", 15.0, 12.0, nil, false},
+		{"normal LRA", 10.0, 12.0, nil, false},
+		{"boundary LRA 18 no tip", 18.0, 12.0, nil, false},
+		{"boundary LRA 14 with crest 18 no tip", 14.0, 18.0, nil, false},
+		{
+			name:          "speech crest overrides full-file no wideWithCrest",
+			inputLRA:      15.0,
+			crestFactor:   20.0,
+			speechProfile: &processor.SpeechCandidateMetrics{CrestFactor: 12.0},
+			wantTip:       false,
+		},
+		{
+			name:          "speech crest triggers wideWithCrest",
+			inputLRA:      15.0,
+			crestFactor:   12.0,
+			speechProfile: &processor.SpeechCandidateMetrics{CrestFactor: 20.0},
+			wantTip:       true,
+		},
+		{
+			name:          "veryWide ignores crest speech profile",
+			inputLRA:      20.0,
+			crestFactor:   12.0,
+			speechProfile: &processor.SpeechCandidateMetrics{CrestFactor: 5.0},
+			wantTip:       true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := &processor.AudioMeasurements{}
 			m.InputLRA = tt.inputLRA
 			m.CrestFactor = tt.crestFactor
+			m.SpeechProfile = tt.speechProfile
 			tip := tipDynamicRange(m, nil)
 			if (tip != nil) != tt.wantTip {
 				t.Errorf("tipDynamicRange() returned tip=%v, want tip=%v", tip != nil, tt.wantTip)
@@ -511,19 +557,39 @@ func TestTipDynamicRange(t *testing.T) {
 
 func TestTipOverCompressed(t *testing.T) {
 	tests := []struct {
-		name        string
-		crestFactor float64
-		wantTip     bool
+		name          string
+		crestFactor   float64
+		speechProfile *processor.SpeechCandidateMetrics
+		wantTip       bool
 	}{
-		{"heavily compressed", 4.0, true},
-		{"boundary crest 6 no tip", 6.0, false},
-		{"crest zero unmeasured", 0, false},
-		{"normal crest", 12.0, false},
+		{"heavily compressed", 4.0, nil, true},
+		{"boundary crest 6 no tip", 6.0, nil, false},
+		{"crest zero unmeasured", 0, nil, false},
+		{"normal crest", 12.0, nil, false},
+		{
+			name:          "speech crest overrides full-file no tip",
+			crestFactor:   4.0,
+			speechProfile: &processor.SpeechCandidateMetrics{CrestFactor: 12.0},
+			wantTip:       false,
+		},
+		{
+			name:          "speech crest triggers compressed",
+			crestFactor:   12.0,
+			speechProfile: &processor.SpeechCandidateMetrics{CrestFactor: 4.0},
+			wantTip:       true,
+		},
+		{
+			name:          "speech crest zero uses full-file",
+			crestFactor:   4.0,
+			speechProfile: &processor.SpeechCandidateMetrics{CrestFactor: 0},
+			wantTip:       true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := &processor.AudioMeasurements{}
 			m.CrestFactor = tt.crestFactor
+			m.SpeechProfile = tt.speechProfile
 			tip := tipOverCompressed(m, nil)
 			if (tip != nil) != tt.wantTip {
 				t.Errorf("tipOverCompressed() returned tip=%v, want tip=%v", tip != nil, tt.wantTip)
