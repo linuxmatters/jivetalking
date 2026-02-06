@@ -2843,10 +2843,10 @@ const (
 	// Candidate selection cutoff
 	candidateCutoffPercent = 0.15 // Only consider silence in first 15% of recording
 
-	// regressionThreshold is the minimum score drop required to trigger early termination.
-	// Prevents minor score fluctuations from prematurely locking in a suboptimal candidate.
-	// Value of 0.05 (5%) filters out noise while catching genuine quality degradation.
-	regressionThreshold = 0.05
+	// selectionTolerance is the maximum score gap at which an earlier candidate is
+	// preferred over a later, higher-scoring one. Candidates within this tolerance
+	// of the maximum score are considered equivalent; the earliest one wins.
+	selectionTolerance = 0.02
 )
 
 // segmentLongSilenceRegion breaks a long silence region into overlapping segments.
@@ -2882,11 +2882,11 @@ func segmentLongSilenceRegion(region SilenceRegion) []SilenceRegion {
 }
 
 // findBestSilenceRegion finds the best silence region for noise profile extraction.
-// Uses multi-metric scoring to select the best candidate, considering:
-// - Amplitude (quieter = better)
-// - Spectral characteristics (noise-like = better, voice-like = worse)
-// - Temporal position (earlier = slightly better)
-// - Duration (closer to 15s = better)
+// Uses a two-pass approach: first scores all candidates using multi-metric analysis
+// (amplitude, spectral characteristics, stability, duration), then elects the earliest
+// candidate whose score is within selectionTolerance of the maximum. This avoids the
+// pathological case where an intervening low-scoring candidate causes the algorithm
+// to miss a higher-scoring candidate later in the sequence.
 //
 // Uses pre-collected interval data for measurements - no file re-reading required.
 // Returns nil if no suitable region is found.
@@ -2929,16 +2929,7 @@ func findBestSilenceRegion(regions []SilenceRegion, intervals []IntervalSample, 
 		return result
 	}
 
-	// "Stop on regression" selection strategy
-	// Intentional room tone is always recorded near the start of the file.
-	// Track the best candidate seen so far, but stop searching when we see a score
-	// lower than the current best — that indicates we've passed the intentional room tone.
-	// Still measure ALL candidates for logging/debugging purposes.
-	var selectedCandidate *SilenceRegion
-	var selectedIdx int = -1
-	var bestScore float64 = -1
-	selectionComplete := false
-
+	// ── Pass 1: Score all candidates ──────────────────────────────────────
 	for i := range candidates {
 		candidate := &candidates[i]
 
@@ -2956,32 +2947,34 @@ func findBestSilenceRegion(regions []SilenceRegion, intervals []IntervalSample, 
 
 		// Store candidate metrics for reporting
 		result.Candidates = append(result.Candidates, *metrics)
-
-		// Selection logic: stop on first regression
-		if !selectionComplete && score >= minAcceptableScore {
-			if bestScore < 0 {
-				// First acceptable candidate
-				selectedCandidate = candidate
-				selectedIdx = len(result.Candidates) - 1
-				bestScore = score
-			} else if score >= bestScore {
-				// Equal or better than current best - prefer later candidate
-				// (intentional room tone is recorded after brief intro/setup)
-				selectedCandidate = candidate
-				selectedIdx = len(result.Candidates) - 1
-				bestScore = score
-			} else if bestScore-score > regressionThreshold {
-				// Significant regression - stop searching, keep current best
-				selectionComplete = true
-			}
-			// Minor fluctuation (regression <= threshold): continue searching
-			// without updating selection. Allows recovery if a better candidate
-			// appears after a brief dip.
-		}
 	}
 
-	result.BestRegion = selectedCandidate
-	_ = selectedIdx // Used for debugging if needed
+	// ── Pass 2: Elect earliest candidate within tolerance of max score ────
+	if len(result.Candidates) > 0 {
+		// Find maximum score
+		maxScore := 0.0
+		for _, c := range result.Candidates {
+			if c.Score > maxScore {
+				maxScore = c.Score
+			}
+		}
+
+		// Select earliest candidate within selectionTolerance of max
+		// Uses Region field from metrics to avoid index correspondence issues
+		// (result.Candidates may have fewer entries than candidates if some
+		// returned nil from measureSilenceCandidateFromIntervals)
+		for _, c := range result.Candidates {
+			if c.Score >= maxScore-selectionTolerance && c.Score >= minAcceptableScore {
+				region := c.Region
+				result.BestRegion = &SilenceRegion{
+					Start:    region.Start,
+					End:      region.End,
+					Duration: region.Duration,
+				}
+				break
+			}
+		}
+	}
 
 	return result
 }
