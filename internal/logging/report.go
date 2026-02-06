@@ -251,6 +251,114 @@ func interpretSlope(slope float64) string {
 }
 
 // =============================================================================
+// Three-Column Metric Table Helpers
+// =============================================================================
+// These helpers eliminate repetition in writeNoiseFloorTable and
+// writeSpeechRegionTable, which both display Input/Filtered/Final columns
+// for the same set of spectral and loudness metrics.
+
+// threeColMetricSpec describes a single metric row to be rendered into a
+// three-column comparison table. The caller pre-extracts the three float64
+// values from whatever source types are in use.
+type threeColMetricSpec struct {
+	label       string               // display label († suffix added automatically when gain-normalised)
+	vals        [3]float64           // input, filtered, final
+	decimals    int                  // formatting precision
+	unit        string               // unit suffix (e.g. "Hz", "LUFS")
+	gainScaling int                  // 0=none, 1=linear, 2=squared (for normaliseForGain)
+	interpret   func(float64) string // optional interpretation of final value; nil = no interpretation
+}
+
+// noiseFloorFormatter identifies which formatter to use for each value column
+// in the noise-floor table. Spectral metrics use formatMetricSpectral
+// (showing "n/a" for digital silence); loudness metrics use specialised
+// formatters (formatMetricLUFS or formatMetricDB).
+type noiseFloorFormatter int
+
+const (
+	nfFmtSpectral noiseFloorFormatter = iota // formatMetric for input, formatMetricSpectral for filtered/final
+	nfFmtLUFS                                // formatMetricLUFS for all three columns
+	nfFmtDB                                  // formatMetricDB for all three columns
+)
+
+// addNoiseFloorMetricRows appends metric rows to a noise-floor table.
+// For spectral metrics (nfFmtSpectral), input uses formatMetric and
+// filtered/final use formatMetricSpectral with digital silence handling.
+// For loudness metrics, the appropriate specialised formatter is used.
+func addNoiseFloorMetricRows(table *MetricTable, specs []threeColMetricSpec, fmtMode noiseFloorFormatter, gainNormalise bool, effectiveGainDB float64, filteredIsDigitalSilence, finalIsDigitalSilence bool) {
+	for _, s := range specs {
+		input, filtered, final := s.vals[0], s.vals[1], s.vals[2]
+
+		// Apply gain normalisation to final value
+		if s.gainScaling > 0 && gainNormalise && !finalIsDigitalSilence {
+			final = normaliseForGain(final, effectiveGainDB, s.gainScaling)
+		}
+
+		// Add † suffix for gain-normalised metrics
+		label := s.label
+		if s.gainScaling > 0 && gainNormalise {
+			label = s.label + " †"
+		}
+
+		// Format values according to the formatter mode
+		var fmtInput, fmtFiltered, fmtFinal string
+		switch fmtMode {
+		case nfFmtSpectral:
+			fmtInput = formatMetric(input, s.decimals)
+			fmtFiltered = formatMetricSpectral(filtered, s.decimals, filteredIsDigitalSilence)
+			fmtFinal = formatMetricSpectral(final, s.decimals, finalIsDigitalSilence)
+		case nfFmtLUFS:
+			fmtInput = formatMetricLUFS(input, s.decimals)
+			fmtFiltered = formatMetricLUFS(filtered, s.decimals)
+			fmtFinal = formatMetricLUFS(final, s.decimals)
+		case nfFmtDB:
+			fmtInput = formatMetricDB(input, s.decimals)
+			fmtFiltered = formatMetricDB(filtered, s.decimals)
+			fmtFinal = formatMetricDB(final, s.decimals)
+		}
+
+		table.AddRow(label, []string{fmtInput, fmtFiltered, fmtFinal}, s.unit, "")
+	}
+}
+
+// addSpeechMetricRows appends metric rows to a speech-region table.
+// All values use AddMetricRow (formatMetric internally) with optional
+// interpretation of the final value.
+func addSpeechMetricRows(table *MetricTable, specs []threeColMetricSpec, gainNormalise bool, effectiveGainDB float64) {
+	for _, s := range specs {
+		input, filtered, final := s.vals[0], s.vals[1], s.vals[2]
+
+		// Apply gain normalisation to final value
+		if s.gainScaling > 0 && gainNormalise {
+			final = normaliseForGain(final, effectiveGainDB, s.gainScaling)
+		}
+
+		// Add † suffix for gain-normalised metrics
+		label := s.label
+		if s.gainScaling > 0 && gainNormalise {
+			label = s.label + " †"
+		}
+
+		// Compute interpretation from the (possibly gain-normalised) final value
+		var interp string
+		if s.interpret != nil {
+			interp = s.interpret(final)
+		}
+
+		table.AddMetricRow(label, input, filtered, final, s.decimals, s.unit, interp)
+	}
+}
+
+// valOr returns the field value from a source, or math.NaN() if the source is nil.
+// This is a convenience for building threeColMetricSpec slices concisely.
+func valOr[T any](src *T, field func(*T) float64) float64 {
+	if src == nil {
+		return math.NaN()
+	}
+	return field(src)
+}
+
+// =============================================================================
 // Report Section Formatting Helpers
 // =============================================================================
 
@@ -1204,381 +1312,49 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	// For digital silence, spectral metrics are undefined (no signal to analyse).
 	// Show "n/a" instead of misleading zeros or arbitrary values.
 
-	// Spectral Mean
-	inputMean := math.NaN()
-	filteredMean := math.NaN()
-	finalMean := math.NaN()
-	if inputNoise != nil {
-		inputMean = inputNoise.SpectralMean
+	// Entropy input has a special fallback to NoiseProfile when candidate not found
+	inputEntropy := valOr(inputNoise, func(m *processor.SilenceCandidateMetrics) float64 { return m.SpectralEntropy })
+	if inputNoise == nil {
+		inputEntropy = noiseProfile.Entropy
 	}
-	if filteredNoise != nil {
-		filteredMean = filteredNoise.SpectralMean
-	}
-	if finalNoise != nil {
-		finalMean = finalNoise.SpectralMean
-	}
-	if gainNormalise && !finalIsDigitalSilence {
-		finalMean = normaliseForGain(finalMean, effectiveGainDB, 1)
-	}
-	meanLabel := "Spectral Mean"
-	if gainNormalise {
-		meanLabel = "Spectral Mean †"
-	}
-	table.AddRow(meanLabel,
-		[]string{
-			formatMetric(inputMean, 6),
-			formatMetricSpectral(filteredMean, 6, filteredIsDigitalSilence),
-			formatMetricSpectral(finalMean, 6, finalIsDigitalSilence),
-		}, "", "")
+	filteredEntropy := valOr(filteredNoise, func(m *processor.SilenceCandidateMetrics) float64 { return m.SpectralEntropy })
+	finalEntropy := valOr(finalNoise, func(m *processor.SilenceCandidateMetrics) float64 { return m.SpectralEntropy })
 
-	// Spectral Variance
-	inputVar := math.NaN()
-	filteredVar := math.NaN()
-	finalVar := math.NaN()
-	if inputNoise != nil {
-		inputVar = inputNoise.SpectralVariance
+	v := func(field func(*processor.SilenceCandidateMetrics) float64) [3]float64 {
+		return [3]float64{
+			valOr(inputNoise, field),
+			valOr(filteredNoise, field),
+			valOr(finalNoise, field),
+		}
 	}
-	if filteredNoise != nil {
-		filteredVar = filteredNoise.SpectralVariance
-	}
-	if finalNoise != nil {
-		finalVar = finalNoise.SpectralVariance
-	}
-	if gainNormalise && !finalIsDigitalSilence {
-		finalVar = normaliseForGain(finalVar, effectiveGainDB, 2)
-	}
-	varLabel := "Spectral Variance"
-	if gainNormalise {
-		varLabel = "Spectral Variance †"
-	}
-	table.AddRow(varLabel,
-		[]string{
-			formatMetric(inputVar, 6),
-			formatMetricSpectral(filteredVar, 6, filteredIsDigitalSilence),
-			formatMetricSpectral(finalVar, 6, finalIsDigitalSilence),
-		}, "", "")
 
-	// Spectral Centroid
-	inputCentroid := math.NaN()
-	filteredCentroid := math.NaN()
-	finalCentroid := math.NaN()
-	if inputNoise != nil {
-		inputCentroid = inputNoise.SpectralCentroid
-	}
-	if filteredNoise != nil {
-		filteredCentroid = filteredNoise.SpectralCentroid
-	}
-	if finalNoise != nil {
-		finalCentroid = finalNoise.SpectralCentroid
-	}
-	table.AddRow("Spectral Centroid",
-		[]string{
-			formatMetric(inputCentroid, 0),
-			formatMetricSpectral(filteredCentroid, 0, filteredIsDigitalSilence),
-			formatMetricSpectral(finalCentroid, 0, finalIsDigitalSilence),
-		}, "Hz", "")
-
-	// Spectral Spread
-	inputSpread := math.NaN()
-	filteredSpread := math.NaN()
-	finalSpread := math.NaN()
-	if inputNoise != nil {
-		inputSpread = inputNoise.SpectralSpread
-	}
-	if filteredNoise != nil {
-		filteredSpread = filteredNoise.SpectralSpread
-	}
-	if finalNoise != nil {
-		finalSpread = finalNoise.SpectralSpread
-	}
-	table.AddRow("Spectral Spread",
-		[]string{
-			formatMetric(inputSpread, 0),
-			formatMetricSpectral(filteredSpread, 0, filteredIsDigitalSilence),
-			formatMetricSpectral(finalSpread, 0, finalIsDigitalSilence),
-		}, "Hz", "")
-
-	// Spectral Skewness
-	inputSkew := math.NaN()
-	filteredSkew := math.NaN()
-	finalSkew := math.NaN()
-	if inputNoise != nil {
-		inputSkew = inputNoise.SpectralSkewness
-	}
-	if filteredNoise != nil {
-		filteredSkew = filteredNoise.SpectralSkewness
-	}
-	if finalNoise != nil {
-		finalSkew = finalNoise.SpectralSkewness
-	}
-	table.AddRow("Spectral Skewness",
-		[]string{
-			formatMetric(inputSkew, 3),
-			formatMetricSpectral(filteredSkew, 3, filteredIsDigitalSilence),
-			formatMetricSpectral(finalSkew, 3, finalIsDigitalSilence),
-		}, "", "")
-
-	// Spectral Kurtosis
-	inputKurt := math.NaN()
-	filteredKurt := math.NaN()
-	finalKurt := math.NaN()
-	if inputNoise != nil {
-		inputKurt = inputNoise.SpectralKurtosis
-	}
-	if filteredNoise != nil {
-		filteredKurt = filteredNoise.SpectralKurtosis
-	}
-	if finalNoise != nil {
-		finalKurt = finalNoise.SpectralKurtosis
-	}
-	table.AddRow("Spectral Kurtosis",
-		[]string{
-			formatMetric(inputKurt, 3),
-			formatMetricSpectral(filteredKurt, 3, filteredIsDigitalSilence),
-			formatMetricSpectral(finalKurt, 3, finalIsDigitalSilence),
-		}, "", "")
-
-	// Spectral Entropy
-	inputEntropy := math.NaN()
-	filteredEntropy := math.NaN()
-	finalEntropy := math.NaN()
-	if inputNoise != nil {
-		inputEntropy = inputNoise.SpectralEntropy
-	} else {
-		inputEntropy = noiseProfile.Entropy // Fall back to NoiseProfile
-	}
-	if filteredNoise != nil {
-		filteredEntropy = filteredNoise.SpectralEntropy
-	}
-	if finalNoise != nil {
-		finalEntropy = finalNoise.SpectralEntropy
-	}
-	table.AddRow("Spectral Entropy",
-		[]string{
-			formatMetric(inputEntropy, 6),
-			formatMetricSpectral(filteredEntropy, 6, filteredIsDigitalSilence),
-			formatMetricSpectral(finalEntropy, 6, finalIsDigitalSilence),
-		}, "", "")
-
-	// Spectral Flatness
-	inputFlat := math.NaN()
-	filteredFlat := math.NaN()
-	finalFlat := math.NaN()
-	if inputNoise != nil {
-		inputFlat = inputNoise.SpectralFlatness
-	}
-	if filteredNoise != nil {
-		filteredFlat = filteredNoise.SpectralFlatness
-	}
-	if finalNoise != nil {
-		finalFlat = finalNoise.SpectralFlatness
-	}
-	table.AddRow("Spectral Flatness",
-		[]string{
-			formatMetric(inputFlat, 6),
-			formatMetricSpectral(filteredFlat, 6, filteredIsDigitalSilence),
-			formatMetricSpectral(finalFlat, 6, finalIsDigitalSilence),
-		}, "", "")
-
-	// Spectral Crest
-	inputSpectralCrest := math.NaN()
-	filteredSpectralCrest := math.NaN()
-	finalSpectralCrest := math.NaN()
-	if inputNoise != nil {
-		inputSpectralCrest = inputNoise.SpectralCrest
-	}
-	if filteredNoise != nil {
-		filteredSpectralCrest = filteredNoise.SpectralCrest
-	}
-	if finalNoise != nil {
-		finalSpectralCrest = finalNoise.SpectralCrest
-	}
-	table.AddRow("Spectral Crest",
-		[]string{
-			formatMetric(inputSpectralCrest, 3),
-			formatMetricSpectral(filteredSpectralCrest, 3, filteredIsDigitalSilence),
-			formatMetricSpectral(finalSpectralCrest, 3, finalIsDigitalSilence),
-		}, "", "")
-
-	// Spectral Flux
-	inputFlux := math.NaN()
-	filteredFlux := math.NaN()
-	finalFlux := math.NaN()
-	if inputNoise != nil {
-		inputFlux = inputNoise.SpectralFlux
-	}
-	if filteredNoise != nil {
-		filteredFlux = filteredNoise.SpectralFlux
-	}
-	if finalNoise != nil {
-		finalFlux = finalNoise.SpectralFlux
-	}
-	if gainNormalise && !finalIsDigitalSilence {
-		finalFlux = normaliseForGain(finalFlux, effectiveGainDB, 2)
-	}
-	fluxLabel := "Spectral Flux"
-	if gainNormalise {
-		fluxLabel = "Spectral Flux †"
-	}
-	table.AddRow(fluxLabel,
-		[]string{
-			formatMetric(inputFlux, 6),
-			formatMetricSpectral(filteredFlux, 6, filteredIsDigitalSilence),
-			formatMetricSpectral(finalFlux, 6, finalIsDigitalSilence),
-		}, "", "")
-
-	// Spectral Slope
-	inputSlope := math.NaN()
-	filteredSlope := math.NaN()
-	finalSlope := math.NaN()
-	if inputNoise != nil {
-		inputSlope = inputNoise.SpectralSlope
-	}
-	if filteredNoise != nil {
-		filteredSlope = filteredNoise.SpectralSlope
-	}
-	if finalNoise != nil {
-		finalSlope = finalNoise.SpectralSlope
-	}
-	if gainNormalise && !finalIsDigitalSilence {
-		finalSlope = normaliseForGain(finalSlope, effectiveGainDB, 1)
-	}
-	slopeLabel := "Spectral Slope"
-	if gainNormalise {
-		slopeLabel = "Spectral Slope †"
-	}
-	table.AddRow(slopeLabel,
-		[]string{
-			formatMetric(inputSlope, 9),
-			formatMetricSpectral(filteredSlope, 9, filteredIsDigitalSilence),
-			formatMetricSpectral(finalSlope, 9, finalIsDigitalSilence),
-		}, "", "")
-
-	// Spectral Decrease
-	inputDecrease := math.NaN()
-	filteredDecrease := math.NaN()
-	finalDecrease := math.NaN()
-	if inputNoise != nil {
-		inputDecrease = inputNoise.SpectralDecrease
-	}
-	if filteredNoise != nil {
-		filteredDecrease = filteredNoise.SpectralDecrease
-	}
-	if finalNoise != nil {
-		finalDecrease = finalNoise.SpectralDecrease
-	}
-	table.AddRow("Spectral Decrease",
-		[]string{
-			formatMetric(inputDecrease, 6),
-			formatMetricSpectral(filteredDecrease, 6, filteredIsDigitalSilence),
-			formatMetricSpectral(finalDecrease, 6, finalIsDigitalSilence),
-		}, "", "")
-
-	// Spectral Rolloff
-	inputRolloff := math.NaN()
-	filteredRolloff := math.NaN()
-	finalRolloff := math.NaN()
-	if inputNoise != nil {
-		inputRolloff = inputNoise.SpectralRolloff
-	}
-	if filteredNoise != nil {
-		filteredRolloff = filteredNoise.SpectralRolloff
-	}
-	if finalNoise != nil {
-		finalRolloff = finalNoise.SpectralRolloff
-	}
-	table.AddRow("Spectral Rolloff",
-		[]string{
-			formatMetric(inputRolloff, 0),
-			formatMetricSpectral(filteredRolloff, 0, filteredIsDigitalSilence),
-			formatMetricSpectral(finalRolloff, 0, finalIsDigitalSilence),
-		}, "Hz", "")
+	addNoiseFloorMetricRows(table, []threeColMetricSpec{
+		{"Spectral Mean", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.SpectralMean }), 6, "", 1, nil},
+		{"Spectral Variance", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.SpectralVariance }), 6, "", 2, nil},
+		{"Spectral Centroid", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.SpectralCentroid }), 0, "Hz", 0, nil},
+		{"Spectral Spread", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.SpectralSpread }), 0, "Hz", 0, nil},
+		{"Spectral Skewness", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.SpectralSkewness }), 3, "", 0, nil},
+		{"Spectral Kurtosis", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.SpectralKurtosis }), 3, "", 0, nil},
+		{"Spectral Entropy", [3]float64{inputEntropy, filteredEntropy, finalEntropy}, 6, "", 0, nil},
+		{"Spectral Flatness", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.SpectralFlatness }), 6, "", 0, nil},
+		{"Spectral Crest", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.SpectralCrest }), 3, "", 0, nil},
+		{"Spectral Flux", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.SpectralFlux }), 6, "", 2, nil},
+		{"Spectral Slope", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.SpectralSlope }), 9, "", 1, nil},
+		{"Spectral Decrease", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.SpectralDecrease }), 6, "", 0, nil},
+		{"Spectral Rolloff", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.SpectralRolloff }), 0, "Hz", 0, nil},
+	}, nfFmtSpectral, gainNormalise, effectiveGainDB, filteredIsDigitalSilence, finalIsDigitalSilence)
 
 	// ========== LOUDNESS METRICS ==========
 
-	// Momentary LUFS - use special formatting for values below measurement floor
-	inputMomentary := math.NaN()
-	filteredMomentary := math.NaN()
-	finalMomentary := math.NaN()
-	if inputNoise != nil {
-		inputMomentary = inputNoise.MomentaryLUFS
-	}
-	if filteredNoise != nil {
-		filteredMomentary = filteredNoise.MomentaryLUFS
-	}
-	if finalNoise != nil {
-		finalMomentary = finalNoise.MomentaryLUFS
-	}
-	table.AddRow("Momentary LUFS",
-		[]string{
-			formatMetricLUFS(inputMomentary, 1),
-			formatMetricLUFS(filteredMomentary, 1),
-			formatMetricLUFS(finalMomentary, 1),
-		},
-		"LUFS", "")
+	addNoiseFloorMetricRows(table, []threeColMetricSpec{
+		{"Momentary LUFS", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.MomentaryLUFS }), 1, "LUFS", 0, nil},
+		{"Short-term LUFS", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.ShortTermLUFS }), 1, "LUFS", 0, nil},
+	}, nfFmtLUFS, gainNormalise, effectiveGainDB, filteredIsDigitalSilence, finalIsDigitalSilence)
 
-	// Short-term LUFS
-	inputShortTerm := math.NaN()
-	filteredShortTerm := math.NaN()
-	finalShortTerm := math.NaN()
-	if inputNoise != nil {
-		inputShortTerm = inputNoise.ShortTermLUFS
-	}
-	if filteredNoise != nil {
-		filteredShortTerm = filteredNoise.ShortTermLUFS
-	}
-	if finalNoise != nil {
-		finalShortTerm = finalNoise.ShortTermLUFS
-	}
-	table.AddRow("Short-term LUFS",
-		[]string{
-			formatMetricLUFS(inputShortTerm, 1),
-			formatMetricLUFS(filteredShortTerm, 1),
-			formatMetricLUFS(finalShortTerm, 1),
-		},
-		"LUFS", "")
-
-	// True Peak - values are now stored in dB (converted during measurement)
-	inputTP := math.NaN()
-	filteredTP := math.NaN()
-	finalTP := math.NaN()
-	if inputNoise != nil {
-		inputTP = inputNoise.TruePeak
-	}
-	if filteredNoise != nil {
-		filteredTP = filteredNoise.TruePeak
-	}
-	if finalNoise != nil {
-		finalTP = finalNoise.TruePeak
-	}
-	table.AddRow("True Peak",
-		[]string{
-			formatMetricDB(inputTP, 1),
-			formatMetricDB(filteredTP, 1),
-			formatMetricDB(finalTP, 1),
-		},
-		"dBTP", "")
-
-	// Sample Peak - values are now stored in dB (converted during measurement)
-	inputSP := math.NaN()
-	filteredSP := math.NaN()
-	finalSP := math.NaN()
-	if inputNoise != nil {
-		inputSP = inputNoise.SamplePeak
-	}
-	if filteredNoise != nil {
-		filteredSP = filteredNoise.SamplePeak
-	}
-	if finalNoise != nil {
-		finalSP = finalNoise.SamplePeak
-	}
-	table.AddRow("Sample Peak",
-		[]string{
-			formatMetricDB(inputSP, 1),
-			formatMetricDB(filteredSP, 1),
-			formatMetricDB(finalSP, 1),
-		},
-		"dBFS", "")
+	addNoiseFloorMetricRows(table, []threeColMetricSpec{
+		{"True Peak", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.TruePeak }), 1, "dBTP", 0, nil},
+		{"Sample Peak", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.SamplePeak }), 1, "dBFS", 0, nil},
+	}, nfFmtDB, gainNormalise, effectiveGainDB, filteredIsDigitalSilence, finalIsDigitalSilence)
 
 	// Character (interpretation row) - based on entropy
 	// For digital silence, show "silent" instead of attempting to characterise non-existent noise
@@ -1693,290 +1469,46 @@ func writeSpeechRegionTable(f *os.File, inputMeasurements *processor.AudioMeasur
 
 	// ========== SPECTRAL METRICS ==========
 
-	// Spectral Mean
-	inputMean := math.NaN()
-	filteredMean := math.NaN()
-	finalMean := math.NaN()
-	if inputSpeech != nil {
-		inputMean = inputSpeech.SpectralMean
-	}
-	if filteredSpeech != nil {
-		filteredMean = filteredSpeech.SpectralMean
-	}
-	if finalSpeech != nil {
-		finalMean = finalSpeech.SpectralMean
-	}
-	if gainNormalise {
-		finalMean = normaliseForGain(finalMean, effectiveGainDB, 1)
-	}
-	meanLabel := "Spectral Mean"
-	if gainNormalise {
-		meanLabel = "Spectral Mean †"
-	}
-	table.AddMetricRow(meanLabel, inputMean, filteredMean, finalMean, 6, "", "")
+	// Extract centroid and entropy values needed by the Character row below
+	inputCentroid := valOr(inputSpeech, func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralCentroid })
+	filteredCentroid := valOr(filteredSpeech, func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralCentroid })
+	finalCentroid := valOr(finalSpeech, func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralCentroid })
+	inputEntropy := valOr(inputSpeech, func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralEntropy })
+	filteredEntropy := valOr(filteredSpeech, func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralEntropy })
+	finalEntropy := valOr(finalSpeech, func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralEntropy })
 
-	// Spectral Variance
-	inputVar := math.NaN()
-	filteredVar := math.NaN()
-	finalVar := math.NaN()
-	if inputSpeech != nil {
-		inputVar = inputSpeech.SpectralVariance
+	sv := func(field func(*processor.SpeechCandidateMetrics) float64) [3]float64 {
+		return [3]float64{
+			valOr(inputSpeech, field),
+			valOr(filteredSpeech, field),
+			valOr(finalSpeech, field),
+		}
 	}
-	if filteredSpeech != nil {
-		filteredVar = filteredSpeech.SpectralVariance
-	}
-	if finalSpeech != nil {
-		finalVar = finalSpeech.SpectralVariance
-	}
-	if gainNormalise {
-		finalVar = normaliseForGain(finalVar, effectiveGainDB, 2)
-	}
-	varLabel := "Spectral Variance"
-	if gainNormalise {
-		varLabel = "Spectral Variance †"
-	}
-	table.AddMetricRow(varLabel, inputVar, filteredVar, finalVar, 6, "", "")
 
-	// Spectral Centroid
-	inputCentroid := math.NaN()
-	filteredCentroid := math.NaN()
-	finalCentroid := math.NaN()
-	if inputSpeech != nil {
-		inputCentroid = inputSpeech.SpectralCentroid
-	}
-	if filteredSpeech != nil {
-		filteredCentroid = filteredSpeech.SpectralCentroid
-	}
-	if finalSpeech != nil {
-		finalCentroid = finalSpeech.SpectralCentroid
-	}
-	table.AddMetricRow("Spectral Centroid", inputCentroid, filteredCentroid, finalCentroid, 0, "Hz", interpretCentroid(finalCentroid))
-
-	// Spectral Spread
-	inputSpread := math.NaN()
-	filteredSpread := math.NaN()
-	finalSpread := math.NaN()
-	if inputSpeech != nil {
-		inputSpread = inputSpeech.SpectralSpread
-	}
-	if filteredSpeech != nil {
-		filteredSpread = filteredSpeech.SpectralSpread
-	}
-	if finalSpeech != nil {
-		finalSpread = finalSpeech.SpectralSpread
-	}
-	table.AddMetricRow("Spectral Spread", inputSpread, filteredSpread, finalSpread, 0, "Hz", interpretSpread(finalSpread))
-
-	// Spectral Skewness
-	inputSkew := math.NaN()
-	filteredSkew := math.NaN()
-	finalSkew := math.NaN()
-	if inputSpeech != nil {
-		inputSkew = inputSpeech.SpectralSkewness
-	}
-	if filteredSpeech != nil {
-		filteredSkew = filteredSpeech.SpectralSkewness
-	}
-	if finalSpeech != nil {
-		finalSkew = finalSpeech.SpectralSkewness
-	}
-	table.AddMetricRow("Spectral Skewness", inputSkew, filteredSkew, finalSkew, 3, "", interpretSkewness(finalSkew))
-
-	// Spectral Kurtosis
-	inputKurt := math.NaN()
-	filteredKurt := math.NaN()
-	finalKurt := math.NaN()
-	if inputSpeech != nil {
-		inputKurt = inputSpeech.SpectralKurtosis
-	}
-	if filteredSpeech != nil {
-		filteredKurt = filteredSpeech.SpectralKurtosis
-	}
-	if finalSpeech != nil {
-		finalKurt = finalSpeech.SpectralKurtosis
-	}
-	table.AddMetricRow("Spectral Kurtosis", inputKurt, filteredKurt, finalKurt, 3, "", interpretKurtosis(finalKurt))
-
-	// Spectral Entropy
-	inputEntropy := math.NaN()
-	filteredEntropy := math.NaN()
-	finalEntropy := math.NaN()
-	if inputSpeech != nil {
-		inputEntropy = inputSpeech.SpectralEntropy
-	}
-	if filteredSpeech != nil {
-		filteredEntropy = filteredSpeech.SpectralEntropy
-	}
-	if finalSpeech != nil {
-		finalEntropy = finalSpeech.SpectralEntropy
-	}
-	table.AddMetricRow("Spectral Entropy", inputEntropy, filteredEntropy, finalEntropy, 6, "", interpretEntropy(finalEntropy))
-
-	// Spectral Flatness
-	inputFlat := math.NaN()
-	filteredFlat := math.NaN()
-	finalFlat := math.NaN()
-	if inputSpeech != nil {
-		inputFlat = inputSpeech.SpectralFlatness
-	}
-	if filteredSpeech != nil {
-		filteredFlat = filteredSpeech.SpectralFlatness
-	}
-	if finalSpeech != nil {
-		finalFlat = finalSpeech.SpectralFlatness
-	}
-	table.AddMetricRow("Spectral Flatness", inputFlat, filteredFlat, finalFlat, 6, "", interpretFlatness(finalFlat))
-
-	// Spectral Crest
-	inputSpectralCrest := math.NaN()
-	filteredSpectralCrest := math.NaN()
-	finalSpectralCrest := math.NaN()
-	if inputSpeech != nil {
-		inputSpectralCrest = inputSpeech.SpectralCrest
-	}
-	if filteredSpeech != nil {
-		filteredSpectralCrest = filteredSpeech.SpectralCrest
-	}
-	if finalSpeech != nil {
-		finalSpectralCrest = finalSpeech.SpectralCrest
-	}
-	table.AddMetricRow("Spectral Crest", inputSpectralCrest, filteredSpectralCrest, finalSpectralCrest, 3, "", interpretCrest(finalSpectralCrest))
-
-	// Spectral Flux
-	inputFlux := math.NaN()
-	filteredFlux := math.NaN()
-	finalFlux := math.NaN()
-	if inputSpeech != nil {
-		inputFlux = inputSpeech.SpectralFlux
-	}
-	if filteredSpeech != nil {
-		filteredFlux = filteredSpeech.SpectralFlux
-	}
-	if finalSpeech != nil {
-		finalFlux = finalSpeech.SpectralFlux
-	}
-	if gainNormalise {
-		finalFlux = normaliseForGain(finalFlux, effectiveGainDB, 2)
-	}
-	fluxLabel := "Spectral Flux"
-	if gainNormalise {
-		fluxLabel = "Spectral Flux †"
-	}
-	table.AddMetricRow(fluxLabel, inputFlux, filteredFlux, finalFlux, 6, "", interpretFlux(finalFlux))
-
-	// Spectral Slope
-	inputSlope := math.NaN()
-	filteredSlope := math.NaN()
-	finalSlope := math.NaN()
-	if inputSpeech != nil {
-		inputSlope = inputSpeech.SpectralSlope
-	}
-	if filteredSpeech != nil {
-		filteredSlope = filteredSpeech.SpectralSlope
-	}
-	if finalSpeech != nil {
-		finalSlope = finalSpeech.SpectralSlope
-	}
-	if gainNormalise {
-		finalSlope = normaliseForGain(finalSlope, effectiveGainDB, 1)
-	}
-	slopeLabel := "Spectral Slope"
-	if gainNormalise {
-		slopeLabel = "Spectral Slope †"
-	}
-	table.AddMetricRow(slopeLabel, inputSlope, filteredSlope, finalSlope, 9, "", interpretSlope(finalSlope))
-
-	// Spectral Decrease
-	inputDecrease := math.NaN()
-	filteredDecrease := math.NaN()
-	finalDecrease := math.NaN()
-	if inputSpeech != nil {
-		inputDecrease = inputSpeech.SpectralDecrease
-	}
-	if filteredSpeech != nil {
-		filteredDecrease = filteredSpeech.SpectralDecrease
-	}
-	if finalSpeech != nil {
-		finalDecrease = finalSpeech.SpectralDecrease
-	}
-	table.AddMetricRow("Spectral Decrease", inputDecrease, filteredDecrease, finalDecrease, 6, "", interpretDecrease(finalDecrease))
-
-	// Spectral Rolloff
-	inputRolloff := math.NaN()
-	filteredRolloff := math.NaN()
-	finalRolloff := math.NaN()
-	if inputSpeech != nil {
-		inputRolloff = inputSpeech.SpectralRolloff
-	}
-	if filteredSpeech != nil {
-		filteredRolloff = filteredSpeech.SpectralRolloff
-	}
-	if finalSpeech != nil {
-		finalRolloff = finalSpeech.SpectralRolloff
-	}
-	table.AddMetricRow("Spectral Rolloff", inputRolloff, filteredRolloff, finalRolloff, 0, "Hz", interpretRolloff(finalRolloff))
+	addSpeechMetricRows(table, []threeColMetricSpec{
+		{"Spectral Mean", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralMean }), 6, "", 1, nil},
+		{"Spectral Variance", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralVariance }), 6, "", 2, nil},
+		{"Spectral Centroid", [3]float64{inputCentroid, filteredCentroid, finalCentroid}, 0, "Hz", 0, interpretCentroid},
+		{"Spectral Spread", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralSpread }), 0, "Hz", 0, interpretSpread},
+		{"Spectral Skewness", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralSkewness }), 3, "", 0, interpretSkewness},
+		{"Spectral Kurtosis", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralKurtosis }), 3, "", 0, interpretKurtosis},
+		{"Spectral Entropy", [3]float64{inputEntropy, filteredEntropy, finalEntropy}, 6, "", 0, interpretEntropy},
+		{"Spectral Flatness", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralFlatness }), 6, "", 0, interpretFlatness},
+		{"Spectral Crest", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralCrest }), 3, "", 0, interpretCrest},
+		{"Spectral Flux", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralFlux }), 6, "", 2, interpretFlux},
+		{"Spectral Slope", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralSlope }), 9, "", 1, interpretSlope},
+		{"Spectral Decrease", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralDecrease }), 6, "", 0, interpretDecrease},
+		{"Spectral Rolloff", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralRolloff }), 0, "Hz", 0, interpretRolloff},
+	}, gainNormalise, effectiveGainDB)
 
 	// ========== LOUDNESS METRICS ==========
 
-	// Momentary LUFS
-	inputMomentary := math.NaN()
-	filteredMomentary := math.NaN()
-	finalMomentary := math.NaN()
-	if inputSpeech != nil {
-		inputMomentary = inputSpeech.MomentaryLUFS
-	}
-	if filteredSpeech != nil {
-		filteredMomentary = filteredSpeech.MomentaryLUFS
-	}
-	if finalSpeech != nil {
-		finalMomentary = finalSpeech.MomentaryLUFS
-	}
-	table.AddMetricRow("Momentary LUFS", inputMomentary, filteredMomentary, finalMomentary, 1, "LUFS", "")
-
-	// Short-term LUFS
-	inputShortTerm := math.NaN()
-	filteredShortTerm := math.NaN()
-	finalShortTerm := math.NaN()
-	if inputSpeech != nil {
-		inputShortTerm = inputSpeech.ShortTermLUFS
-	}
-	if filteredSpeech != nil {
-		filteredShortTerm = filteredSpeech.ShortTermLUFS
-	}
-	if finalSpeech != nil {
-		finalShortTerm = finalSpeech.ShortTermLUFS
-	}
-	table.AddMetricRow("Short-term LUFS", inputShortTerm, filteredShortTerm, finalShortTerm, 1, "LUFS", "")
-
-	// True Peak
-	inputTP := math.NaN()
-	filteredTP := math.NaN()
-	finalTP := math.NaN()
-	if inputSpeech != nil {
-		inputTP = inputSpeech.TruePeak
-	}
-	if filteredSpeech != nil {
-		filteredTP = filteredSpeech.TruePeak
-	}
-	if finalSpeech != nil {
-		finalTP = finalSpeech.TruePeak
-	}
-	table.AddMetricRow("True Peak", inputTP, filteredTP, finalTP, 1, "dBTP", "")
-
-	// Sample Peak
-	inputSP := math.NaN()
-	filteredSP := math.NaN()
-	finalSP := math.NaN()
-	if inputSpeech != nil {
-		inputSP = inputSpeech.SamplePeak
-	}
-	if filteredSpeech != nil {
-		filteredSP = filteredSpeech.SamplePeak
-	}
-	if finalSpeech != nil {
-		finalSP = finalSpeech.SamplePeak
-	}
-	table.AddMetricRow("Sample Peak", inputSP, filteredSP, finalSP, 1, "dBFS", "")
+	addSpeechMetricRows(table, []threeColMetricSpec{
+		{"Momentary LUFS", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.MomentaryLUFS }), 1, "LUFS", 0, nil},
+		{"Short-term LUFS", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.ShortTermLUFS }), 1, "LUFS", 0, nil},
+		{"True Peak", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.TruePeak }), 1, "dBTP", 0, nil},
+		{"Sample Peak", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.SamplePeak }), 1, "dBFS", 0, nil},
+	}, gainNormalise, effectiveGainDB)
 
 	// Character (interpretation row) - based on spectral centroid and entropy
 	// Speech character describes voice quality: warm, balanced, bright, etc.
