@@ -4,6 +4,7 @@ package audio
 import (
 	"errors"
 	"fmt"
+	"math"
 
 	ffmpeg "github.com/linuxmatters/ffmpeg-statigo"
 )
@@ -181,6 +182,17 @@ func (r *Reader) GetTimeBase() *ffmpeg.AVRational {
 // GetDecoderContext returns the decoder context (needed for filter graph setup)
 func (r *Reader) GetDecoderContext() *ffmpeg.AVCodecContext {
 	return r.decCtx
+}
+
+// Seek seeks to the specified timestamp in AV_TIME_BASE units.
+// Use 0 to seek to the beginning of the file. After seeking, the decoder
+// buffers are flushed so that subsequent ReadFrame calls return fresh data.
+func (r *Reader) Seek(timestamp int64) error {
+	if _, err := ffmpeg.AVFormatSeekFile(r.fmtCtx, -1, math.MinInt64, timestamp, math.MaxInt64, 0); err != nil {
+		return fmt.Errorf("failed to seek: %w", err)
+	}
+	ffmpeg.AVCodecFlushBuffers(r.decCtx)
+	return nil
 }
 
 // Close releases all resources
