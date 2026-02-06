@@ -1755,14 +1755,13 @@ func extractSpectralMetrics(metadata *ffmpeg.AVDictionary) spectralMetrics {
 // extractIntervalFrameMetrics extracts per-frame metrics for interval accumulation.
 // Only collects metrics that are valid per-window (aspectralstats, ebur128 windowed).
 // Excludes astats which provides cumulative values, not per-interval.
-func extractIntervalFrameMetrics(metadata *ffmpeg.AVDictionary) intervalFrameMetrics {
+func extractIntervalFrameMetrics(metadata *ffmpeg.AVDictionary, spectral spectralMetrics) intervalFrameMetrics {
 	var m intervalFrameMetrics
 
 	// Peak level from astats (used for max tracking, which is valid per-interval)
 	m.PeakLevel, _ = getFloatMetadata(metadata, metaKeyPeakLevel)
 
-	// aspectralstats metrics (valid per-window measurements)
-	spectral := extractSpectralMetrics(metadata)
+	// aspectralstats metrics (valid per-window measurements, pre-extracted by caller)
 	m.SpectralMean = spectral.Mean
 	m.SpectralVariance = spectral.Variance
 	m.SpectralCentroid = spectral.Centroid
@@ -1795,14 +1794,14 @@ func extractIntervalFrameMetrics(metadata *ffmpeg.AVDictionary) intervalFrameMet
 // extractFrameMetadata extracts audio analysis metadata from a filtered frame.
 // Updates accumulators with spectral, astats, and ebur128 measurements.
 // Called from both the main processing loop and the flush loop.
-func extractFrameMetadata(metadata *ffmpeg.AVDictionary, acc *metadataAccumulators) {
+func extractFrameMetadata(metadata *ffmpeg.AVDictionary, acc *metadataAccumulators, spectral spectralMetrics) {
 	if metadata == nil {
 		return
 	}
 
-	// Extract all aspectralstats measurements (averaged across frames)
+	// Accumulate pre-extracted spectral metrics (averaged across frames)
 	// For mono audio, spectral stats are under channel .1
-	acc.accumulateSpectral(extractSpectralMetrics(metadata))
+	acc.accumulateSpectral(spectral)
 
 	// Extract astats measurements (cumulative, so we keep the latest)
 	// For mono audio, stats are under channel .1
@@ -2304,12 +2303,16 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 				return nil, fmt.Errorf("failed to get filtered frame: %w", err)
 			}
 
+			// Extract spectral metrics once, reuse for both whole-file and interval accumulators
+			metadata := filteredFrame.Metadata()
+			spectral := extractSpectralMetrics(metadata)
+
 			// Extract measurements from frame metadata (whole-file accumulators)
-			extractFrameMetadata(filteredFrame.Metadata(), acc)
+			extractFrameMetadata(metadata, acc, spectral)
 
 			// Also accumulate into current interval for per-interval spectral data
 			// Filtered frames roughly correspond to input timing (just at higher sample rate)
-			intervalAcc.add(extractIntervalFrameMetrics(filteredFrame.Metadata()))
+			intervalAcc.add(extractIntervalFrameMetrics(metadata, spectral))
 
 			ffmpeg.AVFrameUnref(filteredFrame)
 		}
@@ -2329,11 +2332,15 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 			return nil, fmt.Errorf("failed to get filtered frame: %w", err)
 		}
 
+		// Extract spectral metrics once, reuse for both whole-file and interval accumulators
+		metadata := filteredFrame.Metadata()
+		spectral := extractSpectralMetrics(metadata)
+
 		// Extract measurements from remaining frames
-		extractFrameMetadata(filteredFrame.Metadata(), acc)
+		extractFrameMetadata(metadata, acc, spectral)
 
 		// Also accumulate into current interval for per-interval spectral data
-		intervalAcc.add(extractIntervalFrameMetrics(filteredFrame.Metadata()))
+		intervalAcc.add(extractIntervalFrameMetrics(metadata, spectral))
 
 		ffmpeg.AVFrameUnref(filteredFrame)
 	}
