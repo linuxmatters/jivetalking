@@ -1162,6 +1162,9 @@ type silenceMedians struct {
 // search interval slice used for silence/room-tone detection. The caller
 // passes the already-sliced searchIntervals (first silenceSearchPercent% of intervals).
 func computeSilenceMedians(searchIntervals []IntervalSample) silenceMedians {
+	if len(searchIntervals) == 0 {
+		return silenceMedians{}
+	}
 	rmsLevels := make([]float64, len(searchIntervals))
 	fluxValues := make([]float64, len(searchIntervals))
 	for i, interval := range searchIntervals {
