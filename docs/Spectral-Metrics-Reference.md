@@ -472,9 +472,9 @@ The singer's formant allows classical singers to project over orchestral accompa
 
 5. Wikipedia. "Spectral Flatness." https://en.wikipedia.org/wiki/Spectral_flatness
 
-6. Johnston, J.D. (1988). "Transform Coding of Audio Signals Using Perceptual Noise Criteria." IEEE Journal on Selected Areas in Communications, 6(2), 314-323.
+6. Johnston, J.D. (1988). ["Transform Coding of Audio Signals Using Perceptual Noise Criteria."](https://www.ee.columbia.edu/~dpwe/papers/Johns88-audiocoding.pdf) [IEEE Journal on Selected Areas in Communications, 6(2), 314-323.](https://ieeexplore.ieee.org/document/608)
 
-7. Dubnov, S. (2004). "Generalization of Spectral Flatness Measure for Non-Gaussian Linear Processes." IEEE Signal Processing Letters, 11(8), 698-701.
+7. Dubnov, S. (2004). ["Generalization of Spectral Flatness Measure for Non-Gaussian Linear Processes."](https://www.researchgate.net/publication/3343094_Generalization_of_Spectral_Flatness_Measure_for_Non-Gaussian_Linear_Processes) [IEEE Signal Processing Letters, 11(8), 698-701.](https://ieeexplore.ieee.org/document/1316889/)
 
 8. Misra, H. et al. (2004). "Spectral Entropy Based Feature for Robust ASR." ICASSP'04.
 
