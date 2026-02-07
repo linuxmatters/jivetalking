@@ -170,8 +170,8 @@ The LA-2A operates on already-cleaned audio, so it can focus on its strength: ge
 
 ## References
 
-- Teletronix Engineering, LA-2A Leveling Amplifier Manual (1965)
-- Universal Audio, "LA-2A Leveling Amplifier" reissue documentation
+- [Teletronix Engineering, LA-2A Leveling Amplifier Manual (1965) ](https://tile.loc.gov/storage-services/master/mbrs/recording_preservation/manuals/Teletronix%20Model%20LA-2A%20Leveling%20Amplifier.pdf)
+- [Universal Audio, "LA-2A Leveling Amplifier" reissue documentation](https://media.uaudio.com/assetlibrary/l/a/la-2a_manual.pdf)
 - Dennis Fink, "The History of the LA-2A" (Mix Magazine, 2003)
-- FFmpeg Documentation: `acompressor` filter
+- FFmpeg Documentation: [`acompressor` filter](https://ffmpeg.org/ffmpeg-filters.html#acompressor)
 - https://github.com/aim-qmul/4a2a
