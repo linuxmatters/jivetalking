@@ -225,6 +225,15 @@ const (
 	la2aKurtosisLowPeak   = 5.0  // Below: flat spectrum, firmer ratio
 	la2aDynamicRangeWide  = 35.0 // dB - above: add ratio boost
 
+	// LA-2A hot input protection
+	// When input true peak >= -1 dBTP, the signal is already loud enough that
+	// aggressive compression crushes dynamics unnecessarily. The downstream
+	// limiter handles peak control, so the compressor can afford to be gentler.
+	la2aHotInputTPThreshold       = -1.0 // dBTP: above this, start backing off
+	la2aHotInputTPSevere          = -0.5 // dBTP: above this, maximum backoff
+	la2aHotInputRatioReduction    = 1.0  // Maximum ratio reduction (e.g. 3.5 → 2.5)
+	la2aHotInputHeadroomReduction = 5.0  // Maximum headroom reduction in dB
+
 	// LA-2A Threshold: Relative to peak level (like Peak Reduction knob)
 	// LA-2A's threshold is effectively signal-relative
 	// Headroom from peak level determines compression depth
@@ -1405,6 +1414,17 @@ func tuneLA2ARatio(config *FilterChainConfig, measurements *AudioMeasurements) {
 		ratio += la2aRatioDynamicBoost
 	}
 
+	// Hot input protection: back off ratio when true peak is high.
+	// The limiter downstream handles peak control, so the compressor
+	// can afford to be gentler on already-loud material.
+	if measurements.InputTP >= la2aHotInputTPThreshold {
+		severity := (measurements.InputTP - la2aHotInputTPThreshold) /
+			(la2aHotInputTPSevere - la2aHotInputTPThreshold)
+		severity = clamp(severity, 0.0, 1.0)
+		severity = math.Sqrt(severity)
+		ratio -= la2aHotInputRatioReduction * severity
+	}
+
 	// Clamp to reasonable range
 	config.LA2ARatio = clamp(ratio, 2.0, 5.0)
 }
@@ -1432,6 +1452,17 @@ func tuneLA2AThreshold(config *FilterChainConfig, measurements *AudioMeasurement
 	default:
 		// Already compressed - light levelling
 		headroom = la2aThresholdHeadroomLight
+	}
+
+	// Hot input protection: reduce headroom (raise threshold) for loud inputs.
+	// When peaks are already near 0 dBTP, less compression depth is needed
+	// because the limiter downstream handles peak control.
+	if measurements.InputTP >= la2aHotInputTPThreshold {
+		severity := (measurements.InputTP - la2aHotInputTPThreshold) /
+			(la2aHotInputTPSevere - la2aHotInputTPThreshold)
+		severity = clamp(severity, 0.0, 1.0)
+		severity = math.Sqrt(severity)
+		headroom -= la2aHotInputHeadroomReduction * severity
 	}
 
 	// Calculate threshold relative to peak level
