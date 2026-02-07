@@ -2724,6 +2724,11 @@ const (
 	crosstalkKurtosisThreshold    = 10.0 // Above this + voice centroid = likely crosstalk
 	crosstalkCrestFactorThreshold = 15.0 // Above this + voice centroid = likely crosstalk
 	crosstalkPeakRMSGap           = 45.0 // dB - catches severe transient contamination regardless of spectral content
+	// silenceCrestFactorMax is the maximum acceptable crest factor for silence candidates.
+	// Crest factor > 25 dB indicates physical transients (bumps, interference) contaminating
+	// the silence region, making noise floor measurements unreliable.
+	// Normal room tone: 5-20 dB; contaminated: 25-45 dB.
+	silenceCrestFactorMax = 25.0 // dB - hard rejection above this
 
 	// Crest factor penalty thresholds for silence candidates.
 	// Context: These apply to SILENCE CANDIDATES (RMS < -70 dBFS).
@@ -2900,6 +2905,19 @@ func scoreSilenceCandidate(m *SilenceCandidateMetrics) float64 {
 	if isCrosstalk {
 		debugLog("scoreSilenceCandidate: REJECTING candidate at %.3fs (returning score=0.0)", m.Region.Start.Seconds())
 		return 0.0 // Reject this candidate
+	}
+
+	// Hard rejection: extreme crest factor indicates physical transients (bumps,
+	// interference) contaminating the silence region. Unlike the crosstalk check
+	// (45 dB), this catches moderate contamination (25-45 dB range).
+	if m.CrestFactor > silenceCrestFactorMax {
+		debugLog("scoreSilenceCandidate: REJECTING candidate at %.3fs - crest factor %.1f dB exceeds %.1f dB threshold",
+			m.Region.Start.Seconds(), m.CrestFactor, silenceCrestFactorMax)
+		m.TransientWarning = fmt.Sprintf(
+			"rejected: crest factor %.1f dB exceeds %.1f dB threshold (transient contamination)",
+			m.CrestFactor, silenceCrestFactorMax,
+		)
+		return 0.0
 	}
 
 	// Calculate individual component scores (all normalised to 0-1 range)

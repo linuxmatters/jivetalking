@@ -71,7 +71,7 @@ analysis: mark-analysis martin-analysis popey-analysis
 # Process all presenters for episodes 70, 71, and 72
 all-episodes:
     #!/usr/bin/env bash
-    for ep in 68 69 70 71 72 73 74; do
+    for ep in 68 69 70 71 72 73 74 75; do
         echo "=== Processing Episode $ep ==="
         for presenter in mark martin popey; do
             echo "--- $presenter ---"
