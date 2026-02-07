@@ -618,10 +618,11 @@ func TestTuneDeesser(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		centroid      float64 // spectral centroid (Hz)
-		rolloff       float64 // spectral rolloff (Hz)
-		wantIntensity float64 // expected de-esser intensity
-		tolerance     float64 // acceptable tolerance for floating point
+		centroid      float64                 // spectral centroid (Hz)
+		rolloff       float64                 // spectral rolloff (Hz)
+		wantIntensity float64                 // expected de-esser intensity
+		tolerance     float64                 // acceptable tolerance for floating point
+		speechProfile *SpeechCandidateMetrics // nil = no speech profile
 	}{
 		// Full adaptive logic (both centroid and rolloff available)
 		// Very bright voice (centroid > 6000) with extensive HF (rolloff > 12000)
@@ -631,6 +632,7 @@ func TestTuneDeesser(t *testing.T) {
 			rolloff:       14000,
 			wantIntensity: 0.72, // 0.6 * 1.2 = 0.72, below max 0.8
 			tolerance:     0.01,
+			speechProfile: &SpeechCandidateMetrics{},
 		},
 		// Bright voice (centroid 4000-6000) with extensive HF
 		{
@@ -639,6 +641,7 @@ func TestTuneDeesser(t *testing.T) {
 			rolloff:       14000,
 			wantIntensity: 0.6, // 0.5 * 1.2 = 0.6
 			tolerance:     0.01,
+			speechProfile: &SpeechCandidateMetrics{},
 		},
 		// Dark voice (centroid < 4000) with limited HF (rolloff 4000-8000)
 		// Dark voice base is 0.4, limited HF applies 0.7 factor = 0.28
@@ -649,6 +652,7 @@ func TestTuneDeesser(t *testing.T) {
 			rolloff:       7000,
 			wantIntensity: 0.0, // 0.4 * 0.7 = 0.28 < 0.3 min, disabled
 			tolerance:     0.0,
+			speechProfile: &SpeechCandidateMetrics{},
 		},
 		// Bright voice with limited HF - above min threshold
 		{
@@ -657,6 +661,7 @@ func TestTuneDeesser(t *testing.T) {
 			rolloff:       7000,
 			wantIntensity: 0.35, // 0.5 * 0.7 = 0.35 > 0.3 min
 			tolerance:     0.01,
+			speechProfile: &SpeechCandidateMetrics{},
 		},
 		// No HF content (rolloff < 4000) - disabled regardless of centroid
 		{
@@ -665,6 +670,7 @@ func TestTuneDeesser(t *testing.T) {
 			rolloff:       3500,
 			wantIntensity: 0.0, // disabled due to no sibilance expected
 			tolerance:     0.0,
+			speechProfile: &SpeechCandidateMetrics{},
 		},
 		{
 			name:          "bright voice, no HF content",
@@ -672,6 +678,7 @@ func TestTuneDeesser(t *testing.T) {
 			rolloff:       3500,
 			wantIntensity: 0.0,
 			tolerance:     0.0,
+			speechProfile: &SpeechCandidateMetrics{},
 		},
 		// Normal HF extension (8000-12000)
 		{
@@ -680,6 +687,7 @@ func TestTuneDeesser(t *testing.T) {
 			rolloff:       10000,
 			wantIntensity: 0.6, // base intensity, no modifier
 			tolerance:     0.01,
+			speechProfile: &SpeechCandidateMetrics{},
 		},
 		{
 			name:          "bright voice, normal HF",
@@ -687,6 +695,7 @@ func TestTuneDeesser(t *testing.T) {
 			rolloff:       10000,
 			wantIntensity: 0.5,
 			tolerance:     0.01,
+			speechProfile: &SpeechCandidateMetrics{},
 		},
 		{
 			name:          "dark voice, normal HF",
@@ -694,6 +703,7 @@ func TestTuneDeesser(t *testing.T) {
 			rolloff:       10000,
 			wantIntensity: 0.4,
 			tolerance:     0.01,
+			speechProfile: &SpeechCandidateMetrics{},
 		},
 
 		// Limited HF with intensity below minimum - should disable
@@ -703,6 +713,7 @@ func TestTuneDeesser(t *testing.T) {
 			rolloff:       7500, // limited HF, * 0.7 = 0.28 < 0.3 min
 			wantIntensity: 0.0,  // disabled because 0.28 < deessIntensityMin
 			tolerance:     0.0,
+			speechProfile: &SpeechCandidateMetrics{},
 		},
 
 		// Centroid-only fallback (rolloff = 0)
@@ -712,6 +723,7 @@ func TestTuneDeesser(t *testing.T) {
 			rolloff:       0,
 			wantIntensity: 0.6, // deessIntensityBright
 			tolerance:     0.01,
+			speechProfile: &SpeechCandidateMetrics{},
 		},
 		{
 			name:          "bright voice, no rolloff data",
@@ -719,6 +731,7 @@ func TestTuneDeesser(t *testing.T) {
 			rolloff:       0,
 			wantIntensity: 0.5, // deessIntensityNormal
 			tolerance:     0.01,
+			speechProfile: &SpeechCandidateMetrics{},
 		},
 		{
 			name:          "dark voice, no rolloff data",
@@ -726,6 +739,7 @@ func TestTuneDeesser(t *testing.T) {
 			rolloff:       0,
 			wantIntensity: 0.4, // deessIntensityDark
 			tolerance:     0.01,
+			speechProfile: &SpeechCandidateMetrics{},
 		},
 
 		// No spectral data - keep default (0.0)
@@ -751,6 +765,7 @@ func TestTuneDeesser(t *testing.T) {
 			rolloff:       10000,
 			wantIntensity: 0.5, // not > 6000, so uses deessIntensityNormal
 			tolerance:     0.01,
+			speechProfile: &SpeechCandidateMetrics{},
 		},
 		{
 			name:          "boundary: exactly at centroidBright",
@@ -758,6 +773,7 @@ func TestTuneDeesser(t *testing.T) {
 			rolloff:       10000,
 			wantIntensity: 0.4, // not > 4000, so uses deessIntensityDark
 			tolerance:     0.01,
+			speechProfile: &SpeechCandidateMetrics{},
 		},
 		{
 			name:          "boundary: exactly at rolloffLimited",
@@ -765,6 +781,7 @@ func TestTuneDeesser(t *testing.T) {
 			rolloff:       8000, // exactly at threshold
 			wantIntensity: 0.6,  // not < 8000, falls to default (normal HF)
 			tolerance:     0.01,
+			speechProfile: &SpeechCandidateMetrics{},
 		},
 		{
 			name:          "boundary: exactly at rolloffExtensive",
@@ -772,6 +789,7 @@ func TestTuneDeesser(t *testing.T) {
 			rolloff:       12000, // exactly at threshold
 			wantIntensity: 0.6,   // not > 12000, falls to default (normal HF)
 			tolerance:     0.01,
+			speechProfile: &SpeechCandidateMetrics{},
 		},
 
 		// Max capping
@@ -781,6 +799,17 @@ func TestTuneDeesser(t *testing.T) {
 			rolloff:       15000, // extensive, * 1.2 = 0.72
 			wantIntensity: 0.72,  // below max 0.8, so not capped
 			tolerance:     0.01,
+			speechProfile: &SpeechCandidateMetrics{},
+		},
+
+		// No speech profile - guard clause disables de-esser
+		{
+			name:          "no speech profile - deesser disabled",
+			centroid:      7500,  // Would normally trigger bright de-essing
+			rolloff:       12000, // Would normally trigger extensive HF
+			wantIntensity: 0.0,   // But no speech profile = disabled
+			tolerance:     0.0,
+			speechProfile: nil,
 		},
 	}
 
@@ -795,6 +824,7 @@ func TestTuneDeesser(t *testing.T) {
 					SpectralCentroid: tt.centroid,
 					SpectralRolloff:  tt.rolloff,
 				},
+				SpeechProfile: tt.speechProfile,
 			}
 
 			// Execute

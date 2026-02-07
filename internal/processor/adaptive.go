@@ -739,6 +739,14 @@ func scaleExpansion(noiseFloor float64) float64 {
 // - Low rolloff → limited HF content, skip or reduce de-essing
 // - Dark voice with no HF extension → disable de-esser entirely
 func tuneDeesser(config *FilterChainConfig, measurements *AudioMeasurements) {
+	// Require speech profile for reliable sibilance detection.
+	// Full-file spectral metrics are diluted by silence/noise regions
+	// and produce false positives for sibilance in speech-sparse recordings.
+	if measurements.SpeechProfile == nil {
+		config.DeessIntensity = 0.0
+		return
+	}
+
 	// Both centroid and rolloff available - full adaptive logic
 	if measurements.SpectralCentroid > 0 && measurements.SpectralRolloff > 0 {
 		tuneDeesserFull(config, measurements)

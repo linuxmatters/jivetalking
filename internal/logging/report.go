@@ -855,8 +855,11 @@ func formatDeesserFilter(f *os.File, cfg *processor.FilterChainConfig, m *proces
 		return
 	}
 	if cfg.DeessIntensity == 0 {
-		// Enabled but intensity is 0 - adaptive tuning determined no de-essing needed
-		fmt.Fprintf(f, "%sdeesser: inactive: no sibilance detected\n", prefix)
+		if m == nil || m.SpeechProfile == nil {
+			fmt.Fprintf(f, "%sdeesser: inactive: no speech profile (full-file metrics unreliable)\n", prefix)
+		} else {
+			fmt.Fprintf(f, "%sdeesser: inactive: no sibilance detected\n", prefix)
+		}
 		return
 	}
 
