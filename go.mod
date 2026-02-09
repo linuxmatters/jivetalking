@@ -3,12 +3,10 @@ module github.com/linuxmatters/jivetalking
 go 1.24.0
 
 require (
-	github.com/alecthomas/kong v1.13.0
+	github.com/alecthomas/kong v1.14.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/linuxmatters/ffmpeg-statigo v0.0.0-00010101000000-000000000000
-	github.com/medama-io/go-timezone-country v0.0.0-20240903121643-db228bdc5dc1
-	github.com/thlib/go-timezone-local v0.0.7
 )
 
 replace github.com/linuxmatters/ffmpeg-statigo => ./third_party/ffmpeg-statigo
