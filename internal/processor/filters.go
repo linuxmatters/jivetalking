@@ -103,11 +103,21 @@ var filterBuilders = map[FilterID]filterBuilderFunc{
 	FilterAdeclick:       (*FilterChainConfig).buildAdeclickFilter,
 }
 
+// PassNumber identifies which processing pass is being executed.
+type PassNumber int
+
+const (
+	PassAnalysis    PassNumber = 1
+	PassProcessing  PassNumber = 2
+	PassMeasuring   PassNumber = 3
+	PassNormalising PassNumber = 4
+)
+
 // FilterChainConfig holds configuration for the audio processing filter chain
 type FilterChainConfig struct {
 	// Pass indicates which processing pass is being executed (1 = analysis, 2 = processing)
 	// Used by filters that need pass-specific behaviour
-	Pass int
+	Pass PassNumber
 
 	// Downmix (pan) - stereo to mono conversion
 	// Applied first to ensure all downstream filters work with mono

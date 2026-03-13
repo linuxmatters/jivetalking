@@ -6,7 +6,7 @@ import (
 
 // ProgressMsg represents a progress update from the processor
 type ProgressMsg struct {
-	Pass         int
+	Pass         processor.PassNumber
 	PassName     string
 	Progress     float64
 	Level        float64

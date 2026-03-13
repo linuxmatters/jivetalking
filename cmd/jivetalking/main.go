@@ -186,21 +186,21 @@ type progressHandler struct {
 	pass4Time  time.Duration
 }
 
-func (ph *progressHandler) callback(pass int, passName string, progress float64, level float64, measurements *processor.AudioMeasurements) {
+func (ph *progressHandler) callback(pass processor.PassNumber, passName string, progress float64, level float64, measurements *processor.AudioMeasurements) {
 	ph.log("[MAIN] Sending ProgressMsg: Pass %d (%s), Progress %.1f%%, Level %.1f dB", pass, passName, progress*100, level)
 
 	// Track pass timing
-	if pass == 1 && progress == 0.0 {
+	if pass == processor.PassAnalysis && progress == 0.0 {
 		ph.pass1Start = time.Now()
-	} else if pass == 1 && progress == 1.0 {
+	} else if pass == processor.PassAnalysis && progress == 1.0 {
 		ph.pass1Time = time.Since(ph.pass1Start)
-	} else if pass == 3 && progress == 0.0 {
+	} else if pass == processor.PassMeasuring && progress == 0.0 {
 		ph.pass3Start = time.Now()
-	} else if pass == 3 && progress == 1.0 {
+	} else if pass == processor.PassMeasuring && progress == 1.0 {
 		ph.pass3Time = time.Since(ph.pass3Start)
-	} else if pass == 4 && progress == 0.0 {
+	} else if pass == processor.PassNormalising && progress == 0.0 {
 		ph.pass4Start = time.Now()
-	} else if pass == 4 && progress == 1.0 {
+	} else if pass == processor.PassNormalising && progress == 1.0 {
 		ph.pass4Time = time.Since(ph.pass4Start)
 	}
 
@@ -289,7 +289,7 @@ func runAnalysisWithTUI(inputPath string, config *processor.FilterChainConfig, l
 		})
 
 		// Create progress callback that sends updates to TUI
-		progressCallback := func(pass int, passName string, progress float64, level float64, measurements *processor.AudioMeasurements) {
+		progressCallback := func(pass processor.PassNumber, passName string, progress float64, level float64, measurements *processor.AudioMeasurements) {
 			log("[ANALYSIS] Progress: Pass %d (%s), %.1f%%, Level %.1f dB", pass, passName, progress*100, level)
 			p.Send(ui.AnalysisProgressMsg{
 				Progress: progress,

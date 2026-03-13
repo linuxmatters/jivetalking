@@ -31,7 +31,7 @@ func TestAnalyzeAudio(t *testing.T) {
 	t.Run("synthetic_tone_with_silence", func(t *testing.T) {
 		// Progress callback to show analysis progress
 		lastPercent := -1
-		progressCallback := func(pass int, passName string, progress float64, level float64, m *AudioMeasurements) {
+		progressCallback := func(pass PassNumber, passName string, progress float64, level float64, m *AudioMeasurements) {
 			percent := int(progress * 100)
 			// Only log at 25% intervals to avoid spam
 			if percent >= lastPercent+25 {
@@ -761,7 +761,7 @@ func TestSpeechScore(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			score := speechScore(tt.interval, tt.rmsP50, 1500.0)
+			score := speechScore(tt.interval, tt.rmsP50)
 			if score < tt.wantMin || score > tt.wantMax {
 				t.Errorf("speechScore() = %.2f, want [%.2f, %.2f]", score, tt.wantMin, tt.wantMax)
 			}

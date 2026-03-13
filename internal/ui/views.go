@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/linuxmatters/jivetalking/internal/processor"
 )
 
 // renderProcessingView renders the main processing view
@@ -97,13 +98,13 @@ func renderFileDetails(file FileProgress) string {
 	// Pass indicator
 	var passName string
 	switch file.CurrentPass {
-	case 1:
+	case processor.PassAnalysis:
 		passName = "Analysing Audio"
-	case 2:
+	case processor.PassProcessing:
 		passName = "Processing Audio"
-	case 3:
+	case processor.PassMeasuring:
 		passName = "Measuring Levels"
-	case 4:
+	case processor.PassNormalising:
 		passName = "Normalising Audio"
 	default:
 		passName = "Processing"

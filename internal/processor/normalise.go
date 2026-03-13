@@ -121,7 +121,7 @@ type LoudnormMeasurement struct {
 // Returns:
 //   - measurement: Loudnorm measurements for second pass
 //   - err: Error if measurement failed
-func measureWithLoudnorm(inputPath string, config *FilterChainConfig, progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements)) (*LoudnormMeasurement, error) {
+func measureWithLoudnorm(inputPath string, config *FilterChainConfig, progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements)) (*LoudnormMeasurement, error) {
 	// Start capturing loudnorm log output
 	startLoudnormCapture()
 
@@ -197,7 +197,7 @@ func measureWithLoudnorm(inputPath string, config *FilterChainConfig, progressCa
 		frameCount++
 		if progressCallback != nil && frameCount%progressUpdateInterval == 0 {
 			progress := math.Min(0.99, float64(samplesProcessed)/float64(totalSamples))
-			progressCallback(3, "Measuring", progress, 0.0, nil)
+			progressCallback(PassMeasuring, "Measuring", progress, 0.0, nil)
 		}
 	}
 
@@ -408,7 +408,7 @@ func ApplyNormalisation(
 	config *FilterChainConfig,
 	outputMeasurements *OutputMeasurements,
 	inputMeasurements *AudioMeasurements,
-	progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements),
+	progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements),
 ) (*NormalisationResult, error) {
 	if !config.LoudnormEnabled {
 		return &NormalisationResult{Skipped: true}, nil
@@ -416,7 +416,7 @@ func ApplyNormalisation(
 
 	// Signal pass start - first we measure, then we apply
 	if progressCallback != nil {
-		progressCallback(3, "Measuring", 0.0, 0.0, nil)
+		progressCallback(PassMeasuring, "Measuring", 0.0, 0.0, nil)
 	}
 
 	// Pass 3: Run loudnorm measurement pass on Pass 2 output
@@ -433,8 +433,8 @@ func ApplyNormalisation(
 
 	// Signal measurement complete, starting application
 	if progressCallback != nil {
-		progressCallback(3, "Measuring", 1.0, 0.0, nil)
-		progressCallback(4, "Normalising", 0.0, 0.0, nil)
+		progressCallback(PassMeasuring, "Measuring", 1.0, 0.0, nil)
+		progressCallback(PassNormalising, "Normalising", 0.0, 0.0, nil)
 	}
 
 	// Calculate limiter ceiling (actual limiting happens in buildLoudnormFilterSpec)
@@ -481,7 +481,7 @@ func ApplyNormalisation(
 
 	// Signal pass complete
 	if progressCallback != nil {
-		progressCallback(4, "Normalising", 1.0, 0.0, nil)
+		progressCallback(PassNormalising, "Normalising", 1.0, 0.0, nil)
 	}
 
 	// Validate result is within tolerance of the EFFECTIVE target (not the requested one)
@@ -521,7 +521,7 @@ func applyLoudnormAndMeasure(
 	config *FilterChainConfig,
 	measurement *LoudnormMeasurement,
 	inputMeasurements *AudioMeasurements,
-	progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements),
+	progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements),
 ) (float64, float64, *OutputMeasurements, *LoudnormStats, error) {
 	// Start capturing loudnorm's JSON output for diagnostics
 	startLoudnormCapture()
@@ -626,7 +626,7 @@ func applyLoudnormAndMeasure(
 		// Progress update periodically (every N input frames for smooth updates)
 		if progressCallback != nil && framesProcessed%progressUpdateInterval == 0 {
 			progress := math.Min(0.99, float64(samplesProcessed)/float64(totalSamples))
-			progressCallback(4, "Normalising", progress, acc.ebur128OutputI, nil)
+			progressCallback(PassNormalising, "Normalising", progress, acc.ebur128OutputI, nil)
 		}
 	}
 
