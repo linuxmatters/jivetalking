@@ -15,11 +15,11 @@ import (
 // Returns measurements and the adapted filter configuration.
 // Useful for rapid testing of silence detection algorithms without full processing.
 func AnalyzeOnly(inputPath string, config *FilterChainConfig,
-	progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements),
+	progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements),
 ) (*AudioMeasurements, *FilterChainConfig, error) {
 	// Pass 1: Analysis
 	if progressCallback != nil {
-		progressCallback(1, "Analyzing", 0.0, 0.0, nil)
+		progressCallback(PassAnalysis, "Analyzing", 0.0, 0.0, nil)
 	}
 
 	measurements, err := AnalyzeAudio(inputPath, config, progressCallback)
@@ -28,7 +28,7 @@ func AnalyzeOnly(inputPath string, config *FilterChainConfig,
 	}
 
 	if progressCallback != nil {
-		progressCallback(1, "Analyzing", 1.0, 0.0, measurements)
+		progressCallback(PassAnalysis, "Analyzing", 1.0, 0.0, measurements)
 	}
 
 	// Adapt config to show what would be used in Pass 2
@@ -44,10 +44,10 @@ func AnalyzeOnly(inputPath string, config *FilterChainConfig,
 //
 // The output file will be named <basename>-processed.<ext> in the same directory as the input
 // If progressCallback is not nil, it will be called with progress updates
-func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements)) (*ProcessingResult, error) {
+func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements)) (*ProcessingResult, error) {
 	// Pass 1: Analysis
 	if progressCallback != nil {
-		progressCallback(1, "Analyzing", 0.0, 0.0, nil)
+		progressCallback(PassAnalysis, "Analyzing", 0.0, 0.0, nil)
 	}
 
 	measurements, err := AnalyzeAudio(inputPath, config, progressCallback)
@@ -56,7 +56,7 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 	}
 
 	if progressCallback != nil {
-		progressCallback(1, "Analyzing", 1.0, 0.0, measurements)
+		progressCallback(PassAnalysis, "Analyzing", 1.0, 0.0, measurements)
 	}
 
 	// Adapt filter configuration based on Pass 1 measurements
@@ -64,7 +64,7 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 
 	// Pass 2: Processing
 	if progressCallback != nil {
-		progressCallback(2, "Processing", 0.0, 0.0, measurements)
+		progressCallback(PassProcessing, "Processing", 0.0, 0.0, measurements)
 	}
 
 	// Generate output filename: input.flac → input-processed.flac
@@ -74,7 +74,7 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 	config.OutputAnalysisEnabled = true
 
 	// Set Pass 2 configuration for filter chain
-	config.Pass = 2
+	config.Pass = PassProcessing
 	config.FilterOrder = Pass2FilterOrder
 
 	// Track output measurements from Pass 2 (filtered but not yet normalised)
@@ -85,7 +85,7 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 	}
 
 	if progressCallback != nil {
-		progressCallback(2, "Processing", 1.0, 0.0, measurements)
+		progressCallback(PassProcessing, "Processing", 1.0, 0.0, measurements)
 	}
 
 	// Measure silence and speech regions in Pass 2 output (before normalisation) for comparison
@@ -167,7 +167,7 @@ type ProcessingResult struct {
 // Applies the filter chain built by BuildFilterSpec() which includes asendcmd for noise profile learning
 // when NoiseProfileStart/End timestamps are set in the config.
 // If outputMeasurements is non-nil and config.OutputAnalysisEnabled is true, populates it with Pass 2 output analysis.
-func processWithFilters(inputPath, outputPath string, config *FilterChainConfig, progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements), measurements *AudioMeasurements, outputMeasurements **OutputMeasurements) error {
+func processWithFilters(inputPath, outputPath string, config *FilterChainConfig, progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements), measurements *AudioMeasurements, outputMeasurements **OutputMeasurements) error {
 	// Open input audio file
 	reader, metadata, err := audio.OpenAudioFile(inputPath)
 	if err != nil {
@@ -271,7 +271,7 @@ func processWithFilters(inputPath, outputPath string, config *FilterChainConfig,
 			if progress > 1.0 {
 				progress = 1.0
 			}
-			progressCallback(2, "Processing", progress, currentLevel, measurements)
+			progressCallback(PassProcessing, "Processing", progress, currentLevel, measurements)
 		}
 	}
 

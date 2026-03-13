@@ -28,7 +28,7 @@ type FileProgress struct {
 	Status     FileStatus
 
 	// Phase tracking
-	CurrentPass int // 1, 2, or 3
+	CurrentPass processor.PassNumber
 	PassName    string
 
 	// Progress tracking (percentage-based)
@@ -188,11 +188,11 @@ func updateFileProgress(fp FileProgress, msg ProgressMsg) FileProgress {
 
 	// Update status based on pass
 	switch msg.Pass {
-	case 1:
+	case processor.PassAnalysis:
 		fp.Status = StatusAnalyzing
-	case 2:
+	case processor.PassProcessing:
 		fp.Status = StatusProcessing
-	case 3:
+	case processor.PassMeasuring, processor.PassNormalising:
 		fp.Status = StatusNormalising
 	}
 

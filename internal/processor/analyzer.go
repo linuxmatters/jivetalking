@@ -2191,7 +2191,7 @@ func calculateAdaptiveSilenceThreshold(noiseFloor float64) float64 {
 //
 // The noise floor and silence threshold are computed from interval data AFTER the full pass,
 // eliminating the need for a separate pre-scan phase.
-func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements)) (*AudioMeasurements, error) {
+func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements)) (*AudioMeasurements, error) {
 	// Default fallback threshold if interval analysis yields insufficient data
 	const defaultNoiseFloor = -50.0
 
@@ -2288,7 +2288,7 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 			if progress > 1.0 {
 				progress = 1.0
 			}
-			progressCallback(1, "Analyzing", progress, currentLevel, nil)
+			progressCallback(PassAnalysis, "Analyzing", progress, currentLevel, nil)
 		}
 		frameCount++
 
@@ -2685,7 +2685,7 @@ func createAnalysisFilterGraph(
 	// Configure for Pass 1 analysis
 	// Uses unified BuildFilterSpec() with Pass1FilterOrder:
 	// Downmix → Analysis
-	config.Pass = 1
+	config.Pass = PassAnalysis
 	config.FilterOrder = Pass1FilterOrder
 
 	return setupFilterGraph(decCtx, config.BuildFilterSpec())
@@ -3131,7 +3131,7 @@ func calculateDurationScore(duration time.Duration) float64 {
 // speechScore calculates how speech-like an interval is.
 // Returns 0.0-1.0 where higher = more likely to be speech.
 // Inverts silence detection criteria: rewards amplitude, voice-range centroid, low entropy.
-func speechScore(interval IntervalSample, rmsP50, centroidP50 float64) float64 {
+func speechScore(interval IntervalSample, rmsP50 float64) float64 {
 	// Reject if too quiet (likely silence/room tone)
 	if interval.RMSLevel < speechRMSMinimum {
 		return 0.0
@@ -3163,7 +3163,6 @@ func speechScore(interval IntervalSample, rmsP50, centroidP50 float64) float64 {
 	}
 
 	// Weighted combination: amplitude most important, then centroid, then entropy
-	_ = centroidP50 // Reserved for future use
 	return ampScore*0.5 + centroidScore*0.3 + entropyScore*0.2
 }
 
@@ -3204,16 +3203,12 @@ func findSpeechCandidatesFromIntervals(intervals []IntervalSample, silenceEnd ti
 
 	// Calculate medians for speech scoring
 	rmsLevels := make([]float64, len(searchIntervals))
-	centroidValues := make([]float64, len(searchIntervals))
 	for i, interval := range searchIntervals {
 		rmsLevels[i] = interval.RMSLevel
-		centroidValues[i] = interval.SpectralCentroid
 	}
 	sort.Float64s(rmsLevels)
-	sort.Float64s(centroidValues)
 
 	rmsP50 := rmsLevels[len(rmsLevels)/2]
-	centroidP50 := centroidValues[len(centroidValues)/2]
 
 	// Speech score threshold (lower than silence since speech varies more)
 	const speechScoreThreshold = 0.4
@@ -3226,7 +3221,7 @@ func findSpeechCandidatesFromIntervals(intervals []IntervalSample, silenceEnd ti
 
 	for i := 0; i < len(searchIntervals); i++ {
 		interval := searchIntervals[i]
-		score := speechScore(interval, rmsP50, centroidP50)
+		score := speechScore(interval, rmsP50)
 		isSpeech := score >= speechScoreThreshold
 
 		if isSpeech {

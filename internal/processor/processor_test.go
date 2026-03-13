@@ -36,7 +36,7 @@ func TestProcessAudio(t *testing.T) {
 	config.VolumaxEnabled = true // CBS Volumax-style limiter
 
 	// Process the audio with a no-op progress callback
-	result, err := ProcessAudio(testFile, config, func(pass int, passName string, progress float64, level float64, measurements *AudioMeasurements) {
+	result, err := ProcessAudio(testFile, config, func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements) {
 		// No-op for tests
 	})
 	if err != nil {
