@@ -187,7 +187,7 @@ func (r *Reader) GetDecoderContext() *ffmpeg.AVCodecContext {
 // Seek seeks to the specified timestamp in AV_TIME_BASE units.
 // Use 0 to seek to the beginning of the file. After seeking, the decoder
 // buffers are flushed so that subsequent ReadFrame calls return fresh data.
-func (r *Reader) Seek(timestamp int64) error {
+func (r *Reader) SeekTo(timestamp int64) error {
 	if _, err := ffmpeg.AVFormatSeekFile(r.fmtCtx, -1, math.MinInt64, timestamp, math.MaxInt64, 0); err != nil {
 		return fmt.Errorf("failed to seek: %w", err)
 	}
