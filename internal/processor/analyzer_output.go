@@ -234,7 +234,7 @@ func MeasureOutputRegions(outputPath string, silenceRegion *SilenceRegion, speec
 	if speechRegion != nil {
 		if silenceRegion != nil {
 			// Only need to seek if we already read through the file for silence
-			if err := reader.Seek(0); err != nil {
+			if err := reader.SeekTo(0); err != nil {
 				debugLog("Warning: Failed to seek for speech region measurement: %v", err)
 				return silenceMetrics, nil
 			}
