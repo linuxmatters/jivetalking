@@ -142,88 +142,94 @@ func (a *intervalAccumulator) add(m intervalFrameMetrics) {
 }
 
 // frameSumSquaresAndPeak calculates sum of squared sample values, sample count, and peak from an audio frame.
-// Handles S16, FLT, S32, and DBL sample formats, normalizing to [-1.0, 1.0] range.
+// Handles S16, FLT, S32, and DBL sample formats (both interleaved and planar), normalizing to [-1.0, 1.0] range.
+// For planar multi-channel formats, iterates each plane separately via Data().Get(ch).
 // Returns sumSquares, sampleCount, peakAbsolute, and ok (false if format is unsupported or frame is invalid).
 func frameSumSquaresAndPeak(frame *ffmpeg.AVFrame) (sumSquares float64, sampleCount int64, peakAbs float64, ok bool) {
 	if frame == nil || frame.NbSamples() == 0 {
 		return 0, 0, 0, false
 	}
 
-	sampleFmt := frame.Format()
+	sampleFmt := ffmpeg.AVSampleFormat(frame.Format())
 	nbSamples := frame.NbSamples()
 	nbChannels := frame.ChLayout().NbChannels()
 
-	dataPtr := frame.Data().Get(0)
-	if dataPtr == nil {
-		return 0, 0, 0, false
-	}
-
-	// Guard against planar formats with multiple channels: Data().Get(0) returns
-	// only plane 0 (channel 0), so slicing nbSamples*nbChannels would read out of bounds.
+	// Determine if the format is planar (one plane per channel)
 	isPlanar := false
-	switch ffmpeg.AVSampleFormat(sampleFmt) {
+	switch sampleFmt {
 	case ffmpeg.AVSampleFmtS16P, ffmpeg.AVSampleFmtFltp, ffmpeg.AVSampleFmtS32P, ffmpeg.AVSampleFmtDblp:
 		isPlanar = true
 	}
-	if isPlanar && nbChannels > 1 {
-		return 0, 0, 0, false
+
+	// For interleaved formats, all samples are in plane 0 with nbSamples*nbChannels elements.
+	// For planar formats, each channel has its own plane with nbSamples elements.
+	planes := 1
+	samplesPerPlane := int(nbSamples) * int(nbChannels)
+	if isPlanar {
+		planes = int(nbChannels)
+		samplesPerPlane = int(nbSamples)
 	}
 
-	switch ffmpeg.AVSampleFormat(sampleFmt) {
-	case ffmpeg.AVSampleFmtS16, ffmpeg.AVSampleFmtS16P:
-		samples := unsafe.Slice((*int16)(dataPtr), int(nbSamples)*int(nbChannels))
-		for _, sample := range samples {
-			normalized := float64(sample) / 32768.0
-			sumSquares += normalized * normalized
-			sampleCount++
-			absVal := math.Abs(normalized)
-			if absVal > peakAbs {
-				peakAbs = absVal
-			}
+	for plane := 0; plane < planes; plane++ {
+		dataPtr := frame.Data().Get(uintptr(plane))
+		if dataPtr == nil {
+			return 0, 0, 0, false
 		}
-		return sumSquares, sampleCount, peakAbs, true
 
-	case ffmpeg.AVSampleFmtFlt, ffmpeg.AVSampleFmtFltp:
-		samples := unsafe.Slice((*float32)(dataPtr), int(nbSamples)*int(nbChannels))
-		for _, sample := range samples {
-			normalized := float64(sample)
-			sumSquares += normalized * normalized
-			sampleCount++
-			absVal := math.Abs(normalized)
-			if absVal > peakAbs {
-				peakAbs = absVal
+		switch sampleFmt {
+		case ffmpeg.AVSampleFmtS16, ffmpeg.AVSampleFmtS16P:
+			samples := unsafe.Slice((*int16)(dataPtr), samplesPerPlane)
+			for _, sample := range samples {
+				normalized := float64(sample) / 32768.0
+				sumSquares += normalized * normalized
+				sampleCount++
+				absVal := math.Abs(normalized)
+				if absVal > peakAbs {
+					peakAbs = absVal
+				}
 			}
-		}
-		return sumSquares, sampleCount, peakAbs, true
 
-	case ffmpeg.AVSampleFmtS32, ffmpeg.AVSampleFmtS32P:
-		samples := unsafe.Slice((*int32)(dataPtr), int(nbSamples)*int(nbChannels))
-		for _, sample := range samples {
-			normalized := float64(sample) / 2147483648.0
-			sumSquares += normalized * normalized
-			sampleCount++
-			absVal := math.Abs(normalized)
-			if absVal > peakAbs {
-				peakAbs = absVal
+		case ffmpeg.AVSampleFmtFlt, ffmpeg.AVSampleFmtFltp:
+			samples := unsafe.Slice((*float32)(dataPtr), samplesPerPlane)
+			for _, sample := range samples {
+				normalized := float64(sample)
+				sumSquares += normalized * normalized
+				sampleCount++
+				absVal := math.Abs(normalized)
+				if absVal > peakAbs {
+					peakAbs = absVal
+				}
 			}
-		}
-		return sumSquares, sampleCount, peakAbs, true
 
-	case ffmpeg.AVSampleFmtDbl, ffmpeg.AVSampleFmtDblp:
-		samples := unsafe.Slice((*float64)(dataPtr), int(nbSamples)*int(nbChannels))
-		for _, sample := range samples {
-			sumSquares += sample * sample
-			sampleCount++
-			absVal := math.Abs(sample)
-			if absVal > peakAbs {
-				peakAbs = absVal
+		case ffmpeg.AVSampleFmtS32, ffmpeg.AVSampleFmtS32P:
+			samples := unsafe.Slice((*int32)(dataPtr), samplesPerPlane)
+			for _, sample := range samples {
+				normalized := float64(sample) / 2147483648.0
+				sumSquares += normalized * normalized
+				sampleCount++
+				absVal := math.Abs(normalized)
+				if absVal > peakAbs {
+					peakAbs = absVal
+				}
 			}
-		}
-		return sumSquares, sampleCount, peakAbs, true
 
-	default:
-		return 0, 0, 0, false
+		case ffmpeg.AVSampleFmtDbl, ffmpeg.AVSampleFmtDblp:
+			samples := unsafe.Slice((*float64)(dataPtr), samplesPerPlane)
+			for _, sample := range samples {
+				sumSquares += sample * sample
+				sampleCount++
+				absVal := math.Abs(sample)
+				if absVal > peakAbs {
+					peakAbs = absVal
+				}
+			}
+
+		default:
+			return 0, 0, 0, false
+		}
 	}
+
+	return sumSquares, sampleCount, peakAbs, true
 }
 
 // addFrameRMSAndPeak accumulates RMS and peak from raw frame samples for accurate per-interval measurement.
