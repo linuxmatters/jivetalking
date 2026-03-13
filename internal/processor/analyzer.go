@@ -2229,10 +2229,6 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 		}
 	}()
 
-	// Process all frames through the filter
-	filteredFrame := ffmpeg.AVFrameAlloc()
-	defer ffmpeg.AVFrameFree(&filteredFrame)
-
 	// Track frames for periodic progress updates
 	frameCount := 0
 	updateInterval := 100 // Send progress update every N frames
@@ -2253,59 +2249,49 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 	var inputSamplesProcessed int64
 	inputSampleRate := float64(reader.GetDecoderContext().SampleRate())
 
-	for {
-		frame, err := reader.ReadFrame()
-		if err != nil {
-			return nil, fmt.Errorf("failed to read frame: %w", err)
-		}
-		if frame == nil {
-			break // EOF
-		}
+	// Process all frames through the filter graph
+	if err := runFilterGraph(reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
+		OnReadError: func(err error) error {
+			return fmt.Errorf("failed to read frame: %w", err)
+		},
+		OnPushError: func(err error) error {
+			return fmt.Errorf("failed to add frame to filter: %w", err)
+		},
+		OnPullError: func(err error) error {
+			return fmt.Errorf("failed to get filtered frame: %w", err)
+		},
+		OnInputFrame: func(inputFrame *ffmpeg.AVFrame) {
+			// Calculate audio level from frame
+			currentLevel = calculateFrameLevel(inputFrame)
 
-		// Calculate audio level from frame
-		currentLevel = calculateFrameLevel(frame)
+			// Calculate input frame time based on samples processed (before filter graph upsampling)
+			inputFrameTime := time.Duration(float64(inputSamplesProcessed) / inputSampleRate * float64(time.Second))
+			inputSamplesProcessed += int64(inputFrame.NbSamples())
+			lastFrameTime = inputFrameTime
 
-		// Calculate input frame time based on samples processed (before filter graph upsampling)
-		inputFrameTime := time.Duration(float64(inputSamplesProcessed) / inputSampleRate * float64(time.Second))
-		inputSamplesProcessed += int64(frame.NbSamples())
-		lastFrameTime = inputFrameTime
+			// Accumulate RMS and peak from INPUT frame (before filter graph which upsamples to 192kHz)
+			// This gives accurate RMS and peak values matching the original audio levels
+			intervalAcc.addFrameRMSAndPeak(inputFrame)
 
-		// Accumulate RMS and peak from INPUT frame (before filter graph which upsamples to 192kHz)
-		// This gives accurate RMS and peak values matching the original audio levels
-		intervalAcc.addFrameRMSAndPeak(frame)
-
-		// Check if interval complete (250ms elapsed) based on input time
-		if inputFrameTime-intervalStartTime >= intervalDuration {
-			// Finalize and store completed interval
-			intervals = append(intervals, intervalAcc.finalize(intervalStartTime))
-			intervalStartTime = inputFrameTime
-			intervalAcc.reset()
-		}
-
-		// Send periodic progress updates based on frame count
-		if frameCount%updateInterval == 0 && progressCallback != nil && estimatedTotalFrames > 0 {
-			progress := float64(frameCount) / estimatedTotalFrames
-			if progress > 1.0 {
-				progress = 1.0
+			// Check if interval complete (250ms elapsed) based on input time
+			if inputFrameTime-intervalStartTime >= intervalDuration {
+				// Finalize and store completed interval
+				intervals = append(intervals, intervalAcc.finalize(intervalStartTime))
+				intervalStartTime = inputFrameTime
+				intervalAcc.reset()
 			}
-			progressCallback(PassAnalysis, "Analyzing", progress, currentLevel, nil)
-		}
-		frameCount++
 
-		// Push frame into filter graph
-		if _, err := ffmpeg.AVBuffersrcAddFrameFlags(bufferSrcCtx, frame, 0); err != nil {
-			return nil, fmt.Errorf("failed to add frame to filter: %w", err)
-		}
-
-		// Pull filtered frames and extract spectral metadata
-		for {
-			if _, err := ffmpeg.AVBuffersinkGetFrame(bufferSinkCtx, filteredFrame); err != nil {
-				if errors.Is(err, ffmpeg.EAgain) || errors.Is(err, ffmpeg.AVErrorEOF) {
-					break
+			// Send periodic progress updates based on frame count
+			if frameCount%updateInterval == 0 && progressCallback != nil && estimatedTotalFrames > 0 {
+				progress := float64(frameCount) / estimatedTotalFrames
+				if progress > 1.0 {
+					progress = 1.0
 				}
-				return nil, fmt.Errorf("failed to get filtered frame: %w", err)
+				progressCallback(PassAnalysis, "Analyzing", progress, currentLevel, nil)
 			}
-
+			frameCount++
+		},
+		OnFrame: func(_, filteredFrame *ffmpeg.AVFrame) (FrameAction, error) {
 			// Extract spectral metrics once, reuse for both whole-file and interval accumulators
 			metadata := filteredFrame.Metadata()
 			spectral := extractSpectralMetrics(metadata)
@@ -2317,35 +2303,10 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 			// Filtered frames roughly correspond to input timing (just at higher sample rate)
 			intervalAcc.add(extractIntervalFrameMetrics(metadata, spectral))
 
-			ffmpeg.AVFrameUnref(filteredFrame)
-		}
-	}
-
-	// Flush the filter graph
-	if _, err := ffmpeg.AVBuffersrcAddFrameFlags(bufferSrcCtx, nil, 0); err != nil {
-		return nil, fmt.Errorf("failed to flush filter: %w", err)
-	}
-
-	// Pull remaining frames
-	for {
-		if _, err := ffmpeg.AVBuffersinkGetFrame(bufferSinkCtx, filteredFrame); err != nil {
-			if errors.Is(err, ffmpeg.EAgain) || errors.Is(err, ffmpeg.AVErrorEOF) {
-				break
-			}
-			return nil, fmt.Errorf("failed to get filtered frame: %w", err)
-		}
-
-		// Extract spectral metrics once, reuse for both whole-file and interval accumulators
-		metadata := filteredFrame.Metadata()
-		spectral := extractSpectralMetrics(metadata)
-
-		// Extract measurements from remaining frames
-		extractFrameMetadata(metadata, acc, spectral)
-
-		// Also accumulate into current interval for per-interval spectral data
-		intervalAcc.add(extractIntervalFrameMetrics(metadata, spectral))
-
-		ffmpeg.AVFrameUnref(filteredFrame)
+			return FrameDiscard, nil
+		},
+	}); err != nil {
+		return nil, err
 	}
 
 	// Finalize any remaining partial interval (if it has data)
