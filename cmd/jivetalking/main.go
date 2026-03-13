@@ -67,7 +67,7 @@ func main() {
 		debugLog, _ = os.Create("jivetalking-debug.log")
 		defer debugLog.Close()
 	}
-	log := func(format string, args ...interface{}) {
+	log := func(format string, args ...any) {
 		if debugLog != nil {
 			fmt.Fprintf(debugLog, format+"\n", args...)
 		}
@@ -177,7 +177,7 @@ func main() {
 // progressHandler handles progress updates from the processor
 type progressHandler struct {
 	p          *tea.Program
-	log        func(string, ...interface{})
+	log        func(string, ...any)
 	pass1Start time.Time
 	pass1Time  time.Duration
 	pass3Start time.Time
@@ -215,7 +215,7 @@ func (ph *progressHandler) callback(pass processor.PassNumber, passName string, 
 
 // runAnalysisOnly performs Pass 1 analysis on each file with a progress UI,
 // then displays results to console. Skips full 4-pass processing.
-func runAnalysisOnly(files []string, log func(string, ...interface{})) {
+func runAnalysisOnly(files []string, log func(string, ...any)) {
 	config := processor.DefaultFilterConfig()
 
 	// Check if we have a TTY for the progress UI
@@ -252,6 +252,10 @@ func runAnalysisOnly(files []string, log func(string, ...interface{})) {
 		}
 
 		if analysisErr != nil {
+			if analysisErr.Error() == "cancelled by user" {
+				// User pressed Ctrl+C - exit immediately, don't process remaining files
+				return
+			}
 			cli.PrintError(fmt.Sprintf("Analysis failed for %s: %v", inputPath, analysisErr))
 			continue
 		}
@@ -273,7 +277,7 @@ func isTTY() bool {
 }
 
 // runAnalysisWithTUI runs analysis with the Bubbletea progress UI
-func runAnalysisWithTUI(inputPath string, config *processor.FilterChainConfig, log func(string, ...interface{})) (*processor.AudioMeasurements, *processor.FilterChainConfig, error) {
+func runAnalysisWithTUI(inputPath string, config *processor.FilterChainConfig, log func(string, ...any)) (*processor.AudioMeasurements, *processor.FilterChainConfig, error) {
 	// Create the analysis UI model
 	model := ui.NewAnalysisModel()
 
@@ -323,6 +327,11 @@ func runAnalysisWithTUI(inputPath string, config *processor.FilterChainConfig, l
 	// Check for analysis error
 	if analysisModel.Error != nil {
 		return nil, nil, analysisModel.Error
+	}
+
+	// Check for user cancellation (TUI exited without completing analysis)
+	if !analysisModel.Done {
+		return nil, nil, fmt.Errorf("cancelled by user")
 	}
 
 	return analysisModel.Measurements, analysisModel.Config, nil
