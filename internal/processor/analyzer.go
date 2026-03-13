@@ -82,45 +82,45 @@ type regionMeasurements struct {
 // These metrics are collected before final selection to enable multi-metric scoring.
 // Includes all measurements available from IntervalSample for future filter tuning.
 type SilenceCandidateMetrics struct {
-	Region SilenceRegion // The silence region being evaluated
+	Region SilenceRegion `json:"region"` // The silence region being evaluated
 
 	// Amplitude metrics
-	RMSLevel    float64 // dBFS, average level (lower = quieter)
-	PeakLevel   float64 // dBFS, max peak level across region
-	CrestFactor float64 // Peak - RMS in dB (high = impulsive)
+	RMSLevel    float64 `json:"rms_level"`    // dBFS, average level (lower = quieter)
+	PeakLevel   float64 `json:"peak_level"`   // dBFS, max peak level across region
+	CrestFactor float64 `json:"crest_factor"` // Peak - RMS in dB (high = impulsive)
 
 	// Spectral metrics (averaged across region)
-	SpectralMean     float64 // Average magnitude
-	SpectralVariance float64 // Magnitude spread
-	SpectralCentroid float64 // Hz, where energy is concentrated
-	SpectralSpread   float64 // Hz, frequency bandwidth
-	SpectralSkewness float64 // Distribution asymmetry
-	SpectralKurtosis float64 // Peakiness - high values indicate speech harmonics
-	SpectralEntropy  float64 // 0-1, signal randomness (1.0 = broadband noise)
-	SpectralFlatness float64 // 0-1, noise-like (high) vs tonal (low)
-	SpectralCrest    float64 // Spectral peakiness
-	SpectralFlux     float64 // Rate of spectral change
-	SpectralSlope    float64 // High-frequency roll-off rate
-	SpectralDecrease float64 // High-frequency energy decay
-	SpectralRolloff  float64 // Hz, frequency below which 85% energy lies
+	SpectralMean     float64 `json:"spectral_mean"`     // Average magnitude
+	SpectralVariance float64 `json:"spectral_variance"` // Magnitude spread
+	SpectralCentroid float64 `json:"spectral_centroid"` // Hz, where energy is concentrated
+	SpectralSpread   float64 `json:"spectral_spread"`   // Hz, frequency bandwidth
+	SpectralSkewness float64 `json:"spectral_skewness"` // Distribution asymmetry
+	SpectralKurtosis float64 `json:"spectral_kurtosis"` // Peakiness - high values indicate speech harmonics
+	SpectralEntropy  float64 `json:"spectral_entropy"`  // 0-1, signal randomness (1.0 = broadband noise)
+	SpectralFlatness float64 `json:"spectral_flatness"` // 0-1, noise-like (high) vs tonal (low)
+	SpectralCrest    float64 `json:"spectral_crest"`    // Spectral peakiness
+	SpectralFlux     float64 `json:"spectral_flux"`     // Rate of spectral change
+	SpectralSlope    float64 `json:"spectral_slope"`    // High-frequency roll-off rate
+	SpectralDecrease float64 `json:"spectral_decrease"` // High-frequency energy decay
+	SpectralRolloff  float64 `json:"spectral_rolloff"`  // Hz, frequency below which 85% energy lies
 
 	// Loudness metrics (averaged/max across region)
-	MomentaryLUFS float64 // LUFS, average momentary loudness
-	ShortTermLUFS float64 // LUFS, average short-term loudness
-	TruePeak      float64 // dBTP, max true peak across region
-	SamplePeak    float64 // dBFS, max sample peak across region
+	MomentaryLUFS float64 `json:"momentary_lufs"`  // LUFS, average momentary loudness
+	ShortTermLUFS float64 `json:"short_term_lufs"` // LUFS, average short-term loudness
+	TruePeak      float64 `json:"true_peak"`       // dBTP, max true peak across region
+	SamplePeak    float64 `json:"sample_peak"`     // dBFS, max sample peak across region
 
 	// Warning flags (populated during scoring)
 	TransientWarning string `json:"transient_warning,omitempty"` // Warning if danger zone signature detected
 
 	// Scoring (computed after measurement)
-	Score float64 // Composite score for candidate ranking
+	Score float64 `json:"score"` // Composite score for candidate ranking
 
 	// StabilityScore measures the temporal consistency of the silence region (0-1).
 	// Higher scores indicate more stable measurements across the region, suggesting
 	// intentionally-recorded room tone rather than accidental gaps between speech.
 	// Calculated from RMS variance and average spectral flux across intervals.
-	StabilityScore float64
+	StabilityScore float64 `json:"stability_score"`
 }
 
 // SpeechRegion represents a detected continuous speech period in the audio.
