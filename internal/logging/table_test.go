@@ -390,22 +390,24 @@ func TestWriteSpeechRegionTableGainNormalisation(t *testing.T) {
 	// Helper to create minimal speech metrics with plausible values
 	makeSpeechMetrics := func() *processor.SpeechCandidateMetrics {
 		return &processor.SpeechCandidateMetrics{
-			RMSLevel:         -24.0,
-			PeakLevel:        -12.0,
-			CrestFactor:      12.0,
-			SpectralMean:     0.004812,
-			SpectralVariance: 0.018876,
-			SpectralCentroid: 1500.0,
-			SpectralSpread:   800.0,
-			SpectralSkewness: 2.5,
-			SpectralKurtosis: 8.0,
-			SpectralEntropy:  0.65,
-			SpectralFlatness: 0.15,
-			SpectralCrest:    12.0,
-			SpectralFlux:     0.003200,
-			SpectralSlope:    -0.000045,
-			SpectralDecrease: -0.00012,
-			SpectralRolloff:  4500.0,
+			RMSLevel:    -24.0,
+			PeakLevel:   -12.0,
+			CrestFactor: 12.0,
+			Spectral: processor.SpectralMetrics{
+				Mean:     0.004812,
+				Variance: 0.018876,
+				Centroid: 1500.0,
+				Spread:   800.0,
+				Skewness: 2.5,
+				Kurtosis: 8.0,
+				Entropy:  0.65,
+				Flatness: 0.15,
+				Crest:    12.0,
+				Flux:     0.003200,
+				Slope:    -0.000045,
+				Decrease: -0.00012,
+				Rolloff:  4500.0,
+			},
 		}
 	}
 

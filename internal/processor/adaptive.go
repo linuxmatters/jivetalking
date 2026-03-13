@@ -449,12 +449,12 @@ func tuneDS201HighPass(config *FilterChainConfig, measurements *AudioMeasurement
 	hasSpeech := measurements.SpeechProfile != nil
 	centroid := measurements.SpectralCentroid
 	if hasSpeech {
-		centroid = preferSpeechMetric(centroid, measurements.SpeechProfile.SpectralCentroid)
+		centroid = preferSpeechMetric(centroid, measurements.SpeechProfile.Spectral.Centroid)
 	}
 	var speechDecrease, speechSkewness float64
 	if hasSpeech {
-		speechDecrease = measurements.SpeechProfile.SpectralDecrease
-		speechSkewness = measurements.SpeechProfile.SpectralSkewness
+		speechDecrease = measurements.SpeechProfile.Spectral.Decrease
+		speechSkewness = measurements.SpeechProfile.Spectral.Skewness
 	}
 	decrease := preferSpeechMetricSigned(measurements.SpectralDecrease, speechDecrease, hasSpeech)
 	skewness := preferSpeechMetricSigned(measurements.SpectralSkewness, speechSkewness, hasSpeech)
@@ -571,8 +571,8 @@ func tuneDS201LowPass(config *FilterChainConfig, m *AudioMeasurements) {
 	rolloff := m.SpectralRolloff
 	centroid := m.SpectralCentroid
 	if m.SpeechProfile != nil {
-		rolloff = preferSpeechMetric(rolloff, m.SpeechProfile.SpectralRolloff)
-		centroid = preferSpeechMetric(centroid, m.SpeechProfile.SpectralCentroid)
+		rolloff = preferSpeechMetric(rolloff, m.SpeechProfile.Spectral.Rolloff)
+		centroid = preferSpeechMetric(centroid, m.SpeechProfile.Spectral.Centroid)
 	}
 	if centroid > 0 {
 		config.DS201LPRolloffRatio = rolloff / centroid
@@ -622,8 +622,8 @@ func tuneDS201LowPassForSpeech(config *FilterChainConfig, m *AudioMeasurements) 
 	rolloff := m.SpectralRolloff
 	centroid := m.SpectralCentroid
 	if m.SpeechProfile != nil {
-		rolloff = preferSpeechMetric(rolloff, m.SpeechProfile.SpectralRolloff)
-		centroid = preferSpeechMetric(centroid, m.SpeechProfile.SpectralCentroid)
+		rolloff = preferSpeechMetric(rolloff, m.SpeechProfile.Spectral.Rolloff)
+		centroid = preferSpeechMetric(centroid, m.SpeechProfile.Spectral.Centroid)
 	}
 
 	// Condition 1: Voice already dark (rolloff < 8kHz)
@@ -777,8 +777,8 @@ func tuneDeesserFull(config *FilterChainConfig, measurements *AudioMeasurements)
 	centroid := measurements.SpectralCentroid
 	rolloff := measurements.SpectralRolloff
 	if measurements.SpeechProfile != nil {
-		centroid = preferSpeechMetric(centroid, measurements.SpeechProfile.SpectralCentroid)
-		rolloff = preferSpeechMetric(rolloff, measurements.SpeechProfile.SpectralRolloff)
+		centroid = preferSpeechMetric(centroid, measurements.SpeechProfile.Spectral.Centroid)
+		rolloff = preferSpeechMetric(rolloff, measurements.SpeechProfile.Spectral.Rolloff)
 	}
 
 	// Determine baseline intensity from centroid
@@ -821,7 +821,7 @@ func tuneDeesserCentroidOnly(config *FilterChainConfig, measurements *AudioMeasu
 	// Full-file averages are diluted by silence in multi-track recordings.
 	centroid := measurements.SpectralCentroid
 	if measurements.SpeechProfile != nil {
-		centroid = preferSpeechMetric(centroid, measurements.SpeechProfile.SpectralCentroid)
+		centroid = preferSpeechMetric(centroid, measurements.SpeechProfile.Spectral.Centroid)
 	}
 
 	switch {
@@ -1326,13 +1326,13 @@ func tuneLA2ARelease(config *FilterChainConfig, measurements *AudioMeasurements)
 	// Prefer speech-specific flux for timing decisions
 	flux := measurements.SpectralFlux
 	if measurements.SpeechProfile != nil {
-		flux = preferSpeechMetric(flux, measurements.SpeechProfile.SpectralFlux)
+		flux = preferSpeechMetric(flux, measurements.SpeechProfile.Spectral.Flux)
 	}
 
 	// Prefer speech-specific skewness for warm voice detection
 	var speechSkewness float64
 	if measurements.SpeechProfile != nil {
-		speechSkewness = measurements.SpeechProfile.SpectralSkewness
+		speechSkewness = measurements.SpeechProfile.Spectral.Skewness
 	}
 	skewness := preferSpeechMetricSigned(measurements.SpectralSkewness, speechSkewness, measurements.SpeechProfile != nil)
 
@@ -1391,7 +1391,7 @@ func tuneLA2ARatio(config *FilterChainConfig, measurements *AudioMeasurements) {
 	// Prefer speech-specific kurtosis for harmonic structure
 	kurtosis := measurements.SpectralKurtosis
 	if measurements.SpeechProfile != nil {
-		kurtosis = preferSpeechMetric(kurtosis, measurements.SpeechProfile.SpectralKurtosis)
+		kurtosis = preferSpeechMetric(kurtosis, measurements.SpeechProfile.Spectral.Kurtosis)
 	}
 
 	// Start with LA-2A baseline ratio
@@ -1488,11 +1488,11 @@ func tuneLA2AKnee(config *FilterChainConfig, measurements *AudioMeasurements) {
 	hasSpeech := measurements.SpeechProfile != nil
 	centroid := measurements.SpectralCentroid
 	if hasSpeech {
-		centroid = preferSpeechMetric(centroid, measurements.SpeechProfile.SpectralCentroid)
+		centroid = preferSpeechMetric(centroid, measurements.SpeechProfile.Spectral.Centroid)
 	}
 	var speechSkewness float64
 	if hasSpeech {
-		speechSkewness = measurements.SpeechProfile.SpectralSkewness
+		speechSkewness = measurements.SpeechProfile.Spectral.Skewness
 	}
 	skewness := preferSpeechMetricSigned(measurements.SpectralSkewness, speechSkewness, hasSpeech)
 

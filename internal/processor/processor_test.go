@@ -76,7 +76,7 @@ func TestProcessAudio(t *testing.T) {
 				t.Error("FilteredMeasurements.SilenceSample is nil despite NoiseProfile existing")
 			} else {
 				t.Logf("Pass 2 silence sample RMS: %.2f dBFS", result.FilteredMeasurements.SilenceSample.RMSLevel)
-				t.Logf("Pass 2 silence sample spectral centroid: %.1f Hz", result.FilteredMeasurements.SilenceSample.SpectralCentroid)
+				t.Logf("Pass 2 silence sample spectral centroid: %.1f Hz", result.FilteredMeasurements.SilenceSample.Spectral.Centroid)
 			}
 		} else {
 			t.Logf("NoiseProfile is nil - skipping silence sample validation")
@@ -89,7 +89,7 @@ func TestProcessAudio(t *testing.T) {
 				t.Error("FilteredMeasurements.SpeechSample is nil despite SpeechProfile existing")
 			} else {
 				t.Logf("Pass 2 speech sample RMS: %.2f dBFS", result.FilteredMeasurements.SpeechSample.RMSLevel)
-				t.Logf("Pass 2 speech sample spectral centroid: %.1f Hz", result.FilteredMeasurements.SpeechSample.SpectralCentroid)
+				t.Logf("Pass 2 speech sample spectral centroid: %.1f Hz", result.FilteredMeasurements.SpeechSample.Spectral.Centroid)
 			}
 		} else {
 			t.Logf("SpeechProfile is nil - skipping speech sample validation")
@@ -104,7 +104,7 @@ func TestProcessAudio(t *testing.T) {
 				t.Error("FinalMeasurements.SilenceSample is nil despite NoiseProfile existing")
 			} else {
 				t.Logf("Pass 4 silence sample RMS: %.2f dBFS", result.NormResult.FinalMeasurements.SilenceSample.RMSLevel)
-				t.Logf("Pass 4 silence sample spectral centroid: %.1f Hz", result.NormResult.FinalMeasurements.SilenceSample.SpectralCentroid)
+				t.Logf("Pass 4 silence sample spectral centroid: %.1f Hz", result.NormResult.FinalMeasurements.SilenceSample.Spectral.Centroid)
 			}
 		}
 
@@ -114,7 +114,7 @@ func TestProcessAudio(t *testing.T) {
 				t.Error("FinalMeasurements.SpeechSample is nil despite SpeechProfile existing")
 			} else {
 				t.Logf("Pass 4 speech sample RMS: %.2f dBFS", result.NormResult.FinalMeasurements.SpeechSample.RMSLevel)
-				t.Logf("Pass 4 speech sample spectral centroid: %.1f Hz", result.NormResult.FinalMeasurements.SpeechSample.SpectralCentroid)
+				t.Logf("Pass 4 speech sample spectral centroid: %.1f Hz", result.NormResult.FinalMeasurements.SpeechSample.Spectral.Centroid)
 			}
 		}
 	} else {

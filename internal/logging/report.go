@@ -834,12 +834,12 @@ func formatLA2ACompressorFilter(f *os.File, cfg *processor.FilterChainConfig, m 
 		kurtosisSource := "full-file"
 		fluxSource := "full-file"
 		if m.SpeechProfile != nil {
-			if m.SpeechProfile.SpectralKurtosis > 0 {
-				kurtosis = m.SpeechProfile.SpectralKurtosis
+			if m.SpeechProfile.Spectral.Kurtosis > 0 {
+				kurtosis = m.SpeechProfile.Spectral.Kurtosis
 				kurtosisSource = "speech region"
 			}
-			if m.SpeechProfile.SpectralFlux > 0 {
-				flux = m.SpeechProfile.SpectralFlux
+			if m.SpeechProfile.Spectral.Flux > 0 {
+				flux = m.SpeechProfile.Spectral.Flux
 				fluxSource = "speech region"
 			}
 		}
@@ -874,12 +874,12 @@ func formatDeesserFilter(f *os.File, cfg *processor.FilterChainConfig, m *proces
 		centroidSource := "full-file"
 		rolloffSource := "full-file"
 		if m.SpeechProfile != nil {
-			if m.SpeechProfile.SpectralCentroid > 0 {
-				centroid = m.SpeechProfile.SpectralCentroid
+			if m.SpeechProfile.Spectral.Centroid > 0 {
+				centroid = m.SpeechProfile.Spectral.Centroid
 				centroidSource = "speech region"
 			}
-			if m.SpeechProfile.SpectralRolloff > 0 {
-				rolloff = m.SpeechProfile.SpectralRolloff
+			if m.SpeechProfile.Spectral.Rolloff > 0 {
+				rolloff = m.SpeechProfile.Spectral.Rolloff
 				rolloffSource = "speech region"
 			}
 		}
@@ -1316,12 +1316,12 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	// Show "n/a" instead of misleading zeros or arbitrary values.
 
 	// Entropy input has a special fallback to NoiseProfile when candidate not found
-	inputEntropy := valOr(inputNoise, func(m *processor.SilenceCandidateMetrics) float64 { return m.SpectralEntropy })
+	inputEntropy := valOr(inputNoise, func(m *processor.SilenceCandidateMetrics) float64 { return m.Spectral.Entropy })
 	if inputNoise == nil {
 		inputEntropy = noiseProfile.Entropy
 	}
-	filteredEntropy := valOr(filteredNoise, func(m *processor.SilenceCandidateMetrics) float64 { return m.SpectralEntropy })
-	finalEntropy := valOr(finalNoise, func(m *processor.SilenceCandidateMetrics) float64 { return m.SpectralEntropy })
+	filteredEntropy := valOr(filteredNoise, func(m *processor.SilenceCandidateMetrics) float64 { return m.Spectral.Entropy })
+	finalEntropy := valOr(finalNoise, func(m *processor.SilenceCandidateMetrics) float64 { return m.Spectral.Entropy })
 
 	v := func(field func(*processor.SilenceCandidateMetrics) float64) [3]float64 {
 		return [3]float64{
@@ -1332,19 +1332,19 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	}
 
 	addNoiseFloorMetricRows(table, []threeColMetricSpec{
-		{"Spectral Mean", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.SpectralMean }), 6, "", 1, nil},
-		{"Spectral Variance", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.SpectralVariance }), 6, "", 2, nil},
-		{"Spectral Centroid", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.SpectralCentroid }), 0, "Hz", 0, nil},
-		{"Spectral Spread", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.SpectralSpread }), 0, "Hz", 0, nil},
-		{"Spectral Skewness", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.SpectralSkewness }), 3, "", 0, nil},
-		{"Spectral Kurtosis", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.SpectralKurtosis }), 3, "", 0, nil},
+		{"Spectral Mean", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.Spectral.Mean }), 6, "", 1, nil},
+		{"Spectral Variance", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.Spectral.Variance }), 6, "", 2, nil},
+		{"Spectral Centroid", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.Spectral.Centroid }), 0, "Hz", 0, nil},
+		{"Spectral Spread", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.Spectral.Spread }), 0, "Hz", 0, nil},
+		{"Spectral Skewness", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.Spectral.Skewness }), 3, "", 0, nil},
+		{"Spectral Kurtosis", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.Spectral.Kurtosis }), 3, "", 0, nil},
 		{"Spectral Entropy", [3]float64{inputEntropy, filteredEntropy, finalEntropy}, 6, "", 0, nil},
-		{"Spectral Flatness", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.SpectralFlatness }), 6, "", 0, nil},
-		{"Spectral Crest", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.SpectralCrest }), 3, "", 0, nil},
-		{"Spectral Flux", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.SpectralFlux }), 6, "", 2, nil},
-		{"Spectral Slope", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.SpectralSlope }), 9, "", 1, nil},
-		{"Spectral Decrease", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.SpectralDecrease }), 6, "", 0, nil},
-		{"Spectral Rolloff", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.SpectralRolloff }), 0, "Hz", 0, nil},
+		{"Spectral Flatness", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.Spectral.Flatness }), 6, "", 0, nil},
+		{"Spectral Crest", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.Spectral.Crest }), 3, "", 0, nil},
+		{"Spectral Flux", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.Spectral.Flux }), 6, "", 2, nil},
+		{"Spectral Slope", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.Spectral.Slope }), 9, "", 1, nil},
+		{"Spectral Decrease", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.Spectral.Decrease }), 6, "", 0, nil},
+		{"Spectral Rolloff", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.Spectral.Rolloff }), 0, "Hz", 0, nil},
 	}, nfFmtSpectral, gainNormalise, effectiveGainDB, filteredIsDigitalSilence, finalIsDigitalSilence)
 
 	// ========== LOUDNESS METRICS ==========
@@ -1473,12 +1473,12 @@ func writeSpeechRegionTable(f *os.File, inputMeasurements *processor.AudioMeasur
 	// ========== SPECTRAL METRICS ==========
 
 	// Extract centroid and entropy values needed by the Character row below
-	inputCentroid := valOr(inputSpeech, func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralCentroid })
-	filteredCentroid := valOr(filteredSpeech, func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralCentroid })
-	finalCentroid := valOr(finalSpeech, func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralCentroid })
-	inputEntropy := valOr(inputSpeech, func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralEntropy })
-	filteredEntropy := valOr(filteredSpeech, func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralEntropy })
-	finalEntropy := valOr(finalSpeech, func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralEntropy })
+	inputCentroid := valOr(inputSpeech, func(m *processor.SpeechCandidateMetrics) float64 { return m.Spectral.Centroid })
+	filteredCentroid := valOr(filteredSpeech, func(m *processor.SpeechCandidateMetrics) float64 { return m.Spectral.Centroid })
+	finalCentroid := valOr(finalSpeech, func(m *processor.SpeechCandidateMetrics) float64 { return m.Spectral.Centroid })
+	inputEntropy := valOr(inputSpeech, func(m *processor.SpeechCandidateMetrics) float64 { return m.Spectral.Entropy })
+	filteredEntropy := valOr(filteredSpeech, func(m *processor.SpeechCandidateMetrics) float64 { return m.Spectral.Entropy })
+	finalEntropy := valOr(finalSpeech, func(m *processor.SpeechCandidateMetrics) float64 { return m.Spectral.Entropy })
 
 	sv := func(field func(*processor.SpeechCandidateMetrics) float64) [3]float64 {
 		return [3]float64{
@@ -1489,19 +1489,19 @@ func writeSpeechRegionTable(f *os.File, inputMeasurements *processor.AudioMeasur
 	}
 
 	addSpeechMetricRows(table, []threeColMetricSpec{
-		{"Spectral Mean", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralMean }), 6, "", 1, nil},
-		{"Spectral Variance", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralVariance }), 6, "", 2, nil},
+		{"Spectral Mean", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.Spectral.Mean }), 6, "", 1, nil},
+		{"Spectral Variance", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.Spectral.Variance }), 6, "", 2, nil},
 		{"Spectral Centroid", [3]float64{inputCentroid, filteredCentroid, finalCentroid}, 0, "Hz", 0, interpretCentroid},
-		{"Spectral Spread", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralSpread }), 0, "Hz", 0, interpretSpread},
-		{"Spectral Skewness", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralSkewness }), 3, "", 0, interpretSkewness},
-		{"Spectral Kurtosis", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralKurtosis }), 3, "", 0, interpretKurtosis},
+		{"Spectral Spread", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.Spectral.Spread }), 0, "Hz", 0, interpretSpread},
+		{"Spectral Skewness", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.Spectral.Skewness }), 3, "", 0, interpretSkewness},
+		{"Spectral Kurtosis", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.Spectral.Kurtosis }), 3, "", 0, interpretKurtosis},
 		{"Spectral Entropy", [3]float64{inputEntropy, filteredEntropy, finalEntropy}, 6, "", 0, interpretEntropy},
-		{"Spectral Flatness", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralFlatness }), 6, "", 0, interpretFlatness},
-		{"Spectral Crest", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralCrest }), 3, "", 0, interpretCrest},
-		{"Spectral Flux", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralFlux }), 6, "", 2, interpretFlux},
-		{"Spectral Slope", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralSlope }), 9, "", 1, interpretSlope},
-		{"Spectral Decrease", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralDecrease }), 6, "", 0, interpretDecrease},
-		{"Spectral Rolloff", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.SpectralRolloff }), 0, "Hz", 0, interpretRolloff},
+		{"Spectral Flatness", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.Spectral.Flatness }), 6, "", 0, interpretFlatness},
+		{"Spectral Crest", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.Spectral.Crest }), 3, "", 0, interpretCrest},
+		{"Spectral Flux", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.Spectral.Flux }), 6, "", 2, interpretFlux},
+		{"Spectral Slope", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.Spectral.Slope }), 9, "", 1, interpretSlope},
+		{"Spectral Decrease", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.Spectral.Decrease }), 6, "", 0, interpretDecrease},
+		{"Spectral Rolloff", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.Spectral.Rolloff }), 0, "Hz", 0, interpretRolloff},
 	}, gainNormalise, effectiveGainDB)
 
 	// ========== LOUDNESS METRICS ==========
@@ -1638,15 +1638,15 @@ func writeDiagnosticSilence(f *os.File, measurements *processor.AudioMeasurement
 				fmt.Fprintf(f, "      Peak Level:    %.1f dBFS\n", c.PeakLevel)
 				fmt.Fprintf(f, "      Crest Factor:  %.1f dB\n", c.CrestFactor)
 				fmt.Fprintf(f, "    Spectral:\n")
-				fmt.Fprintf(f, "      Centroid:      %.0f Hz (%s)\n", c.SpectralCentroid, interpretCentroid(c.SpectralCentroid))
-				fmt.Fprintf(f, "      Spread:        %.0f Hz\n", c.SpectralSpread)
-				fmt.Fprintf(f, "      Rolloff:       %.0f Hz\n", c.SpectralRolloff)
-				fmt.Fprintf(f, "      Flatness:      %.3f (%s)\n", c.SpectralFlatness, interpretFlatness(c.SpectralFlatness))
-				fmt.Fprintf(f, "      Entropy:       %.3f (%s)\n", c.SpectralEntropy, interpretEntropy(c.SpectralEntropy))
-				fmt.Fprintf(f, "      Kurtosis:      %.1f (%s)\n", c.SpectralKurtosis, interpretKurtosis(c.SpectralKurtosis))
-				fmt.Fprintf(f, "      Skewness:      %.2f\n", c.SpectralSkewness)
-				fmt.Fprintf(f, "      Flux:          %.4f\n", c.SpectralFlux)
-				fmt.Fprintf(f, "      Slope:         %.2e\n", c.SpectralSlope)
+				fmt.Fprintf(f, "      Centroid:      %.0f Hz (%s)\n", c.Spectral.Centroid, interpretCentroid(c.Spectral.Centroid))
+				fmt.Fprintf(f, "      Spread:        %.0f Hz\n", c.Spectral.Spread)
+				fmt.Fprintf(f, "      Rolloff:       %.0f Hz\n", c.Spectral.Rolloff)
+				fmt.Fprintf(f, "      Flatness:      %.3f (%s)\n", c.Spectral.Flatness, interpretFlatness(c.Spectral.Flatness))
+				fmt.Fprintf(f, "      Entropy:       %.3f (%s)\n", c.Spectral.Entropy, interpretEntropy(c.Spectral.Entropy))
+				fmt.Fprintf(f, "      Kurtosis:      %.1f (%s)\n", c.Spectral.Kurtosis, interpretKurtosis(c.Spectral.Kurtosis))
+				fmt.Fprintf(f, "      Skewness:      %.2f\n", c.Spectral.Skewness)
+				fmt.Fprintf(f, "      Flux:          %.4f\n", c.Spectral.Flux)
+				fmt.Fprintf(f, "      Slope:         %.2e\n", c.Spectral.Slope)
 				fmt.Fprintf(f, "    Loudness:\n")
 				fmt.Fprintf(f, "      Momentary:     %.1f LUFS\n", c.MomentaryLUFS)
 				fmt.Fprintf(f, "      Short-term:    %.1f LUFS\n", c.ShortTermLUFS)
@@ -1726,15 +1726,15 @@ func writeDiagnosticSpeech(f *os.File, measurements *processor.AudioMeasurements
 				fmt.Fprintf(f, "      Peak Level:    %.1f dBFS\n", c.PeakLevel)
 				fmt.Fprintf(f, "      Crest Factor:  %.1f dB\n", c.CrestFactor)
 				fmt.Fprintf(f, "    Spectral:\n")
-				fmt.Fprintf(f, "      Centroid:      %.0f Hz (%s)\n", c.SpectralCentroid, interpretCentroid(c.SpectralCentroid))
-				fmt.Fprintf(f, "      Spread:        %.0f Hz\n", c.SpectralSpread)
-				fmt.Fprintf(f, "      Rolloff:       %.0f Hz\n", c.SpectralRolloff)
-				fmt.Fprintf(f, "      Flatness:      %.3f (%s)\n", c.SpectralFlatness, interpretFlatness(c.SpectralFlatness))
-				fmt.Fprintf(f, "      Entropy:       %.3f (%s)\n", c.SpectralEntropy, interpretEntropy(c.SpectralEntropy))
-				fmt.Fprintf(f, "      Kurtosis:      %.1f (%s)\n", c.SpectralKurtosis, interpretKurtosis(c.SpectralKurtosis))
-				fmt.Fprintf(f, "      Skewness:      %.2f\n", c.SpectralSkewness)
-				fmt.Fprintf(f, "      Flux:          %.4f\n", c.SpectralFlux)
-				fmt.Fprintf(f, "      Slope:         %.2e\n", c.SpectralSlope)
+				fmt.Fprintf(f, "      Centroid:      %.0f Hz (%s)\n", c.Spectral.Centroid, interpretCentroid(c.Spectral.Centroid))
+				fmt.Fprintf(f, "      Spread:        %.0f Hz\n", c.Spectral.Spread)
+				fmt.Fprintf(f, "      Rolloff:       %.0f Hz\n", c.Spectral.Rolloff)
+				fmt.Fprintf(f, "      Flatness:      %.3f (%s)\n", c.Spectral.Flatness, interpretFlatness(c.Spectral.Flatness))
+				fmt.Fprintf(f, "      Entropy:       %.3f (%s)\n", c.Spectral.Entropy, interpretEntropy(c.Spectral.Entropy))
+				fmt.Fprintf(f, "      Kurtosis:      %.1f (%s)\n", c.Spectral.Kurtosis, interpretKurtosis(c.Spectral.Kurtosis))
+				fmt.Fprintf(f, "      Skewness:      %.2f\n", c.Spectral.Skewness)
+				fmt.Fprintf(f, "      Flux:          %.4f\n", c.Spectral.Flux)
+				fmt.Fprintf(f, "      Slope:         %.2e\n", c.Spectral.Slope)
 				if c.VoicingDensity > 0 {
 					fmt.Fprintf(f, "    Voicing Density: %.1f%%\n", c.VoicingDensity*100)
 				}
@@ -1755,7 +1755,7 @@ func writeDiagnosticSpeech(f *os.File, measurements *processor.AudioMeasurements
 		fmt.Fprintf(f, "  RMS Level:         %.1f dBFS\n", profile.RMSLevel)
 		fmt.Fprintf(f, "  Peak Level:        %.1f dBFS\n", profile.PeakLevel)
 		fmt.Fprintf(f, "  Crest Factor:      %.1f dB\n", profile.CrestFactor)
-		fmt.Fprintf(f, "  Centroid:          %.0f Hz\n", profile.SpectralCentroid)
+		fmt.Fprintf(f, "  Centroid:          %.0f Hz\n", profile.Spectral.Centroid)
 	} else if len(measurements.SpeechRegions) > 0 {
 		fmt.Fprintf(f, "Speech Regions:      %d detected\n", len(measurements.SpeechRegions))
 		fmt.Fprintf(f, "  No candidate met quality threshold for speech profiling.\n")

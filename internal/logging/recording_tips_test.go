@@ -547,14 +547,14 @@ func TestTipProximityEffect(t *testing.T) {
 			name:             "speech profile overrides full-file no tip",
 			spectralDecrease: -0.15,
 			spectralSkewness: 1.0,
-			speechProfile:    &processor.SpeechCandidateMetrics{SpectralDecrease: -0.03, SpectralSkewness: 0.5},
+			speechProfile:    &processor.SpeechCandidateMetrics{Spectral: processor.SpectralMetrics{Decrease: -0.03, Skewness: 0.5}},
 			wantTip:          false,
 		},
 		{
 			name:             "speech profile triggers when full-file would not",
 			spectralDecrease: -0.03,
 			spectralSkewness: 0.5,
-			speechProfile:    &processor.SpeechCandidateMetrics{SpectralDecrease: -0.15, SpectralSkewness: 1.0},
+			speechProfile:    &processor.SpeechCandidateMetrics{Spectral: processor.SpectralMetrics{Decrease: -0.15, Skewness: 1.0}},
 			wantTip:          true,
 		},
 		{
@@ -639,8 +639,7 @@ func TestTipSibilance(t *testing.T) {
 			centroid: 3000.0,
 			rolloff:  9000.0,
 			speechProfile: &processor.SpeechCandidateMetrics{
-				SpectralCentroid: 4500.0,
-				SpectralRolloff:  11000.0,
+				Spectral: processor.SpectralMetrics{Centroid: 4500.0, Rolloff: 11000.0},
 			},
 			wantTip: true,
 		},
@@ -650,8 +649,7 @@ func TestTipSibilance(t *testing.T) {
 			centroid: 4500.0,
 			rolloff:  11000.0,
 			speechProfile: &processor.SpeechCandidateMetrics{
-				SpectralCentroid: 0,
-				SpectralRolloff:  0,
+				Spectral: processor.SpectralMetrics{Centroid: 0, Rolloff: 0},
 			},
 			wantTip: true,
 		},
