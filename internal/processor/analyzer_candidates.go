@@ -166,7 +166,7 @@ const (
 )
 
 // Scoring weight constants for scoreSpeechCandidate
-// Weights sum to 1.0, split between stability (0.30) and quality (0.70)
+// Weights sum to 1.0, split between stability (0.40) and quality (0.60)
 const (
 	candidateWeightAmplitude = 0.20 // Quality: louder = better sample
 	candidateWeightCentroid  = 0.15 // Quality: voice range
@@ -852,8 +852,12 @@ func findSilenceCandidatesFromIntervals(intervals []IntervalSample, threshold fl
 
 	// Handle silence that extends to the search limit
 	if inSilence && silentIntervalCount >= minimumSilenceIntervals {
-		lastInterval := intervals[searchLimit-1]
-		endTime := lastInterval.Timestamp + 250*time.Millisecond
+		// Exclude trailing non-silent interruptions, same as the mid-loop case
+		lastSilentIdx := searchLimit - 1 - interruptionCount
+		if lastSilentIdx < 0 {
+			lastSilentIdx = 0
+		}
+		endTime := intervals[lastSilentIdx].Timestamp + 250*time.Millisecond
 		duration := endTime - silenceStart
 
 		// Only include if not in excluded first 15 seconds

@@ -217,6 +217,12 @@ func processWithFilters(inputPath, outputPath string, config *FilterChainConfig,
 		OnReadError: func(err error) error {
 			return fmt.Errorf("failed to read frame: %w", err)
 		},
+		OnPushError: func(err error) error {
+			return fmt.Errorf("failed to push frame to filter: %w", err)
+		},
+		OnPullError: func(err error) error {
+			return fmt.Errorf("failed to pull frame from filter: %w", err)
+		},
 		OnInputFrame: func(inputFrame *ffmpeg.AVFrame) {
 			frameCount++
 

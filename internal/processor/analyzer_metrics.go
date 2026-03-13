@@ -158,6 +158,17 @@ func frameSumSquaresAndPeak(frame *ffmpeg.AVFrame) (sumSquares float64, sampleCo
 		return 0, 0, 0, false
 	}
 
+	// Guard against planar formats with multiple channels: Data().Get(0) returns
+	// only plane 0 (channel 0), so slicing nbSamples*nbChannels would read out of bounds.
+	isPlanar := false
+	switch ffmpeg.AVSampleFormat(sampleFmt) {
+	case ffmpeg.AVSampleFmtS16P, ffmpeg.AVSampleFmtFltp, ffmpeg.AVSampleFmtS32P, ffmpeg.AVSampleFmtDblp:
+		isPlanar = true
+	}
+	if isPlanar && nbChannels > 1 {
+		return 0, 0, 0, false
+	}
+
 	switch ffmpeg.AVSampleFormat(sampleFmt) {
 	case ffmpeg.AVSampleFmtS16, ffmpeg.AVSampleFmtS16P:
 		samples := unsafe.Slice((*int16)(dataPtr), int(nbSamples)*int(nbChannels))
