@@ -221,12 +221,30 @@ func measureWithLoudnorm(inputPath string, config *FilterChainConfig, progressCa
 	}
 
 	// Parse string values to measurement struct
+	parseFloat := func(name, value string) (float64, error) {
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		if err != nil {
+			return 0, fmt.Errorf("invalid loudnorm %s value %q: %w", name, value, err)
+		}
+		return parsed, nil
+	}
+
 	measurement := &LoudnormMeasurement{}
-	measurement.InputI, _ = strconv.ParseFloat(strings.TrimSpace(stats.InputI), 64)
-	measurement.InputTP, _ = strconv.ParseFloat(strings.TrimSpace(stats.InputTP), 64)
-	measurement.InputLRA, _ = strconv.ParseFloat(strings.TrimSpace(stats.InputLRA), 64)
-	measurement.InputThresh, _ = strconv.ParseFloat(strings.TrimSpace(stats.InputThresh), 64)
-	measurement.TargetOffset, _ = strconv.ParseFloat(strings.TrimSpace(stats.TargetOffset), 64)
+	if measurement.InputI, err = parseFloat("input_i", stats.InputI); err != nil {
+		return nil, err
+	}
+	if measurement.InputTP, err = parseFloat("input_tp", stats.InputTP); err != nil {
+		return nil, err
+	}
+	if measurement.InputLRA, err = parseFloat("input_lra", stats.InputLRA); err != nil {
+		return nil, err
+	}
+	if measurement.InputThresh, err = parseFloat("input_thresh", stats.InputThresh); err != nil {
+		return nil, err
+	}
+	if measurement.TargetOffset, err = parseFloat("target_offset", stats.TargetOffset); err != nil {
+		return nil, err
+	}
 
 	return measurement, nil
 }
