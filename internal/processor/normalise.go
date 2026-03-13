@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -221,11 +222,11 @@ func measureWithLoudnorm(inputPath string, config *FilterChainConfig, progressCa
 
 	// Parse string values to measurement struct
 	measurement := &LoudnormMeasurement{}
-	fmt.Sscanf(stats.InputI, "%f", &measurement.InputI)
-	fmt.Sscanf(stats.InputTP, "%f", &measurement.InputTP)
-	fmt.Sscanf(stats.InputLRA, "%f", &measurement.InputLRA)
-	fmt.Sscanf(stats.InputThresh, "%f", &measurement.InputThresh)
-	fmt.Sscanf(stats.TargetOffset, "%f", &measurement.TargetOffset)
+	measurement.InputI, _ = strconv.ParseFloat(strings.TrimSpace(stats.InputI), 64)
+	measurement.InputTP, _ = strconv.ParseFloat(strings.TrimSpace(stats.InputTP), 64)
+	measurement.InputLRA, _ = strconv.ParseFloat(strings.TrimSpace(stats.InputLRA), 64)
+	measurement.InputThresh, _ = strconv.ParseFloat(strings.TrimSpace(stats.InputThresh), 64)
+	measurement.TargetOffset, _ = strconv.ParseFloat(strings.TrimSpace(stats.TargetOffset), 64)
 
 	return measurement, nil
 }

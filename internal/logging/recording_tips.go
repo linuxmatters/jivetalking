@@ -1,8 +1,9 @@
 package logging
 
 import (
+	"cmp"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/linuxmatters/jivetalking/internal/processor"
@@ -55,8 +56,8 @@ func GenerateRecordingTips(m *processor.AudioMeasurements, config *processor.Fil
 	tips = applyExclusions(tips, firedRules)
 
 	// Sort by priority (descending)
-	sort.Slice(tips, func(i, j int) bool {
-		return tips[i].Priority > tips[j].Priority
+	slices.SortFunc(tips, func(a, b RecordingTip) int {
+		return cmp.Compare(b.Priority, a.Priority)
 	})
 
 	// Cap at maximum

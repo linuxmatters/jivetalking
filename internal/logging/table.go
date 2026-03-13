@@ -159,8 +159,7 @@ func formatMetric(value float64, decimals int) string {
 	}
 
 	// Standard formatting
-	format := fmt.Sprintf("%%.%df", decimals)
-	return fmt.Sprintf(format, value)
+	return fmt.Sprintf("%.*f", decimals, value)
 }
 
 // formatMetricDB formats a dB value with special handling for digital silence.
@@ -172,8 +171,7 @@ func formatMetricDB(value float64, decimals int) string {
 	if isDigitalSilence(value) {
 		return "< -120"
 	}
-	format := fmt.Sprintf("%%.%df", decimals)
-	return fmt.Sprintf(format, value)
+	return fmt.Sprintf("%.*f", decimals, value)
 }
 
 // LUFSMeasurementFloor is the lowest reliable LUFS measurement from ebur128.
@@ -191,8 +189,7 @@ func formatMetricLUFS(value float64, decimals int) string {
 	if value < LUFSMeasurementFloor {
 		return "< -70"
 	}
-	format := fmt.Sprintf("%%.%df", decimals)
-	return fmt.Sprintf(format, value)
+	return fmt.Sprintf("%.*f", decimals, value)
 }
 
 // formatMetricPeak formats a linear peak value (0.0-1.0 scale) with dB conversion.
@@ -210,8 +207,7 @@ func formatMetricPeak(value float64, decimals int) string {
 	if dB < DigitalSilenceThreshold {
 		return "< -120"
 	}
-	format := fmt.Sprintf("%%.%df", decimals)
-	return fmt.Sprintf(format, dB)
+	return fmt.Sprintf("%.*f", decimals, dB)
 }
 
 // SpectralSilenceValue is the placeholder for spectral metrics when digital silence is detected.
@@ -234,8 +230,7 @@ func formatMetricSigned(value float64, decimals int) string {
 		return MissingValue
 	}
 
-	format := fmt.Sprintf("%%+.%df", decimals)
-	return fmt.Sprintf(format, value)
+	return fmt.Sprintf("%+.*f", decimals, value)
 }
 
 // formatMetricWithUnit combines value and unit for display.
