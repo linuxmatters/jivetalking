@@ -2,7 +2,6 @@
 package processor
 
 import (
-	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -203,10 +202,6 @@ func processWithFilters(inputPath, outputPath string, config *FilterChainConfig,
 	}
 	defer encoder.Close()
 
-	// Allocate frames for processing
-	filteredFrame := ffmpeg.AVFrameAlloc()
-	defer ffmpeg.AVFrameFree(&filteredFrame)
-
 	// Initialize output measurement accumulators if output analysis is enabled
 	var outputAcc *outputMetadataAccumulators
 	if config.OutputAnalysisEnabled && outputMeasurements != nil {
@@ -217,33 +212,25 @@ func processWithFilters(inputPath, outputPath string, config *FilterChainConfig,
 	frameCount := 0
 	currentLevel := 0.0
 
-	// Process all frames through the filter chain
-	for {
-		// Read frame from input
-		frame, err := reader.ReadFrame()
-		if err != nil {
+	// Process all frames through the filter chain using runFilterGraph
+	if err := runFilterGraph(reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
+		OnReadError: func(err error) error {
 			return fmt.Errorf("failed to read frame: %w", err)
-		}
-		if frame == nil {
-			break // EOF
-		}
+		},
+		OnInputFrame: func(inputFrame *ffmpeg.AVFrame) {
+			frameCount++
 
-		frameCount++
-
-		// Push frame into filter graph
-		if _, err := ffmpeg.AVBuffersrcAddFrameFlags(bufferSrcCtx, frame, 0); err != nil {
-			return fmt.Errorf("failed to add frame to filter: %w", err)
-		}
-
-		// Pull filtered frames and encode them
-		for {
-			if _, err := ffmpeg.AVBuffersinkGetFrame(bufferSinkCtx, filteredFrame); err != nil {
-				if errors.Is(err, ffmpeg.EAgain) || errors.Is(err, ffmpeg.AVErrorEOF) {
-					break
+			// Send periodic progress updates based on INPUT frame count
+			updateInterval := 100
+			if frameCount%updateInterval == 0 && progressCallback != nil && estimatedTotalFrames > 0 {
+				progress := float64(frameCount) / estimatedTotalFrames
+				if progress > 1.0 {
+					progress = 1.0
 				}
-				return fmt.Errorf("failed to get filtered frame: %w", err)
+				progressCallback(PassProcessing, "Processing", progress, currentLevel, measurements)
 			}
-
+		},
+		OnFrame: func(inputFrame, filteredFrame *ffmpeg.AVFrame) (FrameAction, error) {
 			// Calculate audio level from FILTERED frame (shows processed audio in VU meter)
 			currentLevel = calculateFrameLevel(filteredFrame)
 
@@ -257,50 +244,13 @@ func processWithFilters(inputPath, outputPath string, config *FilterChainConfig,
 
 			// Encode and write the filtered frame
 			if err := encoder.WriteFrame(filteredFrame); err != nil {
-				return fmt.Errorf("failed to write frame: %w", err)
+				return FrameDiscard, fmt.Errorf("failed to write frame: %w", err)
 			}
 
-			ffmpeg.AVFrameUnref(filteredFrame)
-		}
-
-		// Send periodic progress updates based on INPUT frame count (moved outside inner loop)
-		// This ensures consistent update frequency between Pass 1 and Pass 2
-		updateInterval := 100 // Send progress update every N frames
-		if frameCount%updateInterval == 0 && progressCallback != nil && estimatedTotalFrames > 0 {
-			progress := float64(frameCount) / estimatedTotalFrames
-			if progress > 1.0 {
-				progress = 1.0
-			}
-			progressCallback(PassProcessing, "Processing", progress, currentLevel, measurements)
-		}
-	}
-
-	// Flush the filter graph
-	if _, err := ffmpeg.AVBuffersrcAddFrameFlags(bufferSrcCtx, nil, 0); err != nil {
-		return fmt.Errorf("failed to flush filter: %w", err)
-	}
-
-	// Pull remaining filtered frames
-	for {
-		if _, err := ffmpeg.AVBuffersinkGetFrame(bufferSinkCtx, filteredFrame); err != nil {
-			if errors.Is(err, ffmpeg.EAgain) || errors.Is(err, ffmpeg.AVErrorEOF) {
-				break
-			}
-			return fmt.Errorf("failed to get filtered frame: %w", err)
-		}
-
-		// Extract output measurements from remaining frames
-		if outputAcc != nil {
-			extractOutputFrameMetadata(filteredFrame.Metadata(), outputAcc)
-		}
-
-		filteredFrame.SetTimeBase(ffmpeg.AVBuffersinkGetTimeBase(bufferSinkCtx))
-
-		if err := encoder.WriteFrame(filteredFrame); err != nil {
-			return fmt.Errorf("failed to write frame: %w", err)
-		}
-
-		ffmpeg.AVFrameUnref(filteredFrame)
+			return FrameDiscard, nil
+		},
+	}); err != nil {
+		return err
 	}
 
 	// Flush the encoder
