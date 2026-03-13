@@ -15,8 +15,6 @@ type FrameAction int
 const (
 	// FrameDiscard unrefs and discards the filtered frame.
 	FrameDiscard FrameAction = iota
-	// FrameKeep leaves the frame referenced; the caller must unref when done.
-	FrameKeep
 )
 
 // FrameLoopConfig controls the behaviour of runFilterGraph.
@@ -41,8 +39,7 @@ type FrameLoopConfig struct {
 	// OnFrame is called for each filtered frame pulled from the sink.
 	// inputFrame is the most recently read input frame (before filtering).
 	// filteredFrame is the frame pulled from the filter graph output.
-	// Return FrameDiscard to have runFilterGraph unref the filtered frame,
-	// or FrameKeep if the callback already consumed/unreffed it.
+	// Return FrameDiscard to have runFilterGraph unref the filtered frame.
 	// A non-nil error aborts both loops.
 	OnFrame func(inputFrame, filteredFrame *ffmpeg.AVFrame) (FrameAction, error)
 
