@@ -70,7 +70,7 @@ type regionMeasurements struct {
 	RMSLevel      float64
 	PeakLevel     float64
 	CrestFactor   float64
-	Spectral      spectralMetrics
+	Spectral      SpectralMetrics
 	MomentaryLUFS float64
 	ShortTermLUFS float64
 	TruePeak      float64
@@ -90,19 +90,7 @@ type SilenceCandidateMetrics struct {
 	CrestFactor float64 `json:"crest_factor"` // Peak - RMS in dB (high = impulsive)
 
 	// Spectral metrics (averaged across region)
-	SpectralMean     float64 `json:"spectral_mean"`     // Average magnitude
-	SpectralVariance float64 `json:"spectral_variance"` // Magnitude spread
-	SpectralCentroid float64 `json:"spectral_centroid"` // Hz, where energy is concentrated
-	SpectralSpread   float64 `json:"spectral_spread"`   // Hz, frequency bandwidth
-	SpectralSkewness float64 `json:"spectral_skewness"` // Distribution asymmetry
-	SpectralKurtosis float64 `json:"spectral_kurtosis"` // Peakiness - high values indicate speech harmonics
-	SpectralEntropy  float64 `json:"spectral_entropy"`  // 0-1, signal randomness (1.0 = broadband noise)
-	SpectralFlatness float64 `json:"spectral_flatness"` // 0-1, noise-like (high) vs tonal (low)
-	SpectralCrest    float64 `json:"spectral_crest"`    // Spectral peakiness
-	SpectralFlux     float64 `json:"spectral_flux"`     // Rate of spectral change
-	SpectralSlope    float64 `json:"spectral_slope"`    // High-frequency roll-off rate
-	SpectralDecrease float64 `json:"spectral_decrease"` // High-frequency energy decay
-	SpectralRolloff  float64 `json:"spectral_rolloff"`  // Hz, frequency below which 85% energy lies
+	Spectral SpectralMetrics `json:"spectral"`
 
 	// Loudness metrics (averaged/max across region)
 	MomentaryLUFS float64 `json:"momentary_lufs"`  // LUFS, average momentary loudness
@@ -143,19 +131,7 @@ type SpeechCandidateMetrics struct {
 	CrestFactor float64 `json:"crest_factor"` // Peak - RMS in dB (speech typically 9-14 dB, optimal range)
 
 	// Spectral metrics (averaged across region)
-	SpectralMean     float64 `json:"spectral_mean"`     // Average magnitude
-	SpectralVariance float64 `json:"spectral_variance"` // Magnitude spread
-	SpectralCentroid float64 `json:"spectral_centroid"` // Hz, voice range: 300-4000 Hz
-	SpectralSpread   float64 `json:"spectral_spread"`   // Hz, frequency bandwidth
-	SpectralSkewness float64 `json:"spectral_skewness"` // Distribution asymmetry
-	SpectralKurtosis float64 `json:"spectral_kurtosis"` // Higher for harmonic speech
-	SpectralEntropy  float64 `json:"spectral_entropy"`  // Lower for structured speech than noise
-	SpectralFlatness float64 `json:"spectral_flatness"` // 0-1, lower for tonal speech
-	SpectralCrest    float64 `json:"spectral_crest"`    // Spectral peakiness
-	SpectralFlux     float64 `json:"spectral_flux"`     // Rate of spectral change
-	SpectralSlope    float64 `json:"spectral_slope"`    // High-frequency roll-off rate
-	SpectralDecrease float64 `json:"spectral_decrease"` // High-frequency energy decay
-	SpectralRolloff  float64 `json:"spectral_rolloff"`  // Hz, frequency below which 85% energy lies
+	Spectral SpectralMetrics `json:"spectral"`
 
 	// Loudness metrics (averaged/max across region)
 	MomentaryLUFS float64 `json:"momentary_lufs"`  // LUFS, average momentary loudness
@@ -845,7 +821,7 @@ func measureSilenceCandidateFromIntervals(region SilenceRegion, intervals []Inte
 	// Accumulate metrics for averaging (sums) and extremes (max)
 	var rmsSum float64
 	var peakMax, truePeakMax, samplePeakMax float64 = -120.0, -120.0, -120.0
-	var spectralSum spectralMetrics
+	var spectralSum SpectralMetrics
 	var momentarySum, shortTermSum float64
 
 	for _, interval := range regionIntervals {
@@ -875,20 +851,7 @@ func measureSilenceCandidateFromIntervals(region SilenceRegion, intervals []Inte
 		RMSLevel:    avgRMS,
 		PeakLevel:   peakMax,
 		CrestFactor: peakMax - avgRMS,
-
-		SpectralMean:     avgSpectral.Mean,
-		SpectralVariance: avgSpectral.Variance,
-		SpectralCentroid: avgSpectral.Centroid,
-		SpectralSpread:   avgSpectral.Spread,
-		SpectralSkewness: avgSpectral.Skewness,
-		SpectralKurtosis: avgSpectral.Kurtosis,
-		SpectralEntropy:  avgSpectral.Entropy,
-		SpectralFlatness: avgSpectral.Flatness,
-		SpectralCrest:    avgSpectral.Crest,
-		SpectralFlux:     avgSpectral.Flux,
-		SpectralSlope:    avgSpectral.Slope,
-		SpectralDecrease: avgSpectral.Decrease,
-		SpectralRolloff:  avgSpectral.Rolloff,
+		Spectral:    avgSpectral,
 
 		MomentaryLUFS: momentarySum / n,
 		ShortTermLUFS: shortTermSum / n,
@@ -1477,7 +1440,7 @@ type baseMetadataAccumulators struct {
 }
 
 // accumulateSpectral adds the given spectral measurements to the running sums.
-func (b *baseMetadataAccumulators) accumulateSpectral(spectral spectralMetrics) {
+func (b *baseMetadataAccumulators) accumulateSpectral(spectral SpectralMetrics) {
 	if !spectral.Found {
 		return
 	}
@@ -1633,29 +1596,29 @@ func linearSampleToDBFS(sample float64) float64 {
 	return 20 * math.Log10(absVal)
 }
 
-// spectralMetrics holds the 13 aspectralstats measurements extracted from FFmpeg metadata.
+// SpectralMetrics holds the 13 aspectralstats measurements extracted from FFmpeg metadata.
 // These metrics characterise the frequency content of audio frames.
-type spectralMetrics struct {
-	Mean     float64 // Average spectral power
-	Variance float64 // Spectral variance
-	Centroid float64 // Spectral centroid (Hz) - where energy is concentrated
-	Spread   float64 // Spectral spread (Hz) - bandwidth/fullness indicator
-	Skewness float64 // Spectral asymmetry - positive=bright, negative=dark
-	Kurtosis float64 // Spectral peakiness - tonal vs broadband content
-	Entropy  float64 // Spectral randomness (0-1) - noise classification
-	Flatness float64 // Noise vs tonal ratio (0-1) - low=tonal, high=noisy
-	Crest    float64 // Spectral peak-to-RMS - transient indicator
-	Flux     float64 // Frame-to-frame spectral change
-	Slope    float64 // Spectral tilt - negative=more bass
-	Decrease float64 // Average spectral decrease
-	Rolloff  float64 // Spectral rolloff (Hz) - HF energy dropoff point
-	Found    bool    // True if any spectral metric was extracted
+type SpectralMetrics struct {
+	Mean     float64 `json:"mean"`     // Average spectral power
+	Variance float64 `json:"variance"` // Spectral variance
+	Centroid float64 `json:"centroid"` // Spectral centroid (Hz) - where energy is concentrated
+	Spread   float64 `json:"spread"`   // Spectral spread (Hz) - bandwidth/fullness indicator
+	Skewness float64 `json:"skewness"` // Spectral asymmetry - positive=bright, negative=dark
+	Kurtosis float64 `json:"kurtosis"` // Spectral peakiness - tonal vs broadband content
+	Entropy  float64 `json:"entropy"`  // Spectral randomness (0-1) - noise classification
+	Flatness float64 `json:"flatness"` // Noise vs tonal ratio (0-1) - low=tonal, high=noisy
+	Crest    float64 `json:"crest"`    // Spectral peak-to-RMS - transient indicator
+	Flux     float64 `json:"flux"`     // Frame-to-frame spectral change
+	Slope    float64 `json:"slope"`    // Spectral tilt - negative=more bass
+	Decrease float64 `json:"decrease"` // Average spectral decrease
+	Rolloff  float64 `json:"rolloff"`  // Spectral rolloff (Hz) - HF energy dropoff point
+	Found    bool    `json:"-"`        // True if any spectral metric was extracted
 }
 
-// spectralFields returns the 13 spectral measurements from this interval as a spectralMetrics value.
+// spectralFields returns the 13 spectral measurements from this interval as a SpectralMetrics value.
 // This enables struct-level accumulation instead of 13 individual variables.
-func (s *IntervalSample) spectralFields() spectralMetrics {
-	return spectralMetrics{
+func (s *IntervalSample) spectralFields() SpectralMetrics {
+	return SpectralMetrics{
 		Mean:     s.SpectralMean,
 		Variance: s.SpectralVariance,
 		Centroid: s.SpectralCentroid,
@@ -1673,8 +1636,8 @@ func (s *IntervalSample) spectralFields() spectralMetrics {
 	}
 }
 
-// add accumulates another spectralMetrics into this one (element-wise sum).
-func (m *spectralMetrics) add(other spectralMetrics) {
+// add accumulates another SpectralMetrics into this one (element-wise sum).
+func (m *SpectralMetrics) add(other SpectralMetrics) {
 	m.Mean += other.Mean
 	m.Variance += other.Variance
 	m.Centroid += other.Centroid
@@ -1690,9 +1653,9 @@ func (m *spectralMetrics) add(other spectralMetrics) {
 	m.Rolloff += other.Rolloff
 }
 
-// average returns a new spectralMetrics with all fields divided by n.
-func (m spectralMetrics) average(n float64) spectralMetrics {
-	return spectralMetrics{
+// average returns a new SpectralMetrics with all fields divided by n.
+func (m SpectralMetrics) average(n float64) SpectralMetrics {
+	return SpectralMetrics{
 		Mean:     m.Mean / n,
 		Variance: m.Variance / n,
 		Centroid: m.Centroid / n,
@@ -1710,9 +1673,9 @@ func (m spectralMetrics) average(n float64) spectralMetrics {
 }
 
 // extractSpectralMetrics extracts all 13 aspectralstats measurements from FFmpeg metadata.
-// Returns a spectralMetrics struct with Found=true if at least one metric was extracted.
-func extractSpectralMetrics(metadata *ffmpeg.AVDictionary) spectralMetrics {
-	var m spectralMetrics
+// Returns a SpectralMetrics struct with Found=true if at least one metric was extracted.
+func extractSpectralMetrics(metadata *ffmpeg.AVDictionary) SpectralMetrics {
+	var m SpectralMetrics
 
 	if value, ok := getFloatMetadata(metadata, metaKeySpectralMean); ok {
 		m.Mean = value
@@ -1773,7 +1736,7 @@ func extractSpectralMetrics(metadata *ffmpeg.AVDictionary) spectralMetrics {
 // extractIntervalFrameMetrics extracts per-frame metrics for interval accumulation.
 // Only collects metrics that are valid per-window (aspectralstats, ebur128 windowed).
 // Excludes astats which provides cumulative values, not per-interval.
-func extractIntervalFrameMetrics(metadata *ffmpeg.AVDictionary, spectral spectralMetrics) intervalFrameMetrics {
+func extractIntervalFrameMetrics(metadata *ffmpeg.AVDictionary, spectral SpectralMetrics) intervalFrameMetrics {
 	var m intervalFrameMetrics
 
 	// Peak level from astats (used for max tracking, which is valid per-interval)
@@ -1812,7 +1775,7 @@ func extractIntervalFrameMetrics(metadata *ffmpeg.AVDictionary, spectral spectra
 // extractFrameMetadata extracts audio analysis metadata from a filtered frame.
 // Updates accumulators with spectral, astats, and ebur128 measurements.
 // Called from both the main processing loop and the flush loop.
-func extractFrameMetadata(metadata *ffmpeg.AVDictionary, acc *metadataAccumulators, spectral spectralMetrics) {
+func extractFrameMetadata(metadata *ffmpeg.AVDictionary, acc *metadataAccumulators, spectral SpectralMetrics) {
 	if metadata == nil {
 		return
 	}
@@ -2898,7 +2861,7 @@ func scoreSilenceCandidate(m *SilenceCandidateMetrics) float64 {
 
 	// Calculate individual component scores (all normalised to 0-1 range)
 	ampScore := calculateAmplitudeScore(m.RMSLevel)
-	specScore := calculateSpectralScore(m.SpectralCentroid, m.SpectralFlatness, m.SpectralKurtosis)
+	specScore := calculateSpectralScore(m.Spectral.Centroid, m.Spectral.Flatness, m.Spectral.Kurtosis)
 	durScore := calculateDurationScore(m.Region.Duration)
 
 	// Weighted combination (base score)
@@ -2990,14 +2953,14 @@ func isLikelyCrosstalk(m *SilenceCandidateMetrics) bool {
 	}
 
 	// Check if centroid is in voice frequency range
-	inVoiceRange := m.SpectralCentroid >= voiceCentroidMin && m.SpectralCentroid <= voiceCentroidMax
+	inVoiceRange := m.Spectral.Centroid >= voiceCentroidMin && m.Spectral.Centroid <= voiceCentroidMax
 
 	if !inVoiceRange {
 		return false // Not in voice range, unlikely to be crosstalk
 	}
 
 	// Voice range + peaked harmonics (high kurtosis) = likely speech
-	if m.SpectralKurtosis > crosstalkKurtosisThreshold {
+	if m.Spectral.Kurtosis > crosstalkKurtosisThreshold {
 		return true
 	}
 
@@ -3262,7 +3225,7 @@ func measureSpeechCandidateFromIntervals(region SpeechRegion, intervals []Interv
 	// Accumulate metrics for averaging (sums) and extremes (max)
 	var rmsSum float64
 	var peakMax, truePeakMax, samplePeakMax float64 = -120.0, -120.0, -120.0
-	var spectralSum spectralMetrics
+	var spectralSum SpectralMetrics
 	var momentarySum, shortTermSum float64
 
 	for _, interval := range regionIntervals {
@@ -3301,20 +3264,7 @@ func measureSpeechCandidateFromIntervals(region SpeechRegion, intervals []Interv
 		RMSLevel:    avgRMS,
 		PeakLevel:   peakMax,
 		CrestFactor: peakMax - avgRMS,
-
-		SpectralMean:     avgSpectral.Mean,
-		SpectralVariance: avgSpectral.Variance,
-		SpectralCentroid: avgSpectral.Centroid,
-		SpectralSpread:   avgSpectral.Spread,
-		SpectralSkewness: avgSpectral.Skewness,
-		SpectralKurtosis: avgSpectral.Kurtosis,
-		SpectralEntropy:  avgSpectral.Entropy,
-		SpectralFlatness: avgSpectral.Flatness,
-		SpectralCrest:    avgSpectral.Crest,
-		SpectralFlux:     avgSpectral.Flux,
-		SpectralSlope:    avgSpectral.Slope,
-		SpectralDecrease: avgSpectral.Decrease,
-		SpectralRolloff:  avgSpectral.Rolloff,
+		Spectral:    avgSpectral,
 
 		MomentaryLUFS: momentarySum / n,
 		ShortTermLUFS: shortTermSum / n,
@@ -3446,7 +3396,7 @@ func scoreSpeechCandidate(m *SpeechCandidateMetrics) float64 {
 
 	// Centroid score: voice range = good
 	centroidScore := 0.0
-	if m.SpectralCentroid >= speechCentroidMin && m.SpectralCentroid <= speechCentroidMax {
+	if m.Spectral.Centroid >= speechCentroidMin && m.Spectral.Centroid <= speechCentroidMax {
 		centroidScore = 1.0
 	}
 
@@ -3468,11 +3418,11 @@ func scoreSpeechCandidate(m *SpeechCandidateMetrics) float64 {
 
 	// Rolloff score: prefer moderate rolloff for processing stability
 	// Uses shared helper function for consistency with scoreSpeechIntervalWindow
-	rolloffScore := calculateRolloffScore(m.SpectralRolloff)
+	rolloffScore := calculateRolloffScore(m.Spectral.Rolloff)
 
 	// Flux score: prefer low flux for processing stability
 	// Uses shared helper function for consistency with scoreSpeechIntervalWindow
-	fluxScore := calculateFluxScore(m.SpectralFlux)
+	fluxScore := calculateFluxScore(m.Spectral.Flux)
 
 	// Weighted combination using named constants
 	return ampScore*candidateWeightAmplitude +
@@ -3537,7 +3487,7 @@ func measureOutputRegionFromReader(reader *audio.Reader, start, duration time.Du
 	var rmsLevelFound bool
 	var framesProcessed int64
 
-	var spectralAcc spectralMetrics
+	var spectralAcc SpectralMetrics
 	var spectralFrameCount int64
 
 	extractMeasurements := func(_ *ffmpeg.AVFrame, filteredFrame *ffmpeg.AVFrame) (FrameAction, error) {
@@ -3588,7 +3538,7 @@ func measureOutputRegionFromReader(reader *audio.Reader, start, duration time.Du
 		return nil, fmt.Errorf("no frames processed in region")
 	}
 
-	var avg spectralMetrics
+	var avg SpectralMetrics
 	if spectralFrameCount > 0 {
 		avg = spectralAcc.average(float64(spectralFrameCount))
 	}
@@ -3649,27 +3599,15 @@ func measureOutputSilenceRegionFromReader(reader *audio.Reader, region SilenceRe
 	debugLog("=== MeasureOutputSilenceRegion SUMMARY ===")
 
 	return &SilenceCandidateMetrics{
-		Region:           region,
-		RMSLevel:         result.RMSLevel,
-		PeakLevel:        result.PeakLevel,
-		CrestFactor:      result.CrestFactor,
-		SpectralMean:     result.Spectral.Mean,
-		SpectralVariance: result.Spectral.Variance,
-		SpectralCentroid: result.Spectral.Centroid,
-		SpectralSpread:   result.Spectral.Spread,
-		SpectralSkewness: result.Spectral.Skewness,
-		SpectralKurtosis: result.Spectral.Kurtosis,
-		SpectralEntropy:  result.Spectral.Entropy,
-		SpectralFlatness: result.Spectral.Flatness,
-		SpectralCrest:    result.Spectral.Crest,
-		SpectralFlux:     result.Spectral.Flux,
-		SpectralSlope:    result.Spectral.Slope,
-		SpectralDecrease: result.Spectral.Decrease,
-		SpectralRolloff:  result.Spectral.Rolloff,
-		MomentaryLUFS:    result.MomentaryLUFS,
-		ShortTermLUFS:    result.ShortTermLUFS,
-		TruePeak:         result.TruePeak,
-		SamplePeak:       result.SamplePeak,
+		Region:        region,
+		RMSLevel:      result.RMSLevel,
+		PeakLevel:     result.PeakLevel,
+		CrestFactor:   result.CrestFactor,
+		Spectral:      result.Spectral,
+		MomentaryLUFS: result.MomentaryLUFS,
+		ShortTermLUFS: result.ShortTermLUFS,
+		TruePeak:      result.TruePeak,
+		SamplePeak:    result.SamplePeak,
 	}, nil
 }
 
@@ -3897,26 +3835,14 @@ func measureOutputSpeechRegionFromReader(reader *audio.Reader, region SpeechRegi
 	debugLog("=== MeasureOutputSpeechRegion SUMMARY ===")
 
 	return &SpeechCandidateMetrics{
-		Region:           region,
-		RMSLevel:         result.RMSLevel,
-		PeakLevel:        result.PeakLevel,
-		CrestFactor:      result.CrestFactor,
-		SpectralMean:     result.Spectral.Mean,
-		SpectralVariance: result.Spectral.Variance,
-		SpectralCentroid: result.Spectral.Centroid,
-		SpectralSpread:   result.Spectral.Spread,
-		SpectralSkewness: result.Spectral.Skewness,
-		SpectralKurtosis: result.Spectral.Kurtosis,
-		SpectralEntropy:  result.Spectral.Entropy,
-		SpectralFlatness: result.Spectral.Flatness,
-		SpectralCrest:    result.Spectral.Crest,
-		SpectralFlux:     result.Spectral.Flux,
-		SpectralSlope:    result.Spectral.Slope,
-		SpectralDecrease: result.Spectral.Decrease,
-		SpectralRolloff:  result.Spectral.Rolloff,
-		MomentaryLUFS:    result.MomentaryLUFS,
-		ShortTermLUFS:    result.ShortTermLUFS,
-		TruePeak:         result.TruePeak,
-		SamplePeak:       result.SamplePeak,
+		Region:        region,
+		RMSLevel:      result.RMSLevel,
+		PeakLevel:     result.PeakLevel,
+		CrestFactor:   result.CrestFactor,
+		Spectral:      result.Spectral,
+		MomentaryLUFS: result.MomentaryLUFS,
+		ShortTermLUFS: result.ShortTermLUFS,
+		TruePeak:      result.TruePeak,
+		SamplePeak:    result.SamplePeak,
 	}, nil
 }

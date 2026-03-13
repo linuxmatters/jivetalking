@@ -96,10 +96,10 @@ func DisplayAnalysisResults(w io.Writer, inputPath string, metadata *audio.Metad
 			fmt.Fprintf(w, "      RMS Level:   %.1f dBFS\n", c.RMSLevel)
 			fmt.Fprintf(w, "      Peak Level:  %.1f dBFS\n", c.PeakLevel)
 			fmt.Fprintf(w, "      Crest:       %.1f dB\n", c.CrestFactor)
-			fmt.Fprintf(w, "      Entropy:     %.3f (%s)\n", c.SpectralEntropy, interpretEntropy(c.SpectralEntropy))
-			fmt.Fprintf(w, "      Flatness:    %.3f (%s)\n", c.SpectralFlatness, interpretFlatness(c.SpectralFlatness))
-			fmt.Fprintf(w, "      Kurtosis:    %.1f (%s)\n", c.SpectralKurtosis, interpretKurtosis(c.SpectralKurtosis))
-			fmt.Fprintf(w, "      Centroid:    %.0f Hz\n", c.SpectralCentroid)
+			fmt.Fprintf(w, "      Entropy:     %.3f (%s)\n", c.Spectral.Entropy, interpretEntropy(c.Spectral.Entropy))
+			fmt.Fprintf(w, "      Flatness:    %.3f (%s)\n", c.Spectral.Flatness, interpretFlatness(c.Spectral.Flatness))
+			fmt.Fprintf(w, "      Kurtosis:    %.1f (%s)\n", c.Spectral.Kurtosis, interpretKurtosis(c.Spectral.Kurtosis))
+			fmt.Fprintf(w, "      Centroid:    %.0f Hz\n", c.Spectral.Centroid)
 			fmt.Fprintln(w)
 		}
 	} else if measurements.NoiseProfile != nil {
@@ -161,8 +161,8 @@ func DisplayAnalysisResults(w io.Writer, inputPath string, metadata *audio.Metad
 			fmt.Fprintf(w, "      Score:       %.2f\n", c.Score)
 			fmt.Fprintf(w, "      RMS Level:   %.1f dBFS\n", c.RMSLevel)
 			fmt.Fprintf(w, "      Crest:       %.1f dB\n", c.CrestFactor)
-			fmt.Fprintf(w, "      Centroid:    %.0f Hz (%s)\n", c.SpectralCentroid, interpretCentroid(c.SpectralCentroid))
-			fmt.Fprintf(w, "      Kurtosis:    %.1f (%s)\n", c.SpectralKurtosis, interpretKurtosis(c.SpectralKurtosis))
+			fmt.Fprintf(w, "      Centroid:    %.0f Hz (%s)\n", c.Spectral.Centroid, interpretCentroid(c.Spectral.Centroid))
+			fmt.Fprintf(w, "      Kurtosis:    %.1f (%s)\n", c.Spectral.Kurtosis, interpretKurtosis(c.Spectral.Kurtosis))
 			if c.VoicingDensity > 0 {
 				fmt.Fprintf(w, "      Voicing:     %.0f%%\n", c.VoicingDensity*100)
 			}

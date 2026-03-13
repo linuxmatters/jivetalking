@@ -312,8 +312,8 @@ func tipProximityEffect(m *processor.AudioMeasurements, _ *processor.FilterChain
 	decrease := m.SpectralDecrease
 	skewness := m.SpectralSkewness
 	if m.SpeechProfile != nil {
-		decrease = m.SpeechProfile.SpectralDecrease
-		skewness = m.SpeechProfile.SpectralSkewness
+		decrease = m.SpeechProfile.Spectral.Decrease
+		skewness = m.SpeechProfile.Spectral.Skewness
 	}
 
 	veryWarm := decrease < -0.10
@@ -342,11 +342,11 @@ func tipSibilance(m *processor.AudioMeasurements, config *processor.FilterChainC
 	centroid := m.SpectralCentroid
 	rolloff := m.SpectralRolloff
 	if m.SpeechProfile != nil {
-		if m.SpeechProfile.SpectralCentroid > 0 {
-			centroid = m.SpeechProfile.SpectralCentroid
+		if m.SpeechProfile.Spectral.Centroid > 0 {
+			centroid = m.SpeechProfile.Spectral.Centroid
 		}
-		if m.SpeechProfile.SpectralRolloff > 0 {
-			rolloff = m.SpeechProfile.SpectralRolloff
+		if m.SpeechProfile.Spectral.Rolloff > 0 {
+			rolloff = m.SpeechProfile.Spectral.Rolloff
 		}
 	}
 

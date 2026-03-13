@@ -943,8 +943,8 @@ func TestMeasureSpeechCandidateFromIntervals(t *testing.T) {
 		if metrics.CrestFactor != expectedCrest {
 			t.Errorf("CrestFactor = %.1f, want %.1f", metrics.CrestFactor, expectedCrest)
 		}
-		if metrics.SpectralCentroid != 1500.0 {
-			t.Errorf("SpectralCentroid = %.1f, want 1500.0", metrics.SpectralCentroid)
+		if metrics.Spectral.Centroid != 1500.0 {
+			t.Errorf("SpectralCentroid = %.1f, want 1500.0", metrics.Spectral.Centroid)
 		}
 	})
 
@@ -1022,13 +1022,11 @@ func TestScoreSpeechCandidate(t *testing.T) {
 		{
 			name: "ideal speech candidate",
 			metrics: &SpeechCandidateMetrics{
-				Region:           SpeechRegion{Duration: 60 * time.Second},
-				RMSLevel:         -15.0,
-				CrestFactor:      12.0, // Ideal (crestFactorIdeal)
-				SpectralCentroid: 1500.0,
-				VoicingDensity:   0.75,   // High voiced content (above 0.6 threshold)
-				SpectralRolloff:  6000.0, // Ideal range (4000-8000 Hz)
-				SpectralFlux:     0.003,  // Below stable threshold (0.004)
+				Region:         SpeechRegion{Duration: 60 * time.Second},
+				RMSLevel:       -15.0,
+				CrestFactor:    12.0, // Ideal (crestFactorIdeal)
+				Spectral:       SpectralMetrics{Centroid: 1500.0, Rolloff: 6000.0, Flux: 0.003},
+				VoicingDensity: 0.75, // High voiced content (above 0.6 threshold)
 			},
 			wantMin: 0.8,
 			wantMax: 1.0,
@@ -1036,13 +1034,11 @@ func TestScoreSpeechCandidate(t *testing.T) {
 		{
 			name: "quiet speech",
 			metrics: &SpeechCandidateMetrics{
-				Region:           SpeechRegion{Duration: 30 * time.Second},
-				RMSLevel:         -28.0,
-				CrestFactor:      12.0, // Ideal
-				SpectralCentroid: 1500.0,
-				VoicingDensity:   0.75,   // High voiced content
-				SpectralRolloff:  6000.0, // Ideal range
-				SpectralFlux:     0.003,  // Low flux
+				Region:         SpeechRegion{Duration: 30 * time.Second},
+				RMSLevel:       -28.0,
+				CrestFactor:    12.0, // Ideal
+				Spectral:       SpectralMetrics{Centroid: 1500.0, Rolloff: 6000.0, Flux: 0.003},
+				VoicingDensity: 0.75, // High voiced content
 			},
 			wantMin: 0.3,
 			wantMax: 0.8,
@@ -1050,13 +1046,11 @@ func TestScoreSpeechCandidate(t *testing.T) {
 		{
 			name: "wrong centroid",
 			metrics: &SpeechCandidateMetrics{
-				Region:           SpeechRegion{Duration: 60 * time.Second},
-				RMSLevel:         -15.0,
-				CrestFactor:      12.0,   // Ideal
-				SpectralCentroid: 8000.0, // Outside voice range
-				VoicingDensity:   0.75,   // High voiced content
-				SpectralRolloff:  6000.0, // Ideal range
-				SpectralFlux:     0.003,  // Low flux
+				Region:         SpeechRegion{Duration: 60 * time.Second},
+				RMSLevel:       -15.0,
+				CrestFactor:    12.0, // Ideal
+				Spectral:       SpectralMetrics{Centroid: 8000.0, Rolloff: 6000.0, Flux: 0.003},
+				VoicingDensity: 0.75, // High voiced content
 			},
 			wantMin: 0.6,
 			wantMax: 0.9,
@@ -1610,9 +1604,9 @@ func TestMeasureOutputSilenceRegion(t *testing.T) {
 		t.Logf("  RMSLevel: %.2f dBFS", metrics.RMSLevel)
 		t.Logf("  PeakLevel: %.2f dBFS", metrics.PeakLevel)
 		t.Logf("  CrestFactor: %.2f dB", metrics.CrestFactor)
-		t.Logf("  SpectralCentroid: %.2f Hz", metrics.SpectralCentroid)
-		t.Logf("  SpectralEntropy: %.2f", metrics.SpectralEntropy)
-		t.Logf("  SpectralFlatness: %.2f", metrics.SpectralFlatness)
+		t.Logf("  SpectralCentroid: %.2f Hz", metrics.Spectral.Centroid)
+		t.Logf("  SpectralEntropy: %.2f", metrics.Spectral.Entropy)
+		t.Logf("  SpectralFlatness: %.2f", metrics.Spectral.Flatness)
 		t.Logf("  MomentaryLUFS: %.2f LUFS", metrics.MomentaryLUFS)
 		t.Logf("  ShortTermLUFS: %.2f LUFS", metrics.ShortTermLUFS)
 		t.Logf("  TruePeak: %.2f dBTP", metrics.TruePeak)
@@ -1638,14 +1632,14 @@ func TestMeasureOutputSilenceRegion(t *testing.T) {
 
 		// Spectral entropy should be relatively high for noise (closer to 1.0 than speech)
 		// We don't enforce strict bounds since synthesis may vary
-		if metrics.SpectralEntropy < 0.0 || metrics.SpectralEntropy > 1.0 {
-			t.Logf("SpectralEntropy out of [0,1] range: %.2f (may be filter-specific)", metrics.SpectralEntropy)
+		if metrics.Spectral.Entropy < 0.0 || metrics.Spectral.Entropy > 1.0 {
+			t.Logf("SpectralEntropy out of [0,1] range: %.2f (may be filter-specific)", metrics.Spectral.Entropy)
 		}
 
 		// Spectral centroid should be present (non-zero)
 		// Even noise has spectral content
-		if metrics.SpectralCentroid < 0.0 {
-			t.Errorf("SpectralCentroid should be non-negative: %.2f Hz", metrics.SpectralCentroid)
+		if metrics.Spectral.Centroid < 0.0 {
+			t.Errorf("SpectralCentroid should be non-negative: %.2f Hz", metrics.Spectral.Centroid)
 		}
 
 		// LUFS measurements may be invalid for very quiet regions
@@ -1722,9 +1716,9 @@ func TestMeasureOutputSpeechRegion(t *testing.T) {
 		t.Logf("  RMSLevel: %.2f dBFS", metrics.RMSLevel)
 		t.Logf("  PeakLevel: %.2f dBFS", metrics.PeakLevel)
 		t.Logf("  CrestFactor: %.2f dB", metrics.CrestFactor)
-		t.Logf("  SpectralCentroid: %.2f Hz", metrics.SpectralCentroid)
-		t.Logf("  SpectralEntropy: %.2f", metrics.SpectralEntropy)
-		t.Logf("  SpectralFlatness: %.2f", metrics.SpectralFlatness)
+		t.Logf("  SpectralCentroid: %.2f Hz", metrics.Spectral.Centroid)
+		t.Logf("  SpectralEntropy: %.2f", metrics.Spectral.Entropy)
+		t.Logf("  SpectralFlatness: %.2f", metrics.Spectral.Flatness)
 		t.Logf("  MomentaryLUFS: %.2f LUFS", metrics.MomentaryLUFS)
 		t.Logf("  ShortTermLUFS: %.2f LUFS", metrics.ShortTermLUFS)
 		t.Logf("  TruePeak: %.2f dBTP", metrics.TruePeak)
@@ -1756,14 +1750,14 @@ func TestMeasureOutputSpeechRegion(t *testing.T) {
 
 		// Spectral centroid should be near tone frequency (440 Hz)
 		// Allow wide tolerance since FFT window and resolution affect this
-		if metrics.SpectralCentroid < 100.0 || metrics.SpectralCentroid > 2000.0 {
-			t.Logf("SpectralCentroid outside plausible range: %.2f Hz (tone at 440 Hz)", metrics.SpectralCentroid)
+		if metrics.Spectral.Centroid < 100.0 || metrics.Spectral.Centroid > 2000.0 {
+			t.Logf("SpectralCentroid outside plausible range: %.2f Hz (tone at 440 Hz)", metrics.Spectral.Centroid)
 		}
 
 		// Spectral flatness should be low for tonal signal (< 0.5)
 		// Sine wave is very tonal, not noise-like
-		if metrics.SpectralFlatness < 0.0 || metrics.SpectralFlatness > 1.0 {
-			t.Logf("SpectralFlatness out of [0,1] range: %.2f", metrics.SpectralFlatness)
+		if metrics.Spectral.Flatness < 0.0 || metrics.Spectral.Flatness > 1.0 {
+			t.Logf("SpectralFlatness out of [0,1] range: %.2f", metrics.Spectral.Flatness)
 		}
 
 		// LUFS should reflect the -20dBFS tone level
