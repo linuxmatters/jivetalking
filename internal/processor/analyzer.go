@@ -63,6 +63,21 @@ type NoiseProfile struct {
 	WasRefined       bool          `json:"was_refined,omitempty"`       // True if region was refined from a longer candidate
 }
 
+// regionMeasurements holds the common measurement results from analysing an
+// output audio region. Both silence and speech region measurement functions
+// share this intermediate type before mapping to their specific candidate types.
+type regionMeasurements struct {
+	RMSLevel      float64
+	PeakLevel     float64
+	CrestFactor   float64
+	Spectral      spectralMetrics
+	MomentaryLUFS float64
+	ShortTermLUFS float64
+	TruePeak      float64
+	SamplePeak    float64
+	FramesProcessed int64
+}
+
 // SilenceCandidateMetrics contains measurements for evaluating silence region candidates.
 // These metrics are collected before final selection to enable multi-metric scoring.
 // Includes all measurements available from IntervalSample for future filter tuning.
@@ -3488,45 +3503,30 @@ func MeasureOutputSilenceRegion(outputPath string, region SilenceRegion) (*Silen
 	return measureOutputSilenceRegionFromReader(reader, region)
 }
 
-// measureOutputSilenceRegionFromReader performs the silence region measurement
-// using an already-opened audio reader. This enables the combined
-// MeasureOutputRegions function to share a single file open/close cycle.
-func measureOutputSilenceRegionFromReader(reader *audio.Reader, region SilenceRegion) (*SilenceCandidateMetrics, error) {
-	// Diagnostic logging: function entry with region details
-	debugLog("=== MeasureOutputSilenceRegion: start=%.3fs, duration=%.3fs ===",
-		region.Start.Seconds(), region.Duration.Seconds())
-
-	// Validate region boundaries
-	if region.Start < 0 {
+// measureOutputRegionFromReader measures amplitude, spectral, and loudness
+// metrics for a time region in an already-opened audio file. This is the
+// shared implementation behind measureOutputSilenceRegionFromReader and
+// measureOutputSpeechRegionFromReader.
+func measureOutputRegionFromReader(reader *audio.Reader, start, duration time.Duration) (*regionMeasurements, error) {
+	if start < 0 {
 		return nil, fmt.Errorf("invalid region: negative start time")
 	}
-	if region.Duration <= 0 {
+	if duration <= 0 {
 		return nil, fmt.Errorf("invalid region: non-positive duration")
 	}
 
-	// Build filter spec to extract and analyze the silence region
-	// Filter chain captures all measurements for comprehensive analysis:
-	// 1. atrim: extract the specific time region (start/duration format)
-	// 2. astats: amplitude measurements (RMS, peak, etc.) - measure_perchannel=0 for overall stats
-	// 3. aspectralstats: all 13 spectral measurements
-	// 4. ebur128: loudness measurements (momentary, short-term, true peak)
-	//
-	// Note: No aformat needed here - the output file is already processed and in final format.
-	// The key is measuring on identical audio data, not forcing format conversion.
 	filterSpec := fmt.Sprintf(
 		"atrim=start=%f:duration=%f,asetpts=PTS-STARTPTS,astats=metadata=1:measure_perchannel=0,aspectralstats=measure=all,ebur128=metadata=1:peak=sample+true",
-		region.Start.Seconds(),
-		region.Duration.Seconds(),
+		start.Seconds(),
+		duration.Seconds(),
 	)
 
-	// Create filter graph
 	filterGraph, bufferSrcCtx, bufferSinkCtx, err := setupFilterGraph(reader.GetDecoderContext(), filterSpec)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create analysis filter graph: %w", err)
 	}
 	defer ffmpeg.AVFilterGraphFree(&filterGraph)
 
-	// Track measurements from all filters (astats + aspectralstats + ebur128)
 	var rmsLevel float64
 	var peakLevel float64
 	var crestFactor float64
@@ -3537,14 +3537,11 @@ func measureOutputSilenceRegionFromReader(reader *audio.Reader, region SilenceRe
 	var rmsLevelFound bool
 	var framesProcessed int64
 
-	// Spectral metric accumulator for averaging across frames
 	var spectralAcc spectralMetrics
 	var spectralFrameCount int64
 
-	// Extract measurements from each filtered frame's metadata
 	extractMeasurements := func(_ *ffmpeg.AVFrame, filteredFrame *ffmpeg.AVFrame) (FrameAction, error) {
 		if metadata := filteredFrame.Metadata(); metadata != nil {
-			// astats amplitude measurements (using Overall keys for measure_perchannel=0)
 			if value, ok := getFloatMetadata(metadata, metaKeyOverallRMSLevel); ok {
 				rmsLevel = value
 				rmsLevelFound = true
@@ -3556,14 +3553,12 @@ func measureOutputSilenceRegionFromReader(reader *audio.Reader, region SilenceRe
 				crestFactor = value
 			}
 
-			// aspectralstats spectral measurements - accumulate for averaging
 			sm := extractSpectralMetrics(metadata)
 			if sm.Found {
 				spectralAcc.add(sm)
 				spectralFrameCount++
 			}
 
-			// ebur128 loudness measurements
 			if value, ok := getFloatMetadata(metadata, metaKeyEbur128M); ok {
 				momentaryLUFS = value
 			}
@@ -3582,7 +3577,6 @@ func measureOutputSilenceRegionFromReader(reader *audio.Reader, region SilenceRe
 		return FrameDiscard, nil
 	}
 
-	// Process frames through filter to measure noise characteristics
 	lenientHandler := func(err error) error { return nil }
 	_ = runFilterGraph(reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
 		OnPushError: lenientHandler,
@@ -3591,17 +3585,14 @@ func measureOutputSilenceRegionFromReader(reader *audio.Reader, region SilenceRe
 	})
 
 	if framesProcessed == 0 {
-		return nil, fmt.Errorf("no frames processed in silence region")
+		return nil, fmt.Errorf("no frames processed in region")
 	}
 
-	// Calculate averaged spectral metrics
 	var avg spectralMetrics
 	if spectralFrameCount > 0 {
 		avg = spectralAcc.average(float64(spectralFrameCount))
 	}
 
-	// Diagnostic summary
-	debugLog("=== MeasureOutputSilenceRegion SUMMARY ===")
 	debugLog("  Frames processed: %d", framesProcessed)
 	debugLog("  Spectral frames: %d", spectralFrameCount)
 	debugLog("  Final ebur128 values:")
@@ -3616,60 +3607,70 @@ func measureOutputSilenceRegionFromReader(reader *audio.Reader, region SilenceRe
 	debugLog("    spectralCentroid: %f", avg.Centroid)
 	debugLog("    spectralRolloff: %f", avg.Rolloff)
 
-	// Validate ebur128 measurements were captured
 	ebur128Valid := momentaryLUFS != 0.0 || shortTermLUFS != 0.0 || truePeak != 0.0
-
 	if !ebur128Valid {
-		// Log warning but don't fail - amplitude/spectral measurements are still valid
-		debugLog("Warning: ebur128 measurements not captured for silence region (insufficient duration or warmup time)")
+		debugLog("Warning: ebur128 measurements not captured (insufficient duration or warmup time)")
 	}
 
-	// Use crest factor from astats if available, otherwise calculate from peak and RMS
 	if crestFactor == 0.0 && rmsLevelFound && peakLevel != 0 {
 		crestFactor = peakLevel - rmsLevel
 	}
 
-	// Convert ebur128 peak values from linear to dB (matches Pass 1 extraction in extractIntervalFromFrame)
-	// ebur128 reports true_peak and sample_peak as linear ratios (0.0 to ~1.0+)
-	truePeakDB := linearRatioToDB(truePeak)
-	samplePeakDB := linearRatioToDB(samplePeak)
-
-	// Map all extracted measurements to SilenceCandidateMetrics
-	metrics := &SilenceCandidateMetrics{
-		Region: region,
-
-		// Amplitude metrics from astats
-		RMSLevel:    rmsLevel,
-		PeakLevel:   peakLevel,
-		CrestFactor: crestFactor,
-
-		// Spectral metrics from aspectralstats (averaged across frames)
-		SpectralMean:     avg.Mean,
-		SpectralVariance: avg.Variance,
-		SpectralCentroid: avg.Centroid,
-		SpectralSpread:   avg.Spread,
-		SpectralSkewness: avg.Skewness,
-		SpectralKurtosis: avg.Kurtosis,
-		SpectralEntropy:  avg.Entropy,
-		SpectralFlatness: avg.Flatness,
-		SpectralCrest:    avg.Crest,
-		SpectralFlux:     avg.Flux,
-		SpectralSlope:    avg.Slope,
-		SpectralDecrease: avg.Decrease,
-		SpectralRolloff:  avg.Rolloff,
-
-		// Loudness metrics from ebur128 (converted to dB)
-		MomentaryLUFS: momentaryLUFS,
-		ShortTermLUFS: shortTermLUFS,
-		TruePeak:      truePeakDB,
-		SamplePeak:    samplePeakDB,
+	result := &regionMeasurements{
+		RMSLevel:        rmsLevel,
+		PeakLevel:       peakLevel,
+		CrestFactor:     crestFactor,
+		Spectral:        avg,
+		MomentaryLUFS:   momentaryLUFS,
+		ShortTermLUFS:   shortTermLUFS,
+		TruePeak:        linearRatioToDB(truePeak),
+		SamplePeak:      linearRatioToDB(samplePeak),
+		FramesProcessed: framesProcessed,
 	}
 
 	if !rmsLevelFound {
-		metrics.RMSLevel = -60.0 // Conservative fallback
+		result.RMSLevel = -60.0 // Conservative fallback
 	}
 
-	return metrics, nil
+	return result, nil
+}
+
+// measureOutputSilenceRegionFromReader measures a silence region and maps
+// the result to SilenceCandidateMetrics.
+func measureOutputSilenceRegionFromReader(reader *audio.Reader, region SilenceRegion) (*SilenceCandidateMetrics, error) {
+	debugLog("=== MeasureOutputSilenceRegion: start=%.3fs, duration=%.3fs ===",
+		region.Start.Seconds(), region.Duration.Seconds())
+
+	result, err := measureOutputRegionFromReader(reader, region.Start, region.Duration)
+	if err != nil {
+		return nil, err
+	}
+
+	debugLog("=== MeasureOutputSilenceRegion SUMMARY ===")
+
+	return &SilenceCandidateMetrics{
+		Region:           region,
+		RMSLevel:         result.RMSLevel,
+		PeakLevel:        result.PeakLevel,
+		CrestFactor:      result.CrestFactor,
+		SpectralMean:     result.Spectral.Mean,
+		SpectralVariance: result.Spectral.Variance,
+		SpectralCentroid: result.Spectral.Centroid,
+		SpectralSpread:   result.Spectral.Spread,
+		SpectralSkewness: result.Spectral.Skewness,
+		SpectralKurtosis: result.Spectral.Kurtosis,
+		SpectralEntropy:  result.Spectral.Entropy,
+		SpectralFlatness: result.Spectral.Flatness,
+		SpectralCrest:    result.Spectral.Crest,
+		SpectralFlux:     result.Spectral.Flux,
+		SpectralSlope:    result.Spectral.Slope,
+		SpectralDecrease: result.Spectral.Decrease,
+		SpectralRolloff:  result.Spectral.Rolloff,
+		MomentaryLUFS:    result.MomentaryLUFS,
+		ShortTermLUFS:    result.ShortTermLUFS,
+		TruePeak:         result.TruePeak,
+		SamplePeak:       result.SamplePeak,
+	}, nil
 }
 
 // FrameAction tells runFilterGraph what to do with a filtered frame after OnFrame returns.
@@ -3882,186 +3883,40 @@ func MeasureOutputSpeechRegion(outputPath string, region SpeechRegion) (*SpeechC
 	return measureOutputSpeechRegionFromReader(reader, region)
 }
 
-// measureOutputSpeechRegionFromReader performs the speech region measurement
-// using an already-opened audio reader. This enables the combined
-// MeasureOutputRegions function to share a single file open/close cycle.
+// measureOutputSpeechRegionFromReader measures a speech region and maps
+// the result to SpeechCandidateMetrics.
 func measureOutputSpeechRegionFromReader(reader *audio.Reader, region SpeechRegion) (*SpeechCandidateMetrics, error) {
-	// Diagnostic logging: function entry with region details
 	debugLog("=== MeasureOutputSpeechRegion: start=%.3fs, duration=%.3fs ===",
 		region.Start.Seconds(), region.Duration.Seconds())
 
-	// Validate region boundaries
-	if region.Start < 0 {
-		return nil, fmt.Errorf("invalid region: negative start time")
-	}
-	if region.Duration <= 0 {
-		return nil, fmt.Errorf("invalid region: non-positive duration")
-	}
-
-	// Build filter spec to extract and analyze the speech region
-	// Filter chain captures all measurements for comprehensive analysis:
-	// 1. atrim: extract the specific time region (start/duration format)
-	// 2. astats: amplitude measurements (RMS, peak, etc.) - measure_perchannel=0 for overall stats
-	// 3. aspectralstats: all 13 spectral measurements
-	// 4. ebur128: loudness measurements (momentary, short-term, true peak)
-	//
-	// Note: No aformat needed here - the output file is already processed and in final format.
-	// The key is measuring on identical audio data, not forcing format conversion.
-	filterSpec := fmt.Sprintf(
-		"atrim=start=%f:duration=%f,asetpts=PTS-STARTPTS,astats=metadata=1:measure_perchannel=0,aspectralstats=measure=all,ebur128=metadata=1:peak=sample+true",
-		region.Start.Seconds(),
-		region.Duration.Seconds(),
-	)
-
-	// Create filter graph
-	filterGraph, bufferSrcCtx, bufferSinkCtx, err := setupFilterGraph(reader.GetDecoderContext(), filterSpec)
+	result, err := measureOutputRegionFromReader(reader, region.Start, region.Duration)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create analysis filter graph: %w", err)
-	}
-	defer ffmpeg.AVFilterGraphFree(&filterGraph)
-
-	// Track measurements from all filters (astats + aspectralstats + ebur128)
-	var rmsLevel float64
-	var peakLevel float64
-	var crestFactor float64
-	var momentaryLUFS float64
-	var shortTermLUFS float64
-	var truePeak float64
-	var samplePeak float64
-	var rmsLevelFound bool
-	var framesProcessed int64
-
-	// Spectral metric accumulator for averaging across frames
-	var spectralAcc spectralMetrics
-	var spectralFrameCount int64
-
-	// Extract measurements from each filtered frame's metadata
-	extractMeasurements := func(_ *ffmpeg.AVFrame, filteredFrame *ffmpeg.AVFrame) (FrameAction, error) {
-		if metadata := filteredFrame.Metadata(); metadata != nil {
-			// astats amplitude measurements (using Overall keys for measure_perchannel=0)
-			if value, ok := getFloatMetadata(metadata, metaKeyOverallRMSLevel); ok {
-				rmsLevel = value
-				rmsLevelFound = true
-			}
-			if value, ok := getFloatMetadata(metadata, metaKeyOverallPeakLevel); ok {
-				peakLevel = value
-			}
-			if value, ok := getFloatMetadata(metadata, metaKeyOverallCrestFactor); ok {
-				crestFactor = value
-			}
-
-			// aspectralstats spectral measurements - accumulate for averaging
-			sm := extractSpectralMetrics(metadata)
-			if sm.Found {
-				spectralAcc.add(sm)
-				spectralFrameCount++
-			}
-
-			// ebur128 loudness measurements
-			if value, ok := getFloatMetadata(metadata, metaKeyEbur128M); ok {
-				momentaryLUFS = value
-			}
-			if value, ok := getFloatMetadata(metadata, metaKeyEbur128S); ok {
-				shortTermLUFS = value
-			}
-			if value, ok := getFloatMetadata(metadata, metaKeyEbur128TruePeak); ok {
-				truePeak = value
-			}
-			if value, ok := getFloatMetadata(metadata, metaKeyEbur128SamplePeak); ok {
-				samplePeak = value
-			}
-		}
-
-		framesProcessed++
-		return FrameDiscard, nil
+		return nil, err
 	}
 
-	// Process frames through filter to measure speech characteristics
-	lenientHandler := func(err error) error { return nil }
-	_ = runFilterGraph(reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
-		OnPushError: lenientHandler,
-		OnPullError: lenientHandler,
-		OnFrame:     extractMeasurements,
-	})
-
-	if framesProcessed == 0 {
-		return nil, fmt.Errorf("no frames processed in speech region")
-	}
-
-	// Calculate averaged spectral metrics
-	var avg spectralMetrics
-	if spectralFrameCount > 0 {
-		avg = spectralAcc.average(float64(spectralFrameCount))
-	}
-
-	// Diagnostic summary
 	debugLog("=== MeasureOutputSpeechRegion SUMMARY ===")
-	debugLog("  Frames processed: %d", framesProcessed)
-	debugLog("  Spectral frames: %d", spectralFrameCount)
-	debugLog("  Final ebur128 values:")
-	debugLog("    momentaryLUFS: %f", momentaryLUFS)
-	debugLog("    shortTermLUFS: %f", shortTermLUFS)
-	debugLog("    truePeak: %f", truePeak)
-	debugLog("    samplePeak: %f", samplePeak)
-	debugLog("  Final astats values:")
-	debugLog("    rmsLevel: %f (found: %v)", rmsLevel, rmsLevelFound)
-	debugLog("    peakLevel: %f", peakLevel)
-	debugLog("  Averaged spectral values:")
-	debugLog("    spectralCentroid: %f", avg.Centroid)
-	debugLog("    spectralRolloff: %f", avg.Rolloff)
 
-	// Validate ebur128 measurements were captured
-	ebur128Valid := momentaryLUFS != 0.0 || shortTermLUFS != 0.0 || truePeak != 0.0
-
-	if !ebur128Valid {
-		// Log warning but don't fail - amplitude/spectral measurements are still valid
-		debugLog("Warning: ebur128 measurements not captured for speech region (insufficient duration or warmup time)")
-	}
-
-	// Use crest factor from astats if available, otherwise calculate from peak and RMS
-	if crestFactor == 0.0 && rmsLevelFound && peakLevel != 0 {
-		crestFactor = peakLevel - rmsLevel
-	}
-
-	// Convert ebur128 peak values from linear to dB (matches Pass 1 extraction in extractIntervalFromFrame)
-	// ebur128 reports true_peak and sample_peak as linear ratios (0.0 to ~1.0+)
-	truePeakDB := linearRatioToDB(truePeak)
-	samplePeakDB := linearRatioToDB(samplePeak)
-
-	// Map all extracted measurements to SpeechCandidateMetrics
-	metrics := &SpeechCandidateMetrics{
-		Region: region,
-
-		// Amplitude metrics from astats
-		RMSLevel:    rmsLevel,
-		PeakLevel:   peakLevel,
-		CrestFactor: crestFactor,
-
-		// Spectral metrics from aspectralstats (averaged across frames)
-		SpectralMean:     avg.Mean,
-		SpectralVariance: avg.Variance,
-		SpectralCentroid: avg.Centroid,
-		SpectralSpread:   avg.Spread,
-		SpectralSkewness: avg.Skewness,
-		SpectralKurtosis: avg.Kurtosis,
-		SpectralEntropy:  avg.Entropy,
-		SpectralFlatness: avg.Flatness,
-		SpectralCrest:    avg.Crest,
-		SpectralFlux:     avg.Flux,
-		SpectralSlope:    avg.Slope,
-		SpectralDecrease: avg.Decrease,
-		SpectralRolloff:  avg.Rolloff,
-
-		// Loudness metrics from ebur128 (converted to dB)
-		MomentaryLUFS: momentaryLUFS,
-		ShortTermLUFS: shortTermLUFS,
-		TruePeak:      truePeakDB,
-		SamplePeak:    samplePeakDB,
-	}
-
-	if !rmsLevelFound {
-		metrics.RMSLevel = -60.0 // Conservative fallback
-	}
-
-	return metrics, nil
+	return &SpeechCandidateMetrics{
+		Region:           region,
+		RMSLevel:         result.RMSLevel,
+		PeakLevel:        result.PeakLevel,
+		CrestFactor:      result.CrestFactor,
+		SpectralMean:     result.Spectral.Mean,
+		SpectralVariance: result.Spectral.Variance,
+		SpectralCentroid: result.Spectral.Centroid,
+		SpectralSpread:   result.Spectral.Spread,
+		SpectralSkewness: result.Spectral.Skewness,
+		SpectralKurtosis: result.Spectral.Kurtosis,
+		SpectralEntropy:  result.Spectral.Entropy,
+		SpectralFlatness: result.Spectral.Flatness,
+		SpectralCrest:    result.Spectral.Crest,
+		SpectralFlux:     result.Spectral.Flux,
+		SpectralSlope:    result.Spectral.Slope,
+		SpectralDecrease: result.Spectral.Decrease,
+		SpectralRolloff:  result.Spectral.Rolloff,
+		MomentaryLUFS:    result.MomentaryLUFS,
+		ShortTermLUFS:    result.ShortTermLUFS,
+		TruePeak:         result.TruePeak,
+		SamplePeak:       result.SamplePeak,
+	}, nil
 }
