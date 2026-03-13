@@ -18,6 +18,11 @@ import (
 // DisplayAnalysisResults outputs Pass 1 analysis results to the console.
 // Used by --analysis-only mode for rapid inspection without full processing.
 func DisplayAnalysisResults(w io.Writer, inputPath string, metadata *audio.Metadata, measurements *processor.AudioMeasurements, config *processor.FilterChainConfig) {
+	if measurements == nil {
+		fmt.Fprintf(w, "No analysis data available for %s\n", filepath.Base(inputPath))
+		return
+	}
+
 	// Header
 	fmt.Fprintln(w, strings.Repeat("=", 70))
 	fmt.Fprintf(w, "ANALYSIS: %s\n", filepath.Base(inputPath))
