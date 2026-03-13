@@ -3526,10 +3526,6 @@ func measureOutputSilenceRegionFromReader(reader *audio.Reader, region SilenceRe
 	}
 	defer ffmpeg.AVFilterGraphFree(&filterGraph)
 
-	// Process frames through filter to measure noise characteristics
-	filteredFrame := ffmpeg.AVFrameAlloc()
-	defer ffmpeg.AVFrameFree(&filteredFrame)
-
 	// Track measurements from all filters (astats + aspectralstats + ebur128)
 	var rmsLevel float64
 	var peakLevel float64
@@ -3557,194 +3553,93 @@ func measureOutputSilenceRegionFromReader(reader *audio.Reader, region SilenceRe
 	var spectralRolloffSum float64
 	var spectralFrameCount int64
 
-	for {
-		frame, err := reader.ReadFrame()
-		if err != nil {
-			break
-		}
-		if frame == nil {
-			break // EOF
-		}
-
-		// Push frame into filter graph
-		if _, err := ffmpeg.AVBuffersrcAddFrameFlags(bufferSrcCtx, frame, 0); err != nil {
-			continue // Skip problematic frames
-		}
-
-		// Pull filtered frames
-		for {
-			if _, err := ffmpeg.AVBuffersinkGetFrame(bufferSinkCtx, filteredFrame); err != nil {
-				if errors.Is(err, ffmpeg.EAgain) || errors.Is(err, ffmpeg.AVErrorEOF) {
-					break
-				}
-				continue
+	// Extract measurements from each filtered frame's metadata
+	extractMeasurements := func(_ *ffmpeg.AVFrame, filteredFrame *ffmpeg.AVFrame) (FrameAction, error) {
+		if metadata := filteredFrame.Metadata(); metadata != nil {
+			// astats amplitude measurements (using Overall keys for measure_perchannel=0)
+			if value, ok := getFloatMetadata(metadata, metaKeyOverallRMSLevel); ok {
+				rmsLevel = value
+				rmsLevelFound = true
+			}
+			if value, ok := getFloatMetadata(metadata, metaKeyOverallPeakLevel); ok {
+				peakLevel = value
+			}
+			if value, ok := getFloatMetadata(metadata, metaKeyOverallCrestFactor); ok {
+				crestFactor = value
 			}
 
-			// Extract measurements from metadata (all filters emit metadata)
-			if metadata := filteredFrame.Metadata(); metadata != nil {
-				// astats amplitude measurements (using Overall keys for measure_perchannel=0)
-				if value, ok := getFloatMetadata(metadata, metaKeyOverallRMSLevel); ok {
-					rmsLevel = value
-					rmsLevelFound = true
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeyOverallPeakLevel); ok {
-					peakLevel = value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeyOverallCrestFactor); ok {
-					crestFactor = value
-				}
-
-				// aspectralstats spectral measurements - accumulate for averaging
-				spectralFound := false
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralMean); ok {
-					spectralMeanSum += value
-					spectralFound = true
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralVariance); ok {
-					spectralVarianceSum += value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralCentroid); ok {
-					spectralCentroidSum += value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralSpread); ok {
-					spectralSpreadSum += value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralSkewness); ok {
-					spectralSkewnessSum += value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralKurtosis); ok {
-					spectralKurtosisSum += value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralEntropy); ok {
-					spectralEntropySum += value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralFlatness); ok {
-					spectralFlatnessSum += value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralCrest); ok {
-					spectralCrestSum += value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralFlux); ok {
-					spectralFluxSum += value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralSlope); ok {
-					spectralSlopeSum += value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralDecrease); ok {
-					spectralDecreaseSum += value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralRolloff); ok {
-					spectralRolloffSum += value
-				}
-				if spectralFound {
-					spectralFrameCount++
-				}
-
-				// ebur128 loudness measurements
-				if value, ok := getFloatMetadata(metadata, metaKeyEbur128M); ok {
-					momentaryLUFS = value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeyEbur128S); ok {
-					shortTermLUFS = value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeyEbur128TruePeak); ok {
-					truePeak = value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeyEbur128SamplePeak); ok {
-					samplePeak = value
-				}
+			// aspectralstats spectral measurements - accumulate for averaging
+			spectralFound := false
+			if value, ok := getFloatMetadata(metadata, metaKeySpectralMean); ok {
+				spectralMeanSum += value
+				spectralFound = true
+			}
+			if value, ok := getFloatMetadata(metadata, metaKeySpectralVariance); ok {
+				spectralVarianceSum += value
+			}
+			if value, ok := getFloatMetadata(metadata, metaKeySpectralCentroid); ok {
+				spectralCentroidSum += value
+			}
+			if value, ok := getFloatMetadata(metadata, metaKeySpectralSpread); ok {
+				spectralSpreadSum += value
+			}
+			if value, ok := getFloatMetadata(metadata, metaKeySpectralSkewness); ok {
+				spectralSkewnessSum += value
+			}
+			if value, ok := getFloatMetadata(metadata, metaKeySpectralKurtosis); ok {
+				spectralKurtosisSum += value
+			}
+			if value, ok := getFloatMetadata(metadata, metaKeySpectralEntropy); ok {
+				spectralEntropySum += value
+			}
+			if value, ok := getFloatMetadata(metadata, metaKeySpectralFlatness); ok {
+				spectralFlatnessSum += value
+			}
+			if value, ok := getFloatMetadata(metadata, metaKeySpectralCrest); ok {
+				spectralCrestSum += value
+			}
+			if value, ok := getFloatMetadata(metadata, metaKeySpectralFlux); ok {
+				spectralFluxSum += value
+			}
+			if value, ok := getFloatMetadata(metadata, metaKeySpectralSlope); ok {
+				spectralSlopeSum += value
+			}
+			if value, ok := getFloatMetadata(metadata, metaKeySpectralDecrease); ok {
+				spectralDecreaseSum += value
+			}
+			if value, ok := getFloatMetadata(metadata, metaKeySpectralRolloff); ok {
+				spectralRolloffSum += value
+			}
+			if spectralFound {
+				spectralFrameCount++
 			}
 
-			framesProcessed++
-			ffmpeg.AVFrameUnref(filteredFrame)
+			// ebur128 loudness measurements
+			if value, ok := getFloatMetadata(metadata, metaKeyEbur128M); ok {
+				momentaryLUFS = value
+			}
+			if value, ok := getFloatMetadata(metadata, metaKeyEbur128S); ok {
+				shortTermLUFS = value
+			}
+			if value, ok := getFloatMetadata(metadata, metaKeyEbur128TruePeak); ok {
+				truePeak = value
+			}
+			if value, ok := getFloatMetadata(metadata, metaKeyEbur128SamplePeak); ok {
+				samplePeak = value
+			}
 		}
+
+		framesProcessed++
+		return FrameDiscard, nil
 	}
 
-	// Flush filter graph
-	if _, err := ffmpeg.AVBuffersrcAddFrameFlags(bufferSrcCtx, nil, 0); err == nil {
-		for {
-			if _, err := ffmpeg.AVBuffersinkGetFrame(bufferSinkCtx, filteredFrame); err != nil {
-				break
-			}
-
-			if metadata := filteredFrame.Metadata(); metadata != nil {
-				// astats amplitude measurements (using Overall keys for measure_perchannel=0)
-				if value, ok := getFloatMetadata(metadata, metaKeyOverallRMSLevel); ok {
-					rmsLevel = value
-					rmsLevelFound = true
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeyOverallPeakLevel); ok {
-					peakLevel = value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeyOverallCrestFactor); ok {
-					crestFactor = value
-				}
-
-				// aspectralstats spectral measurements - accumulate for averaging
-				spectralFound := false
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralMean); ok {
-					spectralMeanSum += value
-					spectralFound = true
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralVariance); ok {
-					spectralVarianceSum += value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralCentroid); ok {
-					spectralCentroidSum += value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralSpread); ok {
-					spectralSpreadSum += value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralSkewness); ok {
-					spectralSkewnessSum += value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralKurtosis); ok {
-					spectralKurtosisSum += value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralEntropy); ok {
-					spectralEntropySum += value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralFlatness); ok {
-					spectralFlatnessSum += value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralCrest); ok {
-					spectralCrestSum += value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralFlux); ok {
-					spectralFluxSum += value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralSlope); ok {
-					spectralSlopeSum += value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralDecrease); ok {
-					spectralDecreaseSum += value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeySpectralRolloff); ok {
-					spectralRolloffSum += value
-				}
-				if spectralFound {
-					spectralFrameCount++
-				}
-
-				// ebur128 loudness measurements
-				if value, ok := getFloatMetadata(metadata, metaKeyEbur128M); ok {
-					momentaryLUFS = value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeyEbur128S); ok {
-					shortTermLUFS = value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeyEbur128TruePeak); ok {
-					truePeak = value
-				}
-				if value, ok := getFloatMetadata(metadata, metaKeyEbur128SamplePeak); ok {
-					samplePeak = value
-				}
-			}
-
-			framesProcessed++
-			ffmpeg.AVFrameUnref(filteredFrame)
-		}
-	}
+	// Process frames through filter to measure noise characteristics
+	lenientHandler := func(err error) error { return nil }
+	_ = runFilterGraph(reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
+		OnPushError: lenientHandler,
+		OnPullError: lenientHandler,
+		OnFrame:     extractMeasurements,
+	})
 
 	if framesProcessed == 0 {
 		return nil, fmt.Errorf("no frames processed in silence region")
