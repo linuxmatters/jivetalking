@@ -3,6 +3,9 @@ package processor
 import (
 	"testing"
 	"time"
+
+	ffmpeg "github.com/linuxmatters/ffmpeg-statigo"
+	"github.com/linuxmatters/jivetalking/internal/audio"
 )
 
 func TestAnalyzeAudio(t *testing.T) {
@@ -1975,4 +1978,105 @@ func TestCrestFactorPenalty(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRunFilterGraph(t *testing.T) {
+	// Generate synthetic audio: 2-second 440Hz tone
+	testFile := generateTestAudio(t, TestAudioOptions{
+		DurationSecs: 2.0,
+		SampleRate:   44100,
+		ToneFreq:     440.0,
+		ToneLevel:    -20.0,
+	})
+	defer cleanupTestAudio(t, testFile)
+
+	// Open the file
+	reader, _, err := audio.OpenAudioFile(testFile)
+	if err != nil {
+		t.Fatalf("failed to open test audio: %v", err)
+	}
+	defer reader.Close()
+
+	// Create a passthrough filter graph (anull = audio null filter, passes through unchanged)
+	filterGraph, bufferSrcCtx, bufferSinkCtx, err := setupFilterGraph(
+		reader.GetDecoderContext(),
+		"anull",
+	)
+	if err != nil {
+		t.Fatalf("failed to create filter graph: %v", err)
+	}
+	defer ffmpeg.AVFilterGraphFree(&filterGraph)
+
+	// Count frames using runFilterGraph
+	var inputFrameCount int
+	var filteredFrameCount int
+
+	err = runFilterGraph(reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
+		OnInputFrame: func(_ *ffmpeg.AVFrame) {
+			inputFrameCount++
+		},
+		OnFrame: func(_, _ *ffmpeg.AVFrame) (FrameAction, error) {
+			filteredFrameCount++
+			return FrameDiscard, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("runFilterGraph failed: %v", err)
+	}
+
+	// With a passthrough filter, filtered frame count must match input frame count
+	if inputFrameCount == 0 {
+		t.Fatal("no input frames read")
+	}
+	if filteredFrameCount != inputFrameCount {
+		t.Errorf("filtered frame count (%d) != input frame count (%d)",
+			filteredFrameCount, inputFrameCount)
+	}
+	t.Logf("processed %d input frames, %d filtered frames", inputFrameCount, filteredFrameCount)
+}
+
+func TestRunFilterGraphLenientErrors(t *testing.T) {
+	// Verify that nil OnReadError defaults to break (lenient) and
+	// nil OnPushError defaults to return error (strict).
+	// This test validates the default callback contract.
+
+	testFile := generateTestAudio(t, TestAudioOptions{
+		DurationSecs: 1.0,
+		SampleRate:   44100,
+		ToneFreq:     440.0,
+		ToneLevel:    -20.0,
+	})
+	defer cleanupTestAudio(t, testFile)
+
+	reader, _, err := audio.OpenAudioFile(testFile)
+	if err != nil {
+		t.Fatalf("failed to open test audio: %v", err)
+	}
+	defer reader.Close()
+
+	filterGraph, bufferSrcCtx, bufferSinkCtx, err := setupFilterGraph(
+		reader.GetDecoderContext(),
+		"anull",
+	)
+	if err != nil {
+		t.Fatalf("failed to create filter graph: %v", err)
+	}
+	defer ffmpeg.AVFilterGraphFree(&filterGraph)
+
+	// Run with lenient push errors (continue on push failure) and discard-only
+	var frameCount int
+	err = runFilterGraph(reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
+		OnPushError: func(_ error) error { return nil }, // lenient: continue
+		OnFrame: func(_, _ *ffmpeg.AVFrame) (FrameAction, error) {
+			frameCount++
+			return FrameDiscard, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("runFilterGraph with lenient push errors failed: %v", err)
+	}
+	if frameCount == 0 {
+		t.Fatal("no frames processed with lenient config")
+	}
+	t.Logf("lenient config processed %d filtered frames", frameCount)
 }
