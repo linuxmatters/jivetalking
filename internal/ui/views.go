@@ -157,22 +157,10 @@ func renderAudioLevelMeter(currentLevel, peakLevel float64) string {
 	maxDB := 0.0
 
 	// Calculate fill position for current level
-	currentPos := int(((currentLevel - minDB) / (maxDB - minDB)) * float64(width))
-	if currentPos < 0 {
-		currentPos = 0
-	}
-	if currentPos > width {
-		currentPos = width
-	}
+	currentPos := max(0, min(int(((currentLevel-minDB)/(maxDB-minDB))*float64(width)), width))
 
 	// Calculate position for peak marker
-	peakPos := int(((peakLevel - minDB) / (maxDB - minDB)) * float64(width))
-	if peakPos < 0 {
-		peakPos = 0
-	}
-	if peakPos > width {
-		peakPos = width
-	}
+	peakPos := max(0, min(int(((peakLevel-minDB)/(maxDB-minDB))*float64(width)), width))
 
 	// Build the meter bar with color zones
 	// Green: -60 to -18 dB (safe)
@@ -188,7 +176,7 @@ func renderAudioLevelMeter(currentLevel, peakLevel float64) string {
 	redColor := "\033[38;2;164;0;0m"      // #A40000
 	resetColor := "\033[0m"
 
-	for i := 0; i < width; i++ {
+	for i := range width {
 		// Determine color zone
 		var color string
 		if i < greenZone {
