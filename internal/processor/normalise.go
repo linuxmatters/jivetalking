@@ -166,50 +166,20 @@ func measureWithLoudnorm(inputPath string, config *FilterChainConfig, progressCa
 	}
 	// Note: We free the filter graph explicitly to trigger loudnorm JSON output
 
-	// Allocate frame for pulling filtered output (reused across all iterations)
-	filteredFrame := ffmpeg.AVFrameAlloc()
-	defer ffmpeg.AVFrameFree(&filteredFrame)
-
 	// Process all frames through loudnorm (no encoding - just measurement)
-	for {
-		frame, err := reader.ReadFrame()
-		if err != nil || frame == nil {
-			break
-		}
-
-		// Track samples for progress
-		samplesProcessed += int64(frame.NbSamples())
-
-		// Push frame into filter graph
-		if _, err := ffmpeg.AVBuffersrcAddFrameFlags(bufferSrcCtx, frame, 0); err != nil {
-			continue
-		}
-
-		// Pull filtered frames (discard - we only want the measurements)
-		for {
-			if _, err := ffmpeg.AVBuffersinkGetFrame(bufferSinkCtx, filteredFrame); err != nil {
-				break
+	lenientHandler := func(err error) error { return nil }
+	_ = runFilterGraph(reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
+		OnPushError: lenientHandler,
+		OnPullError: lenientHandler,
+		OnInputFrame: func(inputFrame *ffmpeg.AVFrame) {
+			samplesProcessed += int64(inputFrame.NbSamples())
+			frameCount++
+			if progressCallback != nil && frameCount%progressUpdateInterval == 0 {
+				progress := math.Min(0.99, float64(samplesProcessed)/float64(totalSamples))
+				progressCallback(PassMeasuring, "Measuring", progress, 0.0, nil)
 			}
-			ffmpeg.AVFrameUnref(filteredFrame)
-		}
-
-		// Progress update periodically (every N frames for smooth updates)
-		frameCount++
-		if progressCallback != nil && frameCount%progressUpdateInterval == 0 {
-			progress := math.Min(0.99, float64(samplesProcessed)/float64(totalSamples))
-			progressCallback(PassMeasuring, "Measuring", progress, 0.0, nil)
-		}
-	}
-
-	// Flush filter graph
-	if _, err := ffmpeg.AVBuffersrcAddFrameFlags(bufferSrcCtx, nil, 0); err == nil {
-		for {
-			if _, err := ffmpeg.AVBuffersinkGetFrame(bufferSinkCtx, filteredFrame); err != nil {
-				break
-			}
-			ffmpeg.AVFrameUnref(filteredFrame)
-		}
-	}
+		},
+	})
 
 	// Free filter graph to trigger loudnorm JSON output
 	ffmpeg.AVFilterGraphFree(&filterGraph)
