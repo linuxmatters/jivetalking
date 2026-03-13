@@ -3,7 +3,6 @@ package processor
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -548,76 +547,37 @@ func applyLoudnormAndMeasure(
 	var samplesProcessed int64
 	const progressUpdateInterval = 100 // Send progress update every N frames
 
-	// Allocate frame for pulling filtered output (reused across all iterations)
-	filteredFrame := ffmpeg.AVFrameAlloc()
-	defer ffmpeg.AVFrameFree(&filteredFrame)
-
-	for {
-		frame, err := reader.ReadFrame()
-		if err != nil {
-			break
-		}
-		if frame == nil {
-			break
-		}
-
-		// Track samples for progress
-		samplesProcessed += int64(frame.NbSamples())
-
-		// Push frame into filter graph
-		if _, err := ffmpeg.AVBuffersrcAddFrameFlags(bufferSrcCtx, frame, 0); err != nil {
-			continue
-		}
-
-		// Pull filtered frames
-		for {
-			if _, err := ffmpeg.AVBuffersinkGetFrame(bufferSinkCtx, filteredFrame); err != nil {
-				if errors.Is(err, ffmpeg.EAgain) || errors.Is(err, ffmpeg.AVErrorEOF) {
-					break
-				}
-				ffmpeg.AVFrameUnref(filteredFrame)
-				continue
-			}
-
+	lenientHandler := func(err error) error { return nil }
+	loopErr := runFilterGraph(reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
+		OnPushError: lenientHandler,
+		OnPullError: lenientHandler,
+		OnInputFrame: func(inputFrame *ffmpeg.AVFrame) {
+			samplesProcessed += int64(inputFrame.NbSamples())
+		},
+		OnFrame: func(inputFrame, filteredFrame *ffmpeg.AVFrame) (FrameAction, error) {
 			// Extract validation measurements using Pass 2's function
 			extractOutputFrameMetadata(filteredFrame.Metadata(), &acc)
 
 			// Encode frame
 			if err := encoder.WriteFrame(filteredFrame); err != nil {
 				ffmpeg.AVFrameUnref(filteredFrame)
-				ffmpeg.AVFilterGraphFree(&filterGraph)
-				return 0.0, 0.0, nil, getLoudnormStats(), fmt.Errorf("encoding failed: %w", err)
+				return FrameDiscard, fmt.Errorf("encoding failed: %w", err)
 			}
 
 			framesProcessed++
-			ffmpeg.AVFrameUnref(filteredFrame)
-		}
 
-		// Progress update periodically (every N input frames for smooth updates)
-		if progressCallback != nil && framesProcessed%progressUpdateInterval == 0 {
-			progress := math.Min(0.99, float64(samplesProcessed)/float64(totalSamples))
-			progressCallback(PassNormalising, "Normalising", progress, acc.ebur128OutputI, nil)
-		}
-	}
-
-	// Flush filter graph
-	if _, err := ffmpeg.AVBuffersrcAddFrameFlags(bufferSrcCtx, nil, 0); err == nil {
-		for {
-			if _, err := ffmpeg.AVBuffersinkGetFrame(bufferSinkCtx, filteredFrame); err != nil {
-				break
+			// Progress update periodically (every N output frames for smooth updates)
+			if progressCallback != nil && framesProcessed%progressUpdateInterval == 0 {
+				progress := math.Min(0.99, float64(samplesProcessed)/float64(totalSamples))
+				progressCallback(PassNormalising, "Normalising", progress, acc.ebur128OutputI, nil)
 			}
 
-			// Extract final measurements using Pass 2's function
-			extractOutputFrameMetadata(filteredFrame.Metadata(), &acc)
-
-			if err := encoder.WriteFrame(filteredFrame); err != nil {
-				ffmpeg.AVFrameUnref(filteredFrame)
-				ffmpeg.AVFilterGraphFree(&filterGraph)
-				return 0.0, 0.0, nil, getLoudnormStats(), fmt.Errorf("encoding failed during flush: %w", err)
-			}
-
-			ffmpeg.AVFrameUnref(filteredFrame)
-		}
+			return FrameDiscard, nil
+		},
+	})
+	if loopErr != nil {
+		ffmpeg.AVFilterGraphFree(&filterGraph)
+		return 0.0, 0.0, nil, getLoudnormStats(), loopErr
 	}
 
 	// Flush encoder
