@@ -690,7 +690,7 @@ func TestFindBestSilenceRegion_LateCandidateDiscoverable(t *testing.T) {
 		t.Errorf("BestRegion.Start = %v, want 1800s", result.BestRegion.Start)
 	}
 	if len(result.Candidates) != 1 {
-		t.Errorf("len(Candidates) = %d, want 1", len(result.Candidates))
+		t.Fatalf("len(Candidates) = %d, want 1", len(result.Candidates))
 	}
 
 	t.Logf("late candidate score=%.4f", result.Candidates[0].Score)
