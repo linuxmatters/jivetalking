@@ -593,7 +593,7 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 		speechSearchStart = 30 * time.Second
 	}
 
-	measurements.SpeechRegions = findSpeechCandidatesFromIntervals(intervals, speechSearchStart)
+	measurements.SpeechRegions = findSpeechCandidatesFromIntervals(intervals, speechSearchStart, measurements.VoiceActivated)
 
 	// Select best speech region (passing noiseProfile for SNR margin checking)
 	speechResult := findBestSpeechRegion(measurements.SpeechRegions, intervals, noiseProfile)
