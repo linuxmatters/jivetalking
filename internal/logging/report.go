@@ -386,7 +386,7 @@ type ReportData struct {
 }
 
 // GenerateReport creates a detailed analysis report and saves it alongside the output file.
-// The report filename will be <output>-processed.log
+// The report filename will be <output>-LUFS-NN-processed.log
 //
 // Report structure (Phase 3 restructure):
 // 1. Header - file info and timestamp
@@ -397,7 +397,7 @@ type ReportData struct {
 // 6. Speech Region Analysis - three-column table with interpretations
 // 7. Diagnostic sections - detailed debug info
 func GenerateReport(data ReportData) error {
-	// Generate report filename: presenter1-processed.flac → presenter1-processed.log
+	// Generate report filename: presenter1-LUFS-16-processed.flac → presenter1-LUFS-16-processed.log
 	logPath := strings.TrimSuffix(data.OutputPath, filepath.Ext(data.OutputPath)) + ".log"
 
 	// Create report file

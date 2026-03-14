@@ -3,6 +3,8 @@ package processor
 
 import (
 	"fmt"
+	"math"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -41,7 +43,7 @@ func AnalyzeOnly(inputPath string, config *FilterChainConfig,
 //   - Pass 2: Process audio through filter chain (downmix → ds201_highpass → ds201_lowpass → noiseremove[anlmdn+compand] → agate → la2a → deesser → analysis → resample)
 //     (Pass 3 measures loudnorm; Pass 4 applies alimiter (Volumax) + loudnorm)
 //
-// The output file will be named <basename>-processed.<ext> in the same directory as the input
+// The output file will be named <basename>-LUFS-NN-processed.<ext> in the same directory as the input
 // If progressCallback is not nil, it will be called with progress updates
 func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements)) (*ProcessingResult, error) {
 	// Pass 1: Analysis
@@ -140,6 +142,14 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 	} else if filteredMeasurements != nil {
 		result.OutputLUFS = filteredMeasurements.OutputI
 	}
+
+	// Rename output file to include LUFS value: <name>-processed.<ext> → <name>-LUFS-NN-processed.<ext>
+	lufsValue := int(math.Round(math.Abs(result.OutputLUFS)))
+	finalPath := generateLUFSOutputPath(inputPath, lufsValue)
+	if err := os.Rename(outputPath, finalPath); err != nil {
+		return nil, fmt.Errorf("failed to rename output: %w", err)
+	}
+	result.OutputPath = finalPath
 
 	return result, nil
 }
@@ -274,7 +284,9 @@ func processWithFilters(inputPath, outputPath string, config *FilterChainConfig,
 	return nil
 }
 
-// generateOutputPath creates the output filename from the input filename
+// generateOutputPath creates the intermediate output filename from the input filename.
+// This path is used during processing; the file is later renamed by generateLUFSOutputPath
+// to include the measured LUFS value.
 // Example: /path/to/audio.flac → /path/to/audio-processed.flac
 func generateOutputPath(inputPath string) string {
 	dir := filepath.Dir(inputPath)
@@ -283,4 +295,14 @@ func generateOutputPath(inputPath string) string {
 	nameWithoutExt := strings.TrimSuffix(filename, ext)
 
 	return filepath.Join(dir, nameWithoutExt+"-processed"+ext)
+}
+
+// generateLUFSOutputPath creates the final output filename with the measured LUFS value.
+// Example: /path/to/audio.flac → /path/to/audio-LUFS-16-processed.flac
+func generateLUFSOutputPath(inputPath string, lufsValue int) string {
+	dir := filepath.Dir(inputPath)
+	filename := filepath.Base(inputPath)
+	ext := filepath.Ext(filename)
+	nameWithoutExt := strings.TrimSuffix(filename, ext)
+	return filepath.Join(dir, fmt.Sprintf("%s-LUFS-%d-processed%s", nameWithoutExt, lufsValue, ext))
 }
