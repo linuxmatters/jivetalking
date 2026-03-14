@@ -79,7 +79,7 @@ func TestTipLevelTooQuiet(t *testing.T) {
 		wantGain      string // substring to check in message, empty to skip
 	}{
 		// InputI fallback (no SpeechProfile)
-		{"very quiet -35 LUFS fallback", -35.0, -20.0, nil, true, "level_too_quiet", "17 dB"},
+		{"very quiet -35 LUFS fallback", -35.0, -20.0, nil, true, "level_too_quiet", "19 dB"},
 		{"boundary -30 LUFS fallback", -30.0, -20.0, nil, false, "", ""},
 		{"moderately quiet -28 LUFS fallback", -28.0, -20.0, nil, false, "", ""},
 		{"normal -20 LUFS fallback", -20.0, -20.0, nil, false, "", ""},
@@ -121,7 +121,7 @@ func TestTipLevelTooQuiet(t *testing.T) {
 			inputTP:    -4.0,
 			wantTip:    true,
 			wantRuleID: "level_too_quiet",
-			wantGain:   "3 dB", // maxSafeGain = -1.0 - (-4.0) = 3.0, gainNeeded = 17 clamped to 3
+			wantGain:   "3 dB", // maxSafeGain = -1.0 - (-4.0) = 3.0, gainNeeded = 19 clamped to 3
 		},
 		{
 			name:       "gain clamped with accounting note",
@@ -129,7 +129,7 @@ func TestTipLevelTooQuiet(t *testing.T) {
 			inputTP:    -6.0,
 			wantTip:    true,
 			wantRuleID: "level_too_quiet",
-			wantGain:   "accounting for", // clamped from 17 to 5
+			wantGain:   "accounting for", // clamped from 19 to 5
 		},
 		{
 			name:       "peaks near ceiling switches to crest message",
@@ -183,8 +183,8 @@ func TestTipLevelQuiet(t *testing.T) {
 	}{
 		// InputI fallback (no SpeechProfile)
 		{"very quiet handled by too_quiet fallback", -35.0, -30.0, nil, false, "", ""},
-		{"boundary -30 LUFS triggers quiet fallback", -30.0, -30.0, nil, true, "level_quiet", "12 dB"},
-		{"moderately quiet -28 LUFS fallback", -28.0, -30.0, nil, true, "level_quiet", "10 dB"},
+		{"boundary -30 LUFS triggers quiet fallback", -30.0, -30.0, nil, true, "level_quiet", "14 dB"},
+		{"moderately quiet -28 LUFS fallback", -28.0, -30.0, nil, true, "level_quiet", "12 dB"},
 		{"boundary -24 LUFS no tip fallback", -24.0, -30.0, nil, false, "", ""},
 		{"normal -20 LUFS fallback", -20.0, -30.0, nil, false, "", ""},
 		// Speech-aware path

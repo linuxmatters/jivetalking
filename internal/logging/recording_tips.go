@@ -122,7 +122,7 @@ func wrapText(text string, maxWidth int, indent string) string {
 // tipLevelTooQuiet fires when recording level is very quiet.
 // Uses SpeechProfile.RMSLevel when available (speech RMS < -42 dBFS),
 // falling back to InputI < -30 LUFS when no speech profile exists.
-// Gain target is -24 dBFS for speech RMS, -18 LUFS for InputI fallback.
+// Gain target is -24 dBFS for speech RMS, -16 LUFS for InputI fallback.
 func tipLevelTooQuiet(m *processor.AudioMeasurements, _ *processor.FilterChainConfig) *RecordingTip {
 	var gainNeeded float64
 	if m.SpeechProfile != nil {
@@ -135,7 +135,7 @@ func tipLevelTooQuiet(m *processor.AudioMeasurements, _ *processor.FilterChainCo
 		if m.InputI >= -30.0 {
 			return nil
 		}
-		gainNeeded = -18.0 - m.InputI
+		gainNeeded = processor.NormTargetLUFS - m.InputI
 	}
 	// Clamp to available peak headroom (keep peaks below -1 dBTP)
 	maxSafeGain := -1.0 - m.InputTP
@@ -163,7 +163,7 @@ func tipLevelTooQuiet(m *processor.AudioMeasurements, _ *processor.FilterChainCo
 // tipLevelQuiet fires when recording level is moderately quiet.
 // Uses SpeechProfile.RMSLevel when available (speech RMS between -42 and -36 dBFS),
 // falling back to InputI between -30 and -24 LUFS when no speech profile exists.
-// Gain target is -24 dBFS for speech RMS, -18 LUFS for InputI fallback.
+// Gain target is -24 dBFS for speech RMS, -16 LUFS for InputI fallback.
 func tipLevelQuiet(m *processor.AudioMeasurements, _ *processor.FilterChainConfig) *RecordingTip {
 	var gainNeeded float64
 	if m.SpeechProfile != nil {
@@ -176,7 +176,7 @@ func tipLevelQuiet(m *processor.AudioMeasurements, _ *processor.FilterChainConfi
 		if m.InputI < -30.0 || m.InputI >= -24.0 {
 			return nil
 		}
-		gainNeeded = -18.0 - m.InputI
+		gainNeeded = processor.NormTargetLUFS - m.InputI
 	}
 	// Clamp to available peak headroom (keep peaks below -1 dBTP)
 	maxSafeGain := -1.0 - m.InputTP
