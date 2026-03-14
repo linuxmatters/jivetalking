@@ -201,7 +201,7 @@ type AudioMeasurements struct {
 	NoiseFloor   float64 `json:"noise_floor"`   // Measured noise floor from astats (dBFS)
 
 	// Adaptive silence detection thresholds (derived from interval sampling)
-	PreScanNoiseFloor  float64 `json:"prescan_noise_floor"`  // Noise floor estimated from first 15% of intervals (dBFS)
+	PreScanNoiseFloor  float64 `json:"prescan_noise_floor"`  // Noise floor estimated from interval data (dBFS)
 	SilenceDetectLevel float64 `json:"silence_detect_level"` // Adaptive silencedetect threshold used (dBFS)
 
 	// Silence detection results (derived from interval sampling)
@@ -401,14 +401,7 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 	// This replaces the previous separate pre-scan pass
 
 	// Pre-compute silence detection medians (shared by noise estimation and candidate detection)
-	silSearchLimit := len(intervals) * silenceSearchPercent / 100
-	if silSearchLimit < silenceThresholdMinIntervals {
-		silSearchLimit = silenceThresholdMinIntervals
-	}
-	if silSearchLimit > len(intervals) {
-		silSearchLimit = len(intervals)
-	}
-	silMedians := computeSilenceMedians(intervals[:silSearchLimit])
+	silMedians := computeSilenceMedians(intervals)
 
 	noiseFloorEstimate, silenceThreshold, ok := estimateNoiseFloorAndThreshold(intervals, silMedians)
 	if !ok {

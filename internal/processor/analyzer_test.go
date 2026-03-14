@@ -667,6 +667,35 @@ func TestFindBestSilenceRegion_LaterCandidateWinsWhenGapExceedsTolerance(t *test
 	}
 }
 
+func TestFindBestSilenceRegion_LateCandidateDiscoverable(t *testing.T) {
+	// A high-scoring candidate placed at 50% of totalDuration (1800s into a 3600s recording)
+	// is correctly elected when it is the only candidate above minAcceptableScore.
+	// Verifies that all three former restrictions (excludeFirstSeconds, silenceSearchPercent,
+	// candidateCutoffPercent) no longer prevent discovery.
+
+	regions := []SilenceRegion{
+		{Start: 1800 * time.Second, End: 1810 * time.Second, Duration: 10 * time.Second},
+	}
+
+	// High-scoring silence candidate: low RMS, low centroid, high flatness, low kurtosis, no flux
+	intervals := makeSilenceTestIntervals(1800*time.Second, 10*time.Second,
+		-75.0, -70.0, 100.0, 0.9, 1.0, 0.0)
+
+	result := findBestSilenceRegion(regions, intervals, 3600.0)
+
+	if result.BestRegion == nil {
+		t.Fatal("expected candidate at t=1800s to be elected")
+	}
+	if result.BestRegion.Start != 1800*time.Second {
+		t.Errorf("BestRegion.Start = %v, want 1800s", result.BestRegion.Start)
+	}
+	if len(result.Candidates) != 1 {
+		t.Errorf("len(Candidates) = %d, want 1", len(result.Candidates))
+	}
+
+	t.Logf("late candidate score=%.4f", result.Candidates[0].Score)
+}
+
 // ============================================================================
 // Speech Detection Tests
 // ============================================================================
