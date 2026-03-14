@@ -74,7 +74,7 @@ The software is no longer officially available, though archived copies circulate
 
 ### Architecture Overview
 
-Jivetalking is a Go CLI tool for podcast audio preprocessing using embedded FFmpeg. It transforms raw voice recordings into broadcast-ready audio at -18 LUFS through a four-pass adaptive processing pipeline.
+Jivetalking is a Go CLI tool for podcast audio preprocessing using embedded FFmpeg. It transforms raw voice recordings into broadcast-ready audio at -16 LUFS through a four-pass adaptive processing pipeline.
 
 ### Four-Pass Processing Pipeline
 
@@ -111,7 +111,7 @@ downmix → ds201_highpass → ds201_lowpass → noiseremove → ds201_gate → 
 
 | Parameter | Target |
 |-----------|--------|
-| **Target Loudness** | -18 LUFS (EBU R128) |
+| **Target Loudness** | -16 LUFS |
 | **True Peak Ceiling** | -1.0 to -2.0 dBTP |
 | **Output Format** | 44.1kHz, 16-bit, mono |
 | **Loudness Range** | Up to 20 LU (prevents dynamic mode fallback) |
@@ -141,7 +141,7 @@ Jivetalking employs speech profile extraction for adaptive tuning:
 | **Processing Approach** | Multi-pass file-based batch processing | Multi-pass file-based batch processing |
 | **Processing Paradigm** | "Leveling"—medium-term variation correction | Full pipeline: denoise → gate → compress → de-ess → normalise |
 | **Look-ahead Capability** | Yes—infinite look-ahead via multiple passes | Yes—infinite look-ahead via Pass 1 analysis |
-| **Target Loudness Standard** | -18 dB RMS (custom RMS calculation) | -18 LUFS (EBU R128 standard) |
+| **Target Loudness Standard** | -18 dB RMS (custom RMS calculation) | -16 LUFS |
 | **Silence Detection** | Fixed: 50ms subsegments > -44 dB | Adaptive: spectral analysis + room tone scoring |
 | **Noise Reduction** | None | anlmdn (Non-Local Means) + compand |
 | **Dynamics Processing** | Implicit in leveling algorithm | Explicit LA-2A-style compressor + CBS Volumax limiter |
@@ -206,7 +206,7 @@ Jivetalking employs speech profile extraction for adaptive tuning:
 
 **Gap:** Levelator targeted -18 dB RMS using a consistent, documented silence-exclusion method.
 
-**Jivetalking Status:** Targets -18 LUFS (EBU R128), which is a different measurement standard. While LUFS correlates with perceived loudness better than RMS, some users may expect RMS-normalised output.
+**Jivetalking Status:** Targets -16 LUFS, which is a different measurement standard. While LUFS correlates with perceived loudness better than RMS, some users may expect RMS-normalised output.
 
 **Impact:** Output levels may differ from user expectations if migrating from Levelator.
 
@@ -388,9 +388,9 @@ Levelator's unique contribution was not compression or normalisation—it was th
 
 #### 6. **Target Standards, Not Arbitrary Values**
 
-Levelator created its own RMS standard because no spoken-word standard existed. Today, EBU R128 (-18 LUFS) is widely accepted.
+Levelator created its own RMS standard because no spoken-word standard existed. Today, EBU R128 defines -23 LUFS for broadcast. Jivetalking targets -16 LUFS, aligned with typical podcast loudness levels for mobile listening.
 
-**Lesson:** Jivetalking's LUFS targeting is the correct modern approach. Resist pressure to support arbitrary target levels unless there's a compelling use case.
+**Lesson:** Jivetalking's LUFS targeting is the correct modern approach. The -16 LUFS target reflects real-world podcast consumption rather than broadcast standards.
 
 ---
 

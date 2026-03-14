@@ -23,7 +23,7 @@ This document provides authoritative definitions, typical value ranges, and perc
 | < -36 dBFS | Very quiet, problematic | ⚠️ Too low |
 
 **Vocal Targets:**
-- **Spoken word:** -20 to -16 dBFS (targeting -18 LUFS final output)
+- **Spoken word:** -20 to -16 dBFS (targeting -16 LUFS final output)
 - **Singing:** -18 to -12 dBFS (higher dynamic range)
 
 ---

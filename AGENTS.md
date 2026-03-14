@@ -2,7 +2,7 @@
 
 ## Project overview
 
-Go CLI tool for podcast audio preprocessing using embedded FFmpeg. Transforms raw voice recordings into broadcast-ready audio at -18 LUFS through a four-pass adaptive processing pipeline. Uses [Charm Bubbletea](https://github.com/charmbracelet/bubbletea) for the TUI.
+Go CLI tool for podcast audio preprocessing using embedded FFmpeg. Transforms raw voice recordings into broadcast-ready audio at -16 LUFS through a four-pass adaptive processing pipeline. Uses [Charm Bubbletea](https://github.com/charmbracelet/bubbletea) for the TUI.
 
 ## Setup commands
 
@@ -60,7 +60,7 @@ Each filter prepares audio for the next. Rumble removal before noise reduction. 
 alimiter (peak reduction) → loudnorm (linear mode)
 ```
 
-The limiter creates headroom so loudnorm can apply full linear gain to reach -18 LUFS without clipping or falling back to dynamic mode.
+The limiter creates headroom so loudnorm can apply full linear gain to reach -16 LUFS without clipping or falling back to dynamic mode.
 
 ## Code style
 
