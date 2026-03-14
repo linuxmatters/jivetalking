@@ -1017,6 +1017,9 @@ func findBestSilenceRegion(regions []SilenceRegion, intervals []IntervalSample, 
 	}
 
 	// ── Pass 1: Score all candidates ──────────────────────────────────────
+	// For candidates longer than goldenWindowDuration, refine to the cleanest
+	// sub-region BEFORE scoring. This trims boundary transients that would
+	// otherwise inflate crest factor and cause false rejection.
 	for i := range candidates {
 		candidate := &candidates[i]
 
@@ -1025,6 +1028,21 @@ func findBestSilenceRegion(regions []SilenceRegion, intervals []IntervalSample, 
 		if metrics == nil {
 			// No intervals in range - skip this candidate
 			continue
+		}
+
+		// Pre-scoring refinement: trim boundary transients before crest factor evaluation
+		if candidate.Duration > goldenWindowDuration {
+			refined := refineToGoldenSubregion(candidate, intervals)
+			wasRefined := refined.Start != candidate.Start || refined.Duration != candidate.Duration
+			if wasRefined {
+				refinedMetrics := measureSilenceCandidateFromIntervals(*refined, intervals)
+				if refinedMetrics != nil {
+					refinedMetrics.WasRefined = true
+					refinedMetrics.OriginalStart = candidate.Start
+					refinedMetrics.OriginalDuration = candidate.Duration
+					metrics = refinedMetrics
+				}
+			}
 		}
 
 		// Score the candidate based on spectral characteristics

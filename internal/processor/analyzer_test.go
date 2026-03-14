@@ -2103,3 +2103,79 @@ func TestRunFilterGraphLenientErrors(t *testing.T) {
 	}
 	t.Logf("lenient config processed %d filtered frames", frameCount)
 }
+
+func TestFindBestSilenceRegion_BoundaryTransientSurvivesAfterRefinement(t *testing.T) {
+	// An 18s candidate where the first 3s contain a boundary transient (speech-to-silence
+	// transition) and the remaining 15s are clean room tone. Without pre-scoring refinement,
+	// the full-span crest factor exceeds silenceCrestFactorMax (25 dB) and the candidate
+	// scores 0.0. With refinement, the golden sub-region trims the transient before scoring.
+
+	region := SilenceRegion{
+		Start:    10 * time.Second,
+		End:      28 * time.Second,
+		Duration: 18 * time.Second,
+	}
+	regions := []SilenceRegion{region}
+
+	// First 3s: boundary transient - high peak (simulating speech tail), elevated RMS
+	transientIntervals := makeSilenceTestIntervals(
+		10*time.Second, 3*time.Second,
+		-50.0, -10.0, // RMS -50, peak -10: crest factor 40 dB per interval
+		100.0, 0.8, 2.0, 0.0,
+	)
+
+	// Remaining 15s: clean room tone - low RMS, low peak, good spectral characteristics
+	cleanIntervals := makeSilenceTestIntervals(
+		13*time.Second, 15*time.Second,
+		-70.0, -65.0, // RMS -70, peak -65: crest factor 5 dB per interval
+		100.0, 0.9, 1.0, 0.0,
+	)
+
+	allIntervals := append(transientIntervals, cleanIntervals...)
+
+	result := findBestSilenceRegion(regions, allIntervals, 3600.0)
+
+	if result.BestRegion == nil {
+		t.Fatal("expected candidate to be elected after pre-scoring refinement trims boundary transient")
+	}
+
+	// Verify the candidate was refined
+	if len(result.Candidates) == 0 {
+		t.Fatal("expected candidates to be populated")
+	}
+
+	foundRefined := false
+	for _, c := range result.Candidates {
+		if c.WasRefined {
+			foundRefined = true
+
+			if c.OriginalStart != 10*time.Second {
+				t.Errorf("OriginalStart = %v, want 10s", c.OriginalStart)
+			}
+			if c.OriginalDuration != 18*time.Second {
+				t.Errorf("OriginalDuration = %v, want 18s", c.OriginalDuration)
+			}
+
+			// Refined region should exclude the transient at 10-13s
+			if c.Region.Start < 13*time.Second {
+				t.Errorf("Refined region start %v overlaps transient zone (before 13s)", c.Region.Start)
+			}
+
+			// Crest factor on the refined region should be well below the 25 dB threshold
+			if c.CrestFactor > 25.0 {
+				t.Errorf("Refined crest factor = %.1f dB, want < 25.0 dB", c.CrestFactor)
+			}
+
+			// Score should be above minAcceptableScore (0.3) since the clean section is good
+			if c.Score < 0.3 {
+				t.Errorf("Score = %.4f, want >= 0.3 (candidate should pass after refinement)", c.Score)
+			}
+
+			break
+		}
+	}
+
+	if !foundRefined {
+		t.Error("expected WasRefined=true for candidate with boundary transient")
+	}
+}
