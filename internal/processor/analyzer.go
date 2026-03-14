@@ -90,6 +90,11 @@ type SilenceCandidateMetrics struct {
 	// intentionally-recorded room tone rather than accidental gaps between speech.
 	// Calculated from RMS variance and average spectral flux across intervals.
 	StabilityScore float64 `json:"stability_score"`
+
+	// Refinement metadata (populated when pre-scoring refinement trims the candidate)
+	OriginalStart    time.Duration `json:"original_start,omitempty"`    // Original candidate start before refinement
+	OriginalDuration time.Duration `json:"original_duration,omitempty"` // Original candidate duration before refinement
+	WasRefined       bool          `json:"was_refined,omitempty"`       // True if region was refined from a longer candidate
 }
 
 // SpeechRegion represents a detected continuous speech period in the audio.
