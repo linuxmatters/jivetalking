@@ -1117,6 +1117,10 @@ func scoreSilenceCandidate(m *SilenceCandidateMetrics) float64 {
 		m.Region.Start.Seconds(), m.CrestFactor, isCrosstalk)
 	if isCrosstalk {
 		debugLog("scoreSilenceCandidate: REJECTING candidate at %.3fs (returning score=0.0)", m.Region.Start.Seconds())
+		m.TransientWarning = fmt.Sprintf(
+			"rejected: crosstalk detected (crest %.1f dB, centroid %.0f Hz)",
+			m.CrestFactor, m.Spectral.Centroid,
+		)
 		return 0.0 // Reject this candidate
 	}
 

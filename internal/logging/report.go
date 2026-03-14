@@ -1659,6 +1659,9 @@ func writeDiagnosticSilence(f *os.File, measurements *processor.AudioMeasurement
 					i+1, c.Region.Duration.Seconds(), c.Region.Start.Seconds(), c.Score, c.RMSLevel)
 			}
 		}
+
+		// Rejection summary for zero-scored candidates
+		writeReportRejectionSummary(f, measurements.SilenceCandidates)
 	} else if measurements.NoiseProfile != nil {
 		fmt.Fprintf(f, "Silence Sample:      %.1fs at %.1fs\n",
 			measurements.NoiseProfile.Duration.Seconds(),
@@ -1676,6 +1679,36 @@ func writeDiagnosticSilence(f *os.File, measurements *processor.AudioMeasurement
 	}
 
 	fmt.Fprintln(f, "")
+}
+
+// writeReportRejectionSummary outputs a compact summary of rejected silence candidates to the report file.
+func writeReportRejectionSummary(f *os.File, candidates []processor.SilenceCandidateMetrics) {
+	reasonCounts := make(map[string]int)
+	for _, c := range candidates {
+		if c.Score != 0.0 {
+			continue
+		}
+		reason := classifyRejectionReason(c.TransientWarning)
+		reasonCounts[reason]++
+	}
+
+	if len(reasonCounts) == 0 {
+		return
+	}
+
+	order := []string{"digital silence", "crosstalk", "transient contamination", "too loud"}
+	var parts []string
+	for _, reason := range order {
+		if count, ok := reasonCounts[reason]; ok {
+			parts = append(parts, fmt.Sprintf("%d %s", count, reason))
+			delete(reasonCounts, reason)
+		}
+	}
+	for reason, count := range reasonCounts {
+		parts = append(parts, fmt.Sprintf("%d %s", count, reason))
+	}
+
+	fmt.Fprintf(f, "Rejected:            %s\n", strings.Join(parts, ", "))
 }
 
 // writeDiagnosticSpeech outputs detailed speech detection diagnostics.
