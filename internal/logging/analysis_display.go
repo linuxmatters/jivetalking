@@ -64,48 +64,64 @@ func DisplayAnalysisResults(w io.Writer, inputPath string, metadata *audio.Metad
 		fmt.Fprintf(w, "  Candidates:     %d evaluated\n", len(measurements.SilenceCandidates))
 		fmt.Fprintln(w)
 
-		for i, c := range measurements.SilenceCandidates {
-			// Check if this candidate was elected
-			isElected := false
-			wasRefined := false
-			var refinedStart time.Duration
-			var refinedDuration time.Duration
-
-			if measurements.NoiseProfile != nil {
+		// Find the elected candidate index
+		electedIdx := -1
+		electedWasRefined := false
+		var electedRefinedStart time.Duration
+		var electedRefinedDuration time.Duration
+		if measurements.NoiseProfile != nil {
+			for i, c := range measurements.SilenceCandidates {
 				if measurements.NoiseProfile.WasRefined {
-					isElected = c.Region.Start == measurements.NoiseProfile.OriginalStart
-					wasRefined = isElected
-					refinedStart = measurements.NoiseProfile.Start
-					refinedDuration = measurements.NoiseProfile.Duration
+					if c.Region.Start == measurements.NoiseProfile.OriginalStart {
+						electedIdx = i
+						electedWasRefined = true
+						electedRefinedStart = measurements.NoiseProfile.Start
+						electedRefinedDuration = measurements.NoiseProfile.Duration
+						break
+					}
 				} else {
-					isElected = c.Region.Start == measurements.NoiseProfile.Start
+					if c.Region.Start == measurements.NoiseProfile.Start {
+						electedIdx = i
+						break
+					}
 				}
 			}
+		}
 
-			electedMark := ""
-			if isElected {
-				electedMark = " [ELECTED]"
-			}
-
-			fmt.Fprintf(w, "  #%d: %.1fs at %s%s\n",
-				i+1, c.Region.Duration.Seconds(), formatTimestamp(c.Region.Start), electedMark)
-
-			// Show refinement details only for elected candidate
-			if isElected && wasRefined {
+		if electedIdx >= 0 {
+			// Print elected candidate first with distinct header
+			c := measurements.SilenceCandidates[electedIdx]
+			fmt.Fprintf(w, "  ELECTED CANDIDATE\n")
+			fmt.Fprintf(w, "  #%d: %.1fs at %s\n",
+				electedIdx+1, c.Region.Duration.Seconds(), formatTimestamp(c.Region.Start))
+			if electedWasRefined {
 				fmt.Fprintf(w, "      Refined:     %.1fs at %s (golden sub-region)\n",
-					refinedDuration.Seconds(), formatTimestamp(refinedStart))
+					electedRefinedDuration.Seconds(), formatTimestamp(electedRefinedStart))
 			}
-
-			// Show full metrics for all candidates
-			fmt.Fprintf(w, "      Score:       %.3f\n", c.Score)
-			fmt.Fprintf(w, "      RMS Level:   %.1f dBFS\n", c.RMSLevel)
-			fmt.Fprintf(w, "      Peak Level:  %.1f dBFS\n", c.PeakLevel)
-			fmt.Fprintf(w, "      Crest:       %.1f dB\n", c.CrestFactor)
-			fmt.Fprintf(w, "      Entropy:     %.3f (%s)\n", c.Spectral.Entropy, interpretEntropy(c.Spectral.Entropy))
-			fmt.Fprintf(w, "      Flatness:    %.3f (%s)\n", c.Spectral.Flatness, interpretFlatness(c.Spectral.Flatness))
-			fmt.Fprintf(w, "      Kurtosis:    %.1f (%s)\n", c.Spectral.Kurtosis, interpretKurtosis(c.Spectral.Kurtosis))
-			fmt.Fprintf(w, "      Centroid:    %.0f Hz\n", c.Spectral.Centroid)
+			writeSilenceCandidateMetrics(w, c)
 			fmt.Fprintln(w)
+
+			// Print remaining candidates
+			if len(measurements.SilenceCandidates) > 1 {
+				fmt.Fprintf(w, "  OTHER CANDIDATES\n")
+				for i, c := range measurements.SilenceCandidates {
+					if i == electedIdx {
+						continue
+					}
+					fmt.Fprintf(w, "  #%d: %.1fs at %s\n",
+						i+1, c.Region.Duration.Seconds(), formatTimestamp(c.Region.Start))
+					writeSilenceCandidateMetrics(w, c)
+					fmt.Fprintln(w)
+				}
+			}
+		} else {
+			// No elected candidate - print all in discovery order
+			for i, c := range measurements.SilenceCandidates {
+				fmt.Fprintf(w, "  #%d: %.1fs at %s\n",
+					i+1, c.Region.Duration.Seconds(), formatTimestamp(c.Region.Start))
+				writeSilenceCandidateMetrics(w, c)
+				fmt.Fprintln(w)
+			}
 		}
 	} else if measurements.NoiseProfile != nil {
 		fmt.Fprintf(w, "  Sample:         %.1fs at %s\n",
@@ -255,6 +271,18 @@ func DisplayAnalysisResults(w io.Writer, inputPath string, metadata *audio.Metad
 			fmt.Fprintf(w, "  ⚠ %s\n", wrapped)
 		}
 	}
+}
+
+// writeSilenceCandidateMetrics writes the metric lines for a single silence candidate.
+func writeSilenceCandidateMetrics(w io.Writer, c processor.SilenceCandidateMetrics) {
+	fmt.Fprintf(w, "      Score:       %.3f\n", c.Score)
+	fmt.Fprintf(w, "      RMS Level:   %.1f dBFS\n", c.RMSLevel)
+	fmt.Fprintf(w, "      Peak Level:  %.1f dBFS\n", c.PeakLevel)
+	fmt.Fprintf(w, "      Crest:       %.1f dB\n", c.CrestFactor)
+	fmt.Fprintf(w, "      Entropy:     %.3f (%s)\n", c.Spectral.Entropy, interpretEntropy(c.Spectral.Entropy))
+	fmt.Fprintf(w, "      Flatness:    %.3f (%s)\n", c.Spectral.Flatness, interpretFlatness(c.Spectral.Flatness))
+	fmt.Fprintf(w, "      Kurtosis:    %.1f (%s)\n", c.Spectral.Kurtosis, interpretKurtosis(c.Spectral.Kurtosis))
+	fmt.Fprintf(w, "      Centroid:    %.0f Hz\n", c.Spectral.Centroid)
 }
 
 // writeAnalysisSection writes a section header for analysis output.
