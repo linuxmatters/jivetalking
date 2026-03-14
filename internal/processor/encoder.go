@@ -86,7 +86,11 @@ func createOutputEncoder(outputPath string, _ *audio.Metadata, bufferSinkCtx *ff
 
 	// Set compression level for FLAC
 	if codec.Id() == ffmpeg.AVCodecIdFlac {
-		_, _ = ffmpeg.AVOptSetInt(encCtx.RawPtr(), ffmpeg.GlobalCStr("compression_level"), 5, 0)
+		if _, err := ffmpeg.AVOptSetInt(encCtx.RawPtr(), ffmpeg.GlobalCStr("compression_level"), 5, 0); err != nil {
+			ffmpeg.AVCodecFreeContext(&encCtx)
+			ffmpeg.AVFormatFreeContext(fmtCtx)
+			return nil, fmt.Errorf("failed to set FLAC compression level: %w", err)
+		}
 		// FLAC encoder requires fixed frame size - must match asetnsamples filter (4096)
 		encCtx.SetFrameSize(4096)
 	}

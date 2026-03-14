@@ -754,12 +754,8 @@ func estimateNoiseFloorAndThreshold(intervals []IntervalSample, medians silenceM
 	// Take the top 20% of scored intervals as room tone candidates
 	// (or at least roomToneCandidateMinCount intervals for statistical relevance)
 	candidateCount := len(scored) / roomToneCandidatePercent
-	if candidateCount < roomToneCandidateMinCount {
-		candidateCount = roomToneCandidateMinCount
-	}
-	if candidateCount > len(scored) {
-		candidateCount = len(scored)
-	}
+	candidateCount = max(candidateCount, roomToneCandidateMinCount)
+	candidateCount = min(candidateCount, len(scored))
 
 	// Noise floor is the maximum RMS among high-confidence room tone intervals
 	maxRoomToneRMS := -120.0
@@ -798,7 +794,7 @@ func findSilenceCandidatesFromIntervals(intervals []IntervalSample, threshold fl
 	var interruptionCount int // consecutive intervals below score threshold
 	inSilence := false
 
-	for i := 0; i < len(intervals); i++ {
+	for i := range len(intervals) {
 		interval := intervals[i]
 
 		// Hard ceiling: anything above threshold cannot be room tone
@@ -847,9 +843,7 @@ func findSilenceCandidatesFromIntervals(intervals []IntervalSample, threshold fl
 	if inSilence && silentIntervalCount >= minimumSilenceIntervals {
 		// Exclude trailing non-silent interruptions, same as the mid-loop case
 		lastSilentIdx := len(intervals) - 1 - interruptionCount
-		if lastSilentIdx < 0 {
-			lastSilentIdx = 0
-		}
+		lastSilentIdx = max(lastSilentIdx, 0)
 		endTime := intervals[lastSilentIdx].Timestamp + 250*time.Millisecond
 		duration := endTime - silenceStart
 
@@ -1487,7 +1481,7 @@ func findSpeechCandidatesFromIntervals(intervals []IntervalSample, silenceEnd ti
 	var interruptionCount int
 	inSpeech := false
 
-	for i := 0; i < len(searchIntervals); i++ {
+	for i := range len(searchIntervals) {
 		interval := searchIntervals[i]
 		score := speechScore(interval, rmsP50, speechRMSMin)
 		isSpeech := score >= speechScoreThreshold

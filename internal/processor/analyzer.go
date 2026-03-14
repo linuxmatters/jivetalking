@@ -13,10 +13,10 @@ import (
 // DebugLog is a package-level function for debug logging.
 // When set (non-nil), diagnostic output is written via this function.
 // Set by main.go when --debug flag is enabled.
-var DebugLog func(format string, args ...interface{})
+var DebugLog func(format string, args ...any)
 
 // debugLog writes to the debug log if enabled, otherwise does nothing.
-func debugLog(format string, args ...interface{}) {
+func debugLog(format string, args ...any) {
 	if DebugLog != nil {
 		DebugLog(format, args...)
 	}
