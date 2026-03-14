@@ -57,12 +57,11 @@ func DisplayAnalysisResults(w io.Writer, inputPath string, metadata *audio.Metad
 
 	// Silence detection section
 	writeAnalysisSection(w, "SILENCE DETECTION")
-	fmt.Fprintf(w, "  Threshold:      %.1f dB (from %.1f dB noise floor estimate)\n",
+	fmt.Fprintf(w, "  Threshold:      %.1f dB (%.1f dBFS room tone estimate + 1 dB)\n",
 		measurements.SilenceDetectLevel, measurements.PreScanNoiseFloor)
 
 	if len(measurements.SilenceCandidates) > 0 {
 		fmt.Fprintf(w, "  Candidates:     %d evaluated\n", len(measurements.SilenceCandidates))
-		fmt.Fprintln(w)
 
 		// Find the elected candidate index
 		electedIdx := -1
@@ -152,6 +151,7 @@ func DisplayAnalysisResults(w io.Writer, inputPath string, metadata *audio.Metad
 			fmt.Fprintln(w, "  Voice-activated recording detected")
 		}
 	}
+	fmt.Fprintln(w)
 
 	// Speech detection section
 	writeAnalysisSection(w, "SPEECH DETECTION")
