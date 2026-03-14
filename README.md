@@ -6,7 +6,7 @@ Raw microphone recordings into broadcast-ready audio in one command. No configur
 jivetalking presenter1.flac presenter2.flac
 ```
 
-Your files emerge at -16 LUFS, the podcast/broadcast standard, with room rumble, background hiss, clicks, and harsh sibilance sorted automatically. Everything needed is embedded in the binary. This is not how audio tools usually work, and that is rather the point.
+Your files emerge at -16 LUFS, a common podcast target, with room rumble, background hiss, clicks, and harsh sibilance sorted automatically. Everything needed is embedded in the binary. This is not how audio tools usually work, and that is rather the point.
 
 ---
 
