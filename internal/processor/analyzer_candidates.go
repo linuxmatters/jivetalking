@@ -66,6 +66,11 @@ const (
 	// 8 intervals = 2 seconds tolerance for breaths, brief pauses.
 	speechInterruptionToleranceIntervals = 8
 
+	// voiceActivatedSpeechInterruptionToleranceIntervals is the widened tolerance
+	// for voice-activated recordings where digital silence gaps replace natural pauses.
+	// 40 intervals = 10 seconds, bridging platform-inserted gaps up to 10s.
+	voiceActivatedSpeechInterruptionToleranceIntervals = 40
+
 	// speechSearchStartBuffer adds time after silence end before searching for speech.
 	// Allows transition from room tone to actual speech content.
 	speechSearchStartBuffer = 2 * time.Second
@@ -1418,7 +1423,7 @@ func speechScore(interval IntervalSample, rmsP50 float64) float64 {
 // 3. Score each interval for "speech likelihood"
 // 4. Find consecutive runs that meet minimum duration (30 seconds)
 // 5. Allow brief interruptions (2s) for natural pauses
-func findSpeechCandidatesFromIntervals(intervals []IntervalSample, silenceEnd time.Duration) []SpeechRegion {
+func findSpeechCandidatesFromIntervals(intervals []IntervalSample, silenceEnd time.Duration, voiceActivated bool) []SpeechRegion {
 	if len(intervals) < minimumSpeechIntervals {
 		return nil
 	}
@@ -1455,6 +1460,12 @@ func findSpeechCandidatesFromIntervals(intervals []IntervalSample, silenceEnd ti
 	// Speech score threshold (lower than silence since speech varies more)
 	const speechScoreThreshold = 0.4
 
+	// Select interruption tolerance based on voice-activated status
+	interruptionTolerance := speechInterruptionToleranceIntervals
+	if voiceActivated {
+		interruptionTolerance = voiceActivatedSpeechInterruptionToleranceIntervals
+	}
+
 	var candidates []SpeechRegion
 	var speechStart time.Duration
 	var speechIntervalCount int
@@ -1481,7 +1492,7 @@ func findSpeechCandidatesFromIntervals(intervals []IntervalSample, silenceEnd ti
 			// Not speech - count as interruption
 			interruptionCount++
 
-			if interruptionCount > speechInterruptionToleranceIntervals {
+			if interruptionCount > interruptionTolerance {
 				// Too many consecutive interruptions - end speech region
 				lastSpeechIdx := i - interruptionCount
 				if speechIntervalCount >= minimumSpeechIntervals && lastSpeechIdx >= 0 && lastSpeechIdx < len(searchIntervals) {

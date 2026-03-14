@@ -841,7 +841,7 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 		speechIntervals := makeVariedSpeechIntervals(10*time.Second, 600, true) // 2.5min speech
 		intervals := append(silenceIntervals, speechIntervals...)
 
-		candidates := findSpeechCandidatesFromIntervals(intervals, 10*time.Second)
+		candidates := findSpeechCandidatesFromIntervals(intervals, 10*time.Second, false)
 
 		if len(candidates) == 0 {
 			t.Fatal("expected at least one speech candidate")
@@ -857,7 +857,7 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 		speechIntervals := makeVariedSpeechIntervals(10*time.Second, 80, true) // 20s
 		intervals := append(silenceIntervals, speechIntervals...)
 
-		candidates := findSpeechCandidatesFromIntervals(intervals, 10*time.Second)
+		candidates := findSpeechCandidatesFromIntervals(intervals, 10*time.Second, false)
 
 		if len(candidates) != 0 {
 			t.Errorf("expected no candidates, got %d", len(candidates))
@@ -872,7 +872,7 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 		speech2 := makeVariedSpeechIntervals(86500*time.Millisecond, 300, true) // 75s more
 		intervals := append(append(speech1, pause...), speech2...)
 
-		candidates := findSpeechCandidatesFromIntervals(intervals, 5*time.Second)
+		candidates := findSpeechCandidatesFromIntervals(intervals, 5*time.Second, false)
 
 		if len(candidates) == 0 {
 			t.Fatal("expected speech candidate bridging pause")
@@ -891,7 +891,7 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 		intervals := append(earlyIntervals, lateIntervals...)
 
 		// Search starts at 50s (after early speech ends)
-		candidates := findSpeechCandidatesFromIntervals(intervals, 50*time.Second)
+		candidates := findSpeechCandidatesFromIntervals(intervals, 50*time.Second, false)
 
 		if len(candidates) == 0 {
 			t.Fatal("expected speech candidate after silence end")
@@ -906,7 +906,7 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 		// Only 100 intervals (25s) - less than minimum 120 (30s)
 		intervals := makeVariedSpeechIntervals(0, 100, true)
 
-		candidates := findSpeechCandidatesFromIntervals(intervals, 0)
+		candidates := findSpeechCandidatesFromIntervals(intervals, 0, false)
 
 		if candidates != nil {
 			t.Errorf("expected nil for insufficient intervals, got %d candidates", len(candidates))
@@ -920,11 +920,52 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 		speech2 := makeVariedSpeechIntervals(33*time.Second, 80, true) // 20s more
 		intervals := append(append(speech1, pause...), speech2...)
 
-		candidates := findSpeechCandidatesFromIntervals(intervals, 5*time.Second)
+		candidates := findSpeechCandidatesFromIntervals(intervals, 5*time.Second, false)
 
 		// Neither segment alone meets 30s minimum, so no candidates expected
 		if len(candidates) != 0 {
 			t.Errorf("expected no candidates (pause breaks region), got %d", len(candidates))
+		}
+	})
+
+	t.Run("voice-activated bridges digital silence gap", func(t *testing.T) {
+		// Two speech segments separated by a 7.5s digital silence gap (30 intervals).
+		// Default tolerance (8 intervals / 2s) would split; widened (40 / 10s) bridges.
+		speech1 := makeVariedSpeechIntervals(10*time.Second, 300, true)          // 75s speech
+		gap := makeVariedSpeechIntervals(85*time.Second, 30, false)              // 7.5s digital silence
+		speech2 := makeVariedSpeechIntervals(92500*time.Millisecond, 300, true)  // 75s speech
+		intervals := append(append(speech1, gap...), speech2...)
+
+		// Default tolerance: gap exceeds 2s, splits into two regions
+		defaultCandidates := findSpeechCandidatesFromIntervals(intervals, 5*time.Second, false)
+		// Widened tolerance: gap within 10s, bridges into one region
+		widenedCandidates := findSpeechCandidatesFromIntervals(intervals, 5*time.Second, true)
+
+		if len(defaultCandidates) < 2 {
+			t.Fatalf("expected default tolerance to split gap into 2+ regions, got %d", len(defaultCandidates))
+		}
+
+		if len(widenedCandidates) != 1 {
+			t.Fatalf("expected widened tolerance to bridge gap into 1 region, got %d", len(widenedCandidates))
+		}
+
+		if widenedCandidates[0].Duration < 140*time.Second {
+			t.Errorf("expected bridged duration >140s, got %v", widenedCandidates[0].Duration)
+		}
+	})
+
+	t.Run("voice-activated does not bridge gaps beyond 10s", func(t *testing.T) {
+		// Two speech segments separated by a 12.5s gap (50 intervals).
+		// Even widened tolerance (40 intervals) should not bridge this.
+		speech1 := makeVariedSpeechIntervals(10*time.Second, 300, true)            // 75s speech
+		gap := makeVariedSpeechIntervals(85*time.Second, 50, false)                // 12.5s gap
+		speech2 := makeVariedSpeechIntervals(97500*time.Millisecond, 300, true)    // 75s speech
+		intervals := append(append(speech1, gap...), speech2...)
+
+		candidates := findSpeechCandidatesFromIntervals(intervals, 5*time.Second, true)
+
+		if len(candidates) < 2 {
+			t.Errorf("expected gap >10s to split even with widened tolerance, got %d candidates", len(candidates))
 		}
 	})
 }
