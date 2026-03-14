@@ -76,7 +76,7 @@ var Pass2FilterOrder = []FilterID{
 // Normalisation target and tolerance for Pass 3 gain adjustment
 const (
 	// NormTargetLUFS is the podcast loudness standard.
-	NormTargetLUFS = -18.0
+	NormTargetLUFS = -16.0
 
 	// NormToleranceLU is the acceptable deviation from target.
 	// ±0.5 LU is industry standard for loudness compliance.
@@ -212,7 +212,7 @@ type FilterChainConfig struct {
 	DeessFreq      float64 // 0.0-1.0, how much original frequency content to keep
 
 	// Target values (for reference only)
-	TargetI   float64 // LUFS target reference (podcast standard: -18)
+	TargetI   float64 // LUFS target reference (podcast standard: -16)
 	TargetTP  float64 // dBTP, true peak ceiling reference
 	TargetLRA float64 // LU, loudness range reference
 
@@ -251,7 +251,7 @@ type FilterChainConfig struct {
 	// Replaces simple volume gain + limiting with integrated dynamic normalisation
 	// Uses two-pass mode with measurements from Pass 2 for optimal transparency
 	LoudnormEnabled   bool    // Enable loudnorm in Pass 3 (default: true)
-	LoudnormTargetI   float64 // Target integrated loudness (LUFS), default: -18.0
+	LoudnormTargetI   float64 // Target integrated loudness (LUFS), default: -16.0
 	LoudnormTargetTP  float64 // Target true peak (dBTP), default: -1.5
 	LoudnormTargetLRA float64 // Target loudness range (LU), default: 11.0
 	LoudnormDualMono  bool    // Treat mono as dual-mono (CRITICAL for mono files)
@@ -341,7 +341,7 @@ func DefaultFilterConfig() *FilterChainConfig {
 		DeessFreq:      0.5, // Keep 50% of original frequency content (balanced)
 
 		// Target values (for reference only)
-		TargetI:   -18.0, // Reference LUFS target (not enforced)
+		TargetI:   -16.0, // Reference LUFS target (not enforced)
 		TargetTP:  -0.3,  // Reference true peak (not enforced, alimiter does real limiting at -1.5)
 		TargetLRA: 7.0,   // Reference loudness range (EBU R128 default)
 
@@ -369,7 +369,7 @@ func DefaultFilterConfig() *FilterChainConfig {
 
 		// Loudnorm - enabled by default with podcast-optimised settings
 		LoudnormEnabled:   true,
-		LoudnormTargetI:   -18.0, // Broadcast standard (was -16 podcast standard, -18 for more headroom)
+		LoudnormTargetI:   -16.0, // Podcast standard (-16 LUFS)
 		LoudnormTargetTP:  -2.0,  // Conservative headroom (prevents limiter clipping to 0.0 dBTP)
 		LoudnormTargetLRA: 20.0,  // High value to prevent dynamic mode fallback (must be >= source LRA)
 		LoudnormDualMono:  true,  // CRITICAL for mono recordings

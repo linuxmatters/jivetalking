@@ -164,10 +164,10 @@ func renderAudioLevelMeter(currentLevel, peakLevel float64) string {
 	peakPos := max(0, min(int(((peakLevel-minDB)/(maxDB-minDB))*float64(width)), width))
 
 	// Build the meter bar with color zones
-	// Green: -60 to -18 dB (safe)
-	// Orange: -18 to -6 dB (approaching loud)
+	// Green: -60 to -16 dB (safe)
+	// Orange: -16 to -6 dB (approaching loud)
 	// Red: -6 to 0 dB (loud/clipping risk)
-	greenZone := int((((-18.0) - minDB) / (maxDB - minDB)) * float64(width))
+	greenZone := int((((-16.0) - minDB) / (maxDB - minDB)) * float64(width))
 	orangeZone := int((((-6.0) - minDB) / (maxDB - minDB)) * float64(width))
 
 	// Build meter character by character with appropriate colors
