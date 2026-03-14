@@ -1941,9 +1941,10 @@ func TestTuneNoiseRemove(t *testing.T) {
 		}
 	})
 
-	t.Run("missing NoiseProfile uses default values", func(t *testing.T) {
+	t.Run("missing NoiseProfile disables compand", func(t *testing.T) {
 		config := newTestConfig()
 		config.NoiseRemoveEnabled = true
+		config.NoiseRemoveCompandEnabled = true
 
 		measurements := &AudioMeasurements{
 			NoiseProfile: nil,
@@ -1951,21 +1952,20 @@ func TestTuneNoiseRemove(t *testing.T) {
 
 		tuneNoiseRemove(config, measurements)
 
-		// Should remain enabled with default values (no noise profile to adapt to)
+		// anlmdn should remain enabled
 		if !config.NoiseRemoveEnabled {
 			t.Errorf("tuneNoiseRemove should keep filter enabled")
 		}
-		if config.NoiseRemoveCompandThreshold != -55.0 {
-			t.Errorf("NoiseRemoveCompandThreshold = %.1f, want -55.0 (default)", config.NoiseRemoveCompandThreshold)
-		}
-		if config.NoiseRemoveCompandExpansion != 6.0 {
-			t.Errorf("NoiseRemoveCompandExpansion = %.1f, want 6.0 (default)", config.NoiseRemoveCompandExpansion)
+		// Compand should be disabled (no calibration data)
+		if config.NoiseRemoveCompandEnabled {
+			t.Errorf("NoiseRemoveCompandEnabled should be false when NoiseProfile is nil")
 		}
 	})
 
-	t.Run("positive noise floor uses default values", func(t *testing.T) {
+	t.Run("positive noise floor disables compand", func(t *testing.T) {
 		config := newTestConfig()
 		config.NoiseRemoveEnabled = true
+		config.NoiseRemoveCompandEnabled = true
 
 		measurements := &AudioMeasurements{
 			NoiseProfile: &NoiseProfile{
@@ -1976,12 +1976,28 @@ func TestTuneNoiseRemove(t *testing.T) {
 
 		tuneNoiseRemove(config, measurements)
 
-		// Should use default values when noise floor is invalid
-		if config.NoiseRemoveCompandThreshold != -55.0 {
-			t.Errorf("NoiseRemoveCompandThreshold = %.1f, want -55.0 (default)", config.NoiseRemoveCompandThreshold)
+		// Compand should be disabled when noise floor is invalid
+		if config.NoiseRemoveCompandEnabled {
+			t.Errorf("NoiseRemoveCompandEnabled should be false when noise floor is non-negative")
 		}
-		if config.NoiseRemoveCompandExpansion != 6.0 {
-			t.Errorf("NoiseRemoveCompandExpansion = %.1f, want 6.0 (default)", config.NoiseRemoveCompandExpansion)
+	})
+
+	t.Run("valid NoiseProfile keeps compand enabled", func(t *testing.T) {
+		config := newTestConfig()
+		config.NoiseRemoveEnabled = true
+		config.NoiseRemoveCompandEnabled = true
+
+		measurements := &AudioMeasurements{
+			NoiseProfile: &NoiseProfile{
+				Duration:           2.0,
+				MeasuredNoiseFloor: -55.0,
+			},
+		}
+
+		tuneNoiseRemove(config, measurements)
+
+		if !config.NoiseRemoveCompandEnabled {
+			t.Errorf("NoiseRemoveCompandEnabled should remain true when NoiseProfile is valid")
 		}
 	})
 

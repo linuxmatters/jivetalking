@@ -160,6 +160,7 @@ type FilterChainConfig struct {
 	// Non-Local Means denoiser (anlmdn) with a compand for residual suppression
 	// Validated fast-compand config: -13 to -20 dB silence reduction, 20-24x realtime, ±1-2% spectral preservation
 	NoiseRemoveEnabled          bool    // Enable anlmdn+compand noise reduction
+	NoiseRemoveCompandEnabled   bool    // Enable compand residual suppression (false = anlmdn-only)
 	NoiseRemoveStrength         float64 // anlmdn strength (0.00001 = minimum, kept constant)
 	NoiseRemovePatchSec         float64 // Patch size in seconds (context window for similarity)
 	NoiseRemoveResearchSec      float64 // Research radius in seconds (search window for matching)
@@ -294,6 +295,7 @@ func DefaultFilterConfig() *FilterChainConfig {
 
 		// NoiseRemove - anlmdn + compand (validated fast-compand config)
 		NoiseRemoveEnabled:          true,    // Primary noise reduction filter
+		NoiseRemoveCompandEnabled:   true,    // Compand enabled when noise profile available
 		NoiseRemoveStrength:         0.00001, // Minimum strength (fixed from spike validation)
 		NoiseRemovePatchSec:         0.006,   // 6ms patch (fast-compand validated)
 		NoiseRemoveResearchSec:      0.0058,  // 5.8ms research (fast-compand validated)
@@ -598,6 +600,11 @@ func (cfg *FilterChainConfig) buildNoiseRemoveFilter() string {
 		cfg.NoiseRemoveResearchSec,
 		cfg.NoiseRemoveSmooth,
 	)
+
+	// When compand is disabled (no noise profile to calibrate), use anlmdn only
+	if !cfg.NoiseRemoveCompandEnabled {
+		return anlmdnSpec
+	}
 
 	// Build compand filter for residual suppression
 	compandSpec := cfg.buildNoiseRemoveCompandFilter()
