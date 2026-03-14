@@ -277,9 +277,9 @@ func renderCompletedFile(file FileProgress) string {
 		file.NoiseFloor)
 }
 
-// generateOutputName generates the output filename from input
+// generateOutputName returns the source filename for active display during processing.
+// The final LUFS-aware output filename is only known after processing completes,
+// so the active view shows the input filename being processed.
 func generateOutputName(input string) string {
-	ext := filepath.Ext(input)
-	base := strings.TrimSuffix(input, ext)
-	return base + "-processed" + ext
+	return input
 }

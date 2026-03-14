@@ -113,7 +113,7 @@ type LoudnormMeasurement struct {
 // Instead, we read the Pass 2 output file here without writing, just to get measurements.
 //
 // Parameters:
-//   - inputPath: Path to Pass 2 output file (the -processed.flac file)
+//   - inputPath: Path to Pass 2 output file (the -LUFS-NN-processed file)
 //   - config: Filter configuration (contains loudnorm targets)
 //   - progressCallback: Optional progress updates (pass 3)
 //
@@ -363,7 +363,7 @@ type NormalisationResult struct {
 // - Preserves natural dynamics while hitting target loudness
 //
 // Parameters:
-//   - inputPath: Path to Pass 2 output file (the -processed.flac file)
+//   - inputPath: Path to Pass 2 output file (the -LUFS-NN-processed file)
 //   - config: Filter configuration (contains loudnorm targets)
 //   - outputMeasurements: Pass 2 measurements (for reference, not used for loudnorm)
 //   - inputMeasurements: Pass 1 measurements (contains NoiseProfile and SpeechProfile for region capture)

@@ -199,19 +199,21 @@ func cleanupTestAudio(t *testing.T, path string) {
 		t.Logf("warning: failed to remove test file %s: %v", path, err)
 	}
 
-	// Also try to remove any processed output file
+	// Remove any processed output files (both old -processed and new -LUFS-NN-processed patterns)
 	ext := filepath.Ext(path)
 	base := path[:len(path)-len(ext)]
-	processedPath := base + "-processed" + ext
-	if err := os.Remove(processedPath); err != nil && !os.IsNotExist(err) {
-		// Not an error - processed file may not exist
+	pattern := base + "-*processed" + ext
+	matches, _ := filepath.Glob(pattern)
+	for _, match := range matches {
+		os.Remove(match)
 	}
 
-	// Try FLAC processed output too (in case WAV input produced FLAC output)
-	processedFlac := base + "-processed.flac"
-	if processedFlac != processedPath {
-		if err := os.Remove(processedFlac); err != nil && !os.IsNotExist(err) {
-			// Not an error
+	// Also try FLAC variant (in case WAV input produced FLAC output)
+	if ext != ".flac" {
+		flacPattern := base + "-*processed.flac"
+		flacMatches, _ := filepath.Glob(flacPattern)
+		for _, match := range flacMatches {
+			os.Remove(match)
 		}
 	}
 }

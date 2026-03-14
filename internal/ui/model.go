@@ -128,6 +128,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.Files[m.CurrentIndex].InputLUFS = msg.InputLUFS
 			m.Files[m.CurrentIndex].OutputLUFS = msg.OutputLUFS
 			m.Files[m.CurrentIndex].NoiseFloor = msg.NoiseFloor
+			m.Files[m.CurrentIndex].OutputPath = msg.OutputPath
 			m.Files[m.CurrentIndex].Error = msg.Error
 
 			if msg.Error != nil {
