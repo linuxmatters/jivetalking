@@ -74,7 +74,7 @@ The software is no longer officially available, though archived copies circulate
 
 ### Architecture Overview
 
-Jivetalking is a Go CLI tool for podcast audio preprocessing using embedded FFmpeg. It transforms raw voice recordings into broadcast-ready audio at -16 LUFS through a four-pass adaptive processing pipeline.
+Jivetalking is a Go CLI tool for podcast audio preprocessing using embedded FFmpeg. It transforms raw voice recordings into podcast-ready audio at -16 LUFS through a four-pass adaptive processing pipeline.
 
 ### Four-Pass Processing Pipeline
 
