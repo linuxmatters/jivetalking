@@ -14,10 +14,6 @@ const (
 	// Must match minimumSilenceDuration (8s) for profile extraction: 8s / 250ms = 32 intervals
 	minimumSilenceIntervals = 32
 
-	// excludeFirstSeconds: ignore candidates starting in this initial period
-	// (typically contains preamble before intentional room tone recording)
-	excludeFirstSeconds = 15.0
-
 	// roomToneAmplitudeDecayDB is the dB range above median where amplitude score decays from 1.0 to 0.0.
 	// 6dB above median = score of 0.0.
 	roomToneAmplitudeDecayDB = 6.0
@@ -31,9 +27,6 @@ const (
 
 	// silenceThresholdMinIntervals is the minimum number of intervals required for threshold calculation.
 	silenceThresholdMinIntervals = 10
-
-	// silenceSearchPercent is the percentage of recording to search for silence candidates (15%).
-	silenceSearchPercent = 15
 
 	// roomToneCandidatePercent is the percentage of top-scored intervals to use as room tone candidates (20%).
 	roomToneCandidatePercent = 5 // divisor: len/5 = 20%
@@ -680,8 +673,7 @@ type silenceMedians struct {
 }
 
 // computeSilenceMedians calculates RMS and spectral flux medians from the
-// search interval slice used for silence/room-tone detection. The caller
-// passes the already-sliced searchIntervals (first silenceSearchPercent% of intervals).
+// interval slice used for silence/room-tone detection.
 func computeSilenceMedians(searchIntervals []IntervalSample) silenceMedians {
 	if len(searchIntervals) == 0 {
 		return silenceMedians{}
@@ -716,13 +708,6 @@ func estimateNoiseFloorAndThreshold(intervals []IntervalSample, medians silenceM
 		return 0, 0, false
 	}
 
-	// Only use the first silenceSearchPercent% of intervals for threshold calculation
-	searchLimit := len(intervals) * silenceSearchPercent / 100
-	if searchLimit < silenceThresholdMinIntervals {
-		searchLimit = silenceThresholdMinIntervals
-	}
-	searchIntervals := intervals[:searchLimit]
-
 	// Use pre-computed medians for scoring reference
 	rmsP50 := medians.rmsP50
 	fluxP50 := medians.fluxP50
@@ -733,8 +718,8 @@ func estimateNoiseFloorAndThreshold(intervals []IntervalSample, medians silenceM
 		rms   float64
 		score float64
 	}
-	scored := make([]scoredInterval, len(searchIntervals))
-	for i, interval := range searchIntervals {
+	scored := make([]scoredInterval, len(intervals))
+	for i, interval := range intervals {
 		scored[i] = scoredInterval{
 			idx:   i,
 			rms:   interval.RMSLevel,
@@ -779,16 +764,9 @@ func estimateNoiseFloorAndThreshold(intervals []IntervalSample, medians silenceM
 //
 // The RMS threshold parameter is used as a hard ceiling - intervals above it
 // cannot be silence regardless of spectral characteristics.
-// Candidates in the first 15 seconds are excluded (typically contains intro).
 func findSilenceCandidatesFromIntervals(intervals []IntervalSample, threshold float64, medians silenceMedians) []SilenceRegion {
 	if len(intervals) < minimumSilenceIntervals {
 		return nil
-	}
-
-	// Only search the first silenceSearchPercent% of the recording
-	searchLimit := len(intervals) * silenceSearchPercent / 100
-	if searchLimit < minimumSilenceIntervals {
-		searchLimit = minimumSilenceIntervals
 	}
 
 	// Use pre-computed medians for room tone scoring
@@ -800,9 +778,8 @@ func findSilenceCandidatesFromIntervals(intervals []IntervalSample, threshold fl
 	var silentIntervalCount int
 	var interruptionCount int // consecutive intervals below score threshold
 	inSilence := false
-	excludeTime := time.Duration(excludeFirstSeconds * float64(time.Second))
 
-	for i := 0; i < searchLimit; i++ {
+	for i := 0; i < len(intervals); i++ {
 		interval := intervals[i]
 
 		// Hard ceiling: anything above threshold cannot be room tone
@@ -833,14 +810,11 @@ func findSilenceCandidatesFromIntervals(intervals []IntervalSample, threshold fl
 					endTime := intervals[lastSilentIdx].Timestamp + 250*time.Millisecond
 					duration := endTime - silenceStart
 
-					// Only include if not in excluded first 15 seconds
-					if silenceStart >= excludeTime {
-						candidates = append(candidates, SilenceRegion{
-							Start:    silenceStart,
-							End:      endTime,
-							Duration: duration,
-						})
-					}
+					candidates = append(candidates, SilenceRegion{
+						Start:    silenceStart,
+						End:      endTime,
+						Duration: duration,
+					})
 				}
 				inSilence = false
 				silentIntervalCount = 0
@@ -850,24 +824,21 @@ func findSilenceCandidatesFromIntervals(intervals []IntervalSample, threshold fl
 		}
 	}
 
-	// Handle silence that extends to the search limit
+	// Handle silence that extends to the end of the recording
 	if inSilence && silentIntervalCount >= minimumSilenceIntervals {
 		// Exclude trailing non-silent interruptions, same as the mid-loop case
-		lastSilentIdx := searchLimit - 1 - interruptionCount
+		lastSilentIdx := len(intervals) - 1 - interruptionCount
 		if lastSilentIdx < 0 {
 			lastSilentIdx = 0
 		}
 		endTime := intervals[lastSilentIdx].Timestamp + 250*time.Millisecond
 		duration := endTime - silenceStart
 
-		// Only include if not in excluded first 15 seconds
-		if silenceStart >= excludeTime {
-			candidates = append(candidates, SilenceRegion{
-				Start:    silenceStart,
-				End:      endTime,
-				Duration: duration,
-			})
-		}
+		candidates = append(candidates, SilenceRegion{
+			Start:    silenceStart,
+			End:      endTime,
+			Duration: duration,
+		})
 	}
 
 	return candidates
@@ -968,9 +939,6 @@ const (
 	// Set low (0.3) to only reject truly problematic candidates (crosstalk, etc.)
 	minAcceptableScore = 0.3
 
-	// Candidate selection cutoff
-	candidateCutoffPercent = 0.15 // Only consider silence in first 15% of recording
-
 	// selectionTolerance is the maximum score gap at which an earlier candidate is
 	// preferred over a later, higher-scoring one. Candidates within this tolerance
 	// of the maximum score are considered equivalent; the earliest one wins.
@@ -1010,11 +978,10 @@ func segmentLongSilenceRegion(region SilenceRegion) []SilenceRegion {
 }
 
 // findBestSilenceRegion finds the best silence region for noise profile extraction.
-// Uses a two-pass approach: first scores all candidates using multi-metric analysis
-// (amplitude, spectral characteristics, stability, duration), then elects the earliest
-// candidate whose score is within selectionTolerance of the maximum. This avoids the
-// pathological case where an intervening low-scoring candidate causes the algorithm
-// to miss a higher-scoring candidate later in the sequence.
+// Evaluates all candidates regardless of temporal position. Uses a two-pass approach:
+// first scores all candidates using multi-metric analysis (amplitude, spectral
+// characteristics, stability, duration), then elects the earliest candidate whose
+// score is within selectionTolerance of the maximum.
 //
 // Uses pre-collected interval data for measurements - no file re-reading required.
 // Returns nil if no suitable region is found.
@@ -1031,21 +998,13 @@ func findBestSilenceRegion(regions []SilenceRegion, intervals []IntervalSample, 
 		return result
 	}
 
-	// Calculate cutoff time: only consider silence in first 15% of recording
-	// Intentional room tone is always recorded near the start, not deep into the episode
-	cutoffTime := time.Duration(totalDuration * candidateCutoffPercent * float64(time.Second))
-
-	// Filter to candidates meeting duration and temporal criteria, then segment long regions.
+	// Filter to candidates meeting minimum duration, then segment long regions.
 	// Long silence regions are broken into overlapping segments to find the cleanest subsection.
 	// This helps when intentional room tone is embedded within a longer quiet period.
 	var candidates []SilenceRegion
 	for _, r := range regions {
 		// Must meet minimum duration
 		if r.Duration < minimumSilenceDuration {
-			continue
-		}
-		// Must start within first 15% of recording
-		if r.Start > cutoffTime {
 			continue
 		}
 		// Segment long regions to find cleanest subsection
