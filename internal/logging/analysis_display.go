@@ -101,11 +101,21 @@ func DisplayAnalysisResults(w io.Writer, inputPath string, metadata *audio.Metad
 			writeSilenceCandidateMetrics(w, c)
 			fmt.Fprintln(w)
 
-			// Print remaining candidates
-			if len(measurements.SilenceCandidates) > 1 {
+			// Print remaining candidates (skip zero-scored rejected candidates)
+			visibleCount := 0
+			for i, c := range measurements.SilenceCandidates {
+				if i == electedIdx || c.Score == 0.0 {
+					continue
+				}
+				visibleCount++
+			}
+			if visibleCount > 0 {
 				fmt.Fprintf(w, "  OTHER CANDIDATES\n")
 				for i, c := range measurements.SilenceCandidates {
 					if i == electedIdx {
+						continue
+					}
+					if c.Score == 0.0 {
 						continue
 					}
 					fmt.Fprintf(w, "  #%d: %.1fs at %s\n",
@@ -117,6 +127,9 @@ func DisplayAnalysisResults(w io.Writer, inputPath string, metadata *audio.Metad
 		} else {
 			// No elected candidate - print all in discovery order
 			for i, c := range measurements.SilenceCandidates {
+				if c.Score == 0.0 {
+					continue
+				}
 				fmt.Fprintf(w, "  #%d: %.1fs at %s\n",
 					i+1, c.Region.Duration.Seconds(), formatTimestamp(c.Region.Start))
 				writeSilenceCandidateMetrics(w, c)

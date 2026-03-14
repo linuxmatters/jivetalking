@@ -1652,12 +1652,11 @@ func writeDiagnosticSilence(f *os.File, measurements *processor.AudioMeasurement
 				fmt.Fprintf(f, "      Short-term:    %.1f LUFS\n", c.ShortTermLUFS)
 				fmt.Fprintf(f, "      True Peak:     %.1f dBTP\n", c.TruePeak)
 			} else {
-				reason := ""
 				if c.Score == 0.0 {
-					reason = " — rejected: too loud"
+					continue
 				}
-				fmt.Fprintf(f, "  Candidate %d:       %.1fs at %.1fs (score: %.3f, RMS %.1f dBFS)%s\n",
-					i+1, c.Region.Duration.Seconds(), c.Region.Start.Seconds(), c.Score, c.RMSLevel, reason)
+				fmt.Fprintf(f, "  Candidate %d:       %.1fs at %.1fs (score: %.3f, RMS %.1f dBFS)\n",
+					i+1, c.Region.Duration.Seconds(), c.Region.Start.Seconds(), c.Score, c.RMSLevel)
 			}
 		}
 	} else if measurements.NoiseProfile != nil {
