@@ -126,6 +126,9 @@ func DisplayAnalysisResults(w io.Writer, inputPath string, metadata *audio.Metad
 			}
 		} else {
 			// No elected candidate - print all in discovery order
+			if measurements.VoiceActivated {
+				fmt.Fprintln(w, "  Voice-activated recording detected")
+			}
 			for i, c := range measurements.SilenceCandidates {
 				if c.Score == 0.0 {
 					continue
@@ -145,6 +148,9 @@ func DisplayAnalysisResults(w io.Writer, inputPath string, metadata *audio.Metad
 		fmt.Fprintf(w, "  Noise Floor:    %.1f dBFS\n", measurements.NoiseProfile.MeasuredNoiseFloor)
 	} else {
 		fmt.Fprintln(w, "  No silence detected")
+		if measurements.VoiceActivated {
+			fmt.Fprintln(w, "  Voice-activated recording detected")
+		}
 	}
 
 	// Speech detection section
@@ -242,8 +248,12 @@ func DisplayAnalysisResults(w io.Writer, inputPath string, metadata *audio.Metad
 			fmt.Fprintf(w, "  Gate Threshold: %.1f dB %s\n", gateThresholdDB, gateDesc)
 			fmt.Fprintf(w, "  Gate Ratio:     %.1f:1\n", config.DS201GateRatio)
 		}
-		fmt.Fprintf(w, "  NR Threshold:   %.0f dB\n", config.NoiseRemoveCompandThreshold)
-		fmt.Fprintf(w, "  NR Expansion:   %.0f dB\n", config.NoiseRemoveCompandExpansion)
+		if config.NoiseRemoveCompandEnabled {
+			fmt.Fprintf(w, "  NR Threshold:   %.0f dB\n", config.NoiseRemoveCompandThreshold)
+			fmt.Fprintf(w, "  NR Expansion:   %.0f dB\n", config.NoiseRemoveCompandExpansion)
+		} else {
+			fmt.Fprintln(w, "  NR Compander:   disabled (no noise profile)")
+		}
 		if config.DeessIntensity > 0 {
 			fmt.Fprintf(w, "  De-esser:       %.0f%% intensity\n", config.DeessIntensity*100)
 		} else {

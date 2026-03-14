@@ -1610,6 +1610,9 @@ func writeDiagnosticSilence(f *os.File, measurements *processor.AudioMeasurement
 	// Silence candidates (all evaluated candidates with scores)
 	if len(measurements.SilenceCandidates) > 0 {
 		fmt.Fprintf(f, "Silence Candidates:  %d evaluated\n", len(measurements.SilenceCandidates))
+		if measurements.VoiceActivated {
+			fmt.Fprintf(f, "Voice-Activated:     yes (digital silence fraction >= 95%%)\n")
+		}
 		for i, c := range measurements.SilenceCandidates {
 			// Check if this candidate was selected (may have been refined, so check original start if refined)
 			isSelected := false
@@ -1675,6 +1678,9 @@ func writeDiagnosticSilence(f *os.File, measurements *processor.AudioMeasurement
 			r.Duration.Seconds(), r.Start.Seconds())
 	} else {
 		fmt.Fprintf(f, "Silence Candidates:  NONE FOUND\n")
+		if measurements.VoiceActivated {
+			fmt.Fprintf(f, "Voice-Activated:     yes (digital silence fraction >= 95%%)\n")
+		}
 		fmt.Fprintf(f, "  No silence regions detected in audio. Noise profiling unavailable.\n")
 	}
 
