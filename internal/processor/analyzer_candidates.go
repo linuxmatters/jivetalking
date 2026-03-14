@@ -79,14 +79,30 @@ const (
 	speechCentroidMin = 200.0  // Hz - lower bound for speech
 	speechCentroidMax = 4500.0 // Hz - upper bound for speech
 
-	// speechRMSMinimum is the minimum RMS level to be considered speech (not silence).
-	// Set relative to typical normalised speech levels.
-	speechRMSMinimum = -40.0 // dBFS
+	// speechRMSMinimumDefault is the fallback minimum RMS level to be considered speech (not silence).
+	// Used when adaptive computation is not possible (zero or -Inf measurements).
+	speechRMSMinimumDefault = -40.0 // dBFS
+
+	// speechRMSMinimumOffset is the dB below RMS level for the adaptive speech threshold.
+	speechRMSMinimumOffset = 12.0
+
+	// speechRMSMinimumNoiseMargin is the dB above noise floor for the adaptive speech threshold.
+	speechRMSMinimumNoiseMargin = 6.0
 
 	// speechEntropyMax is the maximum entropy for speech (structured signal).
 	// Pure noise approaches 1.0; speech is typically 0.3-0.7.
 	speechEntropyMax = 0.70
 )
+
+// computeSpeechRMSMinimum returns the adaptive minimum RMS level for speech detection.
+// Formula: max(rmsLevel - 12, noiseFloor + 6).
+// Falls back to speechRMSMinimumDefault when measurements are zero or -Inf.
+func computeSpeechRMSMinimum(rmsLevel, noiseFloor float64) float64 {
+	if rmsLevel == 0 || noiseFloor == 0 || math.IsInf(rmsLevel, -1) || math.IsInf(noiseFloor, -1) {
+		return speechRMSMinimumDefault
+	}
+	return math.Max(rmsLevel-speechRMSMinimumOffset, noiseFloor+speechRMSMinimumNoiseMargin)
+}
 
 // Speech window stability scoring constants
 const (
@@ -1378,9 +1394,9 @@ func calculateDurationScore(duration time.Duration) float64 {
 // speechScore calculates how speech-like an interval is.
 // Returns 0.0-1.0 where higher = more likely to be speech.
 // Inverts silence detection criteria: rewards amplitude, voice-range centroid, low entropy.
-func speechScore(interval IntervalSample, rmsP50 float64) float64 {
+func speechScore(interval IntervalSample, rmsP50 float64, speechRMSMin float64) float64 {
 	// Reject if too quiet (likely silence/room tone)
-	if interval.RMSLevel < speechRMSMinimum {
+	if interval.RMSLevel < speechRMSMin {
 		return 0.0
 	}
 
@@ -1423,10 +1439,12 @@ func speechScore(interval IntervalSample, rmsP50 float64) float64 {
 // 3. Score each interval for "speech likelihood"
 // 4. Find consecutive runs that meet minimum duration (30 seconds)
 // 5. Allow brief interruptions (2s) for natural pauses
-func findSpeechCandidatesFromIntervals(intervals []IntervalSample, silenceEnd time.Duration, voiceActivated bool) []SpeechRegion {
+func findSpeechCandidatesFromIntervals(intervals []IntervalSample, silenceEnd time.Duration, voiceActivated bool, rmsLevel, noiseFloor float64) []SpeechRegion {
 	if len(intervals) < minimumSpeechIntervals {
 		return nil
 	}
+
+	speechRMSMin := computeSpeechRMSMinimum(rmsLevel, noiseFloor)
 
 	// Find start index: after silence end + buffer
 	searchStart := silenceEnd + speechSearchStartBuffer
@@ -1474,7 +1492,7 @@ func findSpeechCandidatesFromIntervals(intervals []IntervalSample, silenceEnd ti
 
 	for i := 0; i < len(searchIntervals); i++ {
 		interval := searchIntervals[i]
-		score := speechScore(interval, rmsP50)
+		score := speechScore(interval, rmsP50, speechRMSMin)
 		isSpeech := score >= speechScoreThreshold
 
 		if isSpeech {

@@ -1,6 +1,7 @@
 package processor
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -717,11 +718,12 @@ func makeSpeechTestIntervals(startTime time.Duration, count int, rms, centroid, 
 
 func TestSpeechScore(t *testing.T) {
 	tests := []struct {
-		name     string
-		interval IntervalSample
-		rmsP50   float64
-		wantMin  float64
-		wantMax  float64
+		name         string
+		interval     IntervalSample
+		rmsP50       float64
+		speechRMSMin float64
+		wantMin      float64
+		wantMax      float64
 	}{
 		{
 			name: "typical speech",
@@ -730,9 +732,10 @@ func TestSpeechScore(t *testing.T) {
 				SpectralCentroid: 1500.0, // Voice range
 				SpectralEntropy:  0.5,
 			},
-			rmsP50:  -20.0,
-			wantMin: 0.4,
-			wantMax: 1.0,
+			rmsP50:       -20.0,
+			speechRMSMin: -40.0,
+			wantMin:      0.4,
+			wantMax:      1.0,
 		},
 		{
 			name: "silence (too quiet)",
@@ -741,9 +744,10 @@ func TestSpeechScore(t *testing.T) {
 				SpectralCentroid: 1500.0,
 				SpectralEntropy:  0.5,
 			},
-			rmsP50:  -20.0,
-			wantMin: 0.0,
-			wantMax: 0.0,
+			rmsP50:       -20.0,
+			speechRMSMin: -40.0,
+			wantMin:      0.0,
+			wantMax:      0.0,
 		},
 		{
 			name: "noise (wrong centroid)",
@@ -752,9 +756,10 @@ func TestSpeechScore(t *testing.T) {
 				SpectralCentroid: 8000.0, // Outside voice range
 				SpectralEntropy:  0.9,    // High entropy
 			},
-			rmsP50:  -20.0,
-			wantMin: 0.0,
-			wantMax: 0.4,
+			rmsP50:       -20.0,
+			speechRMSMin: -40.0,
+			wantMin:      0.0,
+			wantMax:      0.4,
 		},
 		{
 			name: "at RMS minimum threshold",
@@ -763,9 +768,10 @@ func TestSpeechScore(t *testing.T) {
 				SpectralCentroid: 1500.0,
 				SpectralEntropy:  0.5,
 			},
-			rmsP50:  -45.0,
-			wantMin: 0.3,
-			wantMax: 0.85,
+			rmsP50:       -45.0,
+			speechRMSMin: -40.0,
+			wantMin:      0.3,
+			wantMax:      0.85,
 		},
 		{
 			name: "just below RMS minimum",
@@ -774,9 +780,10 @@ func TestSpeechScore(t *testing.T) {
 				SpectralCentroid: 1500.0,
 				SpectralEntropy:  0.5,
 			},
-			rmsP50:  -45.0,
-			wantMin: 0.0,
-			wantMax: 0.0,
+			rmsP50:       -45.0,
+			speechRMSMin: -40.0,
+			wantMin:      0.0,
+			wantMax:      0.0,
 		},
 		{
 			name: "low entropy structured speech",
@@ -785,17 +792,97 @@ func TestSpeechScore(t *testing.T) {
 				SpectralCentroid: 2000.0,
 				SpectralEntropy:  0.2, // Very structured
 			},
-			rmsP50:  -20.0,
-			wantMin: 0.5,
-			wantMax: 1.0,
+			rmsP50:       -20.0,
+			speechRMSMin: -40.0,
+			wantMin:      0.5,
+			wantMax:      1.0,
+		},
+		{
+			name: "adaptive threshold rejects quiet interval",
+			interval: IntervalSample{
+				RMSLevel:         -35.0,
+				SpectralCentroid: 1500.0,
+				SpectralEntropy:  0.5,
+			},
+			rmsP50:       -20.0,
+			speechRMSMin: -32.0, // Adaptive threshold above interval RMS
+			wantMin:      0.0,
+			wantMax:      0.0,
+		},
+		{
+			name: "default threshold admits same interval",
+			interval: IntervalSample{
+				RMSLevel:         -35.0,
+				SpectralCentroid: 1500.0,
+				SpectralEntropy:  0.5,
+			},
+			rmsP50:       -40.0,
+			speechRMSMin: -40.0, // Default threshold below interval RMS
+			wantMin:      0.01,
+			wantMax:      1.0,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			score := speechScore(tt.interval, tt.rmsP50)
+			score := speechScore(tt.interval, tt.rmsP50, tt.speechRMSMin)
 			if score < tt.wantMin || score > tt.wantMax {
 				t.Errorf("speechScore() = %.2f, want [%.2f, %.2f]", score, tt.wantMin, tt.wantMax)
+			}
+		})
+	}
+}
+
+func TestComputeSpeechRMSMinimum(t *testing.T) {
+	tests := []struct {
+		name       string
+		rmsLevel   float64
+		noiseFloor float64
+		want       float64
+	}{
+		{
+			name:       "RMS-12 wins over NoiseFloor+6",
+			rmsLevel:   -20.0,
+			noiseFloor: -55.0,
+			want:       -32.0,
+		},
+		{
+			name:       "NoiseFloor+6 wins over RMS-12",
+			rmsLevel:   -20.0,
+			noiseFloor: -35.0,
+			want:       -29.0,
+		},
+		{
+			name:       "fallback on zero measurements",
+			rmsLevel:   0.0,
+			noiseFloor: 0.0,
+			want:       -40.0,
+		},
+		{
+			name:       "fallback on -Inf noise floor",
+			rmsLevel:   -20.0,
+			noiseFloor: math.Inf(-1),
+			want:       -40.0,
+		},
+		{
+			name:       "fallback on -Inf RMS level",
+			rmsLevel:   math.Inf(-1),
+			noiseFloor: -50.0,
+			want:       -40.0,
+		},
+		{
+			name:       "Anna scenario from proposal",
+			rmsLevel:   -48.7,
+			noiseFloor: -70.0,
+			want:       -60.7,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := computeSpeechRMSMinimum(tt.rmsLevel, tt.noiseFloor)
+			if math.Abs(got-tt.want) > 0.001 {
+				t.Errorf("computeSpeechRMSMinimum(%v, %v) = %v, want %v", tt.rmsLevel, tt.noiseFloor, got, tt.want)
 			}
 		})
 	}
@@ -841,7 +928,7 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 		speechIntervals := makeVariedSpeechIntervals(10*time.Second, 600, true) // 2.5min speech
 		intervals := append(silenceIntervals, speechIntervals...)
 
-		candidates := findSpeechCandidatesFromIntervals(intervals, 10*time.Second, false)
+		candidates := findSpeechCandidatesFromIntervals(intervals, 10*time.Second, false, -20.0, -55.0)
 
 		if len(candidates) == 0 {
 			t.Fatal("expected at least one speech candidate")
@@ -857,7 +944,7 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 		speechIntervals := makeVariedSpeechIntervals(10*time.Second, 80, true) // 20s
 		intervals := append(silenceIntervals, speechIntervals...)
 
-		candidates := findSpeechCandidatesFromIntervals(intervals, 10*time.Second, false)
+		candidates := findSpeechCandidatesFromIntervals(intervals, 10*time.Second, false, -20.0, -55.0)
 
 		if len(candidates) != 0 {
 			t.Errorf("expected no candidates, got %d", len(candidates))
@@ -872,7 +959,7 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 		speech2 := makeVariedSpeechIntervals(86500*time.Millisecond, 300, true) // 75s more
 		intervals := append(append(speech1, pause...), speech2...)
 
-		candidates := findSpeechCandidatesFromIntervals(intervals, 5*time.Second, false)
+		candidates := findSpeechCandidatesFromIntervals(intervals, 5*time.Second, false, -20.0, -55.0)
 
 		if len(candidates) == 0 {
 			t.Fatal("expected speech candidate bridging pause")
@@ -891,7 +978,7 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 		intervals := append(earlyIntervals, lateIntervals...)
 
 		// Search starts at 50s (after early speech ends)
-		candidates := findSpeechCandidatesFromIntervals(intervals, 50*time.Second, false)
+		candidates := findSpeechCandidatesFromIntervals(intervals, 50*time.Second, false, -20.0, -55.0)
 
 		if len(candidates) == 0 {
 			t.Fatal("expected speech candidate after silence end")
@@ -906,7 +993,7 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 		// Only 100 intervals (25s) - less than minimum 120 (30s)
 		intervals := makeVariedSpeechIntervals(0, 100, true)
 
-		candidates := findSpeechCandidatesFromIntervals(intervals, 0, false)
+		candidates := findSpeechCandidatesFromIntervals(intervals, 0, false, -20.0, -55.0)
 
 		if candidates != nil {
 			t.Errorf("expected nil for insufficient intervals, got %d candidates", len(candidates))
@@ -920,7 +1007,7 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 		speech2 := makeVariedSpeechIntervals(33*time.Second, 80, true) // 20s more
 		intervals := append(append(speech1, pause...), speech2...)
 
-		candidates := findSpeechCandidatesFromIntervals(intervals, 5*time.Second, false)
+		candidates := findSpeechCandidatesFromIntervals(intervals, 5*time.Second, false, -20.0, -55.0)
 
 		// Neither segment alone meets 30s minimum, so no candidates expected
 		if len(candidates) != 0 {
@@ -937,9 +1024,9 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 		intervals := append(append(speech1, gap...), speech2...)
 
 		// Default tolerance: gap exceeds 2s, splits into two regions
-		defaultCandidates := findSpeechCandidatesFromIntervals(intervals, 5*time.Second, false)
+		defaultCandidates := findSpeechCandidatesFromIntervals(intervals, 5*time.Second, false, -20.0, -55.0)
 		// Widened tolerance: gap within 10s, bridges into one region
-		widenedCandidates := findSpeechCandidatesFromIntervals(intervals, 5*time.Second, true)
+		widenedCandidates := findSpeechCandidatesFromIntervals(intervals, 5*time.Second, true, -20.0, -55.0)
 
 		if len(defaultCandidates) < 2 {
 			t.Fatalf("expected default tolerance to split gap into 2+ regions, got %d", len(defaultCandidates))
@@ -962,7 +1049,7 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 		speech2 := makeVariedSpeechIntervals(97500*time.Millisecond, 300, true)    // 75s speech
 		intervals := append(append(speech1, gap...), speech2...)
 
-		candidates := findSpeechCandidatesFromIntervals(intervals, 5*time.Second, true)
+		candidates := findSpeechCandidatesFromIntervals(intervals, 5*time.Second, true, -20.0, -55.0)
 
 		if len(candidates) < 2 {
 			t.Errorf("expected gap >10s to split even with widened tolerance, got %d candidates", len(candidates))
