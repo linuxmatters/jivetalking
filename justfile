@@ -166,7 +166,7 @@ release VERSION:
     echo "  - Create GitHub release with downloadable assets"
 
 # Run linters
-lint:
+lint: _check-submodule
     @go vet ./...
     @gocyclo -top 20 -avg -ignore '_test\.go$' .
     @ineffassign ./...
