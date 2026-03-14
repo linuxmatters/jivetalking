@@ -20,7 +20,7 @@ jobs:
 
       - name: Get version from tag
         id: get_version
-        run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
 
       - name: Generate changelog
         id: changelog
@@ -31,7 +31,7 @@ jobs:
           # Generate changelog between tags
           if [ -n "$PREV_TAG" ]; then
             echo "## Changes since $PREV_TAG" > CHANGELOG.md
-            git log $PREV_TAG..HEAD --pretty=format:"* %s (%h)" >> CHANGELOG.md
+            git log "$PREV_TAG"..HEAD --pretty=format:"* %s (%h)" >> CHANGELOG.md
           else
             echo "## Initial Release" > CHANGELOG.md
             git log --pretty=format:"* %s (%h)" >> CHANGELOG.md
@@ -112,7 +112,7 @@ jobs:
 
       - name: Get version from tag
         id: get_version
-        run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
 
       - name: Build binary
         run: |
