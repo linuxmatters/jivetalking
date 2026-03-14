@@ -2179,3 +2179,72 @@ func TestFindBestSilenceRegion_BoundaryTransientSurvivesAfterRefinement(t *testi
 		t.Error("expected WasRefined=true for candidate with boundary transient")
 	}
 }
+
+func TestDetectVoiceActivated(t *testing.T) {
+	// Helper to build a candidate slice with a given number of digital silence
+	// and non-digital-silence candidates.
+	makeCandidates := func(digitalSilence, other int, otherWarning string) []SilenceCandidateMetrics {
+		candidates := make([]SilenceCandidateMetrics, 0, digitalSilence+other)
+		for range digitalSilence {
+			candidates = append(candidates, SilenceCandidateMetrics{
+				TransientWarning: "rejected: digital silence (RMS -120.0 dBFS)",
+				Score:            0.0,
+			})
+		}
+		for range other {
+			candidates = append(candidates, SilenceCandidateMetrics{
+				TransientWarning: otherWarning,
+				Score:            0.0,
+			})
+		}
+		return candidates
+	}
+
+	tests := []struct {
+		name       string
+		candidates []SilenceCandidateMetrics
+		want       bool
+	}{
+		{
+			name:       "100% digital silence (Anna-style)",
+			candidates: makeCandidates(386, 0, ""),
+			want:       true,
+		},
+		{
+			name:       "99.8% digital silence, 1 crosstalk (Patrick-style)",
+			candidates: makeCandidates(427, 1, "rejected: crosstalk detected"),
+			want:       true,
+		},
+		{
+			name:       "85% digital silence, below threshold (Marius-style)",
+			candidates: makeCandidates(255, 45, ""),
+			want:       false,
+		},
+		{
+			name:       "no candidates",
+			candidates: nil,
+			want:       false,
+		},
+		{
+			name: "candidates with scores pulling ratio down",
+			// 90 digital silence + 10 scored candidates = 90% < 95% threshold
+			candidates: func() []SilenceCandidateMetrics {
+				cs := makeCandidates(90, 10, "")
+				for i := 90; i < 100; i++ {
+					cs[i].Score = 0.5
+				}
+				return cs
+			}(),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := detectVoiceActivated(tt.candidates)
+			if got != tt.want {
+				t.Errorf("detectVoiceActivated() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
