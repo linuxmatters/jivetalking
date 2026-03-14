@@ -136,6 +136,9 @@ func DisplayAnalysisResults(w io.Writer, inputPath string, metadata *audio.Metad
 				fmt.Fprintln(w)
 			}
 		}
+
+		// Rejection summary: count zero-scored candidates by reason
+		writeSilenceRejectionSummary(w, measurements.SilenceCandidates)
 	} else if measurements.NoiseProfile != nil {
 		fmt.Fprintf(w, "  Sample:         %.1fs at %s\n",
 			measurements.NoiseProfile.Duration.Seconds(), formatTimestamp(measurements.NoiseProfile.Start))
@@ -296,6 +299,55 @@ func writeSilenceCandidateMetrics(w io.Writer, c processor.SilenceCandidateMetri
 	fmt.Fprintf(w, "      Flatness:    %.3f (%s)\n", c.Spectral.Flatness, interpretFlatness(c.Spectral.Flatness))
 	fmt.Fprintf(w, "      Kurtosis:    %.1f (%s)\n", c.Spectral.Kurtosis, interpretKurtosis(c.Spectral.Kurtosis))
 	fmt.Fprintf(w, "      Centroid:    %.0f Hz\n", c.Spectral.Centroid)
+}
+
+// writeSilenceRejectionSummary outputs a compact summary of rejected silence candidates.
+// Groups zero-scored candidates by rejection reason extracted from TransientWarning.
+func writeSilenceRejectionSummary(w io.Writer, candidates []processor.SilenceCandidateMetrics) {
+	reasonCounts := make(map[string]int)
+	for _, c := range candidates {
+		if c.Score != 0.0 {
+			continue
+		}
+		reason := classifyRejectionReason(c.TransientWarning)
+		reasonCounts[reason]++
+	}
+
+	if len(reasonCounts) == 0 {
+		return
+	}
+
+	// Build summary parts in a stable order
+	order := []string{"digital silence", "crosstalk", "transient contamination", "too loud"}
+	var parts []string
+	for _, reason := range order {
+		if count, ok := reasonCounts[reason]; ok {
+			parts = append(parts, fmt.Sprintf("%d %s", count, reason))
+			delete(reasonCounts, reason)
+		}
+	}
+	// Any unexpected reasons
+	for reason, count := range reasonCounts {
+		parts = append(parts, fmt.Sprintf("%d %s", count, reason))
+	}
+
+	fmt.Fprintf(w, "  Rejected:       %s\n", strings.Join(parts, ", "))
+}
+
+// classifyRejectionReason maps a TransientWarning string to a short label.
+func classifyRejectionReason(warning string) string {
+	switch {
+	case strings.Contains(warning, "digital silence"):
+		return "digital silence"
+	case strings.Contains(warning, "crosstalk"):
+		return "crosstalk"
+	case strings.Contains(warning, "transient contamination"):
+		return "transient contamination"
+	case warning == "":
+		return "too loud"
+	default:
+		return "too loud"
+	}
 }
 
 // writeAnalysisSection writes a section header for analysis output.
