@@ -2001,6 +2001,29 @@ func TestTuneNoiseRemove(t *testing.T) {
 		}
 	})
 
+	t.Run("valid profile re-enables compand after previous disable", func(t *testing.T) {
+		config := newTestConfig()
+		config.NoiseRemoveEnabled = true
+
+		// Simulate first file with no noise profile (disables compand)
+		config.NoiseRemoveCompandEnabled = true
+		tuneNoiseRemove(config, &AudioMeasurements{NoiseProfile: nil})
+		if config.NoiseRemoveCompandEnabled {
+			t.Fatalf("NoiseRemoveCompandEnabled should be false after nil NoiseProfile")
+		}
+
+		// Simulate second file with valid noise profile (should re-enable)
+		tuneNoiseRemove(config, &AudioMeasurements{
+			NoiseProfile: &NoiseProfile{
+				Duration:           2.0,
+				MeasuredNoiseFloor: -55.0,
+			},
+		})
+		if !config.NoiseRemoveCompandEnabled {
+			t.Errorf("NoiseRemoveCompandEnabled should be re-enabled for valid NoiseProfile after previous disable")
+		}
+	})
+
 	t.Run("adaptive threshold based on noise floor", func(t *testing.T) {
 		// Threshold = noise floor + 5dB, clamped to [-70, -40]
 		// Expansion tiers: > -45 → 12, > -55 → 8, > -65 → 6, else → 4

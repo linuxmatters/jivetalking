@@ -88,6 +88,9 @@ func DisplayAnalysisResults(w io.Writer, inputPath string, metadata *audio.Metad
 		}
 
 		if electedIdx >= 0 {
+			if measurements.VoiceActivated {
+				fmt.Fprintln(w, "  Voice-activated recording detected")
+			}
 			// Print elected candidate first with distinct header
 			c := measurements.SilenceCandidates[electedIdx]
 			fmt.Fprintf(w, "  ELECTED CANDIDATE\n")
@@ -252,7 +255,7 @@ func DisplayAnalysisResults(w io.Writer, inputPath string, metadata *audio.Metad
 			fmt.Fprintf(w, "  NR Threshold:   %.0f dB\n", config.NoiseRemoveCompandThreshold)
 			fmt.Fprintf(w, "  NR Expansion:   %.0f dB\n", config.NoiseRemoveCompandExpansion)
 		} else {
-			fmt.Fprintln(w, "  NR Compander:   disabled (no noise profile)")
+			fmt.Fprintln(w, "  NR Compander:   disabled")
 		}
 		if config.DeessIntensity > 0 {
 			fmt.Fprintf(w, "  De-esser:       %.0f%% intensity\n", config.DeessIntensity*100)
@@ -369,6 +372,8 @@ func noiseFloorSourceLabel(source string) string {
 		return "estimated from RMS level"
 	case "ebur128_estimate":
 		return "estimated from loudness"
+	case "silence_profile":
+		return "from silence profile"
 	default:
 		return "derived"
 	}

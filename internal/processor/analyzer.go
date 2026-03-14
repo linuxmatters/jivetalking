@@ -581,6 +581,7 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 			// This is more accurate than the overall RMS_trough because it's from pure silence
 			if profile.MeasuredNoiseFloor != 0 && !math.IsInf(profile.MeasuredNoiseFloor, -1) {
 				measurements.NoiseFloor = profile.MeasuredNoiseFloor
+				measurements.NoiseFloorSource = "silence_profile"
 			}
 		}
 	}
