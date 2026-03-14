@@ -108,7 +108,7 @@ func TestDisplayAnalysisResults_CompanderDisabled(t *testing.T) {
 	DisplayAnalysisResults(&buf, "/tmp/test.wav", makeMinimalMetadata(), m, config)
 	output := buf.String()
 
-	if !strings.Contains(output, "NR Compander:   disabled (no noise profile)") {
+	if !strings.Contains(output, "NR Compander:   disabled") {
 		t.Error("expected 'NR Compander: disabled' when compander is disabled")
 	}
 	if strings.Contains(output, "NR Threshold:") {

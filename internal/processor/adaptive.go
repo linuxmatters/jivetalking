@@ -690,6 +690,9 @@ func tuneNoiseRemove(config *FilterChainConfig, m *AudioMeasurements) {
 		return
 	}
 
+	// Re-enable compand (may have been disabled by a previous file in the same run)
+	config.NoiseRemoveCompandEnabled = true
+
 	noiseFloor := m.NoiseProfile.MeasuredNoiseFloor
 
 	// Threshold: 5dB above noise floor (catches breaths but not speech)
