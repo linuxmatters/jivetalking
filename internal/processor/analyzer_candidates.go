@@ -59,9 +59,6 @@ const (
 	// 30 seconds / 250ms = 120 intervals
 	minimumSpeechIntervals = 120
 
-	// minimumSpeechDuration is the minimum duration for speech candidate selection.
-	minimumSpeechDuration = 30 * time.Second
-
 	// speechInterruptionToleranceIntervals allows natural pauses within speech.
 	// 8 intervals = 2 seconds tolerance for breaths, brief pauses.
 	speechInterruptionToleranceIntervals = 8
@@ -378,7 +375,7 @@ func measureSilenceCandidateFromIntervals(region SilenceRegion, intervals []Inte
 
 	// Accumulate metrics for averaging (sums) and extremes (max)
 	var rmsSum float64
-	var peakMax, truePeakMax, samplePeakMax float64 = -120.0, -120.0, -120.0
+	peakMax, truePeakMax, samplePeakMax := -120.0, -120.0, -120.0
 	var spectralSum SpectralMetrics
 	var momentarySum, shortTermSum float64
 
@@ -1043,7 +1040,7 @@ func detectVoiceActivated(candidates []SilenceCandidateMetrics) bool {
 	return fraction >= voiceActivatedDigitalSilenceThreshold
 }
 
-func findBestSilenceRegion(regions []SilenceRegion, intervals []IntervalSample, totalDuration float64) *findBestSilenceRegionResult {
+func findBestSilenceRegion(regions []SilenceRegion, intervals []IntervalSample, _ float64) *findBestSilenceRegionResult {
 	result := &findBestSilenceRegionResult{}
 
 	if len(regions) == 0 {
@@ -1556,7 +1553,7 @@ func measureSpeechCandidateFromIntervals(region SpeechRegion, intervals []Interv
 
 	// Accumulate metrics for averaging (sums) and extremes (max)
 	var rmsSum float64
-	var peakMax, truePeakMax, samplePeakMax float64 = -120.0, -120.0, -120.0
+	peakMax, truePeakMax, samplePeakMax := -120.0, -120.0, -120.0
 	var spectralSum SpectralMetrics
 	var momentarySum, shortTermSum float64
 

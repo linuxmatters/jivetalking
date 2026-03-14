@@ -557,7 +557,9 @@ func TestFindBestSilenceRegion_EarlierCandidatePreferredWithinTolerance(t *testi
 	intervalsB := makeSilenceTestIntervals(30*time.Second, 10*time.Second,
 		-69.0, -64.0, 100.0, 0.85, 1.5, 0.0)
 
-	allIntervals := append(intervalsA, intervalsB...)
+	allIntervals := make([]IntervalSample, 0, len(intervalsA)+len(intervalsB))
+	allIntervals = append(allIntervals, intervalsA...)
+	allIntervals = append(allIntervals, intervalsB...)
 
 	result := findBestSilenceRegion(regions, allIntervals, 3600.0)
 
@@ -594,7 +596,9 @@ func TestFindBestSilenceRegion_BelowMinAcceptableScoreNeverElected(t *testing.T)
 	intervalsB := makeSilenceTestIntervals(15*time.Second, 10*time.Second,
 		-40.5, -35.5, 2375.0, 0.0, 9.0, 0.03)
 
-	allIntervals := append(intervalsA, intervalsB...)
+	allIntervals := make([]IntervalSample, 0, len(intervalsA)+len(intervalsB))
+	allIntervals = append(allIntervals, intervalsA...)
+	allIntervals = append(allIntervals, intervalsB...)
 
 	result := findBestSilenceRegion(regions, allIntervals, 3600.0)
 
@@ -650,7 +654,9 @@ func TestFindBestSilenceRegion_LaterCandidateWinsWhenGapExceedsTolerance(t *test
 	intervalsB := makeSilenceTestIntervals(30*time.Second, 10*time.Second,
 		-75.0, -70.0, 100.0, 0.9, 1.0, 0.0)
 
-	allIntervals := append(intervalsA, intervalsB...)
+	allIntervals := make([]IntervalSample, 0, len(intervalsA)+len(intervalsB))
+	allIntervals = append(allIntervals, intervalsA...)
+	allIntervals = append(allIntervals, intervalsB...)
 
 	result := findBestSilenceRegion(regions, allIntervals, 3600.0)
 
@@ -702,14 +708,17 @@ func TestFindBestSilenceRegion_LateCandidateDiscoverable(t *testing.T) {
 // ============================================================================
 
 // makeSpeechTestIntervals creates synthetic interval samples with speech-like characteristics.
-// Allows control over RMS, centroid, and entropy for testing speech detection logic.
-func makeSpeechTestIntervals(startTime time.Duration, count int, rms, centroid, entropy float64) []IntervalSample {
+// Allows control over RMS and entropy for testing speech detection logic.
+func makeSpeechTestIntervals(count int, rms float64) []IntervalSample {
+	const entropy = 0.5
+	const defaultCentroid = 1500.0
+
 	intervals := make([]IntervalSample, count)
 	for i := range intervals {
 		intervals[i] = IntervalSample{
-			Timestamp:        startTime + time.Duration(i)*250*time.Millisecond,
+			Timestamp:        time.Duration(i) * 250 * time.Millisecond,
 			RMSLevel:         rms,
-			SpectralCentroid: centroid,
+			SpectralCentroid: defaultCentroid,
 			SpectralEntropy:  entropy,
 		}
 	}
@@ -926,7 +935,9 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 		// Search starts at 12s, so we lose 8 intervals, leaving 592 → ~148 speech intervals
 		silenceIntervals := makeVariedSpeechIntervals(0, 40, false)             // 10s silence
 		speechIntervals := makeVariedSpeechIntervals(10*time.Second, 600, true) // 2.5min speech
-		intervals := append(silenceIntervals, speechIntervals...)
+		intervals := make([]IntervalSample, 0, len(silenceIntervals)+len(speechIntervals))
+		intervals = append(intervals, silenceIntervals...)
+		intervals = append(intervals, speechIntervals...)
 
 		candidates := findSpeechCandidatesFromIntervals(intervals, 10*time.Second, false, -20.0, -55.0)
 
@@ -942,7 +953,9 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 		// 10s silence + 20s speech (too short - only 80 intervals)
 		silenceIntervals := makeVariedSpeechIntervals(0, 40, false)
 		speechIntervals := makeVariedSpeechIntervals(10*time.Second, 80, true) // 20s
-		intervals := append(silenceIntervals, speechIntervals...)
+		intervals := make([]IntervalSample, 0, len(silenceIntervals)+len(speechIntervals))
+		intervals = append(intervals, silenceIntervals...)
+		intervals = append(intervals, speechIntervals...)
 
 		candidates := findSpeechCandidatesFromIntervals(intervals, 10*time.Second, false, -20.0, -55.0)
 
@@ -975,7 +988,9 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 		// Need 480+ intervals for late speech to have enough high-scoring intervals
 		earlyIntervals := makeVariedSpeechIntervals(0, 200, true)             // 50s speech at start
 		lateIntervals := makeVariedSpeechIntervals(60*time.Second, 500, true) // 125s speech later
-		intervals := append(earlyIntervals, lateIntervals...)
+		intervals := make([]IntervalSample, 0, len(earlyIntervals)+len(lateIntervals))
+		intervals = append(intervals, earlyIntervals...)
+		intervals = append(intervals, lateIntervals...)
 
 		// Search starts at 50s (after early speech ends)
 		candidates := findSpeechCandidatesFromIntervals(intervals, 50*time.Second, false, -20.0, -55.0)
@@ -1018,9 +1033,9 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 	t.Run("voice-activated bridges digital silence gap", func(t *testing.T) {
 		// Two speech segments separated by a 7.5s digital silence gap (30 intervals).
 		// Default tolerance (8 intervals / 2s) would split; widened (40 / 10s) bridges.
-		speech1 := makeVariedSpeechIntervals(10*time.Second, 300, true)          // 75s speech
-		gap := makeVariedSpeechIntervals(85*time.Second, 30, false)              // 7.5s digital silence
-		speech2 := makeVariedSpeechIntervals(92500*time.Millisecond, 300, true)  // 75s speech
+		speech1 := makeVariedSpeechIntervals(10*time.Second, 300, true)         // 75s speech
+		gap := makeVariedSpeechIntervals(85*time.Second, 30, false)             // 7.5s digital silence
+		speech2 := makeVariedSpeechIntervals(92500*time.Millisecond, 300, true) // 75s speech
 		intervals := append(append(speech1, gap...), speech2...)
 
 		// Default tolerance: gap exceeds 2s, splits into two regions
@@ -1044,9 +1059,9 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 	t.Run("voice-activated does not bridge gaps beyond 10s", func(t *testing.T) {
 		// Two speech segments separated by a 12.5s gap (50 intervals).
 		// Even widened tolerance (40 intervals) should not bridge this.
-		speech1 := makeVariedSpeechIntervals(10*time.Second, 300, true)            // 75s speech
-		gap := makeVariedSpeechIntervals(85*time.Second, 50, false)                // 12.5s gap
-		speech2 := makeVariedSpeechIntervals(97500*time.Millisecond, 300, true)    // 75s speech
+		speech1 := makeVariedSpeechIntervals(10*time.Second, 300, true)         // 75s speech
+		gap := makeVariedSpeechIntervals(85*time.Second, 50, false)             // 12.5s gap
+		speech2 := makeVariedSpeechIntervals(97500*time.Millisecond, 300, true) // 75s speech
 		intervals := append(append(speech1, gap...), speech2...)
 
 		candidates := findSpeechCandidatesFromIntervals(intervals, 5*time.Second, true, -20.0, -55.0)
@@ -1106,7 +1121,7 @@ func TestMeasureSpeechCandidateFromIntervals(t *testing.T) {
 	})
 
 	t.Run("returns nil for empty range", func(t *testing.T) {
-		intervals := makeSpeechTestIntervals(0, 40, -20.0, 1500.0, 0.5)
+		intervals := makeSpeechTestIntervals(40, -20.0)
 		region := SpeechRegion{
 			Start:    100 * time.Second, // No intervals in this range
 			End:      110 * time.Second,
@@ -1124,7 +1139,7 @@ func TestMeasureSpeechCandidateFromIntervals(t *testing.T) {
 func TestFindBestSpeechRegion(t *testing.T) {
 	t.Run("selects longest qualifying candidate", func(t *testing.T) {
 		// Create intervals covering multiple regions
-		intervals := makeSpeechTestIntervals(0, 400, -18.0, 1500.0, 0.5) // 100s of speech-like intervals
+		intervals := makeSpeechTestIntervals(400, -18.0) // 100s of speech-like intervals
 
 		regions := []SpeechRegion{
 			{Start: 0, End: 35 * time.Second, Duration: 35 * time.Second},
@@ -1144,7 +1159,7 @@ func TestFindBestSpeechRegion(t *testing.T) {
 	})
 
 	t.Run("returns nil for empty regions", func(t *testing.T) {
-		intervals := makeSpeechTestIntervals(0, 200, -18.0, 1500.0, 0.5)
+		intervals := makeSpeechTestIntervals(200, -18.0)
 
 		result := findBestSpeechRegion([]SpeechRegion{}, intervals, nil)
 
@@ -1154,7 +1169,7 @@ func TestFindBestSpeechRegion(t *testing.T) {
 	})
 
 	t.Run("stores all candidates for reporting", func(t *testing.T) {
-		intervals := makeSpeechTestIntervals(0, 400, -18.0, 1500.0, 0.5)
+		intervals := makeSpeechTestIntervals(400, -18.0)
 
 		regions := []SpeechRegion{
 			{Start: 0, End: 35 * time.Second, Duration: 35 * time.Second},
@@ -2259,7 +2274,9 @@ func TestFindBestSilenceRegion_BoundaryTransientSurvivesAfterRefinement(t *testi
 		100.0, 0.9, 1.0, 0.0,
 	)
 
-	allIntervals := append(transientIntervals, cleanIntervals...)
+	allIntervals := make([]IntervalSample, 0, len(transientIntervals)+len(cleanIntervals))
+	allIntervals = append(allIntervals, transientIntervals...)
+	allIntervals = append(allIntervals, cleanIntervals...)
 
 	result := findBestSilenceRegion(regions, allIntervals, 3600.0)
 

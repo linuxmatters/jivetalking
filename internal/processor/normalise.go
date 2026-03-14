@@ -124,15 +124,10 @@ func measureWithLoudnorm(inputPath string, config *FilterChainConfig, progressCa
 	// Start capturing loudnorm log output
 	startLoudnormCapture()
 
-	// Helper to stop capture and parse stats
-	getLoudnormStats := func() (*LoudnormStats, error) {
-		return stopLoudnormCapture()
-	}
-
 	// Open input file
 	reader, metadata, err := audio.OpenAudioFile(inputPath)
 	if err != nil {
-		getLoudnormStats() // Clean up capture
+		_, _ = stopLoudnormCapture() // Clean up capture
 		return nil, fmt.Errorf("failed to open input: %w", err)
 	}
 	defer reader.Close()
@@ -160,7 +155,7 @@ func measureWithLoudnorm(inputPath string, config *FilterChainConfig, progressCa
 		filterSpec,
 	)
 	if err != nil {
-		getLoudnormStats() // Clean up capture
+		_, _ = stopLoudnormCapture() // Clean up capture
 		return nil, fmt.Errorf("failed to create filter graph: %w", err)
 	}
 	// Note: We free the filter graph explicitly to trigger loudnorm JSON output
@@ -184,7 +179,7 @@ func measureWithLoudnorm(inputPath string, config *FilterChainConfig, progressCa
 	ffmpeg.AVFilterGraphFree(&filterGraph)
 
 	// Capture loudnorm stats from log output
-	stats, err := getLoudnormStats()
+	stats, err := stopLoudnormCapture()
 	if err != nil {
 		return nil, fmt.Errorf("failed to capture loudnorm measurements: %w", err)
 	}
@@ -240,7 +235,7 @@ func measureWithLoudnorm(inputPath string, config *FilterChainConfig, progressCa
 //   - ceiling: The limiter ceiling in dBTP (clamped to minLimiterCeilingDB if needed)
 //   - needed: True if limiting is required (projected TP exceeds target)
 //   - clamped: True if ceiling was clamped to minimum (loudnorm may need to adjust target)
-func calculateLimiterCeiling(measured_I, measured_TP, target_I, target_TP float64) (ceiling float64, needed bool, clamped bool) {
+func calculateLimiterCeiling(measuredI, measuredTP, targetI, targetTP float64) (ceiling float64, needed bool, clamped bool) {
 	// Safety margin accounts for inter-sample peak (ISP) creation during limiting.
 	// FFmpeg's alimiter operates on sample peaks, not true peaks. When the limiter
 	// shapes waveforms to reduce peaks, the resulting waveform can have ISPs that
@@ -258,16 +253,16 @@ func calculateLimiterCeiling(measured_I, measured_TP, target_I, target_TP float6
 	// Use -24.0 dBTP as practical minimum with small safety buffer
 	const minLimiterCeilingDB = -24.0
 
-	gainRequired := target_I - measured_I
-	projectedTP := measured_TP + gainRequired
+	gainRequired := targetI - measuredI
+	projectedTP := measuredTP + gainRequired
 
 	// No limiting needed if linear mode already possible
-	if projectedTP <= target_TP {
+	if projectedTP <= targetTP {
 		return 0, false, false
 	}
 
-	// Calculate ceiling: target_TP - gainRequired - safetyMargin
-	ceiling = target_TP - gainRequired - safetyMargin
+	// Calculate ceiling: targetTP - gainRequired - safetyMargin
+	ceiling = targetTP - gainRequired - safetyMargin
 
 	// Clamp to alimiter's minimum supported ceiling
 	if ceiling < minLimiterCeilingDB {
@@ -299,7 +294,7 @@ func calculateLimiterCeiling(measured_I, measured_TP, target_I, target_TP float6
 //   - effectiveTargetI: The target I to use (may be lower than desired to ensure linear mode)
 //   - offset: The gain offset to apply (effectiveTargetI - measured_I)
 //   - linearPossible: True if the desired target can be achieved in linear mode
-func calculateLinearModeTarget(measured_I, measured_TP, desired_I, target_TP float64) (effectiveTargetI, offset float64, linearPossible bool) {
+func calculateLinearModeTarget(measuredI, measuredTP, desiredI, targetTP float64) (effectiveTargetI, offset float64, linearPossible bool) {
 	// Calculate the maximum target I that allows linear mode
 	// Formula: measured_TP + (target_I - measured_I) <= target_TP
 	// Solving for target_I: target_I <= target_TP - measured_TP + measured_I
@@ -308,17 +303,17 @@ func calculateLinearModeTarget(measured_I, measured_TP, desired_I, target_TP flo
 	// - Floating point precision differences between Go and FFmpeg's internal calculations
 	// - Potential rounding in filter parameter passing
 	// - Any measurement variance during processing
-	const safetyMargin = 0.1 // dB - ensures we stay safely within linear mode bounds
-	maxLinearTargetI := target_TP - measured_TP + measured_I - safetyMargin
+	const linearSafetyMargin = 0.1 // dB - ensures we stay safely within linear mode bounds
+	maxLinearTargetI := targetTP - measuredTP + measuredI - linearSafetyMargin
 
 	// Check if desired target is achievable in linear mode (with safety margin)
-	if desired_I <= maxLinearTargetI {
+	if desiredI <= maxLinearTargetI {
 		// Desired target is achievable - use it directly
-		return desired_I, desired_I - measured_I, true
+		return desiredI, desiredI - measuredI, true
 	}
 
 	// Desired target would require dynamic mode - clamp to linear-safe maximum
-	return maxLinearTargetI, maxLinearTargetI - measured_I, false
+	return maxLinearTargetI, maxLinearTargetI - measuredI, false
 }
 
 // NormalisationResult contains the outcome of the normalisation pass.

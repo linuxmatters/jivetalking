@@ -52,7 +52,7 @@ func StyledHelpPrinter(options kong.HelpOptions) func(options kong.HelpOptions, 
 		// Usage
 		sb.WriteString(helpSectionStyle.Render("Usage:"))
 		sb.WriteString("\n  ")
-		sb.WriteString(fmt.Sprintf("%s [flags] <files> ...", ctx.Model.Name))
+		fmt.Fprintf(&sb, "%s [flags] <files> ...", ctx.Model.Name)
 		sb.WriteString("\n")
 
 		// Arguments section
@@ -114,7 +114,7 @@ func getArguments(ctx *kong.Context) []argument {
 	var args []argument
 
 	// Parse arguments from the model
-	for _, arg := range ctx.Model.Node.Positional {
+	for _, arg := range ctx.Model.Positional {
 		name := arg.Summary()
 		help := arg.Help
 		args = append(args, argument{name: name, help: help})
@@ -133,12 +133,12 @@ func getFlags(ctx *kong.Context) []flag {
 	})
 
 	// Parse flags from the model
-	for _, f := range ctx.Model.Node.Flags {
+	for _, f := range ctx.Model.Flags {
 		if f.Name == "help" {
 			continue // Already added
 		}
 
-		flagStr := ""
+		var flagStr string
 		if f.Short != 0 {
 			flagStr = fmt.Sprintf("-%c, --%s", f.Short, f.Name)
 		} else {

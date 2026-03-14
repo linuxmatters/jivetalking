@@ -392,14 +392,6 @@ func LinearToDb(linear float64) float64 {
 	return 20.0 * math.Log10(linear)
 }
 
-// boolToInt converts a bool to 0 or 1 for FFmpeg filter parameters
-func boolToInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
-}
-
 // buildDownmixFilter builds the stereo-to-mono downmix filter specification.
 // Uses FFmpeg's built-in channel layout conversion which handles various input
 // configurations (stereo, mono, single-channel recordings) correctly.
@@ -417,7 +409,7 @@ func (cfg *FilterChainConfig) buildDownmixFilter() string {
 // Used in both Pass 1 (input analysis) and Pass 2 (output analysis).
 //
 // Filter order: astats → aspectralstats → ebur128
-// ebur128 is placed last because it upsamples to 192kHz internally and outputs f64,
+// The ebur128 filter is placed last because it upsamples to 192 kHz internally and outputs f64,
 // which would skew spectral measurements if placed first. astats and aspectralstats
 // measure the original signal format, then ebur128 does its own internal upsampling
 // for accurate true peak detection without affecting other measurements.

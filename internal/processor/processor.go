@@ -53,7 +53,7 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 
 	measurements, err := AnalyzeAudio(inputPath, config, progressCallback)
 	if err != nil {
-		return nil, fmt.Errorf("Pass 1 failed: %w", err)
+		return nil, fmt.Errorf("pass 1 failed: %w", err)
 	}
 
 	if progressCallback != nil {
@@ -82,7 +82,7 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 	var filteredMeasurements *OutputMeasurements
 
 	if err := processWithFilters(inputPath, outputPath, config, progressCallback, measurements, &filteredMeasurements); err != nil {
-		return nil, fmt.Errorf("Pass 2 failed: %w", err)
+		return nil, fmt.Errorf("pass 2 failed: %w", err)
 	}
 
 	if progressCallback != nil {
@@ -120,7 +120,7 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 	if filteredMeasurements != nil {
 		normResult, err = ApplyNormalisation(outputPath, config, filteredMeasurements, measurements, progressCallback)
 		if err != nil {
-			return nil, fmt.Errorf("Pass 3 failed: %w", err)
+			return nil, fmt.Errorf("pass 3 failed: %w", err)
 		}
 	}
 

@@ -486,7 +486,7 @@ func formatDuration(d time.Duration) string {
 	}
 
 	hours := minutes / 60
-	minutes = minutes % 60
+	minutes %= 60
 	return fmt.Sprintf("%dh %dm %ds", hours, minutes, seconds)
 }
 
@@ -748,11 +748,12 @@ func formatDS201GateFilter(f *os.File, cfg *processor.FilterChainConfig, m *proc
 			m.NoiseProfile.PeakLevel != 0 &&
 			lufsGap < 25
 
-		if usePeakRef {
+		switch {
+		case usePeakRef:
 			rationale = append(rationale, fmt.Sprintf("peak ref %.1f dB (crest %.1f dB)", m.NoiseProfile.PeakLevel, m.NoiseProfile.CrestFactor))
-		} else if lufsGap >= 25 && m.NoiseProfile != nil && m.NoiseProfile.CrestFactor > 20 {
+		case lufsGap >= 25 && m.NoiseProfile != nil && m.NoiseProfile.CrestFactor > 20:
 			rationale = append(rationale, fmt.Sprintf("noise floor %.1f dB (extreme LUFS gap %.0f dB, ignoring crest)", m.NoiseFloor, lufsGap))
-		} else {
+		default:
 			rationale = append(rationale, fmt.Sprintf("noise floor %.1f dB", m.NoiseFloor))
 		}
 
@@ -771,13 +772,14 @@ func formatDS201GateFilter(f *os.File, cfg *processor.FilterChainConfig, m *proc
 		// Thresholds: very tonal < 0.10, tonal < 0.12, mixed < 0.16, broadband >= 0.16
 		if m.NoiseProfile != nil {
 			entropy := m.NoiseProfile.Entropy
-			if entropy < 0.10 {
+			switch {
+			case entropy < 0.10:
 				rationale = append(rationale, fmt.Sprintf("very tonal (entropy %.2f, slow release)", entropy))
-			} else if entropy < 0.12 {
+			case entropy < 0.12:
 				rationale = append(rationale, fmt.Sprintf("tonal (entropy %.2f)", entropy))
-			} else if entropy < 0.16 {
+			case entropy < 0.16:
 				rationale = append(rationale, fmt.Sprintf("mixed (entropy %.2f, faster release)", entropy))
-			} else {
+			default:
 				rationale = append(rationale, fmt.Sprintf("broadband-ish (entropy %.2f, fast release)", entropy))
 			}
 		}
@@ -1252,13 +1254,14 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 		reductionInterp = "noise eliminated"
 	} else if !math.IsNaN(inputRMS) && !math.IsNaN(filteredRMS) {
 		filteredDelta := inputRMS - filteredRMS
-		if filteredDelta < 0 {
+		switch {
+		case filteredDelta < 0:
 			reductionInterp = "noise increased"
-		} else if filteredDelta < 3 {
+		case filteredDelta < 3:
 			reductionInterp = "minimal reduction"
-		} else if filteredDelta < 10 {
+		case filteredDelta < 10:
 			reductionInterp = "good reduction"
-		} else {
+		default:
 			reductionInterp = "excellent reduction"
 		}
 	}
@@ -1526,18 +1529,20 @@ func writeSpeechRegionTable(f *os.File, inputMeasurements *processor.AudioMeasur
 		if entropy > 0.7 {
 			return "noisy/breathy"
 		}
-		if centroid < 1500 {
+		switch {
+		case centroid < 1500:
 			return "warm, full-bodied"
-		} else if centroid < 2500 {
+		case centroid < 2500:
 			return "balanced, natural"
-		} else if centroid < 4000 {
+		case centroid < 4000:
 			return "present, forward"
-		} else if centroid < 6000 {
+		case centroid < 6000:
 			return "bright, crisp"
-		} else if centroid > 6000 {
+		case centroid > 6000:
 			return "extremely bright (possible HF noise)"
+		default:
+			return "very bright"
 		}
-		return "very bright"
 	}
 	inputSpeechChar := getSpeechCharacter(inputCentroid, inputEntropy)
 	filteredSpeechChar := getSpeechCharacter(filteredCentroid, filteredEntropy)
@@ -1608,6 +1613,7 @@ func writeDiagnosticSilence(f *os.File, measurements *processor.AudioMeasurement
 	}
 
 	// Silence candidates (all evaluated candidates with scores)
+	//nolint:gocritic // ifElseChain: complex display branches with different condition types
 	if len(measurements.SilenceCandidates) > 0 {
 		fmt.Fprintf(f, "Silence Candidates:  %d evaluated\n", len(measurements.SilenceCandidates))
 		if measurements.VoiceActivated {
@@ -1731,6 +1737,7 @@ func writeDiagnosticSpeech(f *os.File, measurements *processor.AudioMeasurements
 	writeSection(f, "Diagnostic: Speech Detection")
 
 	// Show speech candidates summary
+	//nolint:gocritic // ifElseChain: complex display branches with different condition types
 	if len(measurements.SpeechCandidates) > 0 {
 		fmt.Fprintf(f, "Speech Candidates:   %d evaluated\n", len(measurements.SpeechCandidates))
 

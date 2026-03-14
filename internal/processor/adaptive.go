@@ -519,21 +519,22 @@ func tuneDS201HighPass(config *FilterChainConfig, measurements *AudioMeasurement
 	// - Reduced mix (blend filtered with dry signal)
 	//
 	// This removes subsonic rumble while preserving bass character.
-	if decrease < spectralDecreaseVeryWarm {
+	switch {
+	case decrease < spectralDecreaseVeryWarm:
 		// Very warm voice
 		// Use minimal settings: 30Hz cutoff, gentle Q, 50% mix
 		config.DS201HPFreq = ds201HPVeryWarmFreq
 		config.DS201HPWidth = ds201HPVeryWarmWidth
 		config.DS201HPMix = ds201HPVeryWarmMix
 		config.DS201HPPoles = 1 // Gentle 6dB/oct slope
-	} else if skewness > spectralSkewnessLFEmphasis {
+	case skewness > spectralSkewnessLFEmphasis:
 		// Significant LF emphasis
 		// Use warm settings: 40Hz cutoff, gentle Q, 70% mix
 		config.DS201HPFreq = ds201HPWarmFreq
 		config.DS201HPWidth = ds201HPWarmWidth
 		config.DS201HPMix = ds201HPWarmMix
 		config.DS201HPPoles = 1 // Gentle 6dB/oct slope
-	} else if decrease < spectralDecreaseWarm {
+	case decrease < spectralDecreaseWarm:
 		// Warm voice - cap at default with gentle slope to preserve body
 		if config.DS201HPFreq > ds201HPDefaultFreq {
 			config.DS201HPFreq = ds201HPDefaultFreq
@@ -916,11 +917,12 @@ func tuneDS201Gate(config *FilterChainConfig, measurements *AudioMeasurements) {
 		actualThreshold := LinearToDb(config.DS201GateThreshold)
 
 		var clampReason string
-		if thresholdUnclamped < noiseFloorLimit && actualThreshold >= noiseFloorLimit {
+		switch {
+		case thresholdUnclamped < noiseFloorLimit && actualThreshold >= noiseFloorLimit:
 			clampReason = "noise_floor"
-		} else if thresholdUnclamped > speechRMSLimit && actualThreshold <= speechRMSLimit {
+		case thresholdUnclamped > speechRMSLimit && actualThreshold <= speechRMSLimit:
 			clampReason = "speech_rms"
-		} else {
+		default:
 			clampReason = "none"
 		}
 

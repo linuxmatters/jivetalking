@@ -46,8 +46,8 @@ func renderHeader(m Model) string {
 func renderFileQueue(m Model) string {
 	var b strings.Builder
 
-	for i, file := range m.Files {
-		b.WriteString(renderFileEntry(file, i, m.CurrentIndex))
+	for _, file := range m.Files {
+		b.WriteString(renderFileEntry(file))
 		b.WriteString("\n")
 	}
 
@@ -55,7 +55,7 @@ func renderFileQueue(m Model) string {
 }
 
 // renderFileEntry renders a single file entry in the queue
-func renderFileEntry(file FileProgress, index int, currentIndex int) string {
+func renderFileEntry(file FileProgress) string {
 	fileName := filepath.Base(file.InputPath)
 
 	switch file.Status {
@@ -99,7 +99,7 @@ func renderFileDetails(file FileProgress) string {
 	var passName string
 	switch file.CurrentPass {
 	case processor.PassAnalysis:
-		passName = "Analysing Audio"
+		passName = "Analysing Audio" //nolint:gosec // G101 false positive: not a credential
 	case processor.PassProcessing:
 		passName = "Processing Audio"
 	case processor.PassMeasuring:
@@ -109,7 +109,7 @@ func renderFileDetails(file FileProgress) string {
 	default:
 		passName = "Processing"
 	}
-	content.WriteString(fmt.Sprintf("Pass %d/4: %s\n", file.CurrentPass, passName))
+	fmt.Fprintf(&content, "Pass %d/4: %s\n", file.CurrentPass, passName)
 
 	// Progress bar
 	content.WriteString(renderProgressBar(file.Progress, 40))
@@ -121,7 +121,7 @@ func renderFileDetails(file FileProgress) string {
 	if file.Progress > 0 {
 		remaining = (elapsed / file.Progress) - elapsed
 	}
-	content.WriteString(fmt.Sprintf("✇ Elapsed: %.1fs | Remaining: ~%.1fs\n", elapsed, remaining))
+	fmt.Fprintf(&content, "✇ Elapsed: %.1fs | Remaining: ~%.1fs\n", elapsed, remaining)
 
 	// Audio level visualization
 	if file.CurrentLevel != 0 {
@@ -148,7 +148,7 @@ func renderAudioLevelMeter(currentLevel, peakLevel float64) string {
 	var b strings.Builder
 
 	// Display current and peak levels
-	b.WriteString(fmt.Sprintf("🕪 Audio Level: %.1f dB | Peak: %.1f dB\n", currentLevel, peakLevel))
+	fmt.Fprintf(&b, "🕪 Audio Level: %.1f dB | Peak: %.1f dB\n", currentLevel, peakLevel)
 
 	// Create visual meter
 	// dB range: -60 dB (silence) to 0 dB (maximum)
@@ -180,25 +180,27 @@ func renderAudioLevelMeter(currentLevel, peakLevel float64) string {
 	for i := range width {
 		// Determine color zone
 		var color string
-		if i < greenZone {
+		switch {
+		case i < greenZone:
 			color = greenColor
-		} else if i < orangeZone {
+		case i < orangeZone:
 			color = orangeColor
-		} else {
+		default:
 			color = redColor
 		}
 
 		// Determine character
 		var char rune
-		if i == peakPos && i > currentPos {
+		switch {
+		case i == peakPos && i > currentPos:
 			// Show peak marker only if it's ahead of current position
 			char = '|'
-		} else if i < currentPos {
+		case i < currentPos:
 			char = '▓' // Filled
-		} else if i == currentPos && currentPos == peakPos {
+		case i == currentPos && currentPos == peakPos:
 			// When current level is at peak, show filled bar
 			char = '▓'
-		} else {
+		default:
 			char = '░' // Empty
 		}
 
@@ -276,4 +278,3 @@ func renderCompletedFile(file FileProgress) string {
 		file.InputLUFS, file.OutputLUFS, quality,
 		file.NoiseFloor)
 }
-

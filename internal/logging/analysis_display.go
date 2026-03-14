@@ -60,7 +60,7 @@ func DisplayAnalysisResults(w io.Writer, inputPath string, metadata *audio.Metad
 	fmt.Fprintf(w, "  Threshold:      %.1f dB (%.1f dBFS room tone estimate + 1 dB)\n",
 		measurements.SilenceDetectLevel, measurements.PreScanNoiseFloor)
 
-	if len(measurements.SilenceCandidates) > 0 {
+	if len(measurements.SilenceCandidates) > 0 { //nolint:gocritic // ifElseChain: complex display logic unsuitable for switch
 		fmt.Fprintf(w, "  Candidates:     %d evaluated\n", len(measurements.SilenceCandidates))
 
 		// Find the elected candidate index
@@ -158,7 +158,7 @@ func DisplayAnalysisResults(w io.Writer, inputPath string, metadata *audio.Metad
 
 	// Speech detection section
 	writeAnalysisSection(w, "SPEECH DETECTION")
-	if len(measurements.SpeechCandidates) > 0 {
+	if len(measurements.SpeechCandidates) > 0 { //nolint:gocritic // ifElseChain: complex display logic unsuitable for switch
 		fmt.Fprintf(w, "  Candidates:     %d evaluated\n", len(measurements.SpeechCandidates))
 		fmt.Fprintln(w)
 
@@ -413,7 +413,7 @@ func formatTimestamp(d time.Duration) string {
 
 	if minutes >= 60 {
 		hours := minutes / 60
-		minutes = minutes % 60
+		minutes %= 60
 		return fmt.Sprintf("%dh %dm %.0fs", hours, minutes, seconds)
 	}
 	return fmt.Sprintf("%dm %.0fs", minutes, seconds)

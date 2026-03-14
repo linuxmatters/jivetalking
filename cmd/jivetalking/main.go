@@ -54,7 +54,7 @@ func main() {
 	// Validate input
 	if len(cliArgs.Files) == 0 {
 		cli.PrintError("No input files specified")
-		ctx.PrintUsage(false)
+		_ = ctx.PrintUsage(false)
 		os.Exit(1)
 	}
 
@@ -170,7 +170,10 @@ func main() {
 	// Run the program
 	if _, err := p.Run(); err != nil {
 		cli.PrintError(fmt.Sprintf("UI error: %v", err))
-		os.Exit(1)
+		if debugLog != nil {
+			debugLog.Close()
+		}
+		os.Exit(1) //nolint:gocritic // exitAfterDefer: debugLog explicitly closed above
 	}
 }
 
@@ -190,17 +193,18 @@ func (ph *progressHandler) callback(pass processor.PassNumber, passName string, 
 	ph.log("[MAIN] Sending ProgressMsg: Pass %d (%s), Progress %.1f%%, Level %.1f dB", pass, passName, progress*100, level)
 
 	// Track pass timing
-	if pass == processor.PassAnalysis && progress == 0.0 {
+	switch {
+	case pass == processor.PassAnalysis && progress == 0.0:
 		ph.pass1Start = time.Now()
-	} else if pass == processor.PassAnalysis && progress == 1.0 {
+	case pass == processor.PassAnalysis && progress == 1.0:
 		ph.pass1Time = time.Since(ph.pass1Start)
-	} else if pass == processor.PassMeasuring && progress == 0.0 {
+	case pass == processor.PassMeasuring && progress == 0.0:
 		ph.pass3Start = time.Now()
-	} else if pass == processor.PassMeasuring && progress == 1.0 {
+	case pass == processor.PassMeasuring && progress == 1.0:
 		ph.pass3Time = time.Since(ph.pass3Start)
-	} else if pass == processor.PassNormalising && progress == 0.0 {
+	case pass == processor.PassNormalising && progress == 0.0:
 		ph.pass4Start = time.Now()
-	} else if pass == processor.PassNormalising && progress == 1.0 {
+	case pass == processor.PassNormalising && progress == 1.0:
 		ph.pass4Time = time.Since(ph.pass4Start)
 	}
 
