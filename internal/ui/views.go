@@ -70,8 +70,8 @@ func renderFileEntry(file FileProgress, index int, currentIndex int) string {
 	case StatusAnalyzing, StatusProcessing, StatusNormalising:
 		// 🞽 active file with detailed progress
 		icon := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFA500")).Render("🞽")
-		return fmt.Sprintf(" %s %s → %s\n%s",
-			icon, fileName, generateOutputName(fileName),
+		return fmt.Sprintf(" %s %s\n%s",
+			icon, fileName,
 			renderFileDetails(file))
 
 	case StatusError:
@@ -277,9 +277,3 @@ func renderCompletedFile(file FileProgress) string {
 		file.NoiseFloor)
 }
 
-// generateOutputName returns the source filename for active display during processing.
-// The final LUFS-aware output filename is only known after processing completes,
-// so the active view shows the input filename being processed.
-func generateOutputName(input string) string {
-	return input
-}
