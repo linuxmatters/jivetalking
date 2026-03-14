@@ -1197,7 +1197,7 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	// ========== AMPLITUDE METRICS ==========
 
 	// RMS Level (noise floor)
-	inputRMS := math.NaN()
+	var inputRMS float64
 	if inputNoise != nil {
 		inputRMS = inputNoise.RMSLevel
 	} else {
@@ -1272,7 +1272,7 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 		"dB", reductionInterp)
 
 	// Peak Level
-	inputPeak := math.NaN()
+	var inputPeak float64
 	if inputNoise != nil {
 		inputPeak = inputNoise.PeakLevel
 	} else {
@@ -1295,7 +1295,7 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 		"dBFS", "")
 
 	// Crest Factor (undefined for digital silence - no peak or RMS to compare)
-	inputCrest := math.NaN()
+	var inputCrest float64
 	if inputNoise != nil {
 		inputCrest = inputNoise.CrestFactor
 	} else {
