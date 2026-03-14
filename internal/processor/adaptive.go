@@ -681,21 +681,24 @@ func tuneNoiseRemove(config *FilterChainConfig, m *AudioMeasurements) {
 		return
 	}
 
-	// Default values (fallback if no noise profile)
-	threshold := -55.0
-	expansion := 6.0
-
-	if m.NoiseProfile != nil && m.NoiseProfile.MeasuredNoiseFloor < 0 {
-		noiseFloor := m.NoiseProfile.MeasuredNoiseFloor
-
-		// Threshold: 5dB above noise floor (catches breaths but not speech)
-		threshold = noiseFloor + 5.0
-		// Clamp to reasonable range
-		threshold = clamp(threshold, -70.0, -40.0)
-
-		// Expansion: scale with noise severity
-		expansion = scaleExpansion(noiseFloor)
+	// Without a noise profile, the compand has no calibration data.
+	// The anlmdn denoiser is self-adapting and handles in-speech noise
+	// without a reference profile. Disable the compand to avoid the
+	// blind fallback risking attenuation of quiet speech.
+	if m.NoiseProfile == nil || m.NoiseProfile.MeasuredNoiseFloor >= 0 {
+		config.NoiseRemoveCompandEnabled = false
+		return
 	}
+
+	noiseFloor := m.NoiseProfile.MeasuredNoiseFloor
+
+	// Threshold: 5dB above noise floor (catches breaths but not speech)
+	threshold := noiseFloor + 5.0
+	// Clamp to reasonable range
+	threshold = clamp(threshold, -70.0, -40.0)
+
+	// Expansion: scale with noise severity
+	expansion := scaleExpansion(noiseFloor)
 
 	config.NoiseRemoveCompandThreshold = threshold
 	config.NoiseRemoveCompandExpansion = expansion

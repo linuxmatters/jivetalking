@@ -64,6 +64,7 @@ func newTestConfig() *FilterChainConfig {
 		VolumaxOutputLevel: 1.0,
 
 		// NoiseRemove defaults (anlmdn + compand)
+		NoiseRemoveCompandEnabled:   true,
 		NoiseRemoveStrength:         0.00001,
 		NoiseRemovePatchSec:         0.006,
 		NoiseRemoveResearchSec:      0.0058,
@@ -618,6 +619,36 @@ func TestBuildNoiseRemoveFilter(t *testing.T) {
 		}
 		if !strings.Contains(spec, "-75/-85") {
 			t.Errorf("buildNoiseRemoveFilter() missing FLAT curve point -75/-85 for 10dB expansion\nGot: %s", spec)
+		}
+	})
+
+	t.Run("compand enabled produces anlmdn+compand chain", func(t *testing.T) {
+		config := newTestConfig()
+		config.NoiseRemoveEnabled = true
+		config.NoiseRemoveCompandEnabled = true
+
+		spec := config.buildNoiseRemoveFilter()
+
+		if !strings.Contains(spec, "anlmdn=") {
+			t.Errorf("compand-enabled spec missing anlmdn, got: %s", spec)
+		}
+		if !strings.Contains(spec, "compand=") {
+			t.Errorf("compand-enabled spec missing compand, got: %s", spec)
+		}
+	})
+
+	t.Run("compand disabled produces anlmdn-only spec", func(t *testing.T) {
+		config := newTestConfig()
+		config.NoiseRemoveEnabled = true
+		config.NoiseRemoveCompandEnabled = false
+
+		spec := config.buildNoiseRemoveFilter()
+
+		if !strings.Contains(spec, "anlmdn=") {
+			t.Errorf("compand-disabled spec missing anlmdn, got: %s", spec)
+		}
+		if strings.Contains(spec, "compand=") {
+			t.Errorf("compand-disabled spec should not contain compand, got: %s", spec)
 		}
 	})
 
