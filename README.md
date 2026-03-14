@@ -6,7 +6,7 @@ Raw microphone recordings into broadcast-ready audio in one command. No configur
 jivetalking presenter1.flac presenter2.flac
 ```
 
-Your files emerge at -18 LUFS, the podcast/broadcast standard, with room rumble, background hiss, clicks, and harsh sibilance sorted automatically. Everything needed is embedded in the binary. This is not how audio tools usually work, and that is rather the point.
+Your files emerge at -16 LUFS, the podcast/broadcast standard, with room rumble, background hiss, clicks, and harsh sibilance sorted automatically. Everything needed is embedded in the binary. This is not how audio tools usually work, and that is rather the point.
 
 ---
 
@@ -40,7 +40,7 @@ Filter chain inspired by studio legends, tuned to your specific audio:
 Two-stage EBU R128 normalisation with a CBS Volumax-inspired twist:
 
 1. **Limiter** creates headroom by reducing true peaks
-2. **Loudnorm** applies linear gain to reach -18 LUFS without clipping or dynamic processing
+2. **Loudnorm** applies linear gain to reach -16 LUFS without clipping or dynamic processing
 
 This order matters. The limiter provides breathing room so loudnorm can use its transparent linear mode rather than falling back to dynamic compression.
 
@@ -174,7 +174,7 @@ RECORDING TIPS
     by about 14 dB would improve quality
 ```
 
-Output files are named with `-processed` suffix: `recording.flac` becomes `recording-processed.flac`.
+Output files are named with the measured LUFS value: `recording.flac` becomes `recording-LUFS-16-processed.flac`.
 
 ---
 
@@ -187,7 +187,7 @@ Record → Process → Edit → Finalise
   │         │         │
   │         │         └─ Import to Audacity, top/tail, mix to mono
   │         │
-  │         └─ $ jivetalking *.flac (-18 LUFS, matched levels)
+  │         └─ $ jivetalking *.flac (-16 LUFS, matched levels)
   │
   └─ Each presenter records separately, exports FLAC
 ```
