@@ -203,7 +203,8 @@ type AudioMeasurements struct {
 	InputLRA     float64 `json:"input_lra"`     // Loudness range (LU)
 	InputThresh  float64 `json:"input_thresh"`  // Threshold level
 	TargetOffset float64 `json:"target_offset"` // Offset for normalization
-	NoiseFloor   float64 `json:"noise_floor"`   // Measured noise floor from astats (dBFS)
+	NoiseFloor       float64 `json:"noise_floor"`        // Derived noise floor (dBFS), three-tier: astats → RMS estimate → ebur128 estimate
+	NoiseFloorSource string  `json:"noise_floor_source"` // Source of NoiseFloor: "astats", "rms_estimate", "ebur128_estimate"
 
 	// Adaptive silence detection thresholds (derived from interval sampling)
 	PreScanNoiseFloor  float64 `json:"prescan_noise_floor"`  // Noise floor estimated from interval data (dBFS)
@@ -506,10 +507,12 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 	if acc.astatsRMSTrough != 0 && !math.IsInf(acc.astatsRMSTrough, -1) {
 		// Tier 1: Use RMS_trough (best - actual measurement of quiet segments)
 		measurements.NoiseFloor = acc.astatsRMSTrough
+		measurements.NoiseFloorSource = "astats"
 	} else if acc.astatsRMSLevel != 0 && !math.IsInf(acc.astatsRMSLevel, -1) {
 		// Tier 2: Estimate from overall RMS level
 		// Typical speech has quiet segments 12-18dB below average RMS; use 15dB as balanced estimate
 		measurements.NoiseFloor = acc.astatsRMSLevel - 15.0
+		measurements.NoiseFloorSource = "rms_estimate"
 	} else {
 		// Tier 3: Estimate from ebur128 integrated loudness threshold
 		// Louder recordings typically have better SNR (lower relative noise floor)
@@ -522,6 +525,7 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 			noiseFloorOffset = 8.0 // Quiet source: higher relative noise
 		}
 		measurements.NoiseFloor = measurements.InputThresh - noiseFloorOffset
+		measurements.NoiseFloorSource = "ebur128_estimate"
 	}
 
 	// Safety clamp: -90dB (digital silence) to -30dB (very noisy environment)

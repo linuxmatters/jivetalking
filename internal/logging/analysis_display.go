@@ -230,7 +230,7 @@ func DisplayAnalysisResults(w io.Writer, inputPath string, metadata *audio.Metad
 		fmt.Fprintf(w, "  Gate Baseline:  %.1f dB (noise floor + margin)\n", suggestedGateDB)
 		fmt.Fprintf(w, "  NR Headroom:    %.1f dB (noise-to-speech gap)\n", measurements.NoiseReductionHeadroom)
 	} else {
-		fmt.Fprintf(w, "  Noise Floor:    %.1f dBFS (from astats)\n", measurements.AstatsNoiseFloor)
+		fmt.Fprintf(w, "  Noise Floor:    %.1f dBFS (%s)\n", measurements.NoiseFloor, noiseFloorSourceLabel(measurements.NoiseFloorSource))
 	}
 	fmt.Fprintln(w)
 
@@ -357,6 +357,20 @@ func classifyRejectionReason(warning string) string {
 		return "too loud"
 	default:
 		return "too loud"
+	}
+}
+
+// noiseFloorSourceLabel returns a human-readable label for the noise floor derivation source.
+func noiseFloorSourceLabel(source string) string {
+	switch source {
+	case "astats":
+		return "from astats"
+	case "rms_estimate":
+		return "estimated from RMS level"
+	case "ebur128_estimate":
+		return "estimated from loudness"
+	default:
+		return "derived"
 	}
 }
 
