@@ -225,6 +225,9 @@ type AudioMeasurements struct {
 	// Elected speech candidate measurements (for adaptive tuning)
 	SpeechProfile *SpeechCandidateMetrics `json:"speech_profile,omitempty"` // Best speech candidate metrics
 
+	// Voice-activated recording detection
+	VoiceActivated bool `json:"voice_activated"` // True when >= 95% of silence candidates are digital silence
+
 	// Noise profile extracted from best silence candidate
 	NoiseProfile *NoiseProfile `json:"noise_profile,omitempty"` // nil if extraction failed
 
@@ -542,6 +545,9 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 
 	// Store all evaluated candidates for reporting/debugging
 	measurements.SilenceCandidates = silenceResult.Candidates
+
+	// Detect voice-activated recordings from digital silence candidate fraction
+	measurements.VoiceActivated = detectVoiceActivated(silenceResult.Candidates)
 
 	// Extract noise profile from best silence region BEFORE speech region selection.
 	// This allows the SNR margin check in findBestSpeechRegion to penalise candidates

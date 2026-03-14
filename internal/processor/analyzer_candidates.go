@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -924,6 +925,11 @@ const (
 	// Genuine room tone never drops below ~-95 dBFS due to preamp thermal noise.
 	digitalSilenceRMSThreshold = -115.0 // dBFS - 5 dB margin above measurement floor
 
+	// voiceActivatedDigitalSilenceThreshold is the fraction of silence candidates
+	// that must be digital silence to classify a recording as voice-activated.
+	// 95% threshold provides a 10-point margin above the highest known normal recording (Marius: 85%).
+	voiceActivatedDigitalSilenceThreshold = 0.95
+
 	// Crest factor penalty thresholds for silence candidates.
 	// Context: These apply to SILENCE CANDIDATES (RMS < -70 dBFS).
 	// In silence regions, even modest transients produce extreme crest factors:
@@ -995,6 +1001,25 @@ func segmentLongSilenceRegion(region SilenceRegion) []SilenceRegion {
 type findBestSilenceRegionResult struct {
 	BestRegion *SilenceRegion
 	Candidates []SilenceCandidateMetrics
+}
+
+// detectVoiceActivated determines whether a recording was made with a voice-activated
+// platform by examining the fraction of silence candidates flagged as digital silence.
+// Returns true when candidates exist and >= 95% have "digital silence" in their TransientWarning.
+func detectVoiceActivated(candidates []SilenceCandidateMetrics) bool {
+	if len(candidates) == 0 {
+		return false
+	}
+
+	digitalSilenceCount := 0
+	for _, c := range candidates {
+		if strings.Contains(c.TransientWarning, "digital silence") {
+			digitalSilenceCount++
+		}
+	}
+
+	fraction := float64(digitalSilenceCount) / float64(len(candidates))
+	return fraction >= voiceActivatedDigitalSilenceThreshold
 }
 
 func findBestSilenceRegion(regions []SilenceRegion, intervals []IntervalSample, totalDuration float64) *findBestSilenceRegionResult {
