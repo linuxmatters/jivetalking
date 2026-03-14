@@ -13,14 +13,14 @@ import (
 // output audio region. Both silence and speech region measurement functions
 // share this intermediate type before mapping to their specific candidate types.
 type regionMeasurements struct {
-	RMSLevel      float64
-	PeakLevel     float64
-	CrestFactor   float64
-	Spectral      SpectralMetrics
-	MomentaryLUFS float64
-	ShortTermLUFS float64
-	TruePeak      float64
-	SamplePeak    float64
+	RMSLevel        float64
+	PeakLevel       float64
+	CrestFactor     float64
+	Spectral        SpectralMetrics
+	MomentaryLUFS   float64
+	ShortTermLUFS   float64
+	TruePeak        float64
+	SamplePeak      float64
 	FramesProcessed int64
 }
 

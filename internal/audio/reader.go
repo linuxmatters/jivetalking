@@ -51,7 +51,7 @@ func OpenAudioFile(filename string) (*Reader, *Metadata, error) {
 	streamIdx := -1
 	var audioStream *ffmpeg.AVStream
 	streams := fmtCtx.Streams()
-	for i := 0; i < int(fmtCtx.NbStreams()); i++ {
+	for i := range int(fmtCtx.NbStreams()) { //nolint:gosec // NbStreams is a small count, overflow impossible
 		stream := streams.Get(uintptr(i))
 		if stream.Codecpar().CodecType() == ffmpeg.AVMediaTypeAudio {
 			streamIdx = i
@@ -176,7 +176,7 @@ func (r *Reader) ReadFrame() (*ffmpeg.AVFrame, error) {
 
 // GetTimeBase returns the time base of the audio stream
 func (r *Reader) GetTimeBase() *ffmpeg.AVRational {
-	return r.fmtCtx.Streams().Get(uintptr(r.streamIdx)).TimeBase()
+	return r.fmtCtx.Streams().Get(uintptr(r.streamIdx)).TimeBase() //nolint:gosec // streamIdx is validated in OpenAudioFile
 }
 
 // GetDecoderContext returns the decoder context (needed for filter graph setup)

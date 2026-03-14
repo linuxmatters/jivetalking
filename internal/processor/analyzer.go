@@ -198,11 +198,11 @@ type AudioMeasurements struct {
 	BaseMeasurements
 
 	// Input-specific loudness measurements from ebur128
-	InputI       float64 `json:"input_i"`       // Integrated loudness (LUFS)
-	InputTP      float64 `json:"input_tp"`      // True peak (dBTP)
-	InputLRA     float64 `json:"input_lra"`     // Loudness range (LU)
-	InputThresh  float64 `json:"input_thresh"`  // Threshold level
-	TargetOffset float64 `json:"target_offset"` // Offset for normalization
+	InputI           float64 `json:"input_i"`            // Integrated loudness (LUFS)
+	InputTP          float64 `json:"input_tp"`           // True peak (dBTP)
+	InputLRA         float64 `json:"input_lra"`          // Loudness range (LU)
+	InputThresh      float64 `json:"input_thresh"`       // Threshold level
+	TargetOffset     float64 `json:"target_offset"`      // Offset for normalization
 	NoiseFloor       float64 `json:"noise_floor"`        // Derived noise floor (dBFS), three-tier: astats → RMS estimate → ebur128 estimate
 	NoiseFloorSource string  `json:"noise_floor_source"` // Source of NoiseFloor: "astats", "rms_estimate", "ebur128_estimate"
 
@@ -504,24 +504,26 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 	//   - Fallback for when astats data is completely unavailable
 	//   - Uses integrated loudness to infer likely noise floor characteristics
 
-	if acc.astatsRMSTrough != 0 && !math.IsInf(acc.astatsRMSTrough, -1) {
+	switch {
+	case acc.astatsRMSTrough != 0 && !math.IsInf(acc.astatsRMSTrough, -1):
 		// Tier 1: Use RMS_trough (best - actual measurement of quiet segments)
 		measurements.NoiseFloor = acc.astatsRMSTrough
 		measurements.NoiseFloorSource = "astats"
-	} else if acc.astatsRMSLevel != 0 && !math.IsInf(acc.astatsRMSLevel, -1) {
+	case acc.astatsRMSLevel != 0 && !math.IsInf(acc.astatsRMSLevel, -1):
 		// Tier 2: Estimate from overall RMS level
 		// Typical speech has quiet segments 12-18dB below average RMS; use 15dB as balanced estimate
 		measurements.NoiseFloor = acc.astatsRMSLevel - 15.0
 		measurements.NoiseFloorSource = "rms_estimate"
-	} else {
+	default:
 		// Tier 3: Estimate from ebur128 integrated loudness threshold
 		// Louder recordings typically have better SNR (lower relative noise floor)
 		var noiseFloorOffset float64
-		if measurements.InputI > -20 {
+		switch {
+		case measurements.InputI > -20:
 			noiseFloorOffset = 18.0 // Professional: very low noise floor
-		} else if measurements.InputI > -30 {
+		case measurements.InputI > -30:
 			noiseFloorOffset = 12.0 // Typical podcast: moderate noise floor
-		} else {
+		default:
 			noiseFloorOffset = 8.0 // Quiet source: higher relative noise
 		}
 		measurements.NoiseFloor = measurements.InputThresh - noiseFloorOffset
@@ -588,12 +590,13 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 
 	// Detect speech candidates (must come after elected silence)
 	var speechSearchStart time.Duration
-	if silenceResult.BestRegion != nil {
+	switch {
+	case silenceResult.BestRegion != nil:
 		speechSearchStart = silenceResult.BestRegion.End
-	} else if len(measurements.SilenceRegions) > 0 {
+	case len(measurements.SilenceRegions) > 0:
 		// Fallback: use end of first silence region
 		speechSearchStart = measurements.SilenceRegions[0].End
-	} else {
+	default:
 		// No silence found - start speech search after 30 seconds
 		speechSearchStart = 30 * time.Second
 	}
@@ -647,11 +650,12 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 	} else {
 		// Fallback: estimate based on integrated loudness
 		// Louder recordings typically have better SNR
-		if measurements.InputI > -20 {
+		switch {
+		case measurements.InputI > -20:
 			measurements.NoiseReductionHeadroom = 40.0 // Professional recording
-		} else if measurements.InputI > -30 {
+		case measurements.InputI > -30:
 			measurements.NoiseReductionHeadroom = 25.0 // Typical podcast
-		} else {
+		default:
 			measurements.NoiseReductionHeadroom = 15.0 // Quiet recording
 		}
 	}

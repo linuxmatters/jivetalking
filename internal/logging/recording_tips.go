@@ -103,11 +103,12 @@ func wrapText(text string, maxWidth int, indent string) string {
 	currentLine := ""
 
 	for _, word := range words {
-		if currentLine == "" {
+		switch {
+		case currentLine == "":
 			currentLine = word
-		} else if len(currentLine)+1+len(word) <= maxWidth {
+		case len(currentLine)+1+len(word) <= maxWidth:
 			currentLine += " " + word
-		} else {
+		default:
 			lines = append(lines, currentLine)
 			currentLine = word
 		}

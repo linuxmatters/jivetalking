@@ -150,7 +150,7 @@ func frameSumSquaresAndPeak(frame *ffmpeg.AVFrame) (sumSquares float64, sampleCo
 		return 0, 0, 0, false
 	}
 
-	sampleFmt := ffmpeg.AVSampleFormat(frame.Format())
+	sampleFmt := ffmpeg.AVSampleFormat(frame.Format()) //nolint:gosec // AVSampleFormat values fit in int32
 	nbSamples := frame.NbSamples()
 	nbChannels := frame.ChLayout().NbChannels()
 
@@ -164,10 +164,10 @@ func frameSumSquaresAndPeak(frame *ffmpeg.AVFrame) (sumSquares float64, sampleCo
 	// For interleaved formats, all samples are in plane 0 with nbSamples*nbChannels elements.
 	// For planar formats, each channel has its own plane with nbSamples elements.
 	planes := 1
-	samplesPerPlane := int(nbSamples) * int(nbChannels)
+	samplesPerPlane := nbSamples * nbChannels
 	if isPlanar {
-		planes = int(nbChannels)
-		samplesPerPlane = int(nbSamples)
+		planes = nbChannels
+		samplesPerPlane = nbSamples
 	}
 
 	for plane := 0; plane < planes; plane++ {
@@ -384,8 +384,6 @@ var (
 	metaKeyOverallRMSLevel    = ffmpeg.GlobalCStr("lavfi.astats.Overall.RMS_level")
 	metaKeyOverallPeakLevel   = ffmpeg.GlobalCStr("lavfi.astats.Overall.Peak_level")
 	metaKeyOverallCrestFactor = ffmpeg.GlobalCStr("lavfi.astats.Overall.Crest_factor")
-	metaKeyOverallEntropy     = ffmpeg.GlobalCStr("lavfi.astats.Overall.Entropy")
-
 	// ebur128 metadata keys
 	metaKeyEbur128I            = ffmpeg.GlobalCStr("lavfi.r128.I")
 	metaKeyEbur128M            = ffmpeg.GlobalCStr("lavfi.r128.M")
@@ -601,7 +599,7 @@ func linearSampleToDBFS(sample float64) float64 {
 	// If abs value > 1.0, assume integer samples and normalize to 16-bit range
 	if absVal > 1.0 {
 		// Likely integer sample value (e.g., from 16-bit audio: -32768 to 32767)
-		absVal = absVal / 32768.0
+		absVal /= 32768.0
 	}
 	if absVal > 1.0 {
 		absVal = 1.0 // Clamp to 0 dBFS max

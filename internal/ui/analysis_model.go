@@ -173,14 +173,14 @@ func (m AnalysisModel) View() string {
 		// Indeterminate spinner
 		b.WriteString(spinner)
 		b.WriteString(" Processing...")
-		b.WriteString(fmt.Sprintf(" [%s]", formatElapsed(elapsed)))
+		fmt.Fprintf(&b, " [%s]", formatElapsed(elapsed))
 	}
 
 	b.WriteString("\n")
 
 	// Show audio level if available
 	if m.Level != 0 && !m.Done {
-		b.WriteString(fmt.Sprintf("\nLevel: %.1f dB", m.Level))
+		fmt.Fprintf(&b, "\nLevel: %.1f dB", m.Level)
 	}
 
 	return b.String()

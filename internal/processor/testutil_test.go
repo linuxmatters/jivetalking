@@ -136,7 +136,7 @@ func writeWAV(f *os.File, samples []int16, sampleRate int) error {
 	if _, err := f.Write([]byte("RIFF")); err != nil {
 		return err
 	}
-	if err := binary.Write(f, binary.LittleEndian, uint32(fileSize)); err != nil {
+	if err := binary.Write(f, binary.LittleEndian, uint32(fileSize)); err != nil { //nolint:gosec // test file sizes are small
 		return err
 	}
 	if _, err := f.Write([]byte("WAVE")); err != nil {
@@ -156,10 +156,10 @@ func writeWAV(f *os.File, samples []int16, sampleRate int) error {
 	if err := binary.Write(f, binary.LittleEndian, uint16(numChannels)); err != nil {
 		return err
 	}
-	if err := binary.Write(f, binary.LittleEndian, uint32(sampleRate)); err != nil {
+	if err := binary.Write(f, binary.LittleEndian, uint32(sampleRate)); err != nil { //nolint:gosec // sample rate fits in uint32
 		return err
 	}
-	if err := binary.Write(f, binary.LittleEndian, uint32(byteRate)); err != nil {
+	if err := binary.Write(f, binary.LittleEndian, uint32(byteRate)); err != nil { //nolint:gosec // byte rate fits in uint32
 		return err
 	}
 	if err := binary.Write(f, binary.LittleEndian, uint16(blockAlign)); err != nil {
@@ -173,7 +173,7 @@ func writeWAV(f *os.File, samples []int16, sampleRate int) error {
 	if _, err := f.Write([]byte("data")); err != nil {
 		return err
 	}
-	if err := binary.Write(f, binary.LittleEndian, uint32(dataSize)); err != nil {
+	if err := binary.Write(f, binary.LittleEndian, uint32(dataSize)); err != nil { //nolint:gosec // test data sizes are small
 		return err
 	}
 

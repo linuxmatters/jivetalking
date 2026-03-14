@@ -85,7 +85,7 @@ func (t *MetricTable) String() string {
 	// Header row
 	sb.WriteString(strings.Repeat(" ", labelWidth+2)) // Label column + gap
 	for i, header := range t.Headers {
-		sb.WriteString(fmt.Sprintf("%*s  ", valueWidths[i], header))
+		fmt.Fprintf(&sb, "%*s  ", valueWidths[i], header)
 	}
 	if unitWidth > 0 {
 		sb.WriteString(strings.Repeat(" ", unitWidth+1)) // Unit column placeholder
@@ -98,7 +98,7 @@ func (t *MetricTable) String() string {
 	// Data rows
 	for _, row := range t.Rows {
 		// Label (left-aligned)
-		sb.WriteString(fmt.Sprintf("%-*s  ", labelWidth, row.Label))
+		fmt.Fprintf(&sb, "%-*s  ", labelWidth, row.Label)
 
 		// Values (right-aligned within their columns)
 		for i := 0; i < len(t.Headers); i++ {
@@ -106,12 +106,12 @@ func (t *MetricTable) String() string {
 			if i < len(row.Values) && row.Values[i] != "" {
 				val = row.Values[i]
 			}
-			sb.WriteString(fmt.Sprintf("%*s  ", valueWidths[i], val))
+			fmt.Fprintf(&sb, "%*s  ", valueWidths[i], val)
 		}
 
 		// Unit (left-aligned, after values)
 		if unitWidth > 0 {
-			sb.WriteString(fmt.Sprintf("%-*s ", unitWidth, row.Unit))
+			fmt.Fprintf(&sb, "%-*s ", unitWidth, row.Unit)
 		}
 
 		// Interpretation (left-aligned, if present)
