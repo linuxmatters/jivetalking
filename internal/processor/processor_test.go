@@ -7,8 +7,8 @@ import (
 
 // TestProcessAudio tests the complete three-pass processing pipeline
 func TestProcessAudio(t *testing.T) {
-	// Generate synthetic test audio: 3-second 440Hz tone at -18 LUFS
-	// (needs to be loud enough for normalisation to be within ±12 dB of -16 LUFS)
+	// Generate synthetic test audio: 3-second 440Hz tone at -18 dBFS input level
+	// (needs to be loud enough for normalisation to be within ±12 dB of -16 LUFS target)
 	// Short duration for fast test execution
 	testFile := generateTestAudio(t, TestAudioOptions{
 		DurationSecs: 3.0,
