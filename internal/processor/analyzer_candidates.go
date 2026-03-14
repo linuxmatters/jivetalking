@@ -918,6 +918,12 @@ const (
 	// Normal room tone: 5-20 dB; contaminated: 25-45 dB.
 	silenceCrestFactorMax = 25.0 // dB - hard rejection above this
 
+	// digitalSilenceRMSThreshold is the maximum RMS level (dBFS) considered digital silence.
+	// Voice-activated recording platforms (Riverside, Zencastr) clamp non-speech regions
+	// to all-zero samples, pinning RMS at -120.0 dBFS (the FFmpeg astats measurement floor).
+	// Genuine room tone never drops below ~-95 dBFS due to preamp thermal noise.
+	digitalSilenceRMSThreshold = -115.0 // dBFS - 5 dB margin above measurement floor
+
 	// Crest factor penalty thresholds for silence candidates.
 	// Context: These apply to SILENCE CANDIDATES (RMS < -70 dBFS).
 	// In silence regions, even modest transients produce extreme crest factors:
@@ -1089,6 +1095,19 @@ func findBestSilenceRegion(regions []SilenceRegion, intervals []IntervalSample, 
 // Returns 0.0 for candidates that should be rejected (e.g., crosstalk detected).
 func scoreSilenceCandidate(m *SilenceCandidateMetrics) float64 {
 	if m == nil {
+		return 0.0
+	}
+
+	// Reject digital silence: voice-activated platforms (Riverside, Zencastr) clamp
+	// non-speech regions to all-zero samples, pinning RMS at -120.0 dBFS. These regions
+	// contain no room ambience and are useless for noise reduction profiling.
+	if m.RMSLevel <= digitalSilenceRMSThreshold {
+		debugLog("scoreSilenceCandidate: REJECTING candidate at %.3fs - RMS %.1f dBFS at or below %.1f dBFS threshold (digital silence)",
+			m.Region.Start.Seconds(), m.RMSLevel, digitalSilenceRMSThreshold)
+		m.TransientWarning = fmt.Sprintf(
+			"rejected: RMS %.1f dBFS at or below %.1f dBFS threshold (digital silence from voice-activated recording)",
+			m.RMSLevel, digitalSilenceRMSThreshold,
+		)
 		return 0.0
 	}
 
