@@ -134,25 +134,25 @@ changelog:
 release VERSION:
     #!/usr/bin/env bash
     set -e
-    
+
     # Validate version format
     if ! echo "{{VERSION}}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
         echo "Error: VERSION must be in format x.y.z (e.g., 0.1.0)"
         exit 1
     fi
-    
+
     # Check for uncommitted changes
     if ! git diff-index --quiet HEAD --; then
         echo "Error: Working directory has uncommitted changes"
         exit 1
     fi
-    
+
     # Check if tag already exists
     if git rev-parse "{{VERSION}}" >/dev/null 2>&1; then
         echo "Error: Tag {{VERSION}} already exists"
         exit 1
     fi
-    
+
     echo "Creating release {{VERSION}}..."
     git tag -a "{{VERSION}}" -m "Release {{VERSION}}"
     echo "✓ Tag {{VERSION}} created"
@@ -164,3 +164,11 @@ release VERSION:
     echo "  - Build binaries for all platforms"
     echo "  - Generate changelog from commits"
     echo "  - Create GitHub release with downloadable assets"
+
+# Run linters
+lint:
+    @go vet ./...
+    @gocyclo -top 20 -avg -ignore '_test\.go$' .
+    @ineffassign ./...
+    @golangci-lint run
+    @actionlint
