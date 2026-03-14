@@ -1376,7 +1376,7 @@ func tuneLA2ARelease(config *FilterChainConfig, measurements *AudioMeasurements)
 	// Heavy compression (large LUFS gap) triggers slower release
 	// LA-2A's T4 cell releases slower after sustained heavy compression
 	if measurements.InputI < 0 {
-		lufsGap := -18.0 - measurements.InputI // Distance to -18 LUFS target
+		lufsGap := NormTargetLUFS - measurements.InputI // Distance to LUFS target
 		if lufsGap > 16.0 {
 			release += la2aReleaseHeavyBoost
 		}
