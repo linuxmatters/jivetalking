@@ -30,7 +30,7 @@ Filter chain inspired by studio legends, tuned to your specific audio:
 | Filter | Hardware Inspiration | What It Does |
 |--------|---------------------|--------------|
 | **Highpass** | Drawmer DS201 | Removes subsonic rumble (60-120 Hz, adaptive to spectral content) |
-| **Noise reduction** | Non-Local Means | Adaptive anlmdn denoiser with compand residual suppression |
+| **Noise reduction** | Non-Local Means | Adaptive anlmdn denoiser; compand residual suppression added when a noise profile is available |
 | **Gate** | DS201 expander | Soft expansion for natural inter-phrase cleanup; breath reduction option positions threshold between noise floor and quiet speech level |
 | **Compressor** | Teletronix LA-2A | Programme-dependent optical compression; ratio and release adapt to kurtosis and flux |
 | **De-esser** | — | Adaptive intensity (0.0-0.6) based on spectral centroid and rolloff |
@@ -133,7 +133,7 @@ Pass `-a` to run only Pass 1 analysis, printing a detailed report to the console
 The report covers:
 
 - **Loudness & dynamics** — integrated LUFS, true peak, loudness range, crest factor
-- **Silence & speech detection** — candidate regions scored and elected for noise profiling and speech-aware metrics
+- **Silence & speech detection** — candidate regions scored and elected for noise profiling and speech-aware metrics; voice-activated recording detected automatically (Riverside, Zencastr)
 - **Derived measurements** — noise floor, gate baseline, noise-to-speech headroom
 - **Filter adaptation** — the exact parameters jivetalking would apply: highpass frequency, gate threshold, NR settings, de-esser intensity, LA-2A configuration
 - **Spectral summary** — full spectral characterisation with human-readable interpretations
@@ -192,7 +192,7 @@ Record → Process → Edit → Finalise
   └─ Each presenter records separately, exports FLAC
 ```
 
-**Include 10-15 seconds of silence somewhere in your recording.** Just sit quietly and let the room breathe - at the start, between sections, or at the end. Jivetalking scans the entire file to find the cleanest quiet section for building a noise profile, which drives the adaptive noise reduction in Pass 2. Without a clean quiet section, the tool has nothing to calibrate against and denoising results will be noticeably worse.
+**Include 10-15 seconds of silence somewhere in your recording.** Just sit quietly and let the room breathe - at the start, between sections, or at the end. Jivetalking scans the entire file to find the cleanest quiet section for building a noise profile, which drives the adaptive noise reduction in Pass 2. Without a clean quiet section, the NR compander is disabled entirely and only the self-adapting spectral denoiser runs.
 
 ---
 
