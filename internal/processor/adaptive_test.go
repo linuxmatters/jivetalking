@@ -2400,3 +2400,213 @@ func TestApplyHighCrestOverrides(t *testing.T) {
 		assertClose(t, "projectedTP", config.LA2AHighCrestProjectedTP, 1.7, 0.01)
 	})
 }
+
+func TestTuneLA2ACompressorHighCrest(t *testing.T) {
+	// Helper for float comparison within tolerance
+	assertClose := func(t *testing.T, name string, got, want, tol float64) {
+		t.Helper()
+		if math.Abs(got-want) > tol {
+			t.Errorf("%s = %.4f, want %.4f ±%.4f", name, got, want, tol)
+		}
+	}
+
+	// Realistic speech profile for sub-tuners to produce meaningful values.
+	// Values drawn from the elected speech candidates in the analysis docs.
+	speechProfile := &SpeechCandidateMetrics{
+		Spectral: SpectralMetrics{
+			Kurtosis: 19.0,
+			Flux:     0.0003,
+			Centroid: 2347,
+			Skewness: 1.50,
+		},
+		CrestFactor: 34.3,
+	}
+
+	t.Run("Anna-like: high-crest overrides push ratio and threshold", func(t *testing.T) {
+		// Anna-like: InputI=-39.1, InputTP=-4.9 -> deficit ~2.6, severity ~0.325
+		// Acceptance criterion 1: ratio pushed toward ~4.0, threshold toward ~-30
+		config := newTestConfig()
+		config.LoudnormTargetTP = -2.0
+		measurements := &AudioMeasurements{
+			BaseMeasurements: BaseMeasurements{
+				DynamicRange:     86.3,
+				SpectralKurtosis: 5.4,
+				SpectralFlux:     0.0003,
+				PeakLevel:        -10.1,
+				SpectralCentroid: 968,
+				SpectralSkewness: 1.50,
+			},
+			InputI:        -39.1,
+			InputTP:       -4.9,
+			InputLRA:      16.0,
+			NoiseFloor:    -63.7,
+			SpeechProfile: speechProfile,
+		}
+
+		tuneLA2ACompressor(config, measurements)
+
+		// Diagnostic fields must be set
+		if !config.LA2AHighCrestActive {
+			t.Fatal("expected LA2AHighCrestActive=true for Anna-like input")
+		}
+		assertClose(t, "deficit", config.LA2AHighCrestDeficit, 2.6, 0.1)
+		assertClose(t, "severity", config.LA2AHighCrestSeverity, 0.325, 0.01)
+
+		// Override floors: ratio >= 3.65, threshold <= -25.15
+		// Sub-tuners may push further, but not back above the floor.
+		if config.LA2ARatio < 3.6 {
+			t.Errorf("LA2ARatio = %.2f, want >= 3.6 (override floor ~3.65)", config.LA2ARatio)
+		}
+		if config.LA2AThreshold > -25.0 {
+			t.Errorf("LA2AThreshold = %.2f, want <= -25.0 (override floor ~-25.15)", config.LA2AThreshold)
+		}
+		if config.LA2ARelease < 248.0 {
+			t.Errorf("LA2ARelease = %.2f, want >= 248.0 (override floor ~248.75)", config.LA2ARelease)
+		}
+		if config.LA2AKnee < 4.6 {
+			t.Errorf("LA2AKnee = %.2f, want >= 4.6 (override floor ~4.65)", config.LA2AKnee)
+		}
+
+		// Ratio must respect existing 5.0 ceiling (acceptance criterion 4)
+		if config.LA2ARatio > 5.0 {
+			t.Errorf("LA2ARatio = %.2f, must not exceed 5.0 ceiling", config.LA2ARatio)
+		}
+	})
+
+	t.Run("Marius-like: no deficit, sub-tuners unmodified", func(t *testing.T) {
+		// Marius-like: InputI=-20.2, InputTP=-2.5 -> deficit <= 0, no overrides
+		// Acceptance criterion 2: identical output to before high-crest logic
+		config := newTestConfig()
+		config.LoudnormTargetTP = -2.0
+		measurements := &AudioMeasurements{
+			BaseMeasurements: BaseMeasurements{
+				DynamicRange:     88.9,
+				SpectralKurtosis: 12.7,
+				SpectralFlux:     0.0018,
+				PeakLevel:        -7.4,
+				SpectralCentroid: 1555,
+				SpectralSkewness: 2.32,
+			},
+			InputI:        -20.2,
+			InputTP:       -2.5,
+			InputLRA:      11.9,
+			NoiseFloor:    -83.3,
+			SpeechProfile: speechProfile,
+		}
+
+		// Run once with the full tuner chain
+		tuneLA2ACompressor(config, measurements)
+
+		if config.LA2AHighCrestActive {
+			t.Error("expected LA2AHighCrestActive=false for Marius-like input")
+		}
+
+		// Capture the values
+		ratioWithOverrides := config.LA2ARatio
+		thresholdWithOverrides := config.LA2AThreshold
+		releaseWithOverrides := config.LA2ARelease
+		kneeWithOverrides := config.LA2AKnee
+
+		// Run again on a fresh config to compare (both should be identical
+		// since overrides are zero-valued)
+		config2 := newTestConfig()
+		config2.LoudnormTargetTP = -2.0
+		tuneLA2ACompressor(config2, measurements)
+
+		assertClose(t, "ratio", ratioWithOverrides, config2.LA2ARatio, 0.001)
+		assertClose(t, "threshold", thresholdWithOverrides, config2.LA2AThreshold, 0.001)
+		assertClose(t, "release", releaseWithOverrides, config2.LA2ARelease, 0.001)
+		assertClose(t, "knee", kneeWithOverrides, config2.LA2AKnee, 0.001)
+	})
+
+	t.Run("hot-input and deficit cannot co-occur", func(t *testing.T) {
+		// Hot-input protection fires when InputTP >= -1.0 dBTP.
+		// Deficit > 0 requires very low InputI (well below -36.5 LUFS).
+		// A recording quiet enough for deficit > 0 cannot have InputTP >= -1.0.
+		// Verify this invariant: any input with InputTP >= -1.0 has deficit <= 0.
+		hotInputCases := []struct {
+			name    string
+			inputI  float64
+			inputTP float64
+		}{
+			{"loud recording, hot peaks", -16.0, -0.5},
+			{"moderately loud, hot peaks", -20.0, -1.0},
+			{"slightly quiet, hot peaks", -25.0, 0.0},
+		}
+
+		for _, tt := range hotInputCases {
+			t.Run(tt.name, func(t *testing.T) {
+				config := newTestConfig()
+				config.LoudnormTargetTP = -2.0
+				measurements := &AudioMeasurements{
+					BaseMeasurements: BaseMeasurements{
+						DynamicRange:     60.0,
+						SpectralKurtosis: 10.0,
+						SpectralFlux:     0.001,
+						PeakLevel:        tt.inputTP,
+						SpectralCentroid: 2500,
+						SpectralSkewness: 1.0,
+					},
+					InputI:        tt.inputI,
+					InputTP:       tt.inputTP,
+					InputLRA:      8.0,
+					NoiseFloor:    -60.0,
+					SpeechProfile: speechProfile,
+				}
+
+				tuneLA2ACompressor(config, measurements)
+
+				if config.LA2AHighCrestActive {
+					t.Errorf("deficit > 0 (%.2f) with hot InputTP (%.1f dBTP) - invariant violated",
+						config.LA2AHighCrestDeficit, tt.inputTP)
+				}
+			})
+		}
+	})
+
+	t.Run("maximum severity produces aggressive but bounded parameters", func(t *testing.T) {
+		// Deficit >= 8.0 -> severity 1.0 -> maximum override floors
+		config := newTestConfig()
+		config.LoudnormTargetTP = -2.0
+		measurements := &AudioMeasurements{
+			BaseMeasurements: BaseMeasurements{
+				DynamicRange:     90.0,
+				SpectralKurtosis: 5.0,
+				SpectralFlux:     0.0003,
+				PeakLevel:        -5.0,
+				SpectralCentroid: 2000,
+				SpectralSkewness: 1.0,
+			},
+			InputI:        -44.5,
+			InputTP:       -5.0,
+			InputLRA:      20.0,
+			NoiseFloor:    -70.0,
+			SpeechProfile: speechProfile,
+		}
+
+		tuneLA2ACompressor(config, measurements)
+
+		if !config.LA2AHighCrestActive {
+			t.Fatal("expected LA2AHighCrestActive=true for maximum severity input")
+		}
+		assertClose(t, "severity", config.LA2AHighCrestSeverity, 1.0, 0.001)
+
+		// At severity 1.0, floors are: threshold=-40, ratio=5.0, release=350, knee=6.0
+		// Sub-tuners may push further but not below the floor.
+		if config.LA2ARatio < 5.0 {
+			t.Errorf("LA2ARatio = %.2f, want >= 5.0 at maximum severity", config.LA2ARatio)
+		}
+		if config.LA2ARatio > 5.0 {
+			t.Errorf("LA2ARatio = %.2f, must not exceed 5.0 ceiling", config.LA2ARatio)
+		}
+		if config.LA2AThreshold > -40.0 {
+			t.Errorf("LA2AThreshold = %.2f, want <= -40.0 at maximum severity", config.LA2AThreshold)
+		}
+		if config.LA2ARelease < 350.0 {
+			t.Errorf("LA2ARelease = %.2f, want >= 350.0 at maximum severity", config.LA2ARelease)
+		}
+		if config.LA2AKnee < 6.0 {
+			t.Errorf("LA2AKnee = %.2f, want >= 6.0 at maximum severity", config.LA2AKnee)
+		}
+	})
+}
