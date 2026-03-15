@@ -1891,6 +1891,14 @@ func writeDiagnosticPeakLimiter(f *os.File, result *processor.NormalisationResul
 		fmt.Fprintln(f, "")
 	}
 
+	if result.Pass3FilterPrefix != "" {
+		fmt.Fprintln(f, "Pass 3 measurement:")
+		fmt.Fprintf(f, "  Prefix applied:    %s -> loudnorm\n", result.Pass3FilterPrefix)
+		fmt.Fprintln(f, "  Pass 3 measures the post-limiter signal so loudnorm receives accurate")
+		fmt.Fprintln(f, "  measured_I and measured_TP values in Pass 4.")
+		fmt.Fprintln(f, "")
+	}
+
 	fmt.Fprintln(f, "Filter parameters:")
 	fmt.Fprintln(f, "  Attack:    5 ms     (gentle - preserves transient shape)")
 	fmt.Fprintln(f, "  Release:   100 ms   (smooth recovery, eliminates pumping)")
