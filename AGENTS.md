@@ -60,7 +60,7 @@ internal/
 
 1. **Pass 1 (Analysis):** Measures LUFS, true peak, LRA, noise floor, spectral characteristics; detects silence/speech regions via 250ms interval sampling
 2. **Pass 2 (Processing):** Applies adaptive filter chain tuned to measurements; output measured for before/after comparison
-3. **Pass 3 (Measuring):** Runs loudnorm in measurement mode (JSON output via FFmpeg log capture) to get input stats for linear mode
+3. **Pass 3 (Measuring):** Optionally prepends `volume` (pre-gain) + `alimiter` (Volumax) when limiting is active, then runs loudnorm in measurement mode (JSON output via FFmpeg log capture) to get input stats for linear mode; measures the post-limiter signal so `measured_I`/`measured_TP` are accurate
 4. **Pass 4 (Normalising):** Applies `volume` (pre-gain, when ceiling clamped) + `alimiter` (Volumax) + `loudnorm` (linear mode) + `adeclick`; pre-gain raises very quiet recordings so the alimiter can use a viable ceiling; `alimiter` creates headroom so loudnorm achieves full linear gain to reach -16 LUFS
 
 **Filter chain order (Pass 2):**
@@ -72,7 +72,7 @@ Order rationale: downmix to mono first; HP/LP removes frequency extremes before 
 
 **Normalisation (Pass 3/4):**
 ```
-Pass 3: loudnorm (measure-only, print_format=json) → captures LoudnormStats JSON
+Pass 3: [volume (pre-gain, when clamped) → alimiter (Volumax)] → loudnorm (measure-only, print_format=json) → captures LoudnormStats JSON
 Pass 4: volume (pre-gain, when clamped) → alimiter (Volumax, peak reduction) → loudnorm (linear mode, input stats from Pass 3) → adeclick
 ```
 

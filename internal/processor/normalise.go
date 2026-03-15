@@ -410,7 +410,8 @@ type NormalisationResult struct {
 	LimiterCeiling float64 // Ceiling in dBTP (only valid if LimiterEnabled)
 	LimiterGain    float64 // Gain required that triggered limiting (dB)
 	PreGainDB      float64 // Pre-gain amount in dB (0.0 when no pre-gain applied)
-	LimiterClamped bool    // True when calculateLimiterCeiling clamped ceiling to minimum
+	LimiterClamped    bool   // True when calculateLimiterCeiling clamped ceiling to minimum
+	Pass3FilterPrefix string // Filter prefix used for Pass 3 measurement (empty when no pre-gain/limiting)
 
 	// FinalMeasurements contains full analysis after normalisation (Pass 4)
 	// Includes spectral characteristics, amplitude stats, and loudness measurements
@@ -547,6 +548,7 @@ func ApplyNormalisation(
 		LimiterGain:       limiterGain,
 		PreGainDB:         preGainDB,
 		LimiterClamped:    limiterClamped,
+		Pass3FilterPrefix: filterPrefix,
 		FinalMeasurements: finalMeasurements,
 	}, nil
 }
