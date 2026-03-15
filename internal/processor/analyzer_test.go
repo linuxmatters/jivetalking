@@ -1735,7 +1735,7 @@ func TestFindBestSpeechRegion_SNRMarginCheck(t *testing.T) {
 	})
 }
 
-func TestMeasureOutputSilenceRegion(t *testing.T) {
+func Test_measureOutputSilenceRegion(t *testing.T) {
 	// Generate processed test audio file with known silence region
 	// Using a simple tone with a substantial silence gap for predictable measurements
 	testFile := generateTestAudio(t, TestAudioOptions{
@@ -1762,9 +1762,9 @@ func TestMeasureOutputSilenceRegion(t *testing.T) {
 	}
 
 	t.Run("valid_silence_region", func(t *testing.T) {
-		metrics, err := MeasureOutputSilenceRegion(testFile, silenceRegion)
+		metrics, err := measureOutputSilenceRegion(testFile, silenceRegion)
 		if err != nil {
-			t.Fatalf("MeasureOutputSilenceRegion failed: %v", err)
+			t.Fatalf("measureOutputSilenceRegion failed: %v", err)
 		}
 
 		if metrics == nil {
@@ -1822,7 +1822,7 @@ func TestMeasureOutputSilenceRegion(t *testing.T) {
 	})
 
 	t.Run("invalid_path", func(t *testing.T) {
-		metrics, err := MeasureOutputSilenceRegion("/nonexistent/path.wav", silenceRegion)
+		metrics, err := measureOutputSilenceRegion("/nonexistent/path.wav", silenceRegion)
 		if err == nil {
 			t.Error("Expected error for invalid path, got nil")
 		}
@@ -1837,7 +1837,7 @@ func TestMeasureOutputSilenceRegion(t *testing.T) {
 			End:      time.Duration(1.0 * float64(time.Second)),
 			Duration: 0,
 		}
-		metrics, err := MeasureOutputSilenceRegion(testFile, zeroRegion)
+		metrics, err := measureOutputSilenceRegion(testFile, zeroRegion)
 		if err == nil {
 			t.Error("Expected error for zero duration region, got nil")
 		}
@@ -1847,7 +1847,7 @@ func TestMeasureOutputSilenceRegion(t *testing.T) {
 	})
 }
 
-func TestMeasureOutputSpeechRegion(t *testing.T) {
+func Test_measureOutputSpeechRegion(t *testing.T) {
 	// Generate processed test audio file with known speech-like characteristics
 	// Using a sustained tone to represent speech energy
 	testFile := generateTestAudio(t, TestAudioOptions{
@@ -1874,9 +1874,9 @@ func TestMeasureOutputSpeechRegion(t *testing.T) {
 	}
 
 	t.Run("valid_speech_region", func(t *testing.T) {
-		metrics, err := MeasureOutputSpeechRegion(testFile, speechRegion)
+		metrics, err := measureOutputSpeechRegion(testFile, speechRegion)
 		if err != nil {
-			t.Fatalf("MeasureOutputSpeechRegion failed: %v", err)
+			t.Fatalf("measureOutputSpeechRegion failed: %v", err)
 		}
 
 		if metrics == nil {
@@ -1945,7 +1945,7 @@ func TestMeasureOutputSpeechRegion(t *testing.T) {
 	})
 
 	t.Run("invalid_path", func(t *testing.T) {
-		metrics, err := MeasureOutputSpeechRegion("/nonexistent/path.wav", speechRegion)
+		metrics, err := measureOutputSpeechRegion("/nonexistent/path.wav", speechRegion)
 		if err == nil {
 			t.Error("Expected error for invalid path, got nil")
 		}
@@ -1960,7 +1960,7 @@ func TestMeasureOutputSpeechRegion(t *testing.T) {
 			End:      time.Duration(1.0 * float64(time.Second)),
 			Duration: 0,
 		}
-		metrics, err := MeasureOutputSpeechRegion(testFile, zeroRegion)
+		metrics, err := measureOutputSpeechRegion(testFile, zeroRegion)
 		if err == nil {
 			t.Error("Expected error for zero duration region, got nil")
 		}

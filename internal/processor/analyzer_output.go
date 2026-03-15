@@ -24,14 +24,12 @@ type regionMeasurements struct {
 	FramesProcessed int64
 }
 
-// MeasureOutputSilenceRegion analyses the elected silence region in the output file
+// measureOutputSilenceRegion analyses the elected silence region in the output file
 // to capture comprehensive metrics for before/after comparison and adaptive tuning.
 //
 // The region parameter should use the same Start/Duration as the NoiseProfile
 // from Pass 1 analysis. Returns nil if the region cannot be measured.
-//
-// Returns full SilenceCandidateMetrics with all amplitude, spectral, and loudness measurements.
-func MeasureOutputSilenceRegion(outputPath string, region SilenceRegion) (*SilenceCandidateMetrics, error) {
+func measureOutputSilenceRegion(outputPath string, region SilenceRegion) (*SilenceCandidateMetrics, error) {
 	// Open the processed audio file
 	reader, _, err := audio.OpenAudioFile(outputPath)
 	if err != nil {
@@ -177,7 +175,7 @@ func measureOutputRegionFromReader(reader *audio.Reader, start, duration time.Du
 // measureOutputSilenceRegionFromReader measures a silence region and maps
 // the result to SilenceCandidateMetrics.
 func measureOutputSilenceRegionFromReader(reader *audio.Reader, region SilenceRegion) (*SilenceCandidateMetrics, error) {
-	debugLog("=== MeasureOutputSilenceRegion: start=%.3fs, duration=%.3fs ===",
+	debugLog("=== measureOutputSilenceRegion: start=%.3fs, duration=%.3fs ===",
 		region.Start.Seconds(), region.Duration.Seconds())
 
 	result, err := measureOutputRegionFromReader(reader, region.Start, region.Duration)
@@ -185,7 +183,7 @@ func measureOutputSilenceRegionFromReader(reader *audio.Reader, region SilenceRe
 		return nil, err
 	}
 
-	debugLog("=== MeasureOutputSilenceRegion SUMMARY ===")
+	debugLog("=== measureOutputSilenceRegion SUMMARY ===")
 
 	return &SilenceCandidateMetrics{
 		Region:        region,
@@ -202,8 +200,8 @@ func measureOutputSilenceRegionFromReader(reader *audio.Reader, region SilenceRe
 
 // MeasureOutputRegions measures both silence and speech regions from the same
 // output file in a single open/close cycle. This avoids redundant file opens,
-// demuxing, and decoding that would occur when calling MeasureOutputSilenceRegion
-// and MeasureOutputSpeechRegion independently.
+// demuxing, and decoding that would occur when calling measureOutputSilenceRegion
+// and measureOutputSpeechRegion independently.
 //
 // Either region parameter may be nil to skip that measurement. Returns nil for
 // any skipped or failed measurement (non-fatal - matches existing behaviour).
@@ -251,14 +249,12 @@ func MeasureOutputRegions(outputPath string, silenceRegion *SilenceRegion, speec
 	return silenceMetrics, nil
 }
 
-// MeasureOutputSpeechRegion analyses a speech region in the output file
+// measureOutputSpeechRegion analyses a speech region in the output file
 // to capture comprehensive metrics for adaptive filter tuning and validation.
 //
 // The region parameter should identify a representative speech section from
 // the processed audio. Returns nil if the region cannot be measured.
-//
-// Returns full SpeechCandidateMetrics with all amplitude, spectral, and loudness measurements.
-func MeasureOutputSpeechRegion(outputPath string, region SpeechRegion) (*SpeechCandidateMetrics, error) {
+func measureOutputSpeechRegion(outputPath string, region SpeechRegion) (*SpeechCandidateMetrics, error) {
 	// Open the processed audio file
 	reader, _, err := audio.OpenAudioFile(outputPath)
 	if err != nil {
@@ -272,7 +268,7 @@ func MeasureOutputSpeechRegion(outputPath string, region SpeechRegion) (*SpeechC
 // measureOutputSpeechRegionFromReader measures a speech region and maps
 // the result to SpeechCandidateMetrics.
 func measureOutputSpeechRegionFromReader(reader *audio.Reader, region SpeechRegion) (*SpeechCandidateMetrics, error) {
-	debugLog("=== MeasureOutputSpeechRegion: start=%.3fs, duration=%.3fs ===",
+	debugLog("=== measureOutputSpeechRegion: start=%.3fs, duration=%.3fs ===",
 		region.Start.Seconds(), region.Duration.Seconds())
 
 	result, err := measureOutputRegionFromReader(reader, region.Start, region.Duration)
@@ -280,7 +276,7 @@ func measureOutputSpeechRegionFromReader(reader *audio.Reader, region SpeechRegi
 		return nil, err
 	}
 
-	debugLog("=== MeasureOutputSpeechRegion SUMMARY ===")
+	debugLog("=== measureOutputSpeechRegion SUMMARY ===")
 
 	return &SpeechCandidateMetrics{
 		Region:        region,
