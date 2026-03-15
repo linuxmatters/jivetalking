@@ -16,9 +16,7 @@ import (
 )
 
 // Limiter ceiling constants used by calculateLimiterCeiling and pre-gain deficit
-// calculation. These are the canonical values; adaptive.go defines
-// la2aHighCrestSafetyMargin and la2aHighCrestMinLimiterCeiling with identical
-// values for the high-crest override path - keep them in sync.
+// calculation.
 const (
 	// safetyMarginDB accounts for inter-sample peak (ISP) creation during limiting.
 	// See calculateLimiterCeiling for detailed rationale.
