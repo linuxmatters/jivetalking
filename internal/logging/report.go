@@ -1876,6 +1876,21 @@ func writeDiagnosticPeakLimiter(f *os.File, result *processor.NormalisationResul
 		result.InputTP-result.LimiterCeiling, result.InputTP, result.LimiterCeiling)
 	fmt.Fprintln(f, "")
 
+	if result.PreGainDB > 0 {
+		// idealCeiling = minLimiterCeilingDB - deficit, where deficit = PreGainDB
+		idealCeiling := -24.0 - result.PreGainDB
+		postGainTP := result.InputTP + result.PreGainDB
+
+		fmt.Fprintln(f, "Pre-gain (ceiling deficit compensation):")
+		fmt.Fprintf(f, "  Original Ceiling:    %.1f dBTP (clamped to alimiter minimum)\n", -24.0)
+		fmt.Fprintf(f, "  Ideal Ceiling:       %.1f dBTP\n", idealCeiling)
+		fmt.Fprintf(f, "  Deficit:             %.1f dB\n", result.PreGainDB)
+		fmt.Fprintf(f, "  Pre-gain Applied:    +%.1f dB (volume filter before alimiter)\n", result.PreGainDB)
+		fmt.Fprintf(f, "  Re-derived Ceiling:  %.1f dBTP (post-gain, used for alimiter)\n", result.LimiterCeiling)
+		fmt.Fprintf(f, "  Post-gain TP:        %.1f dBTP (projected)\n", postGainTP)
+		fmt.Fprintln(f, "")
+	}
+
 	fmt.Fprintln(f, "Filter parameters:")
 	fmt.Fprintln(f, "  Attack:    5 ms     (gentle - preserves transient shape)")
 	fmt.Fprintln(f, "  Release:   100 ms   (smooth recovery, eliminates pumping)")
