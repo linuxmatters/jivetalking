@@ -269,10 +269,7 @@ const (
 	la2aNoiseFloorNoisy = -45.0 // dBFS - above: noisy, reduce wet
 
 	// LA-2A High-crest override constants
-	// These mirror calculateLimiterCeiling() in normalise.go - keep in sync.
-	la2aHighCrestMaxDeficit        = 6.0   // dB, deficit at which severity reaches 1.0 (beyond ~6 dB, pre-gain handles it)
-	la2aHighCrestSafetyMargin      = 1.5   // dB, matches calculateLimiterCeiling safetyMargin
-	la2aHighCrestMinLimiterCeiling = -24.0 // dBTP, alimiter hardware floor
+	la2aHighCrestMaxDeficit = 6.0 // dB, deficit at which severity reaches 1.0 (beyond ~6 dB, pre-gain handles it)
 
 	// Default fallback values for sanitization
 	ds201DefaultHPFreq        = 80.0
@@ -1316,11 +1313,11 @@ func applyHighCrestOverrides(config *FilterChainConfig, measurements *AudioMeasu
 		debugLog("high-crest: SpeechProfile is nil, using full-file InputI/InputTP for deficit calculation")
 	}
 
-	// Deficit calculation - mirrors calculateLimiterCeiling() in normalise.go
+	// Deficit calculation
 	gainRequired := NormTargetLUFS - measurements.InputI
 	projectedTP := measurements.InputTP + gainRequired
-	idealCeiling := config.LoudnormTargetTP - gainRequired - la2aHighCrestSafetyMargin
-	deficit := la2aHighCrestMinLimiterCeiling - idealCeiling
+	idealCeiling := config.LoudnormTargetTP - gainRequired - safetyMarginDB
+	deficit := minLimiterCeilingDB - idealCeiling
 
 	// Always populate diagnostic fields
 	config.LA2AHighCrestDeficit = deficit
