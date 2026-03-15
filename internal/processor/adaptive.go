@@ -1293,11 +1293,12 @@ func calculateDS201GateDetection(silenceEntropy, silenceCrestDB float64) string 
 // This implementation uses spectral measurements to emulate program-dependent
 // behaviour that the optical T4 cell provides naturally.
 func tuneLA2ACompressor(config *FilterChainConfig, measurements *AudioMeasurements) {
+	overrides := applyHighCrestOverrides(config, measurements)
 	tuneLA2AAttack(config, measurements)
-	tuneLA2ARelease(config, measurements)
-	tuneLA2ARatio(config, measurements)
-	tuneLA2AThreshold(config, measurements)
-	tuneLA2AKnee(config, measurements)
+	tuneLA2ARelease(config, measurements, overrides)
+	tuneLA2ARatio(config, measurements, overrides)
+	tuneLA2AThreshold(config, measurements, overrides)
+	tuneLA2AKnee(config, measurements, overrides)
 	tuneLA2AMix(config, measurements)
 	// Note: Makeup gain left at default (0 dB unity) - loudnorm handles all level adjustment
 }
@@ -1377,7 +1378,7 @@ func tuneLA2AAttack(config *FilterChainConfig, measurements *AudioMeasurements) 
 // - Wide LRA + high flux = expressive speech, needs longer release
 // - Narrow LRA + low flux = compressed/monotone, faster release OK
 // - Warm voices (high skewness) get extra release to preserve body
-func tuneLA2ARelease(config *FilterChainConfig, measurements *AudioMeasurements) {
+func tuneLA2ARelease(config *FilterChainConfig, measurements *AudioMeasurements, overrides la2aOverrides) {
 	// Prefer speech-specific flux for timing decisions
 	flux := measurements.SpectralFlux
 	if measurements.SpeechProfile != nil {
@@ -1431,6 +1432,11 @@ func tuneLA2ARelease(config *FilterChainConfig, measurements *AudioMeasurements)
 		}
 	}
 
+	// Enforce high-crest override floor when active
+	if overrides.ReleaseFloor != 0 {
+		release = math.Max(release, overrides.ReleaseFloor)
+	}
+
 	config.LA2ARelease = release
 }
 
@@ -1442,7 +1448,7 @@ func tuneLA2ARelease(config *FilterChainConfig, measurements *AudioMeasurements)
 //
 // Kurtosis reference: Gaussian distribution has kurtosis=3.
 // Speech typically ranges 5-10 (leptokurtic, clear harmonics).
-func tuneLA2ARatio(config *FilterChainConfig, measurements *AudioMeasurements) {
+func tuneLA2ARatio(config *FilterChainConfig, measurements *AudioMeasurements, overrides la2aOverrides) {
 	// Prefer speech-specific kurtosis for harmonic structure
 	kurtosis := measurements.SpectralKurtosis
 	if measurements.SpeechProfile != nil {
@@ -1481,13 +1487,21 @@ func tuneLA2ARatio(config *FilterChainConfig, measurements *AudioMeasurements) {
 	}
 
 	// Clamp to reasonable range
-	config.LA2ARatio = clamp(ratio, 2.0, 5.0)
+	ratio = clamp(ratio, 2.0, 5.0)
+
+	// Enforce high-crest override floor when active
+	if overrides.RatioFloor != 0 {
+		ratio = math.Max(ratio, overrides.RatioFloor)
+		ratio = clamp(ratio, 2.0, 5.0)
+	}
+
+	config.LA2ARatio = ratio
 }
 
 // tuneLA2AThreshold sets threshold relative to RMS level.
 // LA-2A's Peak Reduction knob effectively sets threshold relative to signal.
 // We calculate threshold as peak level minus headroom, where headroom determines depth.
-func tuneLA2AThreshold(config *FilterChainConfig, measurements *AudioMeasurements) {
+func tuneLA2AThreshold(config *FilterChainConfig, measurements *AudioMeasurements, overrides la2aOverrides) {
 	// Fallback if no peak measurement
 	if measurements.PeakLevel == 0 {
 		config.LA2AThreshold = defaultLA2AThreshold
@@ -1528,13 +1542,18 @@ func tuneLA2AThreshold(config *FilterChainConfig, measurements *AudioMeasurement
 	// Clamp to safe range
 	threshold = clamp(threshold, la2aThresholdMin, la2aThresholdMax)
 
+	// Enforce high-crest override floor when active (lower threshold = more compression)
+	if overrides.ThresholdFloor != 0 {
+		threshold = math.Min(threshold, overrides.ThresholdFloor)
+	}
+
 	config.LA2AThreshold = threshold
 }
 
 // tuneLA2AKnee sets knee softness to emulate T4 optical cell.
 // The T4 provides an inherently soft knee - one of LA-2A's defining characteristics.
 // We adapt based on voice character (spectral centroid and skewness).
-func tuneLA2AKnee(config *FilterChainConfig, measurements *AudioMeasurements) {
+func tuneLA2AKnee(config *FilterChainConfig, measurements *AudioMeasurements, overrides la2aOverrides) {
 	// Start with standard LA-2A soft knee
 	knee := la2aKneeNormal
 
@@ -1569,7 +1588,15 @@ func tuneLA2AKnee(config *FilterChainConfig, measurements *AudioMeasurements) {
 	}
 
 	// Clamp to FFmpeg's range
-	config.LA2AKnee = clamp(knee, 1.0, 8.0)
+	knee = clamp(knee, 1.0, 8.0)
+
+	// Enforce high-crest override floor when active
+	if overrides.KneeFloor != 0 {
+		knee = math.Max(knee, overrides.KneeFloor)
+		knee = clamp(knee, 1.0, 8.0)
+	}
+
+	config.LA2AKnee = knee
 }
 
 // tuneLA2AMix sets wet/dry mix.
