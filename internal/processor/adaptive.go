@@ -268,6 +268,12 @@ const (
 	la2aNoiseFloorClean = -65.0 // dBFS - below: clean enough for full wet
 	la2aNoiseFloorNoisy = -45.0 // dBFS - above: noisy, reduce wet
 
+	// LA-2A High-crest override constants
+	// These mirror calculateLimiterCeiling() in normalise.go - keep in sync.
+	la2aHighCrestMaxDeficit        = 8.0   // dB, deficit at which severity reaches 1.0
+	la2aHighCrestSafetyMargin      = 1.5   // dB, matches calculateLimiterCeiling safetyMargin
+	la2aHighCrestMinLimiterCeiling = -24.0 // dBTP, alimiter hardware floor
+
 	// Default fallback values for sanitization
 	ds201DefaultHPFreq        = 80.0
 	defaultDeessIntensity     = 0.0
@@ -1588,4 +1594,18 @@ func clamp(val, min, max float64) float64 {
 		return max
 	}
 	return val
+}
+
+// lerp performs linear interpolation from a to b by factor t (0.0-1.0).
+func lerp(a, b, t float64) float64 {
+	return a + t*(b-a)
+}
+
+// la2aOverrides carries override floor values for LA-2A sub-tuners.
+// Zero value means "no override" for that parameter.
+type la2aOverrides struct {
+	ThresholdFloor float64 // dB, sub-tuners must not set threshold above this (more negative = lower)
+	RatioFloor     float64 // sub-tuners must not set ratio below this
+	ReleaseFloor   float64 // ms, sub-tuners must not set release below this
+	KneeFloor      float64 // sub-tuners must not set knee below this
 }
