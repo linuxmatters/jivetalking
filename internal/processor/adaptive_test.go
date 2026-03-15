@@ -2161,3 +2161,242 @@ func TestScaleExpansion(t *testing.T) {
 		})
 	}
 }
+
+func TestApplyHighCrestOverrides(t *testing.T) {
+	// Helper for float comparison within tolerance
+	assertClose := func(t *testing.T, name string, got, want, tol float64) {
+		t.Helper()
+		if math.Abs(got-want) > tol {
+			t.Errorf("%s = %.4f, want %.4f ±%.4f", name, got, want, tol)
+		}
+	}
+
+	t.Run("deficit and severity calculation", func(t *testing.T) {
+		tests := []struct {
+			name            string
+			inputI          float64
+			inputTP         float64
+			speechProfile   *SpeechCandidateMetrics
+			wantActive      bool
+			wantDeficit     float64
+			wantSeverity    float64
+			wantProjectedTP float64
+		}{
+			{
+				name:            "Anna-like: quiet input, high crest",
+				inputI:          -39.1,
+				inputTP:         -4.9,
+				speechProfile:   &SpeechCandidateMetrics{},
+				wantActive:      true,
+				wantDeficit:     2.6,
+				wantSeverity:    0.325,
+				wantProjectedTP: 18.2,
+			},
+			{
+				name:            "Marius-like: normal input, no deficit",
+				inputI:          -20.2,
+				inputTP:         -2.5,
+				speechProfile:   &SpeechCandidateMetrics{},
+				wantActive:      false,
+				wantDeficit:     -16.3,
+				wantSeverity:    0.0,
+				wantProjectedTP: 1.7,
+			},
+			{
+				name:            "Patrick-like: moderate input, no deficit",
+				inputI:          -26.8,
+				inputTP:         -6.4,
+				speechProfile:   &SpeechCandidateMetrics{},
+				wantActive:      false,
+				wantDeficit:     -9.7,
+				wantSeverity:    0.0,
+				wantProjectedTP: 4.4,
+			},
+			{
+				name:            "deficit exactly zero: boundary, no override",
+				inputI:          -36.5,
+				inputTP:         -5.0,
+				speechProfile:   &SpeechCandidateMetrics{},
+				wantActive:      false,
+				wantDeficit:     0.0,
+				wantSeverity:    0.0,
+				wantProjectedTP: 15.5,
+			},
+			{
+				name:            "deficit exactly 8: maximum severity",
+				inputI:          -44.5,
+				inputTP:         -5.0,
+				speechProfile:   &SpeechCandidateMetrics{},
+				wantActive:      true,
+				wantDeficit:     8.0,
+				wantSeverity:    1.0,
+				wantProjectedTP: 23.5,
+			},
+			{
+				name:            "deficit beyond 8: severity clamped to 1.0",
+				inputI:          -50.0,
+				inputTP:         -3.0,
+				speechProfile:   &SpeechCandidateMetrics{},
+				wantActive:      true,
+				wantDeficit:     13.5,
+				wantSeverity:    1.0,
+				wantProjectedTP: 31.0,
+			},
+			{
+				name:            "SpeechProfile nil: deficit still computed",
+				inputI:          -39.1,
+				inputTP:         -4.9,
+				speechProfile:   nil,
+				wantActive:      true,
+				wantDeficit:     2.6,
+				wantSeverity:    0.325,
+				wantProjectedTP: 18.2,
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				config := newTestConfig()
+				// Use DefaultFilterConfig target TP (-2.0) to match proposal calculations
+				config.LoudnormTargetTP = -2.0
+				measurements := &AudioMeasurements{
+					InputI:        tt.inputI,
+					InputTP:       tt.inputTP,
+					SpeechProfile: tt.speechProfile,
+				}
+
+				overrides := applyHighCrestOverrides(config, measurements)
+
+				if config.LA2AHighCrestActive != tt.wantActive {
+					t.Errorf("LA2AHighCrestActive = %v, want %v", config.LA2AHighCrestActive, tt.wantActive)
+				}
+				assertClose(t, "LA2AHighCrestDeficit", config.LA2AHighCrestDeficit, tt.wantDeficit, 0.01)
+				assertClose(t, "LA2AHighCrestSeverity", config.LA2AHighCrestSeverity, tt.wantSeverity, 0.001)
+				assertClose(t, "LA2AHighCrestProjectedTP", config.LA2AHighCrestProjectedTP, tt.wantProjectedTP, 0.01)
+
+				// When inactive, overrides must be zero-valued
+				if !tt.wantActive {
+					if overrides.ThresholdFloor != 0 || overrides.RatioFloor != 0 ||
+						overrides.ReleaseFloor != 0 || overrides.KneeFloor != 0 {
+						t.Errorf("inactive case returned non-zero overrides: %+v", overrides)
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("override floor values", func(t *testing.T) {
+		tests := []struct {
+			name               string
+			inputI             float64
+			inputTP            float64
+			wantThresholdFloor float64
+			wantRatioFloor     float64
+			wantReleaseFloor   float64
+			wantKneeFloor      float64
+		}{
+			{
+				name:               "Anna-like: severity ~0.325, moderate overrides",
+				inputI:             -39.1,
+				inputTP:            -4.9,
+				wantThresholdFloor: -25.15, // lerp(-18, -40, 0.325)
+				wantRatioFloor:     3.65,   // lerp(3, 5, 0.325)
+				wantReleaseFloor:   248.75, // lerp(200, 350, 0.325)
+				wantKneeFloor:      4.65,   // lerp(4, 6, 0.325)
+			},
+			{
+				name:               "maximum severity: full override values",
+				inputI:             -44.5,
+				inputTP:            -5.0,
+				wantThresholdFloor: -40.0,
+				wantRatioFloor:     5.0,
+				wantReleaseFloor:   350.0,
+				wantKneeFloor:      6.0,
+			},
+			{
+				name:               "half severity: deficit 4.0",
+				inputI:             -40.5, // gainRequired=24.5, idealCeiling=-2-24.5-1.5=-28, deficit=4.0
+				inputTP:            -5.0,
+				wantThresholdFloor: -29.0, // lerp(-18, -40, 0.5)
+				wantRatioFloor:     4.0,   // lerp(3, 5, 0.5)
+				wantReleaseFloor:   275.0, // lerp(200, 350, 0.5)
+				wantKneeFloor:      5.0,   // lerp(4, 6, 0.5)
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				config := newTestConfig()
+				config.LoudnormTargetTP = -2.0
+				measurements := &AudioMeasurements{
+					InputI:        tt.inputI,
+					InputTP:       tt.inputTP,
+					SpeechProfile: &SpeechCandidateMetrics{},
+				}
+
+				overrides := applyHighCrestOverrides(config, measurements)
+
+				assertClose(t, "ThresholdFloor", overrides.ThresholdFloor, tt.wantThresholdFloor, 0.01)
+				assertClose(t, "RatioFloor", overrides.RatioFloor, tt.wantRatioFloor, 0.01)
+				assertClose(t, "ReleaseFloor", overrides.ReleaseFloor, tt.wantReleaseFloor, 0.01)
+				assertClose(t, "KneeFloor", overrides.KneeFloor, tt.wantKneeFloor, 0.01)
+			})
+		}
+	})
+
+	t.Run("severity scales linearly with deficit", func(t *testing.T) {
+		// Acceptance criterion 5: severity is linear from 0 to 1 over deficit 0 to 8
+		// With LoudnormTargetTP=-2.0, deficit=0 when gainRequired=20.5, i.e. InputI=-36.5
+		// Each 1.0 dB decrease in InputI adds 1.0 dB to deficit
+		deficits := []struct {
+			inputI       float64
+			wantDeficit  float64
+			wantSeverity float64
+		}{
+			{-36.5, 0.0, 0.0},
+			{-37.5, 1.0, 0.125},
+			{-38.5, 2.0, 0.25},
+			{-40.5, 4.0, 0.5},
+			{-42.5, 6.0, 0.75},
+			{-44.5, 8.0, 1.0},
+			{-46.5, 10.0, 1.0}, // clamped at 1.0
+		}
+
+		for _, tt := range deficits {
+			config := newTestConfig()
+			config.LoudnormTargetTP = -2.0
+			measurements := &AudioMeasurements{
+				InputI:        tt.inputI,
+				InputTP:       -5.0,
+				SpeechProfile: &SpeechCandidateMetrics{},
+			}
+
+			applyHighCrestOverrides(config, measurements)
+
+			assertClose(t, "deficit", config.LA2AHighCrestDeficit, tt.wantDeficit, 0.01)
+			assertClose(t, "severity", config.LA2AHighCrestSeverity, tt.wantSeverity, 0.001)
+		}
+	})
+
+	t.Run("diagnostic fields populated for all recordings", func(t *testing.T) {
+		// Acceptance criterion 6: fields populated even when inactive
+		config := newTestConfig()
+		config.LoudnormTargetTP = -2.0
+		measurements := &AudioMeasurements{
+			InputI:        -20.2,
+			InputTP:       -2.5,
+			SpeechProfile: &SpeechCandidateMetrics{},
+		}
+
+		applyHighCrestOverrides(config, measurements)
+
+		if config.LA2AHighCrestActive {
+			t.Error("expected LA2AHighCrestActive=false for Marius-like input")
+		}
+		if config.LA2AHighCrestDeficit == 0 && config.LA2AHighCrestProjectedTP == 0 {
+			t.Error("diagnostic fields should be populated even when inactive")
+		}
+		assertClose(t, "deficit", config.LA2AHighCrestDeficit, -16.3, 0.01)
+		assertClose(t, "projectedTP", config.LA2AHighCrestProjectedTP, 1.7, 0.01)
+	})
+}
