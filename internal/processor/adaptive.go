@@ -1302,6 +1302,47 @@ func tuneLA2ACompressor(config *FilterChainConfig, measurements *AudioMeasuremen
 	// Note: Makeup gain left at default (0 dB unity) - loudnorm handles all level adjustment
 }
 
+// applyHighCrestOverrides predicts whether Pass 4's calculateLimiterCeiling will
+// clamp and, when it will, returns override floors that push the LA-2A toward
+// more aggressive compression. The deficit calculation mirrors
+// calculateLimiterCeiling() in normalise.go using Pass 1 measurements as a
+// forward estimate.
+//
+// Diagnostic fields on config are always populated (active or not).
+// Returns zero-value la2aOverrides when no overrides are needed (deficit <= 0).
+func applyHighCrestOverrides(config *FilterChainConfig, measurements *AudioMeasurements) la2aOverrides {
+	if measurements.SpeechProfile == nil {
+		debugLog("high-crest: SpeechProfile is nil, using full-file InputI/InputTP for deficit calculation")
+	}
+
+	// Deficit calculation - mirrors calculateLimiterCeiling() in normalise.go
+	gainRequired := NormTargetLUFS - measurements.InputI
+	projectedTP := measurements.InputTP + gainRequired
+	idealCeiling := config.LoudnormTargetTP - gainRequired - la2aHighCrestSafetyMargin
+	deficit := la2aHighCrestMinLimiterCeiling - idealCeiling
+
+	// Always populate diagnostic fields
+	config.LA2AHighCrestDeficit = deficit
+	config.LA2AHighCrestProjectedTP = projectedTP
+
+	if deficit <= 0 {
+		config.LA2AHighCrestActive = false
+		config.LA2AHighCrestSeverity = 0
+		return la2aOverrides{}
+	}
+
+	severity := clamp(deficit/la2aHighCrestMaxDeficit, 0.0, 1.0)
+	config.LA2AHighCrestActive = true
+	config.LA2AHighCrestSeverity = severity
+
+	return la2aOverrides{
+		ThresholdFloor: lerp(-18.0, -40.0, severity),
+		RatioFloor:     lerp(3.0, 5.0, severity),
+		ReleaseFloor:   lerp(200.0, 350.0, severity),
+		KneeFloor:      lerp(4.0, 6.0, severity),
+	}
+}
+
 // tuneLA2AAttack sets attack time based on transient characteristics.
 // LA-2A has fixed 10ms attack - we allow slight variation for extreme cases.
 // MaxDifference indicates transient sharpness (% of full scale).
