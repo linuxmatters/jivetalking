@@ -76,7 +76,7 @@ Pass 3: loudnorm (measure-only, print_format=json) → captures LoudnormStats JS
 Pass 4: alimiter (Volumax, peak reduction) → loudnorm (linear mode, input stats from Pass 3) → adeclick
 ```
 
-**Output filename:** `<name>-LUFS-NN-processed.<ext>` where NN is the rounded absolute LUFS value of the final output.
+**Output filename:** `<name>-LUFS-NN-processed.<ext>` where NN is the truncated (not rounded) absolute LUFS value of the final output (e.g., -26.8 LUFS produces `LUFS-26`).
 
 ## Code style
 

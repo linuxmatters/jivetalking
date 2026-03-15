@@ -848,6 +848,22 @@ func formatLA2ACompressorFilter(f *os.File, cfg *processor.FilterChainConfig, m 
 		fmt.Fprintf(f, "        spectral kurtosis: %.1f (%s)\n", kurtosis, kurtosisSource)
 		fmt.Fprintf(f, "        spectral flux: %.4f (%s)\n", flux, fluxSource)
 	}
+
+	// High-crest override diagnostics
+	if cfg.LA2AHighCrestActive && m != nil {
+		fmt.Fprintf(f, "        High-crest override: ACTIVE (deficit %.1f dB, severity %.2f)\n",
+			cfg.LA2AHighCrestDeficit, cfg.LA2AHighCrestSeverity)
+		gainRequired := processor.NormTargetLUFS - m.InputI
+		fmt.Fprintf(f, "        Projected TP: %.1f dBTP (gain %.1f dB applied to %.1f dBTP peaks)\n",
+			cfg.LA2AHighCrestProjectedTP, gainRequired, m.InputTP)
+		idealCeiling := cfg.LoudnormTargetTP - gainRequired - 1.5
+		fmt.Fprintf(f, "        Ideal ceiling: %.1f dBTP, alimiter minimum: -24.0 dBTP\n", idealCeiling)
+		fmt.Fprintf(f, "        Override targets: threshold <= %.0f dB, ratio >= %.1f:1\n",
+			cfg.LA2AThreshold, cfg.LA2ARatio)
+	} else {
+		fmt.Fprintf(f, "        High-crest override: not needed (deficit %.1f dB)\n",
+			cfg.LA2AHighCrestDeficit)
+	}
 }
 
 // formatDeesserFilter outputs deesser filter details

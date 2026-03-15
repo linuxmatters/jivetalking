@@ -144,7 +144,7 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 	}
 
 	// Rename output file to include LUFS value: <name>-processed.<ext> → <name>-LUFS-NN-processed.<ext>
-	lufsValue := int(math.Round(math.Abs(result.OutputLUFS)))
+	lufsValue := int(math.Abs(result.OutputLUFS))
 	finalPath := generateLUFSOutputPath(inputPath, lufsValue)
 	if err := os.Rename(outputPath, finalPath); err != nil {
 		return nil, fmt.Errorf("failed to rename output: %w", err)
