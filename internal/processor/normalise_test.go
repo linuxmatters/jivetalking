@@ -442,20 +442,25 @@ func TestBuildLoudnormFilterSpec_PreGain(t *testing.T) {
 				} else if volumeIdx > alimiterIdx {
 					t.Error("volume filter must appear before alimiter")
 				}
-			} else if strings.Contains(filterSpec, "alimiter=") {
-				// Not clamped but limiter needed: verify original ceiling used
-				// (no volume filter, alimiter uses non-clamped ceiling)
-				_, needsLimiting, _ := calculateLimiterCeiling(
+			} else {
+				ceiling, needsLimiting, _ := calculateLimiterCeiling(
 					tt.inputI, tt.inputTP, config.LoudnormTargetI, config.LoudnormTargetTP,
 				)
-				if !needsLimiting {
-					t.Error("expected no alimiter for this case")
+				hasLimiter := strings.Contains(filterSpec, "alimiter=")
+				if hasLimiter != needsLimiting {
+					t.Errorf("alimiter present = %v, want %v\nfilterSpec: %s", hasLimiter, needsLimiting, filterSpec)
 				}
 
-				// Verify original measured_I is used (not adjusted)
-				wantMeasuredI := fmt.Sprintf("measured_I=%.2f", tt.inputI)
-				if !strings.Contains(filterSpec, wantMeasuredI) {
-					t.Errorf("loudnorm should use original measured_I=%q when not clamped\nfilterSpec: %s", wantMeasuredI, filterSpec)
+				if needsLimiting {
+					wantMeasuredI := fmt.Sprintf("measured_I=%.2f", tt.inputI)
+					if !strings.Contains(filterSpec, wantMeasuredI) {
+						t.Errorf("loudnorm should use original measured_I=%q when not clamped\nfilterSpec: %s", wantMeasuredI, filterSpec)
+					}
+
+					wantMeasuredTP := fmt.Sprintf("measured_TP=%.2f", ceiling)
+					if !strings.Contains(filterSpec, wantMeasuredTP) {
+						t.Errorf("loudnorm should use limiter ceiling measured_TP=%q when not clamped\nfilterSpec: %s", wantMeasuredTP, filterSpec)
+					}
 				}
 			}
 		})
