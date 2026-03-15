@@ -15,6 +15,20 @@ import (
 	"github.com/linuxmatters/jivetalking/internal/audio"
 )
 
+// Limiter ceiling constants used by calculateLimiterCeiling and pre-gain deficit
+// calculation. These are the canonical values; adaptive.go defines
+// la2aHighCrestSafetyMargin and la2aHighCrestMinLimiterCeiling with identical
+// values for the high-crest override path - keep them in sync.
+const (
+	// safetyMarginDB accounts for inter-sample peak (ISP) creation during limiting.
+	// See calculateLimiterCeiling for detailed rationale.
+	safetyMarginDB = 1.5 // dB
+
+	// minLimiterCeilingDB is the practical minimum for FFmpeg's alimiter.
+	// limit=0.0625 = 20*log10(0.0625) ≈ -24.08 dBTP; we use -24.0 with a small buffer.
+	minLimiterCeilingDB = -24.0 // dBTP
+)
+
 // LoudnormStats contains the JSON output from the loudnorm filter.
 // This is used to diagnose whether loudnorm is using linear or dynamic mode.
 type LoudnormStats struct {
@@ -236,23 +250,6 @@ func measureWithLoudnorm(inputPath string, config *FilterChainConfig, progressCa
 //   - needed: True if limiting is required (projected TP exceeds target)
 //   - clamped: True if ceiling was clamped to minimum (loudnorm may need to adjust target)
 func calculateLimiterCeiling(measuredI, measuredTP, targetI, targetTP float64) (ceiling float64, needed bool, clamped bool) {
-	// Safety margin accounts for inter-sample peak (ISP) creation during limiting.
-	// FFmpeg's alimiter operates on sample peaks, not true peaks. When the limiter
-	// shapes waveforms to reduce peaks, the resulting waveform can have ISPs that
-	// exceed the sample peak ceiling. These ISPs are then amplified by loudnorm's gain.
-	//
-	// Observed ISP creation varies by source material:
-	// - Most files: 0.1-0.5 dB ISP after limiting+gain
-	// - Worst case: 1.6 dB ISP after limiting+gain
-	//
-	// Using 1.5 dB margin provides reasonable headroom beyond observed worst-case
-	// (1.6 dB) while getting closer to the -2.0 dBTP target.
-	const safetyMargin = 1.5 // dB - accounts for ISP creation during limiting
-
-	// FFmpeg alimiter minimum: limit=0.0625 = 20*log10(0.0625) ≈ -24.08 dBTP
-	// Use -24.0 dBTP as practical minimum with small safety buffer
-	const minLimiterCeilingDB = -24.0
-
 	gainRequired := targetI - measuredI
 	projectedTP := measuredTP + gainRequired
 
@@ -261,8 +258,8 @@ func calculateLimiterCeiling(measuredI, measuredTP, targetI, targetTP float64) (
 		return 0, false, false
 	}
 
-	// Calculate ceiling: targetTP - gainRequired - safetyMargin
-	ceiling = targetTP - gainRequired - safetyMargin
+	// Calculate ceiling: targetTP - gainRequired - safetyMarginDB
+	ceiling = targetTP - gainRequired - safetyMarginDB
 
 	// Clamp to alimiter's minimum supported ceiling
 	if ceiling < minLimiterCeilingDB {
@@ -334,6 +331,8 @@ type NormalisationResult struct {
 	LimiterEnabled bool    // True if pre-limiting was applied
 	LimiterCeiling float64 // Ceiling in dBTP (only valid if LimiterEnabled)
 	LimiterGain    float64 // Gain required that triggered limiting (dB)
+	PreGainDB      float64 // Pre-gain amount in dB (0.0 when no pre-gain applied)
+	LimiterClamped bool    // True when calculateLimiterCeiling clamped ceiling to minimum
 
 	// FinalMeasurements contains full analysis after normalisation (Pass 4)
 	// Includes spectral characteristics, amplitude stats, and loudness measurements
