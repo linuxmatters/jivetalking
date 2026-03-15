@@ -406,12 +406,12 @@ type NormalisationResult struct {
 	LinearModeForced bool           // True if target was adjusted to force linear mode
 
 	// Limiter diagnostics (Pass 4 pre-limiting)
-	LimiterEnabled bool    // True if pre-limiting was applied
-	LimiterCeiling float64 // Ceiling in dBTP (only valid if LimiterEnabled)
-	LimiterGain    float64 // Gain required that triggered limiting (dB)
-	PreGainDB      float64 // Pre-gain amount in dB (0.0 when no pre-gain applied)
-	LimiterClamped    bool   // True when calculateLimiterCeiling clamped ceiling to minimum
-	Pass3FilterPrefix string // Filter prefix used for Pass 3 measurement (empty when no pre-gain/limiting)
+	LimiterEnabled    bool    // True if pre-limiting was applied
+	LimiterCeiling    float64 // Ceiling in dBTP (only valid if LimiterEnabled)
+	LimiterGain       float64 // Gain required that triggered limiting (dB)
+	PreGainDB         float64 // Pre-gain amount in dB (0.0 when no pre-gain applied)
+	LimiterClamped    bool    // True when calculateLimiterCeiling clamped ceiling to minimum
+	Pass3FilterPrefix string  // Filter prefix used for Pass 3 measurement (empty when no pre-gain/limiting)
 
 	// FinalMeasurements contains full analysis after normalisation (Pass 4)
 	// Includes spectral characteristics, amplitude stats, and loudness measurements
