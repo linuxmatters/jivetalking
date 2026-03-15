@@ -2189,7 +2189,7 @@ func TestApplyHighCrestOverrides(t *testing.T) {
 				speechProfile:   &SpeechCandidateMetrics{},
 				wantActive:      true,
 				wantDeficit:     2.6,
-				wantSeverity:    0.65,
+				wantSeverity:    0.433,
 				wantProjectedTP: 18.2,
 			},
 			{
@@ -2223,7 +2223,7 @@ func TestApplyHighCrestOverrides(t *testing.T) {
 				wantProjectedTP: 15.5,
 			},
 			{
-				name:            "deficit 8: severity clamped (beyond maxDeficit 4)",
+				name:            "deficit 8: severity clamped (beyond maxDeficit 6)",
 				inputI:          -44.5,
 				inputTP:         -5.0,
 				speechProfile:   &SpeechCandidateMetrics{},
@@ -2233,7 +2233,7 @@ func TestApplyHighCrestOverrides(t *testing.T) {
 				wantProjectedTP: 23.5,
 			},
 			{
-				name:            "deficit beyond 4: severity clamped to 1.0",
+				name:            "deficit beyond 6: severity clamped to 1.0",
 				inputI:          -50.0,
 				inputTP:         -3.0,
 				speechProfile:   &SpeechCandidateMetrics{},
@@ -2249,7 +2249,7 @@ func TestApplyHighCrestOverrides(t *testing.T) {
 				speechProfile:   nil,
 				wantActive:      true,
 				wantDeficit:     2.6,
-				wantSeverity:    0.65,
+				wantSeverity:    0.433,
 				wantProjectedTP: 18.2,
 			},
 		}
@@ -2296,13 +2296,13 @@ func TestApplyHighCrestOverrides(t *testing.T) {
 			wantKneeFloor      float64
 		}{
 			{
-				name:               "Anna-like: severity ~0.65, strong overrides",
+				name:               "Anna-like: severity ~0.433, moderate overrides",
 				inputI:             -39.1,
 				inputTP:            -4.9,
-				wantThresholdFloor: -32.3, // lerp(-18, -40, 0.65)
-				wantRatioFloor:     4.3,   // lerp(3, 5, 0.65)
-				wantReleaseFloor:   297.5, // lerp(200, 350, 0.65)
-				wantKneeFloor:      5.3,   // lerp(4, 6, 0.65)
+				wantThresholdFloor: -27.53, // lerp(-18, -40, 0.433)
+				wantRatioFloor:     3.87,   // lerp(3, 5, 0.433)
+				wantReleaseFloor:   265.0,  // lerp(200, 350, 0.433)
+				wantKneeFloor:      4.87,   // lerp(4, 6, 0.433)
 			},
 			{
 				name:               "maximum severity: full override values",
@@ -2314,13 +2314,13 @@ func TestApplyHighCrestOverrides(t *testing.T) {
 				wantKneeFloor:      6.0,
 			},
 			{
-				name:               "deficit 4.0: maximum severity (equals maxDeficit)",
+				name:               "deficit 4.0: severity 0.667 (below maxDeficit 6.0)",
 				inputI:             -40.5, // gainRequired=24.5, idealCeiling=-2-24.5-1.5=-28, deficit=4.0
 				inputTP:            -5.0,
-				wantThresholdFloor: -40.0, // lerp(-18, -40, 1.0)
-				wantRatioFloor:     5.0,   // lerp(3, 5, 1.0)
-				wantReleaseFloor:   350.0, // lerp(200, 350, 1.0)
-				wantKneeFloor:      6.0,   // lerp(4, 6, 1.0)
+				wantThresholdFloor: -32.67, // lerp(-18, -40, 0.667)
+				wantRatioFloor:     4.33,   // lerp(3, 5, 0.667)
+				wantReleaseFloor:   300.0,  // lerp(200, 350, 0.667)
+				wantKneeFloor:      5.33,   // lerp(4, 6, 0.667)
 			},
 		}
 
@@ -2345,7 +2345,7 @@ func TestApplyHighCrestOverrides(t *testing.T) {
 	})
 
 	t.Run("severity scales linearly with deficit", func(t *testing.T) {
-		// Acceptance criterion 5: severity is linear from 0 to 1 over deficit 0 to 4
+		// Acceptance criterion 5: severity is linear from 0 to 1 over deficit 0 to 6
 		// With LoudnormTargetTP=-2.0, deficit=0 when gainRequired=20.5, i.e. InputI=-36.5
 		// Each 1.0 dB decrease in InputI adds 1.0 dB to deficit
 		deficits := []struct {
@@ -2354,11 +2354,12 @@ func TestApplyHighCrestOverrides(t *testing.T) {
 			wantSeverity float64
 		}{
 			{-36.5, 0.0, 0.0},
-			{-37.5, 1.0, 0.25},
-			{-38.5, 2.0, 0.5},
-			{-40.5, 4.0, 1.0},
-			{-42.5, 6.0, 1.0}, // clamped at 1.0
-			{-44.5, 8.0, 1.0},
+			{-37.5, 1.0, 0.167},
+			{-38.5, 2.0, 0.333},
+			{-39.5, 3.0, 0.5},
+			{-40.5, 4.0, 0.667},
+			{-42.5, 6.0, 1.0},
+			{-44.5, 8.0, 1.0},  // clamped at 1.0
 			{-46.5, 10.0, 1.0}, // clamped at 1.0
 		}
 
@@ -2423,8 +2424,8 @@ func TestTuneLA2ACompressorHighCrest(t *testing.T) {
 	}
 
 	t.Run("Anna-like: high-crest overrides push ratio and threshold", func(t *testing.T) {
-		// Anna-like: InputI=-39.1, InputTP=-4.9 -> deficit ~2.6, severity ~0.65
-		// Acceptance criterion 1: ratio pushed toward ~4.3, threshold toward ~-32
+		// Anna-like: InputI=-39.1, InputTP=-4.9 -> deficit ~2.6, severity ~0.433
+		// Acceptance criterion 1: ratio pushed toward ~3.87, threshold toward ~-27.5
 		config := newTestConfig()
 		config.LoudnormTargetTP = -2.0
 		measurements := &AudioMeasurements{
@@ -2450,21 +2451,21 @@ func TestTuneLA2ACompressorHighCrest(t *testing.T) {
 			t.Fatal("expected LA2AHighCrestActive=true for Anna-like input")
 		}
 		assertClose(t, "deficit", config.LA2AHighCrestDeficit, 2.6, 0.1)
-		assertClose(t, "severity", config.LA2AHighCrestSeverity, 0.65, 0.01)
+		assertClose(t, "severity", config.LA2AHighCrestSeverity, 0.433, 0.01)
 
-		// Override floors: ratio >= 3.65, threshold <= -25.15
+		// Override floors: ratio >= 3.8, threshold <= -27.0
 		// Sub-tuners may push further, but not back above the floor.
-		if config.LA2ARatio < 4.2 {
-			t.Errorf("LA2ARatio = %.2f, want >= 4.2 (override floor ~4.3)", config.LA2ARatio)
+		if config.LA2ARatio < 3.8 {
+			t.Errorf("LA2ARatio = %.2f, want >= 3.8 (override floor ~3.87)", config.LA2ARatio)
 		}
-		if config.LA2AThreshold > -32.0 {
-			t.Errorf("LA2AThreshold = %.2f, want <= -32.0 (override floor ~-32.3)", config.LA2AThreshold)
+		if config.LA2AThreshold > -27.0 {
+			t.Errorf("LA2AThreshold = %.2f, want <= -27.0 (override floor ~-27.53)", config.LA2AThreshold)
 		}
-		if config.LA2ARelease < 297.0 {
-			t.Errorf("LA2ARelease = %.2f, want >= 297.0 (override floor ~297.5)", config.LA2ARelease)
+		if config.LA2ARelease < 264.0 {
+			t.Errorf("LA2ARelease = %.2f, want >= 264.0 (override floor ~265.0)", config.LA2ARelease)
 		}
-		if config.LA2AKnee < 5.2 {
-			t.Errorf("LA2AKnee = %.2f, want >= 5.2 (override floor ~5.3)", config.LA2AKnee)
+		if config.LA2AKnee < 4.8 {
+			t.Errorf("LA2AKnee = %.2f, want >= 4.8 (override floor ~4.87)", config.LA2AKnee)
 		}
 
 		// Ratio must respect existing 5.0 ceiling (acceptance criterion 4)
