@@ -104,6 +104,30 @@ func TestCalculateLinearModeTarget(t *testing.T) {
 			wantOffset:         14.0, // -16 - (-30) = 14 dB
 			wantLinearPossible: true,
 		},
+		{
+			name:       "post-gain I - Anna values with clamped ceiling",
+			measuredI:  -36.5, // postGainI = -43.4 + 6.9 deficit
+			measuredTP: -24.0, // re-derived ceiling
+			desiredI:   -16.0,
+			targetTP:   -2.0,
+			// max linear: -2.0 - (-24.0) + (-36.5) - 0.1 = -14.6 LUFS
+			// desired -16.0 <= -14.6, so achievable
+			wantEffectiveI:     -16.0,
+			wantOffset:         20.5, // -16.0 - (-36.5) = 20.5 dB
+			wantLinearPossible: true,
+		},
+		{
+			name:       "post-gain I - extremely quiet, still cannot reach target",
+			measuredI:  -40.0, // postGainI after deficit, still very quiet
+			measuredTP: -24.0, // re-derived ceiling at minimum
+			desiredI:   -16.0,
+			targetTP:   -2.0,
+			// max linear: -2.0 - (-24.0) + (-40.0) - 0.1 = -18.1 LUFS
+			// desired -16.0 > -18.1, so clamped
+			wantEffectiveI:     -18.0 - margin,
+			wantOffset:         22.0 - margin, // -18.1 - (-40.0) = 21.9 dB
+			wantLinearPossible: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -552,6 +576,111 @@ func TestPreGainCeilingRederivation(t *testing.T) {
 			if math.Abs(newCeiling-minLimiterCeilingDB) > 0.01 {
 				t.Errorf("re-derived ceiling = %.2f dBTP, want %.2f dBTP (minLimiterCeilingDB)",
 					newCeiling, minLimiterCeilingDB)
+			}
+		})
+	}
+}
+
+func TestApplyNormalisation_ClampedTargetPropagation(t *testing.T) {
+	// Verifies the end-to-end arithmetic: when the ceiling is clamped,
+	// calculateLinearModeTarget receives the post-gain I (not raw measured I),
+	// and the resulting effectiveTargetI preserves the full -16.0 LUFS target.
+	//
+	// This chains the same functions ApplyNormalisation calls, with Anna's values.
+
+	tests := []struct {
+		name           string
+		measuredI      float64
+		measuredTP     float64
+		targetI        float64
+		targetTP       float64
+		wantEffectiveI float64
+		wantLinear     bool
+	}{
+		{
+			name:           "Anna - very quiet, clamped ceiling preserves full target",
+			measuredI:      -43.4,
+			measuredTP:     -19.2,
+			targetI:        -16.0,
+			targetTP:       -2.0,
+			wantEffectiveI: -16.0,
+			wantLinear:     true,
+		},
+		{
+			name:           "Anna-like with different measurements",
+			measuredI:      -43.2,
+			measuredTP:     -18.6,
+			targetI:        -16.0,
+			targetTP:       -2.0,
+			wantEffectiveI: -16.0,
+			wantLinear:     true,
+		},
+		{
+			name:       "extreme quiet - still clamped after pre-gain",
+			measuredI:  -55.0,
+			measuredTP: -30.0,
+			targetI:    -16.0,
+			targetTP:   -2.0,
+			// deficit = -24.0 - (-2.0 - (-16.0 - (-55.0)) - 1.5) = -24.0 - (-42.5) = 18.5
+			// postGainI = -55.0 + 18.5 = -36.5
+			// re-derived ceiling = -24.0
+			// maxLinear = -2.0 - (-24.0) + (-36.5) - 0.1 = -14.6
+			// -16.0 <= -14.6, so full target preserved
+			wantEffectiveI: -16.0,
+			wantLinear:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Step 1: calculateLimiterCeiling (same as ApplyNormalisation)
+			_, limiterNeeded, limiterClamped := calculateLimiterCeiling(
+				tt.measuredI, tt.measuredTP, tt.targetI, tt.targetTP)
+
+			if !limiterNeeded {
+				t.Fatal("expected limiter to be needed")
+			}
+			if !limiterClamped {
+				t.Fatal("expected ceiling to be clamped")
+			}
+
+			// Step 2: replicate the effectiveTP and effectiveMeasuredI logic
+			gainRequired := tt.targetI - tt.measuredI
+			idealCeiling := tt.targetTP - gainRequired - safetyMarginDB
+			deficit := minLimiterCeilingDB - idealCeiling
+			postGainI := tt.measuredI + deficit
+			newGainRequired := tt.targetI - postGainI
+			reDerivedCeiling := tt.targetTP - newGainRequired - safetyMarginDB
+			effectiveTP := reDerivedCeiling
+			effectiveMeasuredI := postGainI
+
+			// Step 3: calculateLinearModeTarget with post-gain I
+			effectiveTargetI, _, linearPossible := calculateLinearModeTarget(
+				effectiveMeasuredI, effectiveTP, tt.targetI, tt.targetTP)
+
+			if math.Abs(effectiveTargetI-tt.wantEffectiveI) > 0.01 {
+				t.Errorf("effectiveTargetI = %.2f, want %.2f", effectiveTargetI, tt.wantEffectiveI)
+			}
+			if linearPossible != tt.wantLinear {
+				t.Errorf("linearPossible = %v, want %v", linearPossible, tt.wantLinear)
+			}
+
+			// Step 4: verify buildLoudnormFilterSpec receives the full target
+			config := DefaultFilterConfig()
+			config.LoudnormTargetI = effectiveTargetI
+			measurement := &LoudnormMeasurement{
+				InputI:       tt.measuredI,
+				InputTP:      tt.measuredTP,
+				InputLRA:     8.0,
+				InputThresh:  tt.measuredI - 10.0,
+				TargetOffset: -2.5,
+			}
+			_, preGainDB, clamped := buildLoudnormFilterSpec(config, measurement)
+			if !clamped {
+				t.Error("expected buildLoudnormFilterSpec to report clamped")
+			}
+			if math.Abs(preGainDB-deficit) > 0.01 {
+				t.Errorf("preGainDB = %.2f, want deficit = %.2f", preGainDB, deficit)
 			}
 		})
 	}
