@@ -270,7 +270,7 @@ const (
 
 	// LA-2A High-crest override constants
 	// These mirror calculateLimiterCeiling() in normalise.go - keep in sync.
-	la2aHighCrestMaxDeficit        = 8.0   // dB, deficit at which severity reaches 1.0
+	la2aHighCrestMaxDeficit        = 4.0   // dB, deficit at which severity reaches 1.0 (beyond ~4 dB, pre-gain handles it)
 	la2aHighCrestSafetyMargin      = 1.5   // dB, matches calculateLimiterCeiling safetyMargin
 	la2aHighCrestMinLimiterCeiling = -24.0 // dBTP, alimiter hardware floor
 

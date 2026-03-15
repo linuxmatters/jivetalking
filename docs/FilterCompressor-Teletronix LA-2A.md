@@ -59,7 +59,7 @@ idealCeiling = LoudnormTargetTP - gainRequired - safetyMargin
 deficit      = minLimiterCeilingDB - idealCeiling
 ```
 
-When `deficit > 0`, severity scales linearly: `clamp(deficit / 8.0, 0.0, 1.0)`.
+When `deficit > 0`, severity scales linearly: `clamp(deficit / 4.0, 0.0, 1.0)`.
 
 **Override floors** (linear interpolation from severity 0.0 to 1.0):
 
@@ -70,7 +70,7 @@ When `deficit > 0`, severity scales linearly: `clamp(deficit / 8.0, 0.0, 1.0)`.
 | Release | 200 ms | 350 ms | `lerp(200.0, 350.0, severity)` | `max(tunerResult, floor)` |
 | Knee | 4.0 | 6.0 | `lerp(4.0, 6.0, severity)` | `max(tunerResult, floor)` |
 
-The override blends from no change (deficit just above 0) to maximum aggressiveness (deficit >= 8 dB). Sub-tuners may push values beyond the floor but cannot pull them back.
+The override blends from no change (deficit just above 0) to maximum aggressiveness (deficit >= 4 dB). Sub-tuners may push values beyond the floor but cannot pull them back.
 
 ### Attack: Preserving Consonant "Pluck"
 
