@@ -61,7 +61,7 @@ internal/
 1. **Pass 1 (Analysis):** Measures LUFS, true peak, LRA, noise floor, spectral characteristics; detects silence/speech regions via 250ms interval sampling
 2. **Pass 2 (Processing):** Applies adaptive filter chain tuned to measurements; output measured for before/after comparison
 3. **Pass 3 (Measuring):** Runs loudnorm in measurement mode (JSON output via FFmpeg log capture) to get input stats for linear mode
-4. **Pass 4 (Normalising):** Applies `alimiter` (Volumax) + `loudnorm` (linear mode) + `adeclick`; `alimiter` creates headroom so loudnorm achieves full linear gain to reach -16 LUFS
+4. **Pass 4 (Normalising):** Applies `volume` (pre-gain, when ceiling clamped) + `alimiter` (Volumax) + `loudnorm` (linear mode) + `adeclick`; pre-gain raises very quiet recordings so the alimiter can use a viable ceiling; `alimiter` creates headroom so loudnorm achieves full linear gain to reach -16 LUFS
 
 **Filter chain order (Pass 2):**
 ```
@@ -73,7 +73,7 @@ Order rationale: downmix to mono first; HP/LP removes frequency extremes before 
 **Normalisation (Pass 3/4):**
 ```
 Pass 3: loudnorm (measure-only, print_format=json) → captures LoudnormStats JSON
-Pass 4: alimiter (Volumax, peak reduction) → loudnorm (linear mode, input stats from Pass 3) → adeclick
+Pass 4: volume (pre-gain, when clamped) → alimiter (Volumax, peak reduction) → loudnorm (linear mode, input stats from Pass 3) → adeclick
 ```
 
 **Output filename:** `<name>-LUFS-NN-processed.<ext>` where NN is the truncated (not rounded) absolute LUFS value of the final output (e.g., -26.8 LUFS produces `LUFS-26`).

@@ -158,6 +158,49 @@ ceiling := targetTP - gainRequired - safetyMargin
 
 This means the limiter only reduces peaks by the minimum amount necessary - often just 1-2 dB - rather than applying a fixed ceiling that might over-limit.
 
+### Pre-gain for Clamped Ceilings
+
+FFmpeg's alimiter has a practical minimum ceiling of approximately -24.0 dBTP (`limit=0.0625`). For very quiet recordings, the ideal ceiling calculated above can fall below this minimum. When this happens, `calculateLimiterCeiling` clamps the ceiling to -24.0 dBTP and sets `clamped=true`. The clamped ceiling is too high relative to the ideal, so loudnorm cannot apply enough linear gain to reach -16 LUFS.
+
+The pre-gain mechanism closes this gap by inserting a `volume` filter before the alimiter:
+
+```
+deficit   = minLimiterCeilingDB - idealCeiling
+preGainDB = deficit
+```
+
+The volume filter applies static linear gain equal to the deficit, uniformly raising the signal level. After pre-gain, the limiter ceiling is re-derived from the post-gain measurements:
+
+```
+postGainI      = measuredI + deficit
+newGainRequired = targetI - postGainI
+newCeiling      = targetTP - newGainRequired - safetyMargin
+```
+
+The re-derived ceiling lands at or near -24.0 dBTP, which is within the alimiter's supported range. The alimiter uses this re-derived ceiling instead of the clamped value, and loudnorm receives adjusted `measured_I` and `measured_TP` parameters reflecting the post-gain signal.
+
+**Example (Anna, very quiet recording):**
+
+| Value | Before pre-gain | After pre-gain |
+|-------|----------------|----------------|
+| Integrated loudness | -43.2 LUFS | -40.6 LUFS |
+| Gain required | 27.2 dB | 24.6 dB |
+| Ideal ceiling | -26.6 dBTP | -24.1 dBTP |
+| Clamped? | Yes (-24.0) | No |
+| Deficit / pre-gain | 2.6 dB | - |
+
+The volume filter applies no dynamics processing, no lookahead, and creates no artefacts beyond proportional noise floor elevation. For typical deficits of 1-5 dB, the noise floor rise is inaudible in podcast playback, particularly since Pass 2 noise reduction has already lowered the floor.
+
+**Filter chain when clamped:**
+```
+volume (pre-gain) → alimiter → loudnorm → adeclick → astats → aspectralstats → ebur128 → resample
+```
+
+**Filter chain when not clamped (unchanged):**
+```
+alimiter → loudnorm → adeclick → astats → aspectralstats → ebur128 → resample
+```
+
 ---
 
 ## The Volumax Legacy
