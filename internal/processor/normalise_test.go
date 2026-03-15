@@ -581,12 +581,15 @@ func TestPreGainCeilingRederivation(t *testing.T) {
 	}
 }
 
-func TestApplyNormalisation_ClampedTargetPropagation(t *testing.T) {
-	// Verifies the end-to-end arithmetic: when the ceiling is clamped,
-	// calculateLinearModeTarget receives the post-gain I (not raw measured I),
-	// and the resulting effectiveTargetI preserves the full -16.0 LUFS target.
+func TestClampedTargetPropagation_Arithmetic(t *testing.T) {
+	// Verifies the arithmetic chain that ApplyNormalisation uses when the
+	// ceiling is clamped: calculateLimiterCeiling -> deficit -> post-gain I ->
+	// calculateLinearModeTarget -> buildLoudnormFilterSpec. Each function is
+	// called with the same inputs ApplyNormalisation would derive, confirming
+	// the full -16.0 LUFS target is preserved.
 	//
-	// This chains the same functions ApplyNormalisation calls, with Anna's values.
+	// This does not exercise ApplyNormalisation itself (which requires audio
+	// files and the full FFmpeg pipeline); it validates the pure-function chain.
 
 	tests := []struct {
 		name           string
