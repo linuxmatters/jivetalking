@@ -270,6 +270,78 @@ func calculateLimiterCeiling(measuredI, measuredTP, targetI, targetTP float64) (
 	return ceiling, true, clamped
 }
 
+// calculatePreGain computes the pre-gain amount needed when the limiter ceiling is
+// clamped to alimiter's minimum. The deficit (preGainDB) raises the signal before
+// limiting so that loudnorm can apply full linear gain. When the ceiling is not
+// clamped, returns (0.0, 0.0).
+//
+// Parameters:
+//   - measuredI: Measured integrated loudness (LUFS)
+//   - targetI: Target integrated loudness (LUFS), typically -16.0
+//   - targetTP: Target true peak (dBTP), typically -2.0
+//
+// Returns:
+//   - preGainDB: The pre-gain amount in dB (positive when clamped, 0.0 otherwise)
+//   - reDerivedCeiling: The limiter ceiling re-derived from post-gain values (0.0 when not clamped)
+func calculatePreGain(measuredI, targetI, targetTP float64) (preGainDB, reDerivedCeiling float64) {
+	gainRequired := targetI - measuredI
+	idealCeiling := targetTP - gainRequired - safetyMarginDB
+
+	// No pre-gain needed if ceiling is at or above alimiter's minimum
+	if idealCeiling >= minLimiterCeilingDB {
+		return 0.0, 0.0
+	}
+
+	// Deficit: how far below the minimum the ideal ceiling sits
+	preGainDB = minLimiterCeilingDB - idealCeiling
+
+	// Re-derive ceiling from post-gain values
+	postGainI := measuredI + preGainDB
+	newGainRequired := targetI - postGainI
+	reDerivedCeiling = targetTP - newGainRequired - safetyMarginDB
+
+	return preGainDB, reDerivedCeiling
+}
+
+// buildPreLimiterPrefix constructs the filter prefix for pre-limiting in Pass 3/4.
+// Returns a comma-separated filter string fragment containing volume (when pre-gain
+// is active) and alimiter (when limiting is needed), or "" when no limiting is needed.
+//
+// CBS Volumax-inspired parameters for transparent peak limiting:
+//   - attack=5ms: Gentle attack preserves transient shape
+//   - release=100ms: Smooth recovery eliminates pumping
+//   - asc=1: Auto Soft Clipping for program-dependent release
+//   - asc_level=0.8: Program-dependent smoothing (Volumax characteristic)
+//   - level_in/level_out=1: Unity gain (no makeup)
+//   - latency=1: Enable lookahead for better transient handling
+//
+// Parameters:
+//   - preGainDB: Pre-gain amount in dB (positive when clamped, 0.0 otherwise)
+//   - ceiling: Limiter ceiling in dBTP
+//   - needsLimiting: True if limiting is required
+//
+// Returns the filter string fragment or "" when no limiting needed.
+func buildPreLimiterPrefix(preGainDB, ceiling float64, needsLimiting bool) string {
+	if !needsLimiting {
+		return ""
+	}
+
+	var parts []string
+
+	if preGainDB > 0 {
+		parts = append(parts, fmt.Sprintf("volume=%.1fdB", preGainDB))
+	}
+
+	limiterCeilingLinear := math.Pow(10, ceiling/20.0)
+	limiterFilter := fmt.Sprintf(
+		"alimiter=limit=%.6f:attack=5:release=100:level_in=1:level_out=1:level=0:latency=1:asc=1:asc_level=0.8",
+		limiterCeilingLinear,
+	)
+	parts = append(parts, limiterFilter)
+
+	return strings.Join(parts, ",")
+}
+
 // calculateLinearModeTarget calculates the target I and offset that ensure loudnorm
 // stays in linear mode (never falls back to dynamic normalization).
 //
@@ -414,28 +486,19 @@ func ApplyNormalisation(
 	// Calculate effective target I that ensures linear mode (no dynamic fallback)
 	// loudnorm requires: measured_TP + (target_I - measured_I) <= target_TP for linear mode
 	//
-	// IMPORTANT: When the limiter is enabled, loudnorm sees the LIMITED peaks (limiterCeiling),
-	// not the original measured peaks. This creates the headroom needed for full gain.
-	// When clamped with pre-gain active, the re-derived ceiling (post-gain) replaces
-	// the clamped value - pre-gain converts a clamped scenario into a non-clamped one.
+	// When the limiter is enabled, loudnorm sees the LIMITED peaks (limiterCeiling),
+	// not the original measured peaks. When clamped with pre-gain active, the
+	// re-derived ceiling replaces the clamped value.
+	preGainDB, reDerivedCeiling := calculatePreGain(
+		measurement.InputI, config.LoudnormTargetI, config.LoudnormTargetTP,
+	)
 	effectiveTP := measurement.InputTP
 	effectiveMeasuredI := measurement.InputI
 	if limiterNeeded && !limiterClamped {
 		effectiveTP = limiterCeiling
 	} else if limiterNeeded && limiterClamped {
-		// Pre-gain will raise the signal by the deficit, so re-derive the ceiling
-		// from post-gain values. This matches the arithmetic in buildLoudnormFilterSpec.
-		gainRequired := config.LoudnormTargetI - measurement.InputI
-		idealCeiling := config.LoudnormTargetTP - gainRequired - safetyMarginDB
-		deficit := minLimiterCeilingDB - idealCeiling
-		postGainI := measurement.InputI + deficit
-		newGainRequired := config.LoudnormTargetI - postGainI
-		reDerivedCeiling := config.LoudnormTargetTP - newGainRequired - safetyMarginDB
 		effectiveTP = reDerivedCeiling
-		// Use post-gain I for the linear mode check: pre-gain raises the signal
-		// before loudnorm sees it, so the linear mode constraint is satisfied
-		// at a higher target when the input is louder.
-		effectiveMeasuredI = postGainI
+		effectiveMeasuredI = measurement.InputI + preGainDB
 	}
 	effectiveTargetI, _, linearPossible := calculateLinearModeTarget(
 		effectiveMeasuredI,
@@ -452,7 +515,7 @@ func ApplyNormalisation(
 	effectiveConfig.LoudnormTargetI = effectiveTargetI
 
 	// Pass 4: Apply loudnorm with linear=true and the measurements
-	finalLUFS, finalTP, finalMeasurements, loudnormStats, preGainDB, _, err := applyLoudnormAndMeasure(inputPath, &effectiveConfig, measurement, inputMeasurements, progressCallback)
+	finalLUFS, finalTP, finalMeasurements, loudnormStats, _, _, err := applyLoudnormAndMeasure(inputPath, &effectiveConfig, measurement, inputMeasurements, progressCallback)
 	if err != nil {
 		return nil, fmt.Errorf("loudnorm application failed: %w", err)
 	}
@@ -677,7 +740,6 @@ func buildLoudnormFilterSpec(config *FilterChainConfig, measurement *LoudnormMea
 	var filters []string
 
 	// 1. Pre-limiting with adaptive ceiling (CBS Volumax-inspired peak limiter)
-	// Calculate if limiting is needed to allow loudnorm's full linear gain
 	ceiling, needsLimiting, clamped := calculateLimiterCeiling(
 		measurement.InputI,
 		measurement.InputTP,
@@ -685,50 +747,27 @@ func buildLoudnormFilterSpec(config *FilterChainConfig, measurement *LoudnormMea
 		config.LoudnormTargetTP,
 	)
 
-	// 1a. Pre-gain: when the ceiling is clamped to alimiter's minimum, the ideal
-	// ceiling sits below -24.0 dBTP. A volume filter before the alimiter raises
-	// the signal by the deficit, converting the clamped scenario into a non-clamped
-	// one so loudnorm can apply full linear gain.
-	var preGainDB float64
+	// 1a. Pre-gain: when the ceiling is clamped, raise signal by the deficit
+	preGainDB, reDerivedCeiling := calculatePreGain(
+		measurement.InputI, config.LoudnormTargetI, config.LoudnormTargetTP,
+	)
+	if clamped {
+		ceiling = reDerivedCeiling
+	}
+
+	// 1b. Build pre-limiter prefix (volume + alimiter)
+	prefix := buildPreLimiterPrefix(preGainDB, ceiling, needsLimiting)
+	if prefix != "" {
+		filters = append(filters, prefix)
+	}
+
+	// Derive effective measurements for loudnorm
 	effectiveMeasuredI := measurement.InputI
 	effectiveMeasuredTP := measurement.InputTP
 	if clamped {
-		gainRequired := config.LoudnormTargetI - measurement.InputI
-		idealCeiling := config.LoudnormTargetTP - gainRequired - safetyMarginDB
-		preGainDB = minLimiterCeilingDB - idealCeiling
-
-		// Insert volume filter before alimiter
-		filters = append(filters, fmt.Sprintf("volume=%.1fdB", preGainDB))
-
-		// Re-derive ceiling from post-gain values
-		postGainI := measurement.InputI + preGainDB
-		newGainRequired := config.LoudnormTargetI - postGainI
-		newCeiling := config.LoudnormTargetTP - newGainRequired - safetyMarginDB
-		ceiling = newCeiling
-
-		// Adjust effective measurements for loudnorm (do not mutate the struct)
-		effectiveMeasuredI = postGainI
-		effectiveMeasuredTP = newCeiling
-	}
-
-	if needsLimiting {
-		// CBS Volumax-inspired parameters for transparent peak limiting:
-		// - attack=5ms: Gentle attack preserves transient shape, avoids click-inducing discontinuities
-		// - release=100ms: Smooth recovery eliminates pumping artifacts
-		// - asc=1: Auto Soft Clipping for program-dependent release
-		// - asc_level=0.8: Higher value = more program-dependent smoothing (Volumax characteristic)
-		// - level_in/level_out=1: Unity gain (no makeup)
-		// - latency=1: Enable lookahead for better transient handling
-		limiterCeilingLinear := math.Pow(10, ceiling/20.0)
-		limiterFilter := fmt.Sprintf(
-			"alimiter=limit=%.6f:attack=5:release=100:level_in=1:level_out=1:level=0:latency=1:asc=1:asc_level=0.8",
-			limiterCeilingLinear,
-		)
-		filters = append(filters, limiterFilter)
-	}
-
-	// When limiting without pre-gain, use ceiling as effective TP for loudnorm
-	if needsLimiting && !clamped {
+		effectiveMeasuredI = measurement.InputI + preGainDB
+		effectiveMeasuredTP = reDerivedCeiling
+	} else if needsLimiting {
 		effectiveMeasuredTP = ceiling
 	}
 

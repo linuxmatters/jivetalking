@@ -688,3 +688,151 @@ func TestClampedTargetPropagation_Arithmetic(t *testing.T) {
 		})
 	}
 }
+
+func TestCalculatePreGain(t *testing.T) {
+	tests := []struct {
+		name              string
+		measuredI         float64
+		targetI           float64
+		targetTP          float64
+		wantPreGainDB     float64
+		wantReDerivedCeil float64
+	}{
+		{
+			name:      "clamped - returns positive deficit and valid re-derived ceiling",
+			measuredI: -43.2,
+			targetI:   -16.0,
+			targetTP:  -2.0,
+			// gainRequired = -16.0 - (-43.2) = 27.2
+			// idealCeiling = -2.0 - 27.2 - 1.5 = -30.7
+			// deficit = -24.0 - (-30.7) = 6.7
+			// postGainI = -43.2 + 6.7 = -36.5
+			// newGainRequired = -16.0 - (-36.5) = 20.5
+			// reDerivedCeiling = -2.0 - 20.5 - 1.5 = -24.0
+			wantPreGainDB:     6.7,
+			wantReDerivedCeil: -24.0,
+		},
+		{
+			name:      "not clamped - returns zeros",
+			measuredI: -24.9,
+			targetI:   -16.0,
+			targetTP:  -2.0,
+			// gainRequired = 8.9
+			// idealCeiling = -2.0 - 8.9 - 1.5 = -12.4 (above -24.0)
+			wantPreGainDB:     0.0,
+			wantReDerivedCeil: 0.0,
+		},
+		{
+			name:      "boundary - ideal ceiling equals minLimiterCeilingDB exactly",
+			measuredI: -36.5,
+			targetI:   -16.0,
+			targetTP:  -2.0,
+			// gainRequired = 20.5
+			// idealCeiling = -2.0 - 20.5 - 1.5 = -24.0 (exactly minLimiterCeilingDB)
+			wantPreGainDB:     0.0,
+			wantReDerivedCeil: 0.0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			preGainDB, reDerivedCeiling := calculatePreGain(tt.measuredI, tt.targetI, tt.targetTP)
+
+			if math.Abs(preGainDB-tt.wantPreGainDB) > 0.01 {
+				t.Errorf("preGainDB = %.2f, want %.2f", preGainDB, tt.wantPreGainDB)
+			}
+			if math.Abs(reDerivedCeiling-tt.wantReDerivedCeil) > 0.01 {
+				t.Errorf("reDerivedCeiling = %.2f, want %.2f", reDerivedCeiling, tt.wantReDerivedCeil)
+			}
+		})
+	}
+}
+
+func TestBuildPreLimiterPrefix(t *testing.T) {
+	tests := []struct {
+		name          string
+		preGainDB     float64
+		ceiling       float64
+		needsLimiting bool
+		wantEmpty     bool
+		wantVolume    bool
+		wantAlimiter  bool
+	}{
+		{
+			name:          "clamped - volume and alimiter",
+			preGainDB:     6.7,
+			ceiling:       -24.0,
+			needsLimiting: true,
+			wantEmpty:     false,
+			wantVolume:    true,
+			wantAlimiter:  true,
+		},
+		{
+			name:          "needed but not clamped - alimiter only",
+			preGainDB:     0.0,
+			ceiling:       -12.4,
+			needsLimiting: true,
+			wantEmpty:     false,
+			wantVolume:    false,
+			wantAlimiter:  true,
+		},
+		{
+			name:          "not needed - empty string",
+			preGainDB:     0.0,
+			ceiling:       0.0,
+			needsLimiting: false,
+			wantEmpty:     true,
+			wantVolume:    false,
+			wantAlimiter:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := buildPreLimiterPrefix(tt.preGainDB, tt.ceiling, tt.needsLimiting)
+
+			if tt.wantEmpty {
+				if result != "" {
+					t.Errorf("expected empty string, got %q", result)
+				}
+				return
+			}
+
+			hasVolume := strings.Contains(result, "volume=")
+			if hasVolume != tt.wantVolume {
+				t.Errorf("volume present = %v, want %v\nresult: %s", hasVolume, tt.wantVolume, result)
+			}
+
+			hasAlimiter := strings.Contains(result, "alimiter=")
+			if hasAlimiter != tt.wantAlimiter {
+				t.Errorf("alimiter present = %v, want %v\nresult: %s", hasAlimiter, tt.wantAlimiter, result)
+			}
+
+			// (d): volume appears before alimiter when both present
+			if hasVolume && hasAlimiter {
+				volumeIdx := strings.Index(result, "volume=")
+				alimiterIdx := strings.Index(result, "alimiter=")
+				if volumeIdx > alimiterIdx {
+					t.Error("volume must appear before alimiter")
+				}
+			}
+
+			// Verify correct volume value when present
+			if tt.wantVolume {
+				wantVolumeStr := fmt.Sprintf("volume=%.1fdB", tt.preGainDB)
+				if !strings.Contains(result, wantVolumeStr) {
+					t.Errorf("expected %q in result %q", wantVolumeStr, result)
+				}
+			}
+
+			// Verify correct ceiling in alimiter when present
+			if tt.wantAlimiter {
+				limiterLinear := math.Pow(10, tt.ceiling/20.0)
+				wantLimit := fmt.Sprintf("limit=%.6f", limiterLinear)
+				if !strings.Contains(result, wantLimit) {
+					t.Errorf("expected %q in result %q", wantLimit, result)
+				}
+			}
+		})
+	}
+}
