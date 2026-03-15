@@ -183,11 +183,11 @@ The re-derived ceiling lands at or near -24.0 dBTP, which is within the alimiter
 
 | Value | Before pre-gain | After pre-gain |
 |-------|----------------|----------------|
-| Integrated loudness | -43.2 LUFS | -40.6 LUFS |
-| Gain required | 27.2 dB | 24.6 dB |
-| Ideal ceiling | -26.6 dBTP | -24.1 dBTP |
+| Integrated loudness | -43.2 LUFS | -36.5 LUFS |
+| Gain required | 27.2 dB | 20.5 dB |
+| Limiter ceiling | -30.7 dBTP (ideal; clamped to -24.0 dBTP) | -24.0 dBTP (re-derived) |
 | Clamped? | Yes (-24.0) | No |
-| Deficit / pre-gain | 2.6 dB | - |
+| Deficit / pre-gain | 6.7 dB | - |
 
 The volume filter applies no dynamics processing, no lookahead, and creates no artefacts beyond proportional noise floor elevation. For typical deficits of 1-5 dB, the noise floor rise is inaudible in podcast playback, particularly since Pass 2 noise reduction has already lowered the floor.
 
