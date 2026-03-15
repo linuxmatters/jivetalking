@@ -205,6 +205,12 @@ type FilterChainConfig struct {
 	LA2AKnee      float64 // Knee curve softness (1.0-8.0) - T4 cell provides inherent soft knee
 	LA2AMix       float64 // Wet/dry mix (0.0-1.0, 1.0 = 100% compressed)
 
+	// Diagnostic: high-crest override (deficit-based detection)
+	LA2AHighCrestActive      bool    // Whether high-crest overrides were applied (deficit > 0)
+	LA2AHighCrestDeficit     float64 // Predicted ceiling deficit in dB (0.0 when inactive)
+	LA2AHighCrestSeverity    float64 // 0.0-1.0 scaling factor (clamp(deficit / 8.0, 0.0, 1.0))
+	LA2AHighCrestProjectedTP float64 // Projected true peak before compression (dBTP)
+
 	// De-esser (deesser) - removes harsh sibilance automatically
 	DeessEnabled   bool    // Enable deesser filter
 	DeessIntensity float64 // 0.0-1.0, intensity for triggering de-essing (0=off, 1=max)
