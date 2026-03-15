@@ -129,12 +129,14 @@ type LoudnormMeasurement struct {
 // Parameters:
 //   - inputPath: Path to Pass 2 output file (the -processed file, before LUFS rename)
 //   - config: Filter configuration (contains loudnorm targets)
+//   - filterPrefix: Optional filter chain to prepend before loudnorm (e.g. volume+alimiter);
+//     empty string preserves existing behaviour
 //   - progressCallback: Optional progress updates (pass 3)
 //
 // Returns:
 //   - measurement: Loudnorm measurements for second pass
 //   - err: Error if measurement failed
-func measureWithLoudnorm(inputPath string, config *FilterChainConfig, progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements)) (*LoudnormMeasurement, error) {
+func measureWithLoudnorm(inputPath string, config *FilterChainConfig, filterPrefix string, progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements)) (*LoudnormMeasurement, error) {
 	// Start capturing loudnorm log output
 	startLoudnormCapture()
 
@@ -162,6 +164,10 @@ func measureWithLoudnorm(inputPath string, config *FilterChainConfig, progressCa
 		config.LoudnormTargetLRA,
 		boolToString(config.LoudnormDualMono),
 	)
+
+	if filterPrefix != "" {
+		filterSpec = filterPrefix + "," + filterSpec
+	}
 
 	// Create filter graph
 	filterGraph, bufferSrcCtx, bufferSinkCtx, err := setupFilterGraph(
@@ -454,9 +460,28 @@ func ApplyNormalisation(
 		progressCallback(PassMeasuring, "Measuring", 0.0, 0.0, nil)
 	}
 
+	// Compute ceiling/pre-gain from Pass 2 ebur128 measurements (before Pass 3)
+	// This allows Pass 3 to measure through the same volume+alimiter prefix
+	// that Pass 4 will apply, closing the measurement mismatch.
+	limiterCeiling, limiterNeeded, limiterClamped := calculateLimiterCeiling(
+		outputMeasurements.OutputI, outputMeasurements.OutputTP,
+		config.LoudnormTargetI, config.LoudnormTargetTP,
+	)
+	preGainDB, reDerivedCeiling := calculatePreGain(
+		outputMeasurements.OutputI, config.LoudnormTargetI, config.LoudnormTargetTP,
+	)
+	if limiterClamped {
+		limiterCeiling = reDerivedCeiling
+	}
+	limiterGain := config.LoudnormTargetI - outputMeasurements.OutputI
+
+	// Build filter prefix for Pass 3 measurement
+	filterPrefix := buildPreLimiterPrefix(preGainDB, limiterCeiling, limiterNeeded)
+
 	// Pass 3: Run loudnorm measurement pass on Pass 2 output
-	// This reads the file through loudnorm without encoding to get measurements
-	measurement, err := measureWithLoudnorm(inputPath, config, progressCallback)
+	// When a prefix is active, loudnorm measures the post-limiter signal,
+	// so its InputI/InputTP already reflect pre-gain and limiting.
+	measurement, err := measureWithLoudnorm(inputPath, config, filterPrefix, progressCallback)
 	if err != nil {
 		return nil, fmt.Errorf("loudnorm measurement pass failed: %w", err)
 	}
@@ -472,37 +497,13 @@ func ApplyNormalisation(
 		progressCallback(PassNormalising, "Normalising", 0.0, 0.0, nil)
 	}
 
-	// Calculate limiter ceiling (actual limiting happens in buildLoudnormFilterSpec)
-	// clamped=true means ceiling was limited to alimiter's minimum (-24 dBTP),
-	// so loudnorm may still need to adjust target for very quiet audio
-	limiterCeiling, limiterNeeded, limiterClamped := calculateLimiterCeiling(
+	// Calculate effective target I that ensures linear mode (no dynamic fallback)
+	// Pass 3 measured through the same prefix chain as Pass 4, so
+	// measurement.InputI and measurement.InputTP already reflect the
+	// post-limiter signal. No effectiveMeasuredI/effectiveTP adjustment needed.
+	effectiveTargetI, _, linearPossible := calculateLinearModeTarget(
 		measurement.InputI,
 		measurement.InputTP,
-		config.LoudnormTargetI,
-		config.LoudnormTargetTP,
-	)
-	limiterGain := config.LoudnormTargetI - measurement.InputI
-
-	// Calculate effective target I that ensures linear mode (no dynamic fallback)
-	// loudnorm requires: measured_TP + (target_I - measured_I) <= target_TP for linear mode
-	//
-	// When the limiter is enabled, loudnorm sees the LIMITED peaks (limiterCeiling),
-	// not the original measured peaks. When clamped with pre-gain active, the
-	// re-derived ceiling replaces the clamped value.
-	preGainDB, reDerivedCeiling := calculatePreGain(
-		measurement.InputI, config.LoudnormTargetI, config.LoudnormTargetTP,
-	)
-	effectiveTP := measurement.InputTP
-	effectiveMeasuredI := measurement.InputI
-	if limiterNeeded && !limiterClamped {
-		effectiveTP = limiterCeiling
-	} else if limiterNeeded && limiterClamped {
-		effectiveTP = reDerivedCeiling
-		effectiveMeasuredI = measurement.InputI + preGainDB
-	}
-	effectiveTargetI, _, linearPossible := calculateLinearModeTarget(
-		effectiveMeasuredI,
-		effectiveTP,
 		config.LoudnormTargetI,
 		config.LoudnormTargetTP,
 	)
@@ -515,7 +516,7 @@ func ApplyNormalisation(
 	effectiveConfig.LoudnormTargetI = effectiveTargetI
 
 	// Pass 4: Apply loudnorm with linear=true and the measurements
-	finalLUFS, finalTP, finalMeasurements, loudnormStats, _, _, err := applyLoudnormAndMeasure(inputPath, &effectiveConfig, measurement, inputMeasurements, progressCallback)
+	finalLUFS, finalTP, finalMeasurements, loudnormStats, err := applyLoudnormAndMeasure(inputPath, &effectiveConfig, measurement, inputMeasurements, preGainDB, limiterCeiling, limiterNeeded, progressCallback)
 	if err != nil {
 		return nil, fmt.Errorf("loudnorm application failed: %w", err)
 	}
@@ -553,20 +554,25 @@ func ApplyNormalisation(
 // applyLoudnormAndMeasure applies loudnorm's second pass to the audio file and measures the result.
 // Uses in-place processing: reads input, applies loudnorm, writes to temp file, renames.
 //
-// Filter chain: loudnorm → astats → aspectralstats → ebur128 → resample
+// Filter chain: [volume+alimiter] → loudnorm → [adeclick] → astats → aspectralstats → ebur128 → resample
 //
 // This is the second pass of loudnorm's two-pass workflow. The first pass
 // measurements come from measureWithLoudnorm() (stored in LoudnormMeasurement).
+// Pre-computed limiter values (preGainDB, ceiling, needsLimiting) are passed through
+// from ApplyNormalisation, which derives them from Pass 2 ebur128 measurements.
 //
 // Returns the measured integrated loudness, true peak, full output measurements,
-// loudnorm diagnostic stats, pre-gain amount in dB, and whether the ceiling was clamped.
+// and loudnorm diagnostic stats.
 func applyLoudnormAndMeasure(
 	inputPath string,
 	config *FilterChainConfig,
 	measurement *LoudnormMeasurement,
 	inputMeasurements *AudioMeasurements,
+	preGainDB float64,
+	ceiling float64,
+	needsLimiting bool,
 	progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements),
-) (float64, float64, *OutputMeasurements, *LoudnormStats, float64, bool, error) {
+) (float64, float64, *OutputMeasurements, *LoudnormStats, error) {
 	// Start capturing loudnorm's JSON output for diagnostics
 	startLoudnormCapture()
 
@@ -579,7 +585,7 @@ func applyLoudnormAndMeasure(
 	// Open input file
 	reader, metadata, err := audio.OpenAudioFile(inputPath)
 	if err != nil {
-		return 0.0, 0.0, nil, getLoudnormStats(), 0.0, false, fmt.Errorf("failed to open input: %w", err)
+		return 0.0, 0.0, nil, getLoudnormStats(), fmt.Errorf("failed to open input: %w", err)
 	}
 	defer reader.Close()
 
@@ -591,8 +597,8 @@ func applyLoudnormAndMeasure(
 	}
 	tempPath := strings.TrimSuffix(inputPath, ext) + ".loudnorm.tmp" + ext
 
-	// Build Pass 3 filter graph: loudnorm (second pass with linear=true) → ebur128 (validation)
-	filterSpec, preGainDB, limiterClamped := buildLoudnormFilterSpec(config, measurement)
+	// Build Pass 4 filter graph: loudnorm (second pass with linear=true) → ebur128 (validation)
+	filterSpec := buildLoudnormFilterSpec(config, measurement, preGainDB, ceiling, needsLimiting)
 
 	// Create filter graph
 	filterGraph, bufferSrcCtx, bufferSinkCtx, err := createLoudnormFilterGraph(
@@ -600,7 +606,7 @@ func applyLoudnormAndMeasure(
 		filterSpec,
 	)
 	if err != nil {
-		return 0.0, 0.0, nil, getLoudnormStats(), 0.0, false, fmt.Errorf("failed to create filter graph: %w", err)
+		return 0.0, 0.0, nil, getLoudnormStats(), fmt.Errorf("failed to create filter graph: %w", err)
 	}
 	// Note: We free the filter graph explicitly before getting stats, not via defer.
 	// loudnorm outputs its JSON when the filter graph is freed.
@@ -609,7 +615,7 @@ func applyLoudnormAndMeasure(
 	encoder, err := createOutputEncoder(tempPath, metadata, bufferSinkCtx)
 	if err != nil {
 		ffmpeg.AVFilterGraphFree(&filterGraph)
-		return 0.0, 0.0, nil, getLoudnormStats(), 0.0, false, fmt.Errorf("failed to create encoder: %w", err)
+		return 0.0, 0.0, nil, getLoudnormStats(), fmt.Errorf("failed to create encoder: %w", err)
 	}
 	defer encoder.Close()
 
@@ -652,25 +658,25 @@ func applyLoudnormAndMeasure(
 	})
 	if loopErr != nil {
 		ffmpeg.AVFilterGraphFree(&filterGraph)
-		return 0.0, 0.0, nil, getLoudnormStats(), 0.0, false, loopErr
+		return 0.0, 0.0, nil, getLoudnormStats(), loopErr
 	}
 
 	// Flush encoder
 	if err := encoder.Flush(); err != nil {
 		ffmpeg.AVFilterGraphFree(&filterGraph)
-		return 0.0, 0.0, nil, getLoudnormStats(), 0.0, false, fmt.Errorf("failed to flush encoder: %w", err)
+		return 0.0, 0.0, nil, getLoudnormStats(), fmt.Errorf("failed to flush encoder: %w", err)
 	}
 
 	// Close encoder before rename
 	if err := encoder.Close(); err != nil {
 		ffmpeg.AVFilterGraphFree(&filterGraph)
-		return 0.0, 0.0, nil, getLoudnormStats(), 0.0, false, fmt.Errorf("failed to close encoder: %w", err)
+		return 0.0, 0.0, nil, getLoudnormStats(), fmt.Errorf("failed to close encoder: %w", err)
 	}
 
 	// Atomic rename: temp file → original file (in-place update)
 	if err := os.Rename(tempPath, inputPath); err != nil {
 		ffmpeg.AVFilterGraphFree(&filterGraph)
-		return 0.0, 0.0, nil, getLoudnormStats(), 0.0, false, fmt.Errorf("failed to rename output: %w", err)
+		return 0.0, 0.0, nil, getLoudnormStats(), fmt.Errorf("failed to rename output: %w", err)
 	}
 
 	// Free filter graph before getting stats — loudnorm outputs JSON on graph destruction
@@ -708,15 +714,17 @@ func applyLoudnormAndMeasure(
 		}
 	}
 
-	return acc.ebur128OutputI, acc.ebur128OutputTP, finalMeasurements, stats, preGainDB, limiterClamped, nil
+	return acc.ebur128OutputI, acc.ebur128OutputTP, finalMeasurements, stats, nil
 }
 
 // buildLoudnormFilterSpec constructs the filter chain for Pass 4 loudnorm application.
 //
-// Chain order: [alimiter] → loudnorm → [adeclick] → astats → aspectralstats → ebur128 → resample
+// Chain order: [volume+alimiter] → loudnorm → [adeclick] → astats → aspectralstats → ebur128 → resample
 //
-// The alimiter is inserted when needed to create headroom for loudnorm's linear mode.
-// It uses CBS Volumax-inspired parameters for transparent peak limiting.
+// The caller pre-computes preGainDB, ceiling, and needsLimiting from Pass 2 measurements.
+// This function builds the prefix via buildPreLimiterPrefix() and passes measurement.InputI
+// and measurement.InputTP directly to loudnorm as measured_I and measured_TP - no manual
+// adjustment is needed because Pass 3 already measured through the same prefix chain.
 //
 // The loudnorm filter in second pass mode:
 // - Uses measurements from measureWithLoudnorm() (LoudnormMeasurement)
@@ -727,48 +735,15 @@ func applyLoudnormAndMeasure(
 // 192kHz and outputs f64. We want spectral measurements at the original sample rate
 // to match Pass 2's measurements for accurate comparison.
 //
-// Key parameters:
-// - I/TP/LRA: Target values (from config)
-// - measured_I/TP/LRA/thresh: Measurements from loudnorm first pass
-// - offset: Target offset from first pass (critical for linear mode)
-// - dual_mono: CRITICAL for mono files (corrects -3 LU measurement error)
-// - linear: Enable linear mode (applies consistent gain, no adaptive EQ)
-//
 // Per ffmpeg-loudnorm-helper: the offset parameter MUST come from loudnorm's own
 // first pass measurement, not from external calculations.
-func buildLoudnormFilterSpec(config *FilterChainConfig, measurement *LoudnormMeasurement) (string, float64, bool) {
+func buildLoudnormFilterSpec(config *FilterChainConfig, measurement *LoudnormMeasurement, preGainDB float64, ceiling float64, needsLimiting bool) string {
 	var filters []string
 
-	// 1. Pre-limiting with adaptive ceiling (CBS Volumax-inspired peak limiter)
-	ceiling, needsLimiting, clamped := calculateLimiterCeiling(
-		measurement.InputI,
-		measurement.InputTP,
-		config.LoudnormTargetI,
-		config.LoudnormTargetTP,
-	)
-
-	// 1a. Pre-gain: when the ceiling is clamped, raise signal by the deficit
-	preGainDB, reDerivedCeiling := calculatePreGain(
-		measurement.InputI, config.LoudnormTargetI, config.LoudnormTargetTP,
-	)
-	if clamped {
-		ceiling = reDerivedCeiling
-	}
-
-	// 1b. Build pre-limiter prefix (volume + alimiter)
+	// 1. Build pre-limiter prefix (volume + alimiter) from pre-computed values
 	prefix := buildPreLimiterPrefix(preGainDB, ceiling, needsLimiting)
 	if prefix != "" {
 		filters = append(filters, prefix)
-	}
-
-	// Derive effective measurements for loudnorm
-	effectiveMeasuredI := measurement.InputI
-	effectiveMeasuredTP := measurement.InputTP
-	if clamped {
-		effectiveMeasuredI = measurement.InputI + preGainDB
-		effectiveMeasuredTP = reDerivedCeiling
-	} else if needsLimiting {
-		effectiveMeasuredTP = ceiling
 	}
 
 	// 2. loudnorm (second pass mode)
@@ -778,17 +753,16 @@ func buildLoudnormFilterSpec(config *FilterChainConfig, measurement *LoudnormMea
 	// dual_mono=true: CRITICAL - treats mono as dual-mono for correct loudness measurement
 	// print_format=json: Outputs JSON with normalization_type, target_offset, output_i/tp/lra
 	//
-	// IMPORTANT: When pre-limiting is enabled, we pass the limiter ceiling as measured_TP
-	// so loudnorm knows the actual peak level it will receive. This allows it to apply
-	// full linear gain without falling back to dynamic mode.
-	// When pre-gain is active, measured_I and measured_TP reflect the post-gain values.
+	// Pass 3 now measures with the same volume+alimiter prefix, so measurement.InputI
+	// and measurement.InputTP already reflect the post-limiter signal. No manual
+	// effectiveMeasuredI/effectiveMeasuredTP adjustment needed.
 	loudnormFilter := fmt.Sprintf(
 		"loudnorm=I=%.2f:TP=%.2f:LRA=%.1f:measured_I=%.2f:measured_TP=%.2f:measured_LRA=%.2f:measured_thresh=%.2f:offset=%.2f:dual_mono=%s:linear=%s:print_format=json",
 		config.LoudnormTargetI,  // Using %.2f for precision on adjusted targets
 		config.LoudnormTargetTP, // Also %.2f for consistency
 		config.LoudnormTargetLRA,
-		effectiveMeasuredI,
-		effectiveMeasuredTP,
+		measurement.InputI,
+		measurement.InputTP,
 		measurement.InputLRA,
 		measurement.InputThresh,
 		measurement.TargetOffset, // From first pass - critical for linear mode
@@ -833,7 +807,7 @@ func buildLoudnormFilterSpec(config *FilterChainConfig, measurement *LoudnormMea
 	}
 	config.ResampleEnabled = wasEnabled
 
-	return strings.Join(filters, ","), preGainDB, clamped
+	return strings.Join(filters, ",")
 }
 
 // boolToString converts bool to loudnorm's expected string format

@@ -410,7 +410,18 @@ func TestBuildLoudnormFilterSpec_PreGain(t *testing.T) {
 				TargetOffset: tt.targetOffset,
 			}
 
-			filterSpec, preGainDB, clamped := buildLoudnormFilterSpec(config, measurement)
+			// Pre-compute values (caller's responsibility after Task 2.2)
+			ceiling, needsLimiting, clamped := calculateLimiterCeiling(
+				tt.inputI, tt.inputTP, config.LoudnormTargetI, config.LoudnormTargetTP,
+			)
+			preGainDB, reDerivedCeiling := calculatePreGain(
+				tt.inputI, config.LoudnormTargetI, config.LoudnormTargetTP,
+			)
+			if clamped {
+				ceiling = reDerivedCeiling
+			}
+
+			filterSpec := buildLoudnormFilterSpec(config, measurement, preGainDB, ceiling, needsLimiting)
 
 			// (a)/(b): Check volume filter presence
 			hasVolume := strings.Contains(filterSpec, "volume=")
@@ -418,14 +429,25 @@ func TestBuildLoudnormFilterSpec_PreGain(t *testing.T) {
 				t.Errorf("volume filter present = %v, want %v\nfilterSpec: %s", hasVolume, tt.wantVolumeFilter, filterSpec)
 			}
 
-			// Check clamped return value
+			// Check clamped value from pre-computation
 			if clamped != tt.wantClamped {
 				t.Errorf("clamped = %v, want %v", clamped, tt.wantClamped)
 			}
 
-			// (c): Check deficit value
+			// (c): Check deficit value from pre-computation
 			if math.Abs(preGainDB-tt.wantDeficit) > 0.01 {
 				t.Errorf("preGainDB = %.2f, want %.2f", preGainDB, tt.wantDeficit)
+			}
+
+			// (new): Verify measurement.InputI and measurement.InputTP are passed
+			// directly to loudnorm as measured_I and measured_TP (no adjustment)
+			wantDirectI := fmt.Sprintf("measured_I=%.2f", tt.inputI)
+			if !strings.Contains(filterSpec, wantDirectI) {
+				t.Errorf("loudnorm should pass measurement.InputI directly as measured_I=%q\nfilterSpec: %s", wantDirectI, filterSpec)
+			}
+			wantDirectTP := fmt.Sprintf("measured_TP=%.2f", tt.inputTP)
+			if !strings.Contains(filterSpec, wantDirectTP) {
+				t.Errorf("loudnorm should pass measurement.InputTP directly as measured_TP=%q\nfilterSpec: %s", wantDirectTP, filterSpec)
 			}
 
 			if tt.wantVolumeFilter {
@@ -435,27 +457,11 @@ func TestBuildLoudnormFilterSpec_PreGain(t *testing.T) {
 					t.Errorf("filter spec missing %q\nfilterSpec: %s", wantVolumeStr, filterSpec)
 				}
 
-				// (d): Re-derived ceiling used for alimiter, not -24.0 dBTP
-				// The re-derived ceiling should equal minLimiterCeilingDB exactly
-				// because the deficit is designed to close the gap precisely.
-				reDerivedCeiling := minLimiterCeilingDB
+				// (d): Re-derived ceiling used for alimiter
 				reDerivedLinear := math.Pow(10, reDerivedCeiling/20.0)
 				wantLimit := fmt.Sprintf("limit=%.6f", reDerivedLinear)
 				if !strings.Contains(filterSpec, wantLimit) {
 					t.Errorf("alimiter should use re-derived ceiling (limit=%.6f), not found\nfilterSpec: %s", reDerivedLinear, filterSpec)
-				}
-
-				// (e): Adjusted measured_I in loudnorm (post-gain I = inputI + deficit)
-				postGainI := tt.inputI + tt.wantDeficit
-				wantMeasuredI := fmt.Sprintf("measured_I=%.2f", postGainI)
-				if !strings.Contains(filterSpec, wantMeasuredI) {
-					t.Errorf("loudnorm should use adjusted measured_I=%q, not found\nfilterSpec: %s", wantMeasuredI, filterSpec)
-				}
-
-				// (f): Adjusted measured_TP in loudnorm (re-derived ceiling)
-				wantMeasuredTP := fmt.Sprintf("measured_TP=%.2f", reDerivedCeiling)
-				if !strings.Contains(filterSpec, wantMeasuredTP) {
-					t.Errorf("loudnorm should use adjusted measured_TP=%q, not found\nfilterSpec: %s", wantMeasuredTP, filterSpec)
 				}
 
 				// Verify volume filter appears before alimiter in the chain
@@ -467,24 +473,9 @@ func TestBuildLoudnormFilterSpec_PreGain(t *testing.T) {
 					t.Error("volume filter must appear before alimiter")
 				}
 			} else {
-				ceiling, needsLimiting, _ := calculateLimiterCeiling(
-					tt.inputI, tt.inputTP, config.LoudnormTargetI, config.LoudnormTargetTP,
-				)
 				hasLimiter := strings.Contains(filterSpec, "alimiter=")
 				if hasLimiter != needsLimiting {
 					t.Errorf("alimiter present = %v, want %v\nfilterSpec: %s", hasLimiter, needsLimiting, filterSpec)
-				}
-
-				if needsLimiting {
-					wantMeasuredI := fmt.Sprintf("measured_I=%.2f", tt.inputI)
-					if !strings.Contains(filterSpec, wantMeasuredI) {
-						t.Errorf("loudnorm should use original measured_I=%q when not clamped\nfilterSpec: %s", wantMeasuredI, filterSpec)
-					}
-
-					wantMeasuredTP := fmt.Sprintf("measured_TP=%.2f", ceiling)
-					if !strings.Contains(filterSpec, wantMeasuredTP) {
-						t.Errorf("loudnorm should use limiter ceiling measured_TP=%q when not clamped\nfilterSpec: %s", wantMeasuredTP, filterSpec)
-					}
 				}
 			}
 		})
@@ -678,12 +669,29 @@ func TestClampedTargetPropagation_Arithmetic(t *testing.T) {
 				InputThresh:  tt.measuredI - 10.0,
 				TargetOffset: -2.5,
 			}
-			_, preGainDB, clamped := buildLoudnormFilterSpec(config, measurement)
-			if !clamped {
-				t.Error("expected buildLoudnormFilterSpec to report clamped")
+
+			// Pre-compute values (caller's responsibility after Task 2.2)
+			bCeiling, bNeeded, bClamped := calculateLimiterCeiling(
+				tt.measuredI, tt.measuredTP, config.LoudnormTargetI, config.LoudnormTargetTP,
+			)
+			preGainDB, bReDerived := calculatePreGain(
+				tt.measuredI, config.LoudnormTargetI, config.LoudnormTargetTP,
+			)
+			if bClamped {
+				bCeiling = bReDerived
+			}
+
+			filterSpec := buildLoudnormFilterSpec(config, measurement, preGainDB, bCeiling, bNeeded)
+			if !bClamped {
+				t.Error("expected pre-computation to report clamped")
 			}
 			if math.Abs(preGainDB-deficit) > 0.01 {
 				t.Errorf("preGainDB = %.2f, want deficit = %.2f", preGainDB, deficit)
+			}
+
+			// Verify the filter spec contains the expected loudnorm parameters
+			if !strings.Contains(filterSpec, "loudnorm=") {
+				t.Error("filter spec missing loudnorm filter")
 			}
 		})
 	}
