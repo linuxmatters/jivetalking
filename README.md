@@ -168,8 +168,6 @@ FILTER ADAPTATION
   De-esser:       32% intensity
   LA-2A Thresh:   -28 dB
   LA-2A Ratio:    3.2:1
-  LA-2A High-Crest: active (deficit 2.6 dB, severity 0.33)
-  LA-2A Projected TP: 18.2 dBTP
 
 RECORDING TIPS
   ⚠ Your recording is a bit quiet - increasing your microphone gain

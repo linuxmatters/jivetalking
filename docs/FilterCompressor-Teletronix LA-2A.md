@@ -166,9 +166,9 @@ Clamped to 1–5 dB. Let normalisation handle the rest.
 | `LA2AThreshold` | float64 | −40 to −12 dB | −24 dB | Compression threshold |
 | `LA2ARatio` | float64 | 2.0–5.0 | 3.0 | Compression ratio |
 | `LA2AAttack` | float64 | 8–12 ms | 10 ms | Attack time |
-| `LA2ARelease` | float64 | 150–300 ms | 200 ms | Release time |
+| `LA2ARelease` | float64 | 150–350 ms | 200 ms | Release time |
 | `LA2AMakeup` | float64 | 1–5 dB | 2 dB | Makeup gain |
-| `LA2AKnee` | float64 | 3.5–5.0 | 4.0 | Knee softness |
+| `LA2AKnee` | float64 | 3.5–6.0 | 4.0 | Knee softness |
 | `LA2AMix` | float64 | 0.85–1.0 | 1.0 | Wet/dry mix |
 | `LA2AHighCrestActive` | bool | — | false | Whether high-crest overrides were applied |
 | `LA2AHighCrestDeficit` | float64 | dB | 0.0 | Predicted ceiling deficit |
