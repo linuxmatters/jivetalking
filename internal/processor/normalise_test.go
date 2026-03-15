@@ -2,7 +2,9 @@
 package processor
 
 import (
+	"fmt"
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -239,6 +241,36 @@ func TestCalculateLimiterCeiling(t *testing.T) {
 			wantNeeded:  true,
 			wantClamped: false,
 		},
+		{
+			name:       "Anna exact values - clamped with verifiable deficit",
+			measuredI:  -43.2,
+			measuredTP: -18.6,
+			targetI:    -16.0,
+			targetTP:   -2.0,
+			// gain = -16.0 - (-43.2) = 27.2 dB
+			// projected TP = -18.6 + 27.2 = 8.6 dBTP (exceeds -2.0)
+			// idealCeiling = -2.0 - 27.2 - 1.5 = -30.7 dBTP
+			// -30.7 < -24.0, so clamped to -24.0 dBTP
+			// deficit = minLimiterCeilingDB - idealCeiling = -24.0 - (-30.7) = 6.7 dB
+			wantCeiling: minCeiling,
+			wantNeeded:  true,
+			wantClamped: true,
+		},
+		{
+			name:       "exact clamping boundary - ceiling equals minimum exactly",
+			measuredI:  -36.5,
+			measuredTP: -15.0,
+			targetI:    -16.0,
+			targetTP:   -2.0,
+			// gain = -16.0 - (-36.5) = 20.5 dB
+			// projected TP = -15.0 + 20.5 = 5.5 dBTP (exceeds -2.0)
+			// ceiling = -2.0 - 20.5 - 1.5 = -24.0 dBTP (exactly minLimiterCeilingDB)
+			// Not clamped: ceiling < minLimiterCeilingDB is false when equal.
+			// deficit = 0 (no pre-gain needed at the boundary)
+			wantCeiling: minCeiling,
+			wantNeeded:  true,
+			wantClamped: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -254,6 +286,267 @@ func TestCalculateLimiterCeiling(t *testing.T) {
 			}
 			if needed && math.Abs(ceiling-tt.wantCeiling) > 0.01 {
 				t.Errorf("ceiling = %.2f dBTP, want %.2f dBTP", ceiling, tt.wantCeiling)
+			}
+
+			// Verify deficit arithmetic independently for clamped cases.
+			// deficit = minLimiterCeilingDB - (targetTP - gainRequired - safetyMarginDB)
+			if clamped {
+				gainRequired := tt.targetI - tt.measuredI
+				idealCeiling := tt.targetTP - gainRequired - safetyMarginDB
+				deficit := minLimiterCeilingDB - idealCeiling
+				if deficit <= 0 {
+					t.Errorf("deficit should be positive when clamped, got %.2f", deficit)
+				}
+				// Verify the ideal ceiling is below the minimum (confirms clamping)
+				if idealCeiling >= minLimiterCeilingDB {
+					t.Errorf("idealCeiling = %.2f should be below minLimiterCeilingDB (%.2f) when clamped",
+						idealCeiling, minLimiterCeilingDB)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildLoudnormFilterSpec_PreGain(t *testing.T) {
+	tests := []struct {
+		name             string
+		inputI           float64
+		inputTP          float64
+		inputLRA         float64
+		inputThresh      float64
+		targetOffset     float64
+		wantVolumeFilter bool    // (a)/(b): volume filter present or absent
+		wantDeficit      float64 // (c): expected deficit in dB (0 when no pre-gain)
+		wantClamped      bool
+	}{
+		{
+			name:         "clamped - very quiet audio (Anna-like)",
+			inputI:       -43.2,
+			inputTP:      -18.6,
+			inputLRA:     8.0,
+			inputThresh:  -53.0,
+			targetOffset: -2.5,
+			// gain = -16.0 - (-43.2) = 27.2
+			// idealCeiling = -2.0 - 27.2 - 1.5 = -30.7
+			// deficit = -24.0 - (-30.7) = 6.7
+			wantVolumeFilter: true,
+			wantDeficit:      6.7,
+			wantClamped:      true,
+		},
+		{
+			name:         "not clamped - typical podcast (Marius-like)",
+			inputI:       -24.9,
+			inputTP:      -5.0,
+			inputLRA:     6.0,
+			inputThresh:  -35.0,
+			targetOffset: -0.5,
+			// gain = -16.0 - (-24.9) = 8.9
+			// idealCeiling = -2.0 - 8.9 - 1.5 = -12.4 (above -24.0)
+			wantVolumeFilter: false,
+			wantDeficit:      0.0,
+			wantClamped:      false,
+		},
+		{
+			name:         "clamped - moderate deficit",
+			inputI:       -38.0,
+			inputTP:      -15.0,
+			inputLRA:     7.0,
+			inputThresh:  -48.0,
+			targetOffset: -1.0,
+			// gain = -16.0 - (-38.0) = 22.0
+			// idealCeiling = -2.0 - 22.0 - 1.5 = -25.5
+			// deficit = -24.0 - (-25.5) = 1.5
+			wantVolumeFilter: true,
+			wantDeficit:      1.5,
+			wantClamped:      true,
+		},
+		{
+			name:         "no limiter needed - quiet peaks",
+			inputI:       -20.0,
+			inputTP:      -10.0,
+			inputLRA:     5.0,
+			inputThresh:  -30.0,
+			targetOffset: 0.0,
+			// gain = -16.0 - (-20.0) = 4.0
+			// projectedTP = -10.0 + 4.0 = -6.0 (under -2.0, no limiter)
+			wantVolumeFilter: false,
+			wantDeficit:      0.0,
+			wantClamped:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := DefaultFilterConfig()
+			measurement := &LoudnormMeasurement{
+				InputI:       tt.inputI,
+				InputTP:      tt.inputTP,
+				InputLRA:     tt.inputLRA,
+				InputThresh:  tt.inputThresh,
+				TargetOffset: tt.targetOffset,
+			}
+
+			filterSpec, preGainDB, clamped := buildLoudnormFilterSpec(config, measurement)
+
+			// (a)/(b): Check volume filter presence
+			hasVolume := strings.Contains(filterSpec, "volume=")
+			if hasVolume != tt.wantVolumeFilter {
+				t.Errorf("volume filter present = %v, want %v\nfilterSpec: %s", hasVolume, tt.wantVolumeFilter, filterSpec)
+			}
+
+			// Check clamped return value
+			if clamped != tt.wantClamped {
+				t.Errorf("clamped = %v, want %v", clamped, tt.wantClamped)
+			}
+
+			// (c): Check deficit value
+			if math.Abs(preGainDB-tt.wantDeficit) > 0.01 {
+				t.Errorf("preGainDB = %.2f, want %.2f", preGainDB, tt.wantDeficit)
+			}
+
+			if tt.wantVolumeFilter {
+				// (c): Verify deficit value in the filter string
+				wantVolumeStr := fmt.Sprintf("volume=%.1fdB", tt.wantDeficit)
+				if !strings.Contains(filterSpec, wantVolumeStr) {
+					t.Errorf("filter spec missing %q\nfilterSpec: %s", wantVolumeStr, filterSpec)
+				}
+
+				// (d): Re-derived ceiling used for alimiter, not -24.0 dBTP
+				// The re-derived ceiling should equal minLimiterCeilingDB exactly
+				// because the deficit is designed to close the gap precisely.
+				reDerivedCeiling := minLimiterCeilingDB
+				reDerivedLinear := math.Pow(10, reDerivedCeiling/20.0)
+				wantLimit := fmt.Sprintf("limit=%.6f", reDerivedLinear)
+				if !strings.Contains(filterSpec, wantLimit) {
+					t.Errorf("alimiter should use re-derived ceiling (limit=%.6f), not found\nfilterSpec: %s", reDerivedLinear, filterSpec)
+				}
+
+				// (e): Adjusted measured_I in loudnorm (post-gain I = inputI + deficit)
+				postGainI := tt.inputI + tt.wantDeficit
+				wantMeasuredI := fmt.Sprintf("measured_I=%.2f", postGainI)
+				if !strings.Contains(filterSpec, wantMeasuredI) {
+					t.Errorf("loudnorm should use adjusted measured_I=%q, not found\nfilterSpec: %s", wantMeasuredI, filterSpec)
+				}
+
+				// (f): Adjusted measured_TP in loudnorm (re-derived ceiling)
+				wantMeasuredTP := fmt.Sprintf("measured_TP=%.2f", reDerivedCeiling)
+				if !strings.Contains(filterSpec, wantMeasuredTP) {
+					t.Errorf("loudnorm should use adjusted measured_TP=%q, not found\nfilterSpec: %s", wantMeasuredTP, filterSpec)
+				}
+
+				// Verify volume filter appears before alimiter in the chain
+				volumeIdx := strings.Index(filterSpec, "volume=")
+				alimiterIdx := strings.Index(filterSpec, "alimiter=")
+				if alimiterIdx == -1 {
+					t.Error("alimiter filter missing from spec when clamped")
+				} else if volumeIdx > alimiterIdx {
+					t.Error("volume filter must appear before alimiter")
+				}
+			} else if strings.Contains(filterSpec, "alimiter=") {
+				// Not clamped but limiter needed: verify original ceiling used
+				// (no volume filter, alimiter uses non-clamped ceiling)
+				_, needsLimiting, _ := calculateLimiterCeiling(
+					tt.inputI, tt.inputTP, config.LoudnormTargetI, config.LoudnormTargetTP,
+				)
+				if !needsLimiting {
+					t.Error("expected no alimiter for this case")
+				}
+
+				// Verify original measured_I is used (not adjusted)
+				wantMeasuredI := fmt.Sprintf("measured_I=%.2f", tt.inputI)
+				if !strings.Contains(filterSpec, wantMeasuredI) {
+					t.Errorf("loudnorm should use original measured_I=%q when not clamped\nfilterSpec: %s", wantMeasuredI, filterSpec)
+				}
+			}
+		})
+	}
+}
+
+func TestPreGainCeilingRederivation(t *testing.T) {
+	// Validates the mathematical invariant: applying the deficit as pre-gain
+	// converts a clamped scenario into a non-clamped scenario, with the
+	// re-derived ceiling landing at or near minLimiterCeilingDB.
+
+	tests := []struct {
+		name       string
+		measuredI  float64
+		measuredTP float64
+		targetI    float64
+		targetTP   float64
+	}{
+		{
+			name:       "Anna-like - very quiet, large deficit",
+			measuredI:  -43.2,
+			measuredTP: -18.6,
+			targetI:    -16.0,
+			targetTP:   -2.0,
+		},
+		{
+			name:       "moderate deficit - just below clamping",
+			measuredI:  -38.0,
+			measuredTP: -15.0,
+			targetI:    -16.0,
+			targetTP:   -2.0,
+		},
+		{
+			name:       "extreme quiet - large gain required",
+			measuredI:  -50.0,
+			measuredTP: -25.0,
+			targetI:    -16.0,
+			targetTP:   -2.0,
+		},
+		{
+			name:       "different target TP",
+			measuredI:  -40.0,
+			measuredTP: -16.0,
+			targetI:    -16.0,
+			targetTP:   -1.5,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Step 1: original values should be clamped
+			origCeiling, origNeeded, origClamped := calculateLimiterCeiling(
+				tt.measuredI, tt.measuredTP, tt.targetI, tt.targetTP)
+
+			if !origNeeded {
+				t.Fatal("expected limiter to be needed for original values")
+			}
+			if !origClamped {
+				t.Fatal("expected original ceiling to be clamped")
+			}
+			if math.Abs(origCeiling-minLimiterCeilingDB) > 0.01 {
+				t.Fatalf("clamped ceiling = %.2f, want %.2f", origCeiling, minLimiterCeilingDB)
+			}
+
+			// Step 2: calculate deficit
+			gainRequired := tt.targetI - tt.measuredI
+			idealCeiling := tt.targetTP - gainRequired - safetyMarginDB
+			deficit := minLimiterCeilingDB - idealCeiling
+
+			if deficit <= 0 {
+				t.Fatalf("deficit should be positive for clamped scenario, got %.2f", deficit)
+			}
+
+			// Step 3: apply deficit as pre-gain and re-derive ceiling
+			postGainI := tt.measuredI + deficit
+			postGainTP := tt.measuredTP + deficit
+
+			newCeiling, newNeeded, newClamped := calculateLimiterCeiling(
+				postGainI, postGainTP, tt.targetI, tt.targetTP)
+
+			if !newNeeded {
+				t.Error("expected limiter to still be needed after pre-gain")
+			}
+			if newClamped {
+				t.Error("expected re-derived ceiling to NOT be clamped after pre-gain")
+			}
+
+			// Step 4: re-derived ceiling should land at minLimiterCeilingDB
+			if math.Abs(newCeiling-minLimiterCeilingDB) > 0.01 {
+				t.Errorf("re-derived ceiling = %.2f dBTP, want %.2f dBTP (minLimiterCeilingDB)",
+					newCeiling, minLimiterCeilingDB)
 			}
 		})
 	}
