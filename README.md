@@ -39,11 +39,11 @@ Filter chain inspired by studio legends, tuned to your specific audio:
 
 Two-stage EBU R128 normalisation with a CBS Volumax-inspired twist:
 
-1. **Pre-gain** (when needed) applies static gain to raise very quiet recordings whose ideal limiter ceiling falls below the alimiter's -24.0 dBTP minimum, closing the deficit so the limiter can operate at a viable ceiling
-2. **Limiter** creates headroom by reducing true peaks
+1. **Pre-gain and ceiling** are calculated from Pass 2 measurements before Pass 3 runs; when the ideal limiter ceiling falls below alimiter's -24.0 dBTP minimum, a pre-gain amount is derived to close the deficit
+2. **Limiter** creates headroom by reducing true peaks; Pass 3 measures through the same `volume -> alimiter` prefix that Pass 4 will apply, so its `measured_I`/`measured_TP` already reflect the post-limiter signal
 3. **Loudnorm** applies linear gain to reach -16 LUFS without clipping or dynamic processing
 
-This order matters. The limiter provides breathing room so loudnorm can use its transparent linear mode rather than falling back to dynamic compression. When the limiter ceiling is clamped, the pre-gain volume filter raises the signal first so the limiter can use a re-derived ceiling instead of the clamped minimum.
+This order matters. The limiter provides breathing room so loudnorm can use its transparent linear mode rather than falling back to dynamic compression. Calculating pre-gain before Pass 3 ensures measurement and application see the same signal, so no manual adjustment is needed when building the Pass 4 filter graph.
 
 ### Why This Order Matters
 
