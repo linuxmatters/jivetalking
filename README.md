@@ -32,7 +32,7 @@ Filter chain inspired by studio legends, tuned to your specific audio:
 | **Highpass** | Drawmer DS201 | Removes subsonic rumble (60-120 Hz, adaptive to spectral content) |
 | **Noise reduction** | Non-Local Means | Adaptive anlmdn denoiser; compand residual suppression added when a noise profile is available |
 | **Gate** | DS201 expander | Soft expansion for natural inter-phrase cleanup; breath reduction option positions threshold between noise floor and quiet speech level |
-| **Compressor** | Teletronix LA-2A | Programme-dependent optical compression; ratio and release adapt to kurtosis and flux |
+| **Compressor** | Teletronix LA-2A | Programme-dependent optical compression; ratio and release adapt to kurtosis and flux. High-crest override pushes ratio, threshold, release, and knee when predicted limiter ceiling deficit is positive |
 | **De-esser** | — | Adaptive intensity (0.0-0.6) based on spectral centroid and rolloff |
 
 ### Pass 3 & 4: Loudness Normalisation
@@ -168,6 +168,8 @@ FILTER ADAPTATION
   De-esser:       32% intensity
   LA-2A Thresh:   -28 dB
   LA-2A Ratio:    3.2:1
+  LA-2A High-Crest: active (deficit 2.6 dB, severity 0.33)
+  LA-2A Projected TP: 18.2 dBTP
 
 RECORDING TIPS
   ⚠ Your recording is a bit quiet - increasing your microphone gain

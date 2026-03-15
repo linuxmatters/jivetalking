@@ -38,13 +38,39 @@ Jivetalking captures the LA-2A's programme-dependent behaviour through FFmpeg's 
 |-------------------|------------------------|
 | Fixed 10ms attack | Base 10ms with ±2ms transient adaptation |
 | Two-stage release | LRA + spectral flux determine release time |
-| Programme-dependent ratio | Spectral kurtosis modulates 2.5–3.5:1 range |
+| Programme-dependent ratio | Spectral kurtosis modulates 2.5–3.5:1 range; high-crest override can push toward 5.0:1 based on deficit severity |
 | Soft knee | Centroid-adaptive knee (3.5–5.0) |
 | Warmth on dark voices | Skewness detection triggers knee + release boost |
 
 ---
 
 ## Adaptive Parameter Tuning
+
+### High-Crest Override
+
+When a recording's predicted limiter ceiling deficit is positive, the sub-tuners alone cannot prevent Pass 4's alimiter from clamping. The high-crest override detects this condition using Pass 1 measurements and applies proportional floor values that sub-tuners cannot reduce below.
+
+**Detection** mirrors `calculateLimiterCeiling()` in `normalise.go`:
+
+```
+gainRequired = NormTargetLUFS - InputI
+projectedTP  = InputTP + gainRequired
+idealCeiling = LoudnormTargetTP - gainRequired - safetyMargin
+deficit      = minLimiterCeilingDB - idealCeiling
+```
+
+When `deficit > 0`, severity scales linearly: `clamp(deficit / 8.0, 0.0, 1.0)`.
+
+**Override floors** (linear interpolation from severity 0.0 to 1.0):
+
+| Parameter | Default | At severity 1.0 | Formula | Enforcement |
+|-----------|---------|-----------------|---------|-------------|
+| Threshold | -18 dB | -40 dB | `lerp(-18.0, -40.0, severity)` | `min(tunerResult, floor)` |
+| Ratio | 3.0 | 5.0 | `lerp(3.0, 5.0, severity)` | `max(tunerResult, floor)` |
+| Release | 200 ms | 350 ms | `lerp(200.0, 350.0, severity)` | `max(tunerResult, floor)` |
+| Knee | 4.0 | 6.0 | `lerp(4.0, 6.0, severity)` | `max(tunerResult, floor)` |
+
+The override blends from no change (deficit just above 0) to maximum aggressiveness (deficit >= 8 dB). Sub-tuners may push values beyond the floor but cannot pull them back.
 
 ### Attack: Preserving Consonant "Pluck"
 
@@ -68,6 +94,7 @@ The T4 cell's two-stage release gives the LA-2A its breathing room. We approxima
 
 **Warm voice boost:** Dark voices (skewness > 1.5) add 30ms release to preserve body.
 **Heavy compression boost:** Large LUFS gap (>15dB) adds 50ms, mimicking the T4's slower recovery after sustained compression.
+**High-crest override:** When active, extends the release range to 350 ms to accommodate recordings with large predicted ceiling deficits.
 
 ### Ratio: The Levelling Character
 
@@ -91,7 +118,7 @@ The LA-2A's "Peak Reduction" knob sets threshold relative to the incoming signal
 | 20–30 dB | 15 dB | Standard LA-2A |
 | < 20 dB | 10 dB | Light levelling |
 
-Threshold range: −40 dB to −12 dB (clamped for safety).
+Threshold range: -40 dB to -12 dB (clamped for safety). The high-crest override can push threshold to -40 dB, beyond the range the normal tuner typically selects.
 
 ### Knee: T4 Softness
 
@@ -143,6 +170,10 @@ Clamped to 1–5 dB. Let normalisation handle the rest.
 | `LA2AMakeup` | float64 | 1–5 dB | 2 dB | Makeup gain |
 | `LA2AKnee` | float64 | 3.5–5.0 | 4.0 | Knee softness |
 | `LA2AMix` | float64 | 0.85–1.0 | 1.0 | Wet/dry mix |
+| `LA2AHighCrestActive` | bool | — | false | Whether high-crest overrides were applied |
+| `LA2AHighCrestDeficit` | float64 | dB | 0.0 | Predicted ceiling deficit |
+| `LA2AHighCrestSeverity` | float64 | 0.0–1.0 | 0.0 | Override scaling factor |
+| `LA2AHighCrestProjectedTP` | float64 | dBTP | 0.0 | Projected true peak before compression |
 
 ### FFmpeg Filter Specification
 
