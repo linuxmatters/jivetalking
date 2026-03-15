@@ -419,6 +419,7 @@ func ApplyNormalisation(
 	// When clamped with pre-gain active, the re-derived ceiling (post-gain) replaces
 	// the clamped value - pre-gain converts a clamped scenario into a non-clamped one.
 	effectiveTP := measurement.InputTP
+	effectiveMeasuredI := measurement.InputI
 	if limiterNeeded && !limiterClamped {
 		effectiveTP = limiterCeiling
 	} else if limiterNeeded && limiterClamped {
@@ -431,9 +432,13 @@ func ApplyNormalisation(
 		newGainRequired := config.LoudnormTargetI - postGainI
 		reDerivedCeiling := config.LoudnormTargetTP - newGainRequired - safetyMarginDB
 		effectiveTP = reDerivedCeiling
+		// Use post-gain I for the linear mode check: pre-gain raises the signal
+		// before loudnorm sees it, so the linear mode constraint is satisfied
+		// at a higher target when the input is louder.
+		effectiveMeasuredI = postGainI
 	}
 	effectiveTargetI, _, linearPossible := calculateLinearModeTarget(
-		measurement.InputI,
+		effectiveMeasuredI,
 		effectiveTP,
 		config.LoudnormTargetI,
 		config.LoudnormTargetTP,
