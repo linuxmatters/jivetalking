@@ -208,7 +208,7 @@ type FilterChainConfig struct {
 	// Diagnostic: high-crest override (deficit-based detection)
 	LA2AHighCrestActive      bool    // Whether high-crest overrides were applied (deficit > 0)
 	LA2AHighCrestDeficit     float64 // Predicted ceiling deficit in dB (0.0 when inactive)
-	LA2AHighCrestSeverity    float64 // 0.0-1.0 scaling factor (clamp(deficit / 8.0, 0.0, 1.0))
+	LA2AHighCrestSeverity    float64 // 0.0-1.0 scaling factor (clamp(deficit / 6.0, 0.0, 1.0))
 	LA2AHighCrestProjectedTP float64 // Projected true peak before compression (dBTP)
 
 	// De-esser (deesser) - removes harsh sibilance automatically
