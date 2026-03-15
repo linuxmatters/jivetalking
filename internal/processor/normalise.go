@@ -799,13 +799,9 @@ func buildLoudnormFilterSpec(config *FilterChainConfig, measurement *LoudnormMea
 
 	// 7. Resample back to output format (44.1kHz/s16/mono)
 	// Required because ebur128 outputs f64 at 192kHz; encoder expects s16 at 44.1kHz
-	// Temporarily enable resample to get the filter spec, then restore
-	wasEnabled := config.ResampleEnabled
-	config.ResampleEnabled = true
-	if resampleSpec := config.buildResampleFilter(); resampleSpec != "" {
-		filters = append(filters, resampleSpec)
-	}
-	config.ResampleEnabled = wasEnabled
+	// Built directly rather than via buildResampleFilter() which is gated on ResampleEnabled
+	filters = append(filters, fmt.Sprintf("aformat=sample_rates=%d:channel_layouts=mono:sample_fmts=%s,asetnsamples=n=%d",
+		config.ResampleSampleRate, config.ResampleFormat, config.ResampleFrameSize))
 
 	return strings.Join(filters, ",")
 }

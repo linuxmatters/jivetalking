@@ -482,6 +482,25 @@ func TestBuildLoudnormFilterSpec_PreGain(t *testing.T) {
 	}
 }
 
+func TestBuildLoudnormFilterSpec_DoesNotMutateConfig(t *testing.T) {
+	config := DefaultFilterConfig()
+	config.ResampleEnabled = false
+
+	measurement := &LoudnormMeasurement{
+		InputI:       -24.0,
+		InputTP:      -5.0,
+		InputLRA:     6.0,
+		InputThresh:  -34.0,
+		TargetOffset: -0.5,
+	}
+
+	_ = buildLoudnormFilterSpec(config, measurement, 0, -1.0, false)
+
+	if config.ResampleEnabled {
+		t.Error("buildLoudnormFilterSpec mutated config.ResampleEnabled")
+	}
+}
+
 func TestPreGainCeilingRederivation(t *testing.T) {
 	// Validates the mathematical invariant: applying the deficit as pre-gain
 	// converts a clamped scenario into a non-clamped scenario, with the
