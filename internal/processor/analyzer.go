@@ -326,7 +326,6 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 	const intervalDuration = 250 * time.Millisecond
 	var intervals []IntervalSample
 	var intervalAcc intervalAccumulator
-	intervalAcc.reset() // Initialize with proper defaults
 	var intervalStartTime time.Duration
 
 	// Track input frame time (before filter graph, which upsamples to 192kHz)

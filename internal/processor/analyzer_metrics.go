@@ -301,33 +301,10 @@ func (a *intervalAccumulator) finalize(timestamp time.Duration) IntervalSample {
 
 // reset clears the accumulator for the next interval.
 func (a *intervalAccumulator) reset() {
-	a.frameCount = 0
-
-	// Raw sample RMS and peak
-	a.rawSumSquares = 0
-	a.rawSampleCount = 0
-	a.rawPeakAbs = 0
-
-	// aspectralstats
-	a.spectralMeanSum = 0
-	a.spectralVarianceSum = 0
-	a.spectralCentroidSum = 0
-	a.spectralSpreadSum = 0
-	a.spectralSkewnessSum = 0
-	a.spectralKurtosisSum = 0
-	a.spectralEntropySum = 0
-	a.spectralFlatnessSum = 0
-	a.spectralCrestSum = 0
-	a.spectralFluxSum = 0
-	a.spectralSlopeSum = 0
-	a.spectralDecreaseSum = 0
-	a.spectralRolloffSum = 0
-
-	// ebur128
-	a.momentaryLUFSSum = 0
-	a.shortTermLUFSSum = 0
-	a.truePeakMax = -120.0
-	a.samplePeakMax = -120.0
+	*a = intervalAccumulator{
+		truePeakMax:   -120.0,
+		samplePeakMax: -120.0,
+	}
 }
 
 // Cached metadata keys for frame extraction - avoids per-frame C string allocations
