@@ -601,7 +601,7 @@ func applyLoudnormAndMeasure(
 	filterSpec := buildLoudnormFilterSpec(config, measurement, preGainDB, ceiling, needsLimiting)
 
 	// Create filter graph
-	filterGraph, bufferSrcCtx, bufferSinkCtx, err := createLoudnormFilterGraph(
+	filterGraph, bufferSrcCtx, bufferSinkCtx, err := setupFilterGraph(
 		reader.GetDecoderContext(),
 		filterSpec,
 	)
@@ -812,11 +812,4 @@ func boolToString(b bool) string {
 		return "true"
 	}
 	return "false"
-}
-
-// createLoudnormFilterGraph creates a filter graph for loudnorm normalisation.
-// Reuses the existing setupFilterGraph function from filters.go for consistency.
-func createLoudnormFilterGraph(decoderCtx *ffmpeg.AVCodecContext, filterSpec string) (*ffmpeg.AVFilterGraph, *ffmpeg.AVFilterContext, *ffmpeg.AVFilterContext, error) {
-	// Use existing setupFilterGraph helper (defined in filters.go)
-	return setupFilterGraph(decoderCtx, filterSpec)
 }
