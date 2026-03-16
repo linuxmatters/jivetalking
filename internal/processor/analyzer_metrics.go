@@ -453,6 +453,29 @@ func (b *baseMetadataAccumulators) accumulateSpectral(spectral SpectralMetrics) 
 	b.spectralFrameCount++
 }
 
+// finalizeSpectral returns averaged spectral metrics from the accumulated sums.
+// Returns zero-value SpectralMetrics when no spectral frames were accumulated.
+func (b *baseMetadataAccumulators) finalizeSpectral() SpectralMetrics {
+	if b.spectralFrameCount == 0 {
+		return SpectralMetrics{}
+	}
+	return SpectralMetrics{
+		Mean:     b.spectralMeanSum,
+		Variance: b.spectralVarianceSum,
+		Centroid: b.spectralCentroidSum,
+		Spread:   b.spectralSpreadSum,
+		Skewness: b.spectralSkewnessSum,
+		Kurtosis: b.spectralKurtosisSum,
+		Entropy:  b.spectralEntropySum,
+		Flatness: b.spectralFlatnessSum,
+		Crest:    b.spectralCrestSum,
+		Flux:     b.spectralFluxSum,
+		Slope:    b.spectralSlopeSum,
+		Decrease: b.spectralDecreaseSum,
+		Rolloff:  b.spectralRolloffSum,
+	}.average(float64(b.spectralFrameCount))
+}
+
 // extractAstatsMetadata extracts all astats measurements from FFmpeg metadata.
 // These are cumulative values, so we keep the latest from each frame.
 // Includes conversions: linearRatioToDB for CrestFactor, linearSampleToDBFS for MinLevel/MaxLevel.
@@ -656,6 +679,23 @@ func (m SpectralMetrics) average(n float64) SpectralMetrics {
 		Decrease: m.Decrease / n,
 		Rolloff:  m.Rolloff / n,
 	}
+}
+
+// writeSpectralTo maps all 13 spectral fields to the corresponding BaseMeasurements fields.
+func (m SpectralMetrics) writeSpectralTo(b *BaseMeasurements) {
+	b.SpectralMean = m.Mean
+	b.SpectralVariance = m.Variance
+	b.SpectralCentroid = m.Centroid
+	b.SpectralSpread = m.Spread
+	b.SpectralSkewness = m.Skewness
+	b.SpectralKurtosis = m.Kurtosis
+	b.SpectralEntropy = m.Entropy
+	b.SpectralFlatness = m.Flatness
+	b.SpectralCrest = m.Crest
+	b.SpectralFlux = m.Flux
+	b.SpectralSlope = m.Slope
+	b.SpectralDecrease = m.Decrease
+	b.SpectralRolloff = m.Rolloff
 }
 
 // extractSpectralMetrics extracts all 13 aspectralstats measurements from FFmpeg metadata.
@@ -916,22 +956,7 @@ func finalizeOutputMeasurements(acc *outputMetadataAccumulators) *OutputMeasurem
 	}
 
 	// Calculate average spectral statistics from aspectralstats
-	if acc.spectralFrameCount > 0 {
-		frameCount := float64(acc.spectralFrameCount)
-		m.SpectralMean = acc.spectralMeanSum / frameCount
-		m.SpectralVariance = acc.spectralVarianceSum / frameCount
-		m.SpectralCentroid = acc.spectralCentroidSum / frameCount
-		m.SpectralSpread = acc.spectralSpreadSum / frameCount
-		m.SpectralSkewness = acc.spectralSkewnessSum / frameCount
-		m.SpectralKurtosis = acc.spectralKurtosisSum / frameCount
-		m.SpectralEntropy = acc.spectralEntropySum / frameCount
-		m.SpectralFlatness = acc.spectralFlatnessSum / frameCount
-		m.SpectralCrest = acc.spectralCrestSum / frameCount
-		m.SpectralFlux = acc.spectralFluxSum / frameCount
-		m.SpectralSlope = acc.spectralSlopeSum / frameCount
-		m.SpectralDecrease = acc.spectralDecreaseSum / frameCount
-		m.SpectralRolloff = acc.spectralRolloffSum / frameCount
-	}
+	acc.finalizeSpectral().writeSpectralTo(&m.BaseMeasurements)
 
 	return m
 }
