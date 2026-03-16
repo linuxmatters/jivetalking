@@ -24,6 +24,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v6
+        with:
+          submodules: recursive
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
@@ -116,6 +118,8 @@ jobs:
       security-events: write
     steps:
       - uses: actions/checkout@v6
+        with:
+          submodules: recursive
       - uses: actions/dependency-review-action@v4
         if: github.event_name == 'pull_request'
         with:
@@ -127,6 +131,7 @@ jobs:
       - name: Run govulncheck
         uses: golang/govulncheck-action@master
         with:
+          repo-checkout: false
           go-version-file: go.mod
           output-format: sarif
           output-file: govulncheck.sarif
