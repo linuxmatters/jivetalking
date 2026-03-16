@@ -91,22 +91,7 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 
 	// Measure silence and speech regions in Pass 2 output (before normalisation) for comparison
 	if filteredMeasurements != nil {
-		var silRegion *SilenceRegion
-		var spRegion *SpeechRegion
-		if measurements.NoiseProfile != nil {
-			silRegion = &SilenceRegion{
-				Start:    measurements.NoiseProfile.Start,
-				End:      measurements.NoiseProfile.Start + measurements.NoiseProfile.Duration,
-				Duration: measurements.NoiseProfile.Duration,
-			}
-		}
-		if measurements.SpeechProfile != nil {
-			spRegion = &SpeechRegion{
-				Start:    measurements.SpeechProfile.Region.Start,
-				End:      measurements.SpeechProfile.Region.End,
-				Duration: measurements.SpeechProfile.Region.Duration,
-			}
-		}
+		silRegion, spRegion := extractRegionPair(measurements)
 		if silRegion != nil || spRegion != nil {
 			silSample, spSample := MeasureOutputRegions(outputPath, silRegion, spRegion)
 			filteredMeasurements.SilenceSample = silSample
