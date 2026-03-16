@@ -1,0 +1,273 @@
+name: Builder 👷
+
+on:
+  push:
+    branches: [main]
+    tags: ["*.*.*"]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 9 * * 0" # Weekly
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-code:
+    name: Lint Code 🧹
+    runs-on: ubuntu-slim
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - name: Check cyclomatic complexity
+        run: |
+          go install github.com/fzipp/gocyclo/cmd/gocyclo@latest
+          gocyclo -top 20 -ignore '_test\.go$' -avg .
+      - name: Check ineffectual assignments
+        run: |
+          go install github.com/gordonklaus/ineffassign@latest
+          ineffassign ./...
+      - uses: golangci/golangci-lint-action@v9
+
+  lint-actions:
+    name: Lint Action ⚙️
+    runs-on: ubuntu-slim
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: freerangebytes/setup-actionlint@v0.1.1
+      - name: Run actionlint
+        run: |
+          echo "::add-matcher::.github/actionlint-matcher.json"
+          actionlint -color
+
+  coverage:
+    name: Coverage 📊
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Download ffmpeg-statigo libraries
+        run: |
+          cd third_party/ffmpeg-statigo
+          go run ./cmd/download-lib
+      - uses: robherley/go-test-action@v0
+        with:
+          testArguments: -coverprofile=coverage.out -covermode=atomic ./...
+          omit: untested
+
+  test:
+    name: Test 🧪
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+            runner: ubuntu-24.04
+          - os: linux
+            arch: arm64
+            runner: ubuntu-24.04-arm
+          - os: darwin
+            arch: amd64
+            runner: macos-15-intel
+          - os: darwin
+            arch: arm64
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Download ffmpeg-statigo libraries
+        run: |
+          cd third_party/ffmpeg-statigo
+          go run ./cmd/download-lib
+      - name: Test
+        run: go test ./...
+
+  security:
+    name: Security 🔒
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      security-events: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/dependency-review-action@v4
+        if: github.event_name == 'pull_request'
+        with:
+          fail-on-severity: moderate
+          allow-licenses: 0BSD, AFL-2.0, AFL-2.1, AFL-3.0, ANTLR-PD, ANTLR-PD-fallback, Apache-2.0, Artistic-2.0, BlueOak-1.0.0, BSD-1-Clause, BSD-2-Clause, BSD-2-Clause-FreeBSD, BSD-2-Clause-NetBSD, BSD-2-Clause-Patent, BSD-2-Clause-Views, BSD-3-Clause, BSD-3-Clause-Attribution, BSD-3-Clause-Clear, BSD-3-Clause-HP, BSD-3-Clause-LBNL, BSD-3-Clause-Modification, BSD-3-Clause-No-Nuclear-License-2014, BSD-3-Clause-No-Nuclear-Warranty, BSD-3-Clause-Open-MPI, BSD-3-Clause-Sun, BSD-Source-Code, BSL-1.0, bzip2-1.0.5, bzip2-1.0.6, CC0-1.0, CNRI-Python-GPL-Compatible, curl, ECL-2.0, FTL, GPL-2.0-or-later, GPL-3.0-only, GPL-3.0-or-later, HPND-Fenneberg-Livingston, HPND-sell-regexpr, HTMLTIDY, ICU, ImageMagick, Info-ZIP, Intel, Intel-ACPI, ISC, JasPer-2.0, LGPL-2.1-only, LGPL-2.1-or-later, LGPL-3.0-only, LGPL-3.0-or-later, Libpng, libpng-2.0, libtiff, Linux-OpenIB, LZMA-SDK-9.22, MIT, MIT-0, MIT-advertising, MIT-CMU, MIT-Modern-Variant, MIT-open-group, MITNFA, MPL-2.0, MulanPSL-1.0, MulanPSL-2.0, Multics, NCSA, Net-SNMP, NetCDF, NIST-Software, NTP, OLDAP-2.7, OLDAP-2.8, PostgreSQL, PSF-2.0, SGI-B-2.0, SHL-0.5, Spencer-99, SunPro, TCL, TCP-wrappers, UCAR, Unicode-DFS-2015, Unicode-DFS-2016, UnixCrypt, Unlicense, UPL-1.0, W3C, X11, XFree86-1.1, Xnet, Zlib, zlib-acknowledgement, ZPL-2.0, ZPL-2.1
+          fail-on-scopes: runtime
+          comment-summary-in-pr: on-failure
+
+      - name: Run govulncheck
+        uses: golang/govulncheck-action@master
+        with:
+          go-version-file: go.mod
+          output-format: sarif
+          output-file: govulncheck.sarif
+
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v4.32.6
+        if: always()
+        with:
+          sarif_file: govulncheck.sarif
+          category: govulncheck
+
+  sentinel:
+    name: Sentinel 👁️
+    needs: [lint-code, lint-actions, coverage, test, security]
+    if: always()
+    runs-on: ubuntu-slim
+    permissions: {}
+    steps:
+      - name: Check results
+        run: |
+          results='${{ toJSON(needs.*.result) }}'
+          echo "Job results: ${results}"
+          if echo "${results}" | jq -e 'any(. == "failure" or . == "cancelled")' > /dev/null 2>&1; then
+            echo "One or more jobs failed or were cancelled"
+            exit 1
+          fi
+          echo "All jobs passed"
+
+  build:
+    name: Build ${{ matrix.os }} ${{ matrix.arch }}
+    needs: [sentinel]
+    if: always() && needs.sentinel.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+            runner: ubuntu-24.04
+          - os: linux
+            arch: arm64
+            runner: ubuntu-24.04-arm
+          - os: darwin
+            arch: amd64
+            runner: macos-15-intel
+          - os: darwin
+            arch: arm64
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          submodules: recursive
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Download ffmpeg-statigo libraries
+        run: |
+          cd third_party/ffmpeg-statigo
+          go run ./cmd/download-lib
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building jivetalking $VERSION for ${{ matrix.os }}/${{ matrix.arch }}"
+      - name: Build binary
+        run: |
+          go build -ldflags="-X main.version=${{ steps.version.outputs.version }}" -o jivetalking-${{ matrix.os }}-${{ matrix.arch }} ./cmd/jivetalking
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: jivetalking-${{ matrix.os }}-${{ matrix.arch }}
+          path: jivetalking-${{ matrix.os }}-${{ matrix.arch }}
+
+  release:
+    name: Release 📦
+    needs: [build]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Get version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+          if [ -n "$PREV_TAG" ]; then
+            echo "## Changes since $PREV_TAG" > CHANGELOG.md
+            git log "$PREV_TAG"..HEAD --pretty=format:"* %s (%h)" >> CHANGELOG.md
+          else
+            echo "## Initial Release" > CHANGELOG.md
+            git log --pretty=format:"* %s (%h)" >> CHANGELOG.md
+          fi
+
+          cat >> CHANGELOG.md << 'NOTES'
+
+          ## Installation
+
+          Download the appropriate binary for your platform below, make it executable, and move it to your PATH:
+
+          ```bash
+          # Linux (amd64)
+          chmod +x jivetalking-linux-amd64
+          sudo mv jivetalking-linux-amd64 /usr/local/bin/jivetalking
+
+          # macOS (Apple Silicon)
+          chmod +x jivetalking-darwin-arm64
+          sudo mv jivetalking-darwin-arm64 /usr/local/bin/jivetalking
+          ```
+
+          ## Checksums
+
+          SHA256 checksums are provided below for verification.
+          NOTES
+
+          cat CHANGELOG.md
+      - name: Download all artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+          pattern: jivetalking-*
+          merge-multiple: false
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: Jivetalking ${{ steps.version.outputs.version }}
+          body_path: CHANGELOG.md
+          draft: false
+          prerelease: false
+          files: artifacts/jivetalking-*/jivetalking-*
