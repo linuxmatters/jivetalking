@@ -53,9 +53,6 @@ type intervalAccumulator struct {
 	rawSampleCount int64   // Total sample count for this interval
 	rawPeakAbs     float64 // Maximum absolute sample value (linear, 0.0-1.0) for this interval
 
-	// ─── Peak tracking (max per interval, from astats metadata) ─────────────────
-	peakMax float64 // Maximum peak level from astats (dBFS) - cumulative, less accurate
-
 	// ─── aspectralstats accumulators (valid per-window from FFmpeg) ─────────────
 	spectralMeanSum     float64
 	spectralVarianceSum float64
@@ -109,9 +106,6 @@ type intervalFrameMetrics struct {
 // add accumulates a frame's metrics into the interval.
 func (a *intervalAccumulator) add(m intervalFrameMetrics) {
 	// Peak levels: keep maximum
-	if a.frameCount == 0 || m.PeakLevel > a.peakMax {
-		a.peakMax = m.PeakLevel
-	}
 	if a.frameCount == 0 || m.TruePeak > a.truePeakMax {
 		a.truePeakMax = m.TruePeak
 	}
@@ -314,9 +308,6 @@ func (a *intervalAccumulator) reset() {
 	a.rawSampleCount = 0
 	a.rawPeakAbs = 0
 
-	// Peak tracking (astats metadata)
-	a.peakMax = -120.0
-
 	// aspectralstats
 	a.spectralMeanSum = 0
 	a.spectralVarianceSum = 0
@@ -392,15 +383,6 @@ var (
 	metaKeyEbur128SamplePeak   = ffmpeg.GlobalCStr("lavfi.r128.sample_peak")
 	metaKeyEbur128LRA          = ffmpeg.GlobalCStr("lavfi.r128.LRA")
 	metaKeyEbur128TargetThresh = ffmpeg.GlobalCStr("lavfi.r128.target_threshold")
-
-	// Silence detection metadata keys (from silencedetect filter)
-	// For mono audio these are lavfi.silence_start.1, lavfi.silence_end.1, lavfi.silence_duration.1
-	metaKeySilenceStart    = ffmpeg.GlobalCStr("lavfi.silence_start")
-	metaKeySilenceStart1   = ffmpeg.GlobalCStr("lavfi.silence_start.1")
-	metaKeySilenceEnd      = ffmpeg.GlobalCStr("lavfi.silence_end")
-	metaKeySilenceEnd1     = ffmpeg.GlobalCStr("lavfi.silence_end.1")
-	metaKeySilenceDuration = ffmpeg.GlobalCStr("lavfi.silence_duration")
-	metaKeySilenceDur1     = ffmpeg.GlobalCStr("lavfi.silence_duration.1")
 )
 
 // metadataAccumulators holds all accumulator variables for frame metadata extraction.
@@ -557,13 +539,6 @@ type metadataAccumulators struct {
 	ebur128InputSP  float64 // Sample peak
 	ebur128InputLRA float64
 	ebur128Found    bool
-
-	// Silence detection (collected across frames)
-	// silencedetect sets lavfi.silence_start on first frame of silence,
-	// then lavfi.silence_end and lavfi.silence_duration on first frame after silence ends
-	silenceRegions      []SilenceRegion
-	pendingSilenceStart float64 // Pending silence start timestamp (seconds)
-	hasPendingSilence   bool    // Whether we have a pending silence start
 }
 
 // getFloatMetadata extracts a float value from the metadata dictionary
@@ -827,56 +802,6 @@ func extractFrameMetadata(metadata *ffmpeg.AVDictionary, acc *metadataAccumulato
 
 	if value, ok := getFloatMetadata(metadata, metaKeyEbur128LRA); ok {
 		acc.ebur128InputLRA = value
-	}
-
-	// Extract silence detection metadata
-	// silencedetect sets lavfi.silence_start on the first frame of a silence region,
-	// then lavfi.silence_end and lavfi.silence_duration on the first frame after silence ends.
-	// For mono audio, these may be suffixed with .1
-	var silenceStart float64
-	var hasSilenceStart bool
-	if value, ok := getFloatMetadata(metadata, metaKeySilenceStart); ok {
-		silenceStart = value
-		hasSilenceStart = true
-	} else if value, ok := getFloatMetadata(metadata, metaKeySilenceStart1); ok {
-		silenceStart = value
-		hasSilenceStart = true
-	}
-
-	if hasSilenceStart {
-		acc.pendingSilenceStart = silenceStart
-		acc.hasPendingSilence = true
-	}
-
-	// Check for silence end - this completes a silence region
-	var silenceEnd, silenceDuration float64
-	var hasSilenceEnd bool
-	if value, ok := getFloatMetadata(metadata, metaKeySilenceEnd); ok {
-		silenceEnd = value
-		hasSilenceEnd = true
-	} else if value, ok := getFloatMetadata(metadata, metaKeySilenceEnd1); ok {
-		silenceEnd = value
-		hasSilenceEnd = true
-	}
-
-	if hasSilenceEnd {
-		// Get duration - try both keys
-		if value, ok := getFloatMetadata(metadata, metaKeySilenceDuration); ok {
-			silenceDuration = value
-		} else if value, ok := getFloatMetadata(metadata, metaKeySilenceDur1); ok {
-			silenceDuration = value
-		}
-
-		// Record the completed silence region
-		if acc.hasPendingSilence {
-			region := SilenceRegion{
-				Start:    time.Duration(acc.pendingSilenceStart * float64(time.Second)),
-				End:      time.Duration(silenceEnd * float64(time.Second)),
-				Duration: time.Duration(silenceDuration * float64(time.Second)),
-			}
-			acc.silenceRegions = append(acc.silenceRegions, region)
-			acc.hasPendingSilence = false
-		}
 	}
 }
 
