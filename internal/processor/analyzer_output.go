@@ -184,8 +184,8 @@ func measureOutputSilenceRegionFromReader(reader *audio.Reader, region SilenceRe
 
 // MeasureOutputRegions measures both silence and speech regions from the same
 // output file in a single open/close cycle. This avoids redundant file opens,
-// demuxing, and decoding that would occur when calling measureOutputSilenceRegion
-// and measureOutputSpeechRegion independently.
+// demuxing, and decoding that would occur if silence and speech regions were
+// measured in separate passes.
 //
 // Either region parameter may be nil to skip that measurement. Returns nil for
 // any skipped or failed measurement (non-fatal - matches existing behaviour).
