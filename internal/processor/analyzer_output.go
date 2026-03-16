@@ -182,6 +182,28 @@ func measureOutputSilenceRegionFromReader(reader *audio.Reader, region SilenceRe
 	}, nil
 }
 
+// extractRegionPair builds optional SilenceRegion and SpeechRegion pointers
+// from AudioMeasurements profiles. Returns (nil, nil) when both profiles are absent.
+func extractRegionPair(m *AudioMeasurements) (*SilenceRegion, *SpeechRegion) {
+	var silRegion *SilenceRegion
+	var spRegion *SpeechRegion
+	if m.NoiseProfile != nil {
+		silRegion = &SilenceRegion{
+			Start:    m.NoiseProfile.Start,
+			End:      m.NoiseProfile.Start + m.NoiseProfile.Duration,
+			Duration: m.NoiseProfile.Duration,
+		}
+	}
+	if m.SpeechProfile != nil {
+		spRegion = &SpeechRegion{
+			Start:    m.SpeechProfile.Region.Start,
+			End:      m.SpeechProfile.Region.End,
+			Duration: m.SpeechProfile.Region.Duration,
+		}
+	}
+	return silRegion, spRegion
+}
+
 // MeasureOutputRegions measures both silence and speech regions from the same
 // output file in a single open/close cycle. This avoids redundant file opens,
 // demuxing, and decoding that would occur if silence and speech regions were

@@ -691,22 +691,7 @@ func applyLoudnormAndMeasure(
 	// Measure silence and speech regions in final output (same regions as Pass 1 profiles)
 	// NOTE: inputPath now contains the normalised output after os.Rename above
 	if inputMeasurements != nil {
-		var silRegion *SilenceRegion
-		var spRegion *SpeechRegion
-		if inputMeasurements.NoiseProfile != nil {
-			silRegion = &SilenceRegion{
-				Start:    inputMeasurements.NoiseProfile.Start,
-				End:      inputMeasurements.NoiseProfile.Start + inputMeasurements.NoiseProfile.Duration,
-				Duration: inputMeasurements.NoiseProfile.Duration,
-			}
-		}
-		if inputMeasurements.SpeechProfile != nil {
-			spRegion = &SpeechRegion{
-				Start:    inputMeasurements.SpeechProfile.Region.Start,
-				End:      inputMeasurements.SpeechProfile.Region.End,
-				Duration: inputMeasurements.SpeechProfile.Region.Duration,
-			}
-		}
+		silRegion, spRegion := extractRegionPair(inputMeasurements)
 		if silRegion != nil || spRegion != nil {
 			silSample, spSample := MeasureOutputRegions(inputPath, silRegion, spRegion)
 			finalMeasurements.SilenceSample = silSample
