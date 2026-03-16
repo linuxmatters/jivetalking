@@ -328,7 +328,6 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 	var intervalAcc intervalAccumulator
 	intervalAcc.reset() // Initialize with proper defaults
 	var intervalStartTime time.Duration
-	var lastFrameTime time.Duration // Track for end-of-file handling
 
 	// Track input frame time (before filter graph, which upsamples to 192kHz)
 	var inputSamplesProcessed int64
@@ -352,8 +351,6 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 			// Calculate input frame time based on samples processed (before filter graph upsampling)
 			inputFrameTime := time.Duration(float64(inputSamplesProcessed) / inputSampleRate * float64(time.Second))
 			inputSamplesProcessed += int64(inputFrame.NbSamples())
-			lastFrameTime = inputFrameTime
-
 			// Accumulate RMS and peak from INPUT frame (before filter graph which upsamples to 192kHz)
 			// This gives accurate RMS and peak values matching the original audio levels
 			intervalAcc.addFrameRMSAndPeak(inputFrame)
@@ -400,7 +397,6 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 	}
 
 	// Note: We intentionally discard partial intervals with no data
-	_ = lastFrameTime // Silence unused variable warning (used for debugging if needed)
 
 	// Free the filter graph
 	ffmpeg.AVFilterGraphFree(&filterGraph)
@@ -442,20 +438,20 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 
 	// Calculate average spectral statistics from aspectralstats
 	if acc.spectralFrameCount > 0 {
-		frameCount := float64(acc.spectralFrameCount)
-		measurements.SpectralMean = acc.spectralMeanSum / frameCount
-		measurements.SpectralVariance = acc.spectralVarianceSum / frameCount
-		measurements.SpectralCentroid = acc.spectralCentroidSum / frameCount
-		measurements.SpectralSpread = acc.spectralSpreadSum / frameCount
-		measurements.SpectralSkewness = acc.spectralSkewnessSum / frameCount
-		measurements.SpectralKurtosis = acc.spectralKurtosisSum / frameCount
-		measurements.SpectralEntropy = acc.spectralEntropySum / frameCount
-		measurements.SpectralFlatness = acc.spectralFlatnessSum / frameCount
-		measurements.SpectralCrest = acc.spectralCrestSum / frameCount
-		measurements.SpectralFlux = acc.spectralFluxSum / frameCount
-		measurements.SpectralSlope = acc.spectralSlopeSum / frameCount
-		measurements.SpectralDecrease = acc.spectralDecreaseSum / frameCount
-		measurements.SpectralRolloff = acc.spectralRolloffSum / frameCount
+		spectralFrameCountF := float64(acc.spectralFrameCount)
+		measurements.SpectralMean = acc.spectralMeanSum / spectralFrameCountF
+		measurements.SpectralVariance = acc.spectralVarianceSum / spectralFrameCountF
+		measurements.SpectralCentroid = acc.spectralCentroidSum / spectralFrameCountF
+		measurements.SpectralSpread = acc.spectralSpreadSum / spectralFrameCountF
+		measurements.SpectralSkewness = acc.spectralSkewnessSum / spectralFrameCountF
+		measurements.SpectralKurtosis = acc.spectralKurtosisSum / spectralFrameCountF
+		measurements.SpectralEntropy = acc.spectralEntropySum / spectralFrameCountF
+		measurements.SpectralFlatness = acc.spectralFlatnessSum / spectralFrameCountF
+		measurements.SpectralCrest = acc.spectralCrestSum / spectralFrameCountF
+		measurements.SpectralFlux = acc.spectralFluxSum / spectralFrameCountF
+		measurements.SpectralSlope = acc.spectralSlopeSum / spectralFrameCountF
+		measurements.SpectralDecrease = acc.spectralDecreaseSum / spectralFrameCountF
+		measurements.SpectralRolloff = acc.spectralRolloffSum / spectralFrameCountF
 	}
 
 	// Store astats measurements (if captured)
