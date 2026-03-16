@@ -437,22 +437,7 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 	}
 
 	// Calculate average spectral statistics from aspectralstats
-	if acc.spectralFrameCount > 0 {
-		spectralFrameCountF := float64(acc.spectralFrameCount)
-		measurements.SpectralMean = acc.spectralMeanSum / spectralFrameCountF
-		measurements.SpectralVariance = acc.spectralVarianceSum / spectralFrameCountF
-		measurements.SpectralCentroid = acc.spectralCentroidSum / spectralFrameCountF
-		measurements.SpectralSpread = acc.spectralSpreadSum / spectralFrameCountF
-		measurements.SpectralSkewness = acc.spectralSkewnessSum / spectralFrameCountF
-		measurements.SpectralKurtosis = acc.spectralKurtosisSum / spectralFrameCountF
-		measurements.SpectralEntropy = acc.spectralEntropySum / spectralFrameCountF
-		measurements.SpectralFlatness = acc.spectralFlatnessSum / spectralFrameCountF
-		measurements.SpectralCrest = acc.spectralCrestSum / spectralFrameCountF
-		measurements.SpectralFlux = acc.spectralFluxSum / spectralFrameCountF
-		measurements.SpectralSlope = acc.spectralSlopeSum / spectralFrameCountF
-		measurements.SpectralDecrease = acc.spectralDecreaseSum / spectralFrameCountF
-		measurements.SpectralRolloff = acc.spectralRolloffSum / spectralFrameCountF
-	}
+	acc.finalizeSpectral().writeSpectralTo(&measurements.BaseMeasurements)
 
 	// Store astats measurements (if captured)
 	if acc.astatsFound {
