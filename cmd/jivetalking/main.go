@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -19,6 +20,8 @@ import (
 // Local dev builds: "dev"
 // Release builds: git tag (e.g. "0.1.0")
 var version = "dev"
+
+var errCancelledByUser = errors.New("cancelled by user")
 
 // CLI defines the command-line interface
 type CLI struct {
@@ -256,7 +259,7 @@ func runAnalysisOnly(files []string, log func(string, ...any)) {
 		}
 
 		if analysisErr != nil {
-			if analysisErr.Error() == "cancelled by user" {
+			if errors.Is(analysisErr, errCancelledByUser) {
 				// User pressed Ctrl+C - exit immediately, don't process remaining files
 				return
 			}
@@ -335,7 +338,7 @@ func runAnalysisWithTUI(inputPath string, config *processor.FilterChainConfig, l
 
 	// Check for user cancellation (TUI exited without completing analysis)
 	if !analysisModel.Done {
-		return nil, nil, fmt.Errorf("cancelled by user")
+		return nil, nil, errCancelledByUser
 	}
 
 	return analysisModel.Measurements, analysisModel.Config, nil
