@@ -260,7 +260,7 @@ jobs:
 
           cat CHANGELOG.md
       - name: Download all artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           pattern: jivetalking-*
