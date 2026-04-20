@@ -69,7 +69,7 @@ jobs:
         run: |
           cd third_party/ffmpeg-statigo
           go run ./cmd/download-lib
-      - uses: robherley/go-test-action@v0
+      - uses: robherley/go-test-action@v1
         with:
           testArguments: -coverprofile=coverage.out -covermode=atomic ./...
           omit: untested
