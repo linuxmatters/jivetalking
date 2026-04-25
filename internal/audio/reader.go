@@ -179,6 +179,11 @@ func (r *Reader) GetTimeBase() *ffmpeg.AVRational {
 	return r.fmtCtx.Streams().Get(uintptr(r.streamIdx)).TimeBase() //nolint:gosec // streamIdx is validated in OpenAudioFile
 }
 
+// FormatName returns the short name of the input container format (e.g. "flac", "wav").
+func (r *Reader) FormatName() string {
+	return r.fmtCtx.Iformat().Name().String()
+}
+
 // GetDecoderContext returns the decoder context (needed for filter graph setup)
 func (r *Reader) GetDecoderContext() *ffmpeg.AVCodecContext {
 	return r.decCtx

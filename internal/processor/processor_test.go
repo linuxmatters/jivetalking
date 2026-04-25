@@ -1,9 +1,63 @@
 package processor
 
 import (
+	"bytes"
 	"os"
+	"path/filepath"
 	"testing"
+
+	"github.com/linuxmatters/jivetalking/internal/audio"
 )
+
+// TestGenerateOutputPath verifies the intermediate output path is always FLAC.
+func TestGenerateOutputPath(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"lowercase wav", "/tmp/foo.wav", "/tmp/foo-processed.flac"},
+		{"uppercase WAV", "/tmp/foo.WAV", "/tmp/foo-processed.flac"},
+		{"flac input", "/tmp/foo.flac", "/tmp/foo-processed.flac"},
+		{"mp3 input", "/tmp/foo.mp3", "/tmp/foo-processed.flac"},
+		{"no extension", "/tmp/foo", "/tmp/foo-processed.flac"},
+		{"multi-dot", "/tmp/foo.bar.wav", "/tmp/foo.bar-processed.flac"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := generateOutputPath(tc.input)
+			if got != tc.want {
+				t.Errorf("generateOutputPath(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestGenerateLUFSOutputPath verifies the final LUFS-tagged output path is always FLAC.
+func TestGenerateLUFSOutputPath(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"lowercase wav", "/tmp/foo.wav", "/tmp/foo-LUFS-16-processed.flac"},
+		{"uppercase WAV", "/tmp/foo.WAV", "/tmp/foo-LUFS-16-processed.flac"},
+		{"flac input", "/tmp/foo.flac", "/tmp/foo-LUFS-16-processed.flac"},
+		{"mp3 input", "/tmp/foo.mp3", "/tmp/foo-LUFS-16-processed.flac"},
+		{"no extension", "/tmp/foo", "/tmp/foo-LUFS-16-processed.flac"},
+		{"multi-dot", "/tmp/foo.bar.wav", "/tmp/foo.bar-LUFS-16-processed.flac"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := generateLUFSOutputPath(tc.input, 16)
+			if got != tc.want {
+				t.Errorf("generateLUFSOutputPath(%q, 16) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
 
 // TestProcessAudio tests the complete three-pass processing pipeline
 func TestProcessAudio(t *testing.T) {
@@ -59,6 +113,30 @@ func TestProcessAudio(t *testing.T) {
 
 	// Clean up output file (cleanupTestAudio handles this but be explicit)
 	defer os.Remove(result.OutputPath)
+
+	// Verify the output extension is .flac regardless of input extension
+	if ext := filepath.Ext(result.OutputPath); ext != ".flac" {
+		t.Errorf("Output extension = %q, want %q (path: %s)", ext, ".flac", result.OutputPath)
+	}
+
+	// Verify the output container is the FLAC demuxer (not WAV with FLAC payload)
+	reader, _, err := audio.OpenAudioFile(result.OutputPath)
+	if err != nil {
+		t.Fatalf("Failed to reopen output file: %v", err)
+	}
+	defer reader.Close()
+	if got := reader.FormatName(); got != "flac" {
+		t.Errorf("Output FormatName = %q, want %q", got, "flac")
+	}
+
+	// Verify the file starts with the FLAC magic bytes ("fLaC")
+	header, err := os.ReadFile(result.OutputPath)
+	if err != nil {
+		t.Fatalf("Failed to read output file: %v", err)
+	}
+	if len(header) < 4 || !bytes.Equal(header[:4], []byte{0x66, 0x4C, 0x61, 0x43}) {
+		t.Errorf("Output magic bytes = %x, want fLaC (66 4C 61 43)", header[:min(4, len(header))])
+	}
 
 	// Verify measurements are populated
 	if result.Measurements == nil {
