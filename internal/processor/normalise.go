@@ -589,13 +589,8 @@ func applyLoudnormAndMeasure(
 	}
 	defer reader.Close()
 
-	// Create temporary output file with proper audio extension
-	// Extract extension from input file and use it for temp file
-	ext := filepath.Ext(inputPath)
-	if ext == "" {
-		ext = ".flac" // Default to FLAC if no extension
-	}
-	tempPath := strings.TrimSuffix(inputPath, ext) + ".loudnorm.tmp" + ext
+	// Create temporary output file - always FLAC since output is pinned to FLAC
+	tempPath := strings.TrimSuffix(inputPath, filepath.Ext(inputPath)) + ".loudnorm.tmp.flac"
 
 	// Build Pass 4 filter graph: loudnorm (second pass with linear=true) → ebur128 (validation)
 	filterSpec := buildLoudnormFilterSpec(config, measurement, preGainDB, ceiling, needsLimiting)

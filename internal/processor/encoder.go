@@ -26,9 +26,11 @@ func createOutputEncoder(outputPath string, _ *audio.Metadata, bufferSinkCtx *ff
 	// Allocate output format context
 	outputPathC := ffmpeg.ToCStr(outputPath)
 	defer outputPathC.Free()
+	fmtNameC := ffmpeg.ToCStr("flac")
+	defer fmtNameC.Free()
 
 	var fmtCtx *ffmpeg.AVFormatContext
-	if _, err := ffmpeg.AVFormatAllocOutputContext2(&fmtCtx, nil, nil, outputPathC); err != nil {
+	if _, err := ffmpeg.AVFormatAllocOutputContext2(&fmtCtx, nil, fmtNameC, outputPathC); err != nil {
 		return nil, fmt.Errorf("failed to allocate output context: %w", err)
 	}
 

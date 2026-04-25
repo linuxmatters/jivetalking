@@ -271,23 +271,24 @@ func processWithFilters(inputPath, outputPath string, config *FilterChainConfig,
 
 // generateOutputPath creates the intermediate output filename from the input filename.
 // This path is used during processing; the file is later renamed by generateLUFSOutputPath
-// to include the measured LUFS value.
+// to include the measured LUFS value. Output is always FLAC regardless of input extension.
 // Example: /path/to/audio.flac → /path/to/audio-processed.flac
+// Example: /path/to/audio.wav  → /path/to/audio-processed.flac
 func generateOutputPath(inputPath string) string {
 	dir := filepath.Dir(inputPath)
 	filename := filepath.Base(inputPath)
-	ext := filepath.Ext(filename)
-	nameWithoutExt := strings.TrimSuffix(filename, ext)
+	nameWithoutExt := strings.TrimSuffix(filename, filepath.Ext(filename))
 
-	return filepath.Join(dir, nameWithoutExt+"-processed"+ext)
+	return filepath.Join(dir, nameWithoutExt+"-processed.flac")
 }
 
 // generateLUFSOutputPath creates the final output filename with the measured LUFS value.
+// Output is always FLAC regardless of input extension.
 // Example: /path/to/audio.flac → /path/to/audio-LUFS-16-processed.flac
+// Example: /path/to/audio.wav  → /path/to/audio-LUFS-16-processed.flac
 func generateLUFSOutputPath(inputPath string, lufsValue int) string {
 	dir := filepath.Dir(inputPath)
 	filename := filepath.Base(inputPath)
-	ext := filepath.Ext(filename)
-	nameWithoutExt := strings.TrimSuffix(filename, ext)
-	return filepath.Join(dir, fmt.Sprintf("%s-LUFS-%d-processed%s", nameWithoutExt, lufsValue, ext))
+	nameWithoutExt := strings.TrimSuffix(filename, filepath.Ext(filename))
+	return filepath.Join(dir, fmt.Sprintf("%s-LUFS-%d-processed.flac", nameWithoutExt, lufsValue))
 }
