@@ -68,10 +68,24 @@ func generateTestAudio(t *testing.T, opts TestAudioOptions) string {
 
 	maxInt16 := float64(math.MaxInt16)
 
-	for i := 0; i < totalSamples; i++ {
+	for i := range totalSamples {
 		// Check if we're in the silence gap
 		if i >= silenceStart && i < silenceEnd && opts.SilenceGap.Duration > 0 {
-			samples[i] = 0
+			// When a noise floor is configured, the gap inherits it so the
+			// silence pipeline sees a real-room recording rather than digital
+			// silence. Without a noise floor, write literal zero to preserve
+			// behaviour for callers that want hard digital silence.
+			if noiseAmp > 0 {
+				sample := noiseAmp * nextRandom()
+				if sample > 1.0 {
+					sample = 1.0
+				} else if sample < -1.0 {
+					sample = -1.0
+				}
+				samples[i] = int16(sample * maxInt16)
+			} else {
+				samples[i] = 0
+			}
 			continue
 		}
 

@@ -325,6 +325,13 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 	// Interval sampling for silence detection (250ms windows)
 	const intervalDuration = 250 * time.Millisecond
 	var intervals []IntervalSample
+	// silenceIntervals is the prefix-restricted view fed to the silence pipeline
+	// (room-tone election, noise profile). When config.SilenceScanDuration is zero
+	// (no cap), it is aliased to intervals after the loop. When a cap is set, only
+	// intervals whose start time is before the cap are appended here. The whole-file
+	// intervals slice continues to feed speech detection and measurements.IntervalSamples
+	// so loudness, spectral, and reporting remain whole-file.
+	var silenceIntervals []IntervalSample
 	var intervalAcc intervalAccumulator
 	var intervalStartTime time.Duration
 
@@ -357,7 +364,11 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 			// Check if interval complete (250ms elapsed) based on input time
 			if inputFrameTime-intervalStartTime >= intervalDuration {
 				// Finalize and store completed interval
-				intervals = append(intervals, intervalAcc.finalize(intervalStartTime))
+				finalised := intervalAcc.finalize(intervalStartTime)
+				intervals = append(intervals, finalised)
+				if config.SilenceScanDuration > 0 && intervalStartTime < config.SilenceScanDuration {
+					silenceIntervals = append(silenceIntervals, finalised)
+				}
 				intervalStartTime = inputFrameTime
 				intervalAcc.reset()
 			}
@@ -392,7 +403,17 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 
 	// Finalize any remaining partial interval (if it has data)
 	if intervalAcc.rawSampleCount > 0 {
-		intervals = append(intervals, intervalAcc.finalize(intervalStartTime))
+		finalised := intervalAcc.finalize(intervalStartTime)
+		intervals = append(intervals, finalised)
+		if config.SilenceScanDuration > 0 && intervalStartTime < config.SilenceScanDuration {
+			silenceIntervals = append(silenceIntervals, finalised)
+		}
+	}
+
+	// When no cap is set, the silence pipeline reads the same whole-file slice as
+	// the rest of the analysis. Aliasing avoids duplicating every append above.
+	if config.SilenceScanDuration == 0 {
+		silenceIntervals = intervals
 	}
 
 	// Note: We intentionally discard partial intervals with no data
@@ -405,9 +426,9 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 	// This replaces the previous separate pre-scan pass
 
 	// Pre-compute silence detection medians (shared by noise estimation and candidate detection)
-	silMedians := computeSilenceMedians(intervals)
+	silMedians := computeSilenceMedians(silenceIntervals)
 
-	noiseFloorEstimate, silenceThreshold, ok := estimateNoiseFloorAndThreshold(intervals, silMedians)
+	noiseFloorEstimate, silenceThreshold, ok := estimateNoiseFloorAndThreshold(silenceIntervals, silMedians)
 	if !ok {
 		// Fallback if insufficient interval data (very short recordings)
 		noiseFloorEstimate = defaultNoiseFloor
@@ -523,11 +544,11 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 
 	// Detect silence regions using threshold already computed from interval distribution
 	// The silenceThreshold was calculated above via estimateNoiseFloorAndThreshold()
-	measurements.SilenceRegions = findSilenceCandidatesFromIntervals(intervals, silenceThreshold, silMedians)
+	measurements.SilenceRegions = findSilenceCandidatesFromIntervals(silenceIntervals, silenceThreshold, silMedians)
 
 	// Extract noise profile from best silence region (if available)
 	// Uses interval data for all measurements - no file re-reading required
-	silenceResult := findBestSilenceRegion(measurements.SilenceRegions, intervals, totalDuration)
+	silenceResult := findBestSilenceRegion(measurements.SilenceRegions, silenceIntervals, totalDuration)
 
 	// Store all evaluated candidates for reporting/debugging
 	measurements.SilenceCandidates = silenceResult.Candidates
@@ -548,7 +569,7 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 		wasRefined := refinedRegion.Start != originalRegion.Start || refinedRegion.Duration != originalRegion.Duration
 
 		// Extract noise profile from interval data (no file re-read)
-		if profile := extractNoiseProfileFromIntervals(refinedRegion, intervals); profile != nil {
+		if profile := extractNoiseProfileFromIntervals(refinedRegion, silenceIntervals); profile != nil {
 			noiseProfile = profile
 			measurements.NoiseProfile = profile
 
