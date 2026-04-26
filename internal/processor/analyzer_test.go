@@ -49,10 +49,6 @@ func TestAnalyzeAudio(t *testing.T) {
 			t.Fatalf("AnalyzeAudio failed: %v", err)
 		}
 
-		if measurements == nil {
-			t.Fatal("measurements is nil")
-		}
-
 		// Log measurements
 		t.Logf("Input Loudness: %.2f LUFS", measurements.InputI)
 		t.Logf("Input True Peak: %.2f dBTP", measurements.InputTP)
@@ -2437,9 +2433,6 @@ func TestAnalyzeAudio_SilenceScanDuration(t *testing.T) {
 	baseline, err := AnalyzeAudio(testFile, baselineConfig, nil)
 	if err != nil {
 		t.Fatalf("baseline AnalyzeAudio failed: %v", err)
-	}
-	if baseline == nil {
-		t.Fatal("baseline measurements are nil")
 	}
 	if baseline.NoiseProfile == nil {
 		t.Fatalf("baseline NoiseProfile is nil; the silence pipeline did not elect a region "+

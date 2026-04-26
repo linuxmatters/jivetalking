@@ -97,11 +97,6 @@ func TestProcessAudio(t *testing.T) {
 		t.Fatalf("ProcessAudio failed: %v", err)
 	}
 
-	// Verify we got a valid result
-	if result == nil {
-		t.Fatal("ProcessAudio returned nil result")
-	}
-
 	// Verify output file was created
 	if result.OutputPath == "" {
 		t.Fatal("ProcessAudio returned empty output path")
