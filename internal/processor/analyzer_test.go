@@ -1094,10 +1094,6 @@ func TestMeasureSpeechCandidateFromIntervals(t *testing.T) {
 
 		metrics := measureSpeechCandidateFromIntervals(region, intervals)
 
-		if metrics == nil {
-			t.Fatal("expected non-nil metrics")
-		}
-
 		// Check averaged values
 		if metrics.RMSLevel != -20.0 {
 			t.Errorf("RMSLevel = %.1f, want -20.0", metrics.RMSLevel)
@@ -1763,10 +1759,6 @@ func Test_measureOutputSilenceRegion(t *testing.T) {
 			t.Fatalf("measureOutputSilenceRegion failed: %v", err)
 		}
 
-		if metrics == nil {
-			t.Fatal("metrics is nil")
-		}
-
 		// Log all measurements for inspection
 		t.Logf("Silence Region Measurements:")
 		t.Logf("  RMSLevel: %.2f dBFS", metrics.RMSLevel)
@@ -1873,10 +1865,6 @@ func Test_measureOutputSpeechRegion(t *testing.T) {
 		metrics, err := measureOutputSpeechRegion(testFile, speechRegion)
 		if err != nil {
 			t.Fatalf("measureOutputSpeechRegion failed: %v", err)
-		}
-
-		if metrics == nil {
-			t.Fatal("metrics is nil")
 		}
 
 		// Log all measurements for inspection
