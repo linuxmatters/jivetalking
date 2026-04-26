@@ -1,14 +1,23 @@
-# See the documentation for all configuration options:
-# https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
-
 version: 2
 updates:
-  - package-ecosystem: "github-actions"
-    directory: "/"
+  - package-ecosystem: github-actions
+    directories:
+      - /
     schedule:
-      interval: "weekly"
+      interval: monthly
+    groups:
+      github-actions:
+        patterns:
+          - "*"
 
-  - package-ecosystem: "gomod"
-    directory: "/"
+  - package-ecosystem: gomod
+    directory: /
     schedule:
-      interval: "weekly"
+      interval: weekly
+    groups:
+      gomod:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "deps"
+      include: "scope"

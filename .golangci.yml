@@ -8,6 +8,7 @@ linters:
     - gocritic
     - gosec
     - misspell
+    - modernize
     - noctx
     - revive
     - staticcheck
@@ -52,7 +53,7 @@ linters:
       - legacy
       - std-error-handling
     paths:
-      - third_party$
+      - third_party/
       - builtin$
       - examples$
 formatters:
@@ -61,6 +62,6 @@ formatters:
   exclusions:
     generated: lax
     paths:
-      - third_party$
+      - third_party/
       - builtin$
       - examples$
