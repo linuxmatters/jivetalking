@@ -2464,9 +2464,6 @@ func TestAnalyzeAudio_SilenceScanDuration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("AnalyzeAudio failed: %v", err)
 		}
-		if got == nil {
-			t.Fatal("measurements are nil")
-		}
 
 		assertLoudnessMatches(t, got)
 
@@ -2496,9 +2493,6 @@ func TestAnalyzeAudio_SilenceScanDuration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("AnalyzeAudio failed: %v", err)
 		}
-		if got == nil {
-			t.Fatal("measurements are nil")
-		}
 
 		if len(got.SilenceRegions) != 0 {
 			t.Errorf("len(SilenceRegions) = %d, want 0 (cap should exclude silence at 8-55 s)",
@@ -2520,9 +2514,6 @@ func TestAnalyzeAudio_SilenceScanDuration(t *testing.T) {
 		got, err := AnalyzeAudio(testFile, config, nil)
 		if err != nil {
 			t.Fatalf("AnalyzeAudio failed: %v", err)
-		}
-		if got == nil {
-			t.Fatal("measurements are nil")
 		}
 
 		if got.NoiseProfile == nil {
@@ -2551,9 +2542,6 @@ func TestAnalyzeAudio_SilenceScanDuration(t *testing.T) {
 		got, err := AnalyzeAudio(testFile, config, nil)
 		if err != nil {
 			t.Fatalf("AnalyzeAudio failed: %v", err)
-		}
-		if got == nil {
-			t.Fatal("measurements are nil")
 		}
 
 		assertLoudnessMatches(t, got)
