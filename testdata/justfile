@@ -6,7 +6,7 @@ testdata := source_directory()
 
 # Test episode number (change this to test different episodes)
 
-episode := "77"
+episode := "79"
 
 # Get Mark's processed logs
 mark-logs:
@@ -19,7 +19,7 @@ mark-log-stash:
 # Process mark audio
 mark:
     @rm -f {{ testdata }}/LMP-{{ episode }}-mark-*-processed.*
-    @./jivetalking --debug --logs {{ testdata }}/LMP-{{ episode }}-mark.flac
+    @./jivetalking --debug --logs --silence-scan-duration=3m {{ testdata }}/LMP-{{ episode }}-mark.flac
     @just mark-logs
 
 # Get Martin's processed logs
@@ -33,7 +33,7 @@ martin-log-stash:
 # Process martin audio
 martin:
     @rm -f {{ testdata }}/LMP-{{ episode }}-martin-*-processed.*
-    @./jivetalking --debug --logs {{ testdata }}/LMP-{{ episode }}-martin.flac
+    @./jivetalking --debug --logs --silence-scan-duration=3m {{ testdata }}/LMP-{{ episode }}-martin.flac
     @just martin-logs
 
 # Get popey's processed logs
@@ -47,20 +47,20 @@ popey-log-stash:
 # Process popey audio
 popey:
     @rm -f {{ testdata }}/LMP-{{ episode }}-popey-*-processed.*
-    @./jivetalking --debug --logs {{ testdata }}/LMP-{{ episode }}-popey.flac
+    @./jivetalking --debug --logs --silence-scan-duration=3m {{ testdata }}/LMP-{{ episode }}-popey.flac
     @just popey-logs
 
 # Analyse Mark's audio
 mark-analysis:
-    @./jivetalking -a {{ testdata }}/LMP-{{ episode }}-mark.flac | tee {{ testdata }}/LMP-{{ episode }}-mark-analysis.log
+    @./jivetalking -a --silence-scan-duration=3m {{ testdata }}/LMP-{{ episode }}-mark.flac | tee {{ testdata }}/LMP-{{ episode }}-mark-analysis.log
 
 # Analyse Martin's audio
 martin-analysis:
-    @./jivetalking -a {{ testdata }}/LMP-{{ episode }}-martin.flac | tee {{ testdata }}/LMP-{{ episode }}-martin-analysis.log
+    @./jivetalking -a --silence-scan-duration=3m {{ testdata }}/LMP-{{ episode }}-martin.flac | tee {{ testdata }}/LMP-{{ episode }}-martin-analysis.log
 
 # Analyse popey's audio
 popey-analysis:
-    @./jivetalking -a {{ testdata }}/LMP-{{ episode }}-popey.flac | tee {{ testdata }}/LMP-{{ episode }}-popey-analysis.log
+    @./jivetalking -a --silence-scan-duration=3m {{ testdata }}/LMP-{{ episode }}-popey.flac | tee {{ testdata }}/LMP-{{ episode }}-popey-analysis.log
 
 # Process all presenters
 presenters: mark martin popey
