@@ -25,11 +25,12 @@ var errCancelledByUser = errors.New("cancelled by user")
 
 // CLI defines the command-line interface
 type CLI struct {
-	Version      bool     `short:"v" help:"Show version information"`
-	Debug        bool     `short:"d" help:"Enable debug logging to jivetalking-debug.log"`
-	Logs         bool     `help:"Save detailed analysis logs"`
-	AnalysisOnly bool     `short:"a" help:"Run analysis only (Pass 1), display results, skip processing"`
-	Files        []string `arg:"" name:"files" help:"Audio files to process" type:"existingfile" optional:""`
+	Version             bool          `short:"v" help:"Show version information"`
+	Debug               bool          `short:"d" help:"Enable debug logging to jivetalking-debug.log"`
+	Logs                bool          `help:"Save detailed analysis logs"`
+	AnalysisOnly        bool          `short:"a" help:"Run analysis only (Pass 1), display results, skip processing"`
+	SilenceScanDuration time.Duration `help:"Cap silence-candidate scan to the first DURATION of input (e.g. 30s, 1m30s). Faster on long files at the cost of coverage; loudness, true peak, LRA, spectral, and speech analysis remain whole-file. Fewer silence candidates also reach voice-activated detection when capped. 0s means scan the whole file." placeholder:"DURATION" default:"0s"`
+	Files               []string      `arg:"" name:"files" help:"Audio files to process" type:"existingfile" optional:""`
 }
 
 func main() {
@@ -61,8 +62,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	if cliArgs.SilenceScanDuration < 0 {
+		cli.PrintError(fmt.Sprintf("--silence-scan-duration must be >= 0, got %s", cliArgs.SilenceScanDuration))
+		os.Exit(1)
+	}
+
 	// Create default filter configuration
 	config := processor.DefaultFilterConfig()
+	config.SilenceScanDuration = cliArgs.SilenceScanDuration
 
 	// Open debug log file if --debug flag is set
 	var debugLog *os.File
@@ -81,7 +88,7 @@ func main() {
 
 	// Handle analysis-only mode: run Pass 1 and display results, skip TUI
 	if cliArgs.AnalysisOnly {
-		runAnalysisOnly(cliArgs.Files, log)
+		runAnalysisOnly(cliArgs.Files, config, log)
 		return
 	}
 
@@ -222,9 +229,7 @@ func (ph *progressHandler) callback(pass processor.PassNumber, passName string, 
 
 // runAnalysisOnly performs Pass 1 analysis on each file with a progress UI,
 // then displays results to console. Skips full 4-pass processing.
-func runAnalysisOnly(files []string, log func(string, ...any)) {
-	config := processor.DefaultFilterConfig()
-
+func runAnalysisOnly(files []string, config *processor.FilterChainConfig, log func(string, ...any)) {
 	// Check if we have a TTY for the progress UI
 	hasTTY := isTTY()
 

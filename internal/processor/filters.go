@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	ffmpeg "github.com/linuxmatters/ffmpeg-statigo"
 )
@@ -126,6 +127,14 @@ type FilterChainConfig struct {
 	// Analysis (ebur128 + astats + aspectralstats) - audio measurement collection
 	// Captures loudness, dynamics, spectral characteristics
 	AnalysisEnabled bool
+
+	// SilenceScanDuration caps how much of the input is examined when collecting
+	// silence candidates for room-tone election. Zero is the sentinel meaning
+	// "scan whole file" (current behaviour); a positive value restricts silence
+	// candidate collection to intervals before this input time. Loudness, true
+	// peak, LRA, spectral statistics, and speech detection always remain
+	// whole-file regardless of this cap.
+	SilenceScanDuration time.Duration
 
 	// Resample (aformat) - output format standardisation
 	// Pass 2 only - ensures consistent output format
