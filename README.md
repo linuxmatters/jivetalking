@@ -109,6 +109,7 @@ jivetalking [flags] <files...>
 | `-a, --analysis-only` | Run analysis only (Pass 1), display results, skip processing |
 | `-d, --debug` | Enable debug logging to `jivetalking-debug.log` |
 | `--logs` | Save detailed analysis reports alongside output |
+| `--silence-scan-duration=DURATION` | Cap silence-candidate scan to the first `DURATION` of input (e.g. `30s`, `1m30s`). Default `0s` scans the whole file |
 
 
 ### Examples
@@ -125,6 +126,21 @@ jivetalking -d --logs troublesome-recording.flac
 
 # Process all FLAC files in directory
 jivetalking *.flac
+```
+
+### Limiting silence-scan duration
+
+Long recordings can spend disproportionate time scoring silence candidates across the whole file. `--silence-scan-duration` caps that scan to the first `DURATION` of input, trading coverage for speed. Loudness, true peak, LRA, spectral statistics, and speech detection still see the whole file; only silence-candidate collection is constrained, so fewer candidates reach voice-activated detection when the cap is engaged. The flag accepts Go duration syntax (`30s`, `1m`, `2m30s`); the default `0s` scans the whole file. Works with `--analysis-only` as well.
+
+```bash
+# Cap silence scanning to the first 30 seconds
+jivetalking --silence-scan-duration=30s presenter1.flac
+
+# One minute prefix
+jivetalking --silence-scan-duration=1m presenter1.flac
+
+# Two and a half minutes, analysis only
+jivetalking -a --silence-scan-duration=2m30s presenter1.flac
 ```
 
 ### Analysis-Only Mode
