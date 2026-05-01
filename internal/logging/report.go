@@ -1025,6 +1025,8 @@ func writeReportHeader(f *os.File, data ReportData) {
 	fmt.Fprintf(f, "File: %s\n", filepath.Base(data.InputPath))
 	fmt.Fprintf(f, "Processed: %s\n", data.EndTime.Format("2006-01-02 15:04:05 MST"))
 	fmt.Fprintf(f, "Duration: %s\n", formatDuration(time.Duration(data.DurationSecs*float64(time.Second))))
+	fmt.Fprintf(f, "Sample Rate: %d Hz\n", data.SampleRate)
+	fmt.Fprintf(f, "Channels: %s\n", channelName(data.Channels))
 	fmt.Fprintln(f, "")
 }
 

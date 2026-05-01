@@ -27,6 +27,11 @@ var (
 			Bold(true).
 			Foreground(primaryColor)
 
+	// Warning message style
+	WarningStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#FFA500"))
+
 	// Key-value pair styles
 	KeyStyle = lipgloss.NewStyle().
 			Foreground(mutedColor)
@@ -46,4 +51,9 @@ func PrintVersion(version string) {
 // PrintError prints an error message
 func PrintError(message string) {
 	fmt.Fprintf(os.Stderr, "%s %s\n", ErrorStyle.Render("Error:"), message)
+}
+
+// PrintWarning prints a warning message
+func PrintWarning(message string) {
+	fmt.Fprintf(os.Stderr, "%s %s\n", WarningStyle.Render("Warning:"), message)
 }

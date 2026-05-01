@@ -27,7 +27,6 @@ var errCancelledByUser = errors.New("cancelled by user")
 type CLI struct {
 	Version             bool          `short:"v" help:"Show version information"`
 	Debug               bool          `short:"d" help:"Enable debug logging to jivetalking-debug.log"`
-	Logs                bool          `help:"Save detailed analysis logs"`
 	AnalysisOnly        bool          `short:"a" help:"Run analysis only (Pass 1), display results, skip processing"`
 	SilenceScanDuration time.Duration `help:"Cap silence-candidate scan to the first DURATION of input (e.g. 30s, 1m30s). Faster on long files at the cost of coverage; loudness, true peak, LRA, spectral, and speech analysis remain whole-file. Fewer silence candidates also reach voice-activated detection when capped. 0s means scan the whole file." placeholder:"DURATION" default:"0s"`
 	Files               []string      `arg:"" name:"files" help:"Audio files to process" type:"existingfile" optional:""`
@@ -97,6 +96,7 @@ func main() {
 
 	// Start the TUI
 	p := tea.NewProgram(model, tea.WithAltScreen())
+	reportWarnings := make(chan string, len(cliArgs.Files))
 
 	// Start processing in background
 	go func() {
@@ -130,22 +130,10 @@ func main() {
 			}
 			pass2Time := time.Since(pass2Start) - ph.pass1Time - ph.pass3Time - ph.pass4Time
 
-			// Generate analysis report if --logs flag is set
-			if cliArgs.Logs {
-				reportData := logging.ReportData{
-					InputPath:    inputPath,
-					OutputPath:   result.OutputPath,
-					StartTime:    fileStartTime,
-					EndTime:      time.Now(),
-					Timings:      ph.timings(pass2Time),
-					Result:       result,
-					SampleRate:   result.InputMetadata.SampleRate,
-					Channels:     result.InputMetadata.Channels,
-					DurationSecs: result.InputMetadata.DurationSecs,
-				}
-				if err := logging.GenerateReport(reportData); err != nil {
-					log("[MAIN] Failed to generate log file: %v", err)
-				}
+			reportData := buildProcessingReportData(inputPath, fileStartTime, ph.timings(pass2Time), result)
+			if err := logging.GenerateReport(reportData); err != nil {
+				log("[MAIN] Failed to generate log file: %v", err)
+				reportWarnings <- fmt.Sprintf("Report was not written for %s: %v", inputPath, err)
 			}
 
 			// Signal file complete with actual data
@@ -171,6 +159,29 @@ func main() {
 			debugLog.Close()
 		}
 		os.Exit(1) //nolint:gocritic // exitAfterDefer: debugLog explicitly closed above
+	}
+
+	for {
+		select {
+		case warning := <-reportWarnings:
+			cli.PrintWarning(warning)
+		default:
+			return
+		}
+	}
+}
+
+func buildProcessingReportData(inputPath string, fileStartTime time.Time, timings logging.ProcessingTimings, result *processor.ProcessingResult) logging.ReportData {
+	return logging.ReportData{
+		InputPath:    inputPath,
+		OutputPath:   result.OutputPath,
+		StartTime:    fileStartTime,
+		EndTime:      time.Now(),
+		Timings:      timings,
+		Result:       result,
+		SampleRate:   result.InputMetadata.SampleRate,
+		Channels:     result.InputMetadata.Channels,
+		DurationSecs: result.InputMetadata.DurationSecs,
 	}
 }
 
