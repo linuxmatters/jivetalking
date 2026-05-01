@@ -1,5 +1,7 @@
 # Jivetalking - Presenter Integration Tests
 # This file contains commands for testing with local audio files (not in git)
+# Use fixture-5m.flac for iterative fullbench runs from the repo root:
+# JIVETALKING_BENCH_FIXTURE=testdata/fixture-5m.flac just bench-fullbench
 # Path to testdata directory (source_directory returns the directory of THIS file)
 
 testdata := source_directory()

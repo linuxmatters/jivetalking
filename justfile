@@ -103,7 +103,9 @@ test: _check-submodule
 bench: _check-submodule
     go test -run '^$' -bench . -benchmem ./internal/processor
 
-# Run focused Pass 2 and Pass 4 filter-ablation benchmarks
+# Run focused Pass 2 and Pass 4 filter-ablation benchmarks.
+# Use the short local fixture for iteration:
+# JIVETALKING_BENCH_FIXTURE=testdata/fixture-5m.flac just bench-fullbench
 bench-fullbench: _check-submodule
     #!/usr/bin/env bash
     set -e
@@ -119,7 +121,9 @@ bench-profile: _check-submodule
     echo "Run CPU profile analysis with:"
     echo "  go tool pprof .bench/cpu.out"
 
-# Run focused Pass 2 and Pass 4 filter-ablation benchmarks with a CPU profile
+# Run focused Pass 2 and Pass 4 filter-ablation benchmarks with a CPU profile.
+# Use the short local fixture for iteration:
+# JIVETALKING_BENCH_FIXTURE=testdata/fixture-5m.flac just bench-fullbench-profile
 bench-fullbench-profile: _check-submodule
     #!/usr/bin/env bash
     set -e
@@ -128,6 +132,67 @@ bench-fullbench-profile: _check-submodule
     go test -run '^$' -bench 'BenchmarkPass(2|4)FilterAblations' -benchmem -cpuprofile .bench/fullbench-cpu.out ./internal/processor
     echo "Run CPU profile analysis with:"
     echo "  go tool pprof .bench/fullbench-cpu.out"
+
+# Capture baseline focused benchmark output with the 5-minute local fixture
+capture-baseline-bench: _check-submodule
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    fixture="testdata/fixture-5m.flac"
+    baseline="testdata/baseline-fullbench.txt"
+    profile_baseline="testdata/baseline-fullbench-profile.txt"
+    profile_out="testdata/baseline-fullbench-profile-cpu.out"
+    profile_bin="testdata/baseline-fullbench-profile-processor.test"
+
+    export GOCACHE="${GOCACHE:-/tmp/jivetalking-go-build-cache}"
+    export GOMODCACHE="${GOMODCACHE:-/tmp/jivetalking-go-mod-cache}"
+    export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/tmp/jivetalking-xdg-cache}"
+    mkdir -p "$GOCACHE" "$GOMODCACHE" "$XDG_CACHE_HOME"
+
+    if [ ! -f "$fixture" ]; then
+        echo "Missing benchmark fixture: $fixture" >&2
+        exit 1
+    fi
+    fixture_abs="$(pwd -P)/$fixture"
+
+    echo "This will delete .bench and overwrite:"
+    echo "  $baseline"
+    echo "  $profile_baseline"
+    echo "  $profile_out"
+    echo "  $profile_bin"
+    printf "Continue? [y/N] "
+    read -r answer
+    case "$answer" in
+        y|Y|yes|YES)
+            ;;
+        *)
+            echo "Aborted."
+            exit 1
+            ;;
+    esac
+
+    if [ -d .bench ]; then
+        chmod -R u+w .bench 2>/dev/null || true
+        rm -rf .bench
+    fi
+    rm -f "$baseline" "$profile_baseline" "$profile_out" "$profile_bin"
+
+    echo "Capturing fullbench baseline..."
+    JIVETALKING_BENCH_FIXTURE="$fixture_abs" just bench-fullbench 2>&1 | tee "$baseline"
+
+    echo "Capturing fullbench profile baseline..."
+    JIVETALKING_BENCH_FIXTURE="$fixture_abs" just bench-fullbench-profile 2>&1 | tee "$profile_baseline"
+
+    if [ -f .bench/fullbench-cpu.out ]; then
+        mv .bench/fullbench-cpu.out "$profile_out"
+    fi
+    if [ -f processor.test ]; then
+        mv processor.test "$profile_bin"
+    fi
+
+    echo "Baseline fullbench output: $baseline"
+    echo "Baseline fullbench profile output: $profile_baseline"
+    echo "Baseline fullbench CPU profile: $profile_out"
 
 # Benchmark a full CLI processing run against a copied input file
 bench-cli FILE: build
