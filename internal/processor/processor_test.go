@@ -138,6 +138,17 @@ func TestProcessAudio(t *testing.T) {
 		t.Error("ProcessAudio returned nil measurements")
 	}
 
+	// Verify report-needed input metadata is populated from the processing path
+	if result.InputMetadata.SampleRate != 44100 {
+		t.Errorf("InputMetadata.SampleRate = %d, want 44100", result.InputMetadata.SampleRate)
+	}
+	if result.InputMetadata.Channels != 1 {
+		t.Errorf("InputMetadata.Channels = %d, want 1", result.InputMetadata.Channels)
+	}
+	if result.InputMetadata.DurationSecs < 2.9 || result.InputMetadata.DurationSecs > 3.1 {
+		t.Errorf("InputMetadata.DurationSecs = %.3f, want about 3.0", result.InputMetadata.DurationSecs)
+	}
+
 	// Verify filtered measurements are populated (Pass 2 output analysis)
 	if result.FilteredMeasurements == nil {
 		t.Error("ProcessAudio returned nil FilteredMeasurements")
@@ -167,6 +178,11 @@ func TestProcessAudio(t *testing.T) {
 		} else {
 			t.Logf("SpeechProfile is nil - skipping speech sample validation")
 		}
+
+		if (result.FilteredMeasurements.SilenceSample != nil || result.FilteredMeasurements.SpeechSample != nil) &&
+			result.RegionTimings.FilteredOutput <= 0 {
+			t.Error("RegionTimings.FilteredOutput was not captured despite filtered region measurements")
+		}
 	}
 
 	// Verify final measurements are populated (Pass 4 output analysis after normalisation)
@@ -194,11 +210,83 @@ func TestProcessAudio(t *testing.T) {
 		t.Logf("NormResult or FinalMeasurements is nil - skipping Pass 4 validation")
 	}
 
+	if result.NormResult != nil && result.NormResult.FinalMeasurements != nil &&
+		(result.NormResult.FinalMeasurements.SilenceSample != nil || result.NormResult.FinalMeasurements.SpeechSample != nil) &&
+		result.RegionTimings.FinalOutput <= 0 {
+		t.Error("RegionTimings.FinalOutput was not captured despite final region measurements")
+	}
+
 	// Log results
 	t.Logf("Input LUFS: %.2f", result.InputLUFS)
 	t.Logf("Output LUFS: %.2f", result.OutputLUFS)
 	t.Logf("Noise Floor: %.2f", result.NoiseFloor)
 	t.Logf("Output: %s", result.OutputPath)
+}
+
+func TestAnalyzeOnlyDetailedTimings(t *testing.T) {
+	testFile := generateTestAudio(t, TestAudioOptions{
+		DurationSecs: 2.0,
+		SampleRate:   44100,
+		ToneFreq:     440.0,
+		ToneLevel:    -18.0,
+		NoiseLevel:   -55.0,
+		SilenceGap: struct {
+			Start    float64
+			Duration float64
+		}{
+			Start:    1.0,
+			Duration: 0.3,
+		},
+	})
+	defer cleanupTestAudio(t, testFile)
+
+	config := newTestConfig()
+	config.DownmixEnabled = true
+	config.AnalysisEnabled = true
+
+	result, err := AnalyzeOnlyDetailed(testFile, config, nil)
+	if err != nil {
+		t.Fatalf("AnalyzeOnlyDetailed failed: %v", err)
+	}
+
+	if result.Measurements == nil {
+		t.Fatal("AnalyzeOnlyDetailed returned nil measurements")
+	}
+	if result.Config == nil {
+		t.Fatal("AnalyzeOnlyDetailed returned nil config")
+	}
+	if result.AnalysisDuration <= 0 {
+		t.Errorf("AnalysisDuration = %s, want > 0", result.AnalysisDuration)
+	}
+	if result.AdaptationDuration <= 0 {
+		t.Errorf("AdaptationDuration = %s, want > 0", result.AdaptationDuration)
+	}
+}
+
+func TestAnalyzeOnlyWrapper(t *testing.T) {
+	testFile := generateTestAudio(t, TestAudioOptions{
+		DurationSecs: 1.0,
+		SampleRate:   44100,
+		ToneFreq:     440.0,
+		ToneLevel:    -18.0,
+		NoiseLevel:   -55.0,
+	})
+	defer cleanupTestAudio(t, testFile)
+
+	config := newTestConfig()
+	config.DownmixEnabled = true
+	config.AnalysisEnabled = true
+
+	measurements, config, err := AnalyzeOnly(testFile, config, nil)
+	if err != nil {
+		t.Fatalf("AnalyzeOnly failed: %v", err)
+	}
+	if measurements == nil {
+		t.Fatal("AnalyzeOnly returned nil measurements")
+	}
+	if config == nil {
+		t.Fatal("AnalyzeOnly returned nil config")
+	}
 }
 
 // TestFilterChainBuilder tests the filter specification generation

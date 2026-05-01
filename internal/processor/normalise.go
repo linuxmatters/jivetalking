@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	ffmpeg "github.com/linuxmatters/ffmpeg-statigo"
 	"github.com/linuxmatters/jivetalking/internal/audio"
@@ -411,6 +412,8 @@ type NormalisationResult struct {
 	LimiterClamped    bool    // True when calculateLimiterCeiling clamped ceiling to minimum
 	Pass3FilterPrefix string  // Filter prefix used for Pass 3 measurement (empty when no pre-gain/limiting)
 
+	RegionMeasurementTime time.Duration // Final-output silence/speech region measurement duration
+
 	// FinalMeasurements contains full analysis after normalisation (Pass 4)
 	// Includes spectral characteristics, amplitude stats, and loudness measurements
 	// for comparison with Pass 1 input and Pass 2 filtered measurements
@@ -515,7 +518,7 @@ func ApplyNormalisation(
 	effectiveConfig.LoudnormTargetI = effectiveTargetI
 
 	// Pass 4: Apply loudnorm with linear=true and the measurements
-	finalLUFS, finalTP, finalMeasurements, loudnormStats, err := applyLoudnormAndMeasure(inputPath, &effectiveConfig, measurement, inputMeasurements, preGainDB, limiterCeiling, limiterNeeded, progressCallback)
+	finalLUFS, finalTP, finalMeasurements, loudnormStats, regionMeasurementTime, err := applyLoudnormAndMeasure(inputPath, &effectiveConfig, measurement, inputMeasurements, preGainDB, limiterCeiling, limiterNeeded, progressCallback)
 	if err != nil {
 		return nil, fmt.Errorf("loudnorm application failed: %w", err)
 	}
@@ -530,24 +533,25 @@ func ApplyNormalisation(
 	withinTarget := finalDeviation <= 0.5
 
 	return &NormalisationResult{
-		InputLUFS:         measurement.InputI,
-		InputTP:           measurement.InputTP,
-		OutputLUFS:        finalLUFS,
-		OutputTP:          finalTP,
-		GainApplied:       offset,
-		WithinTarget:      withinTarget,
-		Skipped:           false,
-		LoudnormStats:     loudnormStats,
-		RequestedTargetI:  config.LoudnormTargetI,
-		EffectiveTargetI:  effectiveTargetI,
-		LinearModeForced:  !linearPossible,
-		LimiterEnabled:    limiterNeeded,
-		LimiterCeiling:    limiterCeiling,
-		LimiterGain:       limiterGain,
-		PreGainDB:         preGainDB,
-		LimiterClamped:    limiterClamped,
-		Pass3FilterPrefix: filterPrefix,
-		FinalMeasurements: finalMeasurements,
+		InputLUFS:             measurement.InputI,
+		InputTP:               measurement.InputTP,
+		OutputLUFS:            finalLUFS,
+		OutputTP:              finalTP,
+		GainApplied:           offset,
+		WithinTarget:          withinTarget,
+		Skipped:               false,
+		LoudnormStats:         loudnormStats,
+		RequestedTargetI:      config.LoudnormTargetI,
+		EffectiveTargetI:      effectiveTargetI,
+		LinearModeForced:      !linearPossible,
+		LimiterEnabled:        limiterNeeded,
+		LimiterCeiling:        limiterCeiling,
+		LimiterGain:           limiterGain,
+		PreGainDB:             preGainDB,
+		LimiterClamped:        limiterClamped,
+		Pass3FilterPrefix:     filterPrefix,
+		RegionMeasurementTime: regionMeasurementTime,
+		FinalMeasurements:     finalMeasurements,
 	}, nil
 }
 
@@ -572,7 +576,7 @@ func applyLoudnormAndMeasure(
 	ceiling float64,
 	needsLimiting bool,
 	progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements),
-) (float64, float64, *OutputMeasurements, *LoudnormStats, error) {
+) (float64, float64, *OutputMeasurements, *LoudnormStats, time.Duration, error) {
 	// Start capturing loudnorm's JSON output for diagnostics
 	startLoudnormCapture()
 
@@ -585,7 +589,7 @@ func applyLoudnormAndMeasure(
 	// Open input file
 	reader, metadata, err := audio.OpenAudioFile(inputPath)
 	if err != nil {
-		return 0.0, 0.0, nil, getLoudnormStats(), fmt.Errorf("failed to open input: %w", err)
+		return 0.0, 0.0, nil, getLoudnormStats(), 0, fmt.Errorf("failed to open input: %w", err)
 	}
 	defer reader.Close()
 
@@ -601,7 +605,7 @@ func applyLoudnormAndMeasure(
 		filterSpec,
 	)
 	if err != nil {
-		return 0.0, 0.0, nil, getLoudnormStats(), fmt.Errorf("failed to create filter graph: %w", err)
+		return 0.0, 0.0, nil, getLoudnormStats(), 0, fmt.Errorf("failed to create filter graph: %w", err)
 	}
 	// Note: We free the filter graph explicitly before getting stats, not via defer.
 	// loudnorm outputs its JSON when the filter graph is freed.
@@ -610,7 +614,7 @@ func applyLoudnormAndMeasure(
 	encoder, err := createOutputEncoder(tempPath, metadata, bufferSinkCtx)
 	if err != nil {
 		ffmpeg.AVFilterGraphFree(&filterGraph)
-		return 0.0, 0.0, nil, getLoudnormStats(), fmt.Errorf("failed to create encoder: %w", err)
+		return 0.0, 0.0, nil, getLoudnormStats(), 0, fmt.Errorf("failed to create encoder: %w", err)
 	}
 	defer encoder.Close()
 
@@ -653,25 +657,25 @@ func applyLoudnormAndMeasure(
 	})
 	if loopErr != nil {
 		ffmpeg.AVFilterGraphFree(&filterGraph)
-		return 0.0, 0.0, nil, getLoudnormStats(), loopErr
+		return 0.0, 0.0, nil, getLoudnormStats(), 0, loopErr
 	}
 
 	// Flush encoder
 	if err := encoder.Flush(); err != nil {
 		ffmpeg.AVFilterGraphFree(&filterGraph)
-		return 0.0, 0.0, nil, getLoudnormStats(), fmt.Errorf("failed to flush encoder: %w", err)
+		return 0.0, 0.0, nil, getLoudnormStats(), 0, fmt.Errorf("failed to flush encoder: %w", err)
 	}
 
 	// Close encoder before rename
 	if err := encoder.Close(); err != nil {
 		ffmpeg.AVFilterGraphFree(&filterGraph)
-		return 0.0, 0.0, nil, getLoudnormStats(), fmt.Errorf("failed to close encoder: %w", err)
+		return 0.0, 0.0, nil, getLoudnormStats(), 0, fmt.Errorf("failed to close encoder: %w", err)
 	}
 
 	// Atomic rename: temp file → original file (in-place update)
 	if err := os.Rename(tempPath, inputPath); err != nil {
 		ffmpeg.AVFilterGraphFree(&filterGraph)
-		return 0.0, 0.0, nil, getLoudnormStats(), fmt.Errorf("failed to rename output: %w", err)
+		return 0.0, 0.0, nil, getLoudnormStats(), 0, fmt.Errorf("failed to rename output: %w", err)
 	}
 
 	// Free filter graph before getting stats — loudnorm outputs JSON on graph destruction
@@ -682,19 +686,22 @@ func applyLoudnormAndMeasure(
 
 	// Build complete OutputMeasurements from accumulators
 	finalMeasurements := finalizeOutputMeasurements(&acc)
+	var regionMeasurementTime time.Duration
 
 	// Measure silence and speech regions in final output (same regions as Pass 1 profiles)
 	// NOTE: inputPath now contains the normalised output after os.Rename above
 	if inputMeasurements != nil {
 		silRegion, spRegion := extractRegionPair(inputMeasurements)
 		if silRegion != nil || spRegion != nil {
+			regionStart := time.Now()
 			silSample, spSample := MeasureOutputRegions(inputPath, silRegion, spRegion)
+			regionMeasurementTime = time.Since(regionStart)
 			finalMeasurements.SilenceSample = silSample
 			finalMeasurements.SpeechSample = spSample
 		}
 	}
 
-	return acc.ebur128OutputI, acc.ebur128OutputTP, finalMeasurements, stats, nil
+	return acc.ebur128OutputI, acc.ebur128OutputTP, finalMeasurements, stats, regionMeasurementTime, nil
 }
 
 // buildLoudnormFilterSpec constructs the filter chain for Pass 4 loudnorm application.

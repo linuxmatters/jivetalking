@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	ffmpeg "github.com/linuxmatters/ffmpeg-statigo"
 	"github.com/linuxmatters/jivetalking/internal/audio"
@@ -18,24 +19,52 @@ import (
 func AnalyzeOnly(inputPath string, config *FilterChainConfig,
 	progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements),
 ) (*AudioMeasurements, *FilterChainConfig, error) {
+	result, err := AnalyzeOnlyDetailed(inputPath, config, progressCallback)
+	if err != nil {
+		return nil, nil, err
+	}
+	return result.Measurements, result.Config, nil
+}
+
+// AnalysisResult contains analysis-only measurements and stage timings.
+type AnalysisResult struct {
+	Measurements       *AudioMeasurements
+	Config             *FilterChainConfig
+	AnalysisDuration   time.Duration
+	AdaptationDuration time.Duration
+}
+
+// AnalyzeOnlyDetailed performs Pass 1 analysis and returns stage timing details.
+func AnalyzeOnlyDetailed(inputPath string, config *FilterChainConfig,
+	progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements),
+) (*AnalysisResult, error) {
 	// Pass 1: Analysis
 	if progressCallback != nil {
 		progressCallback(PassAnalysis, "Analyzing", 0.0, 0.0, nil)
 	}
 
+	analysisStart := time.Now()
 	measurements, err := AnalyzeAudio(inputPath, config, progressCallback)
 	if err != nil {
-		return nil, nil, fmt.Errorf("analysis failed: %w", err)
+		return nil, fmt.Errorf("analysis failed: %w", err)
 	}
+	analysisDuration := time.Since(analysisStart)
 
 	if progressCallback != nil {
 		progressCallback(PassAnalysis, "Analyzing", 1.0, 0.0, measurements)
 	}
 
 	// Adapt config to show what would be used in Pass 2
+	adaptationStart := time.Now()
 	AdaptConfig(config, measurements)
+	adaptationDuration := time.Since(adaptationStart)
 
-	return measurements, config, nil
+	return &AnalysisResult{
+		Measurements:       measurements,
+		Config:             config,
+		AnalysisDuration:   analysisDuration,
+		AdaptationDuration: adaptationDuration,
+	}, nil
 }
 
 // ProcessAudio performs complete two-pass audio processing:
@@ -80,8 +109,10 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 
 	// Track output measurements from Pass 2 (filtered but not yet normalised)
 	var filteredMeasurements *OutputMeasurements
+	var regionTimings RegionMeasurementTimings
 
-	if err := processWithFilters(inputPath, outputPath, config, progressCallback, measurements, &filteredMeasurements); err != nil {
+	inputMetadata, err := processWithFilters(inputPath, outputPath, config, progressCallback, measurements, &filteredMeasurements)
+	if err != nil {
 		return nil, fmt.Errorf("pass 2 failed: %w", err)
 	}
 
@@ -93,7 +124,9 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 	if filteredMeasurements != nil {
 		silRegion, spRegion := extractRegionPair(measurements)
 		if silRegion != nil || spRegion != nil {
+			regionStart := time.Now()
 			silSample, spSample := MeasureOutputRegions(outputPath, silRegion, spRegion)
+			regionTimings.FilteredOutput = time.Since(regionStart)
 			filteredMeasurements.SilenceSample = silSample
 			filteredMeasurements.SpeechSample = spSample
 		}
@@ -107,6 +140,7 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 		if err != nil {
 			return nil, fmt.Errorf("pass 3 failed: %w", err)
 		}
+		regionTimings.FinalOutput = normResult.RegionMeasurementTime
 	}
 
 	// Return the processing result with output measurements for comparison
@@ -117,6 +151,8 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 		NoiseFloor:           measurements.NoiseFloor,
 		Measurements:         measurements,
 		Config:               config, // Include config for logging adaptive parameters
+		InputMetadata:        inputMetadata,
+		RegionTimings:        regionTimings,
 		FilteredMeasurements: filteredMeasurements,
 		NormResult:           normResult,
 	}
@@ -139,6 +175,19 @@ func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback 
 	return result, nil
 }
 
+// InputMetadata contains the report-needed subset of input file metadata.
+type InputMetadata struct {
+	SampleRate   int
+	Channels     int
+	DurationSecs float64
+}
+
+// RegionMeasurementTimings contains optional reportable region measurement durations.
+type RegionMeasurementTimings struct {
+	FilteredOutput time.Duration
+	FinalOutput    time.Duration
+}
+
 // ProcessingResult contains the results of audio processing
 type ProcessingResult struct {
 	OutputPath   string
@@ -147,6 +196,9 @@ type ProcessingResult struct {
 	NoiseFloor   float64
 	Measurements *AudioMeasurements
 	Config       *FilterChainConfig // Contains adaptive parameters used
+
+	InputMetadata InputMetadata
+	RegionTimings RegionMeasurementTimings
 
 	// Pass 2 output analysis (populated when OutputAnalysisEnabled is true)
 	// Contains measurements after filter chain but before normalisation
@@ -161,13 +213,18 @@ type ProcessingResult struct {
 // Applies the filter chain built by BuildFilterSpec() which includes asendcmd for noise profile learning
 // when NoiseProfileStart/End timestamps are set in the config.
 // If outputMeasurements is non-nil and config.OutputAnalysisEnabled is true, populates it with Pass 2 output analysis.
-func processWithFilters(inputPath, outputPath string, config *FilterChainConfig, progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements), measurements *AudioMeasurements, outputMeasurements **OutputMeasurements) error {
+func processWithFilters(inputPath, outputPath string, config *FilterChainConfig, progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements), measurements *AudioMeasurements, outputMeasurements **OutputMeasurements) (InputMetadata, error) {
 	// Open input audio file
 	reader, metadata, err := audio.OpenAudioFile(inputPath)
 	if err != nil {
-		return fmt.Errorf("failed to open input file: %w", err)
+		return InputMetadata{}, fmt.Errorf("failed to open input file: %w", err)
 	}
 	defer reader.Close()
+	inputMetadata := InputMetadata{
+		SampleRate:   metadata.SampleRate,
+		Channels:     metadata.Channels,
+		DurationSecs: metadata.Duration,
+	}
 
 	// Get total duration for progress calculation
 	totalDuration := metadata.Duration
@@ -186,14 +243,14 @@ func processWithFilters(inputPath, outputPath string, config *FilterChainConfig,
 		config,
 	)
 	if err != nil {
-		return fmt.Errorf("failed to create filter graph: %w", err)
+		return InputMetadata{}, fmt.Errorf("failed to create filter graph: %w", err)
 	}
 	defer ffmpeg.AVFilterGraphFree(&filterGraph)
 
 	// Create output encoder
 	encoder, err := createOutputEncoder(outputPath, metadata, bufferSinkCtx)
 	if err != nil {
-		return fmt.Errorf("failed to create encoder: %w", err)
+		return InputMetadata{}, fmt.Errorf("failed to create encoder: %w", err)
 	}
 	defer encoder.Close()
 
@@ -251,12 +308,12 @@ func processWithFilters(inputPath, outputPath string, config *FilterChainConfig,
 			return FrameDiscard, nil
 		},
 	}); err != nil {
-		return err
+		return InputMetadata{}, err
 	}
 
 	// Flush the encoder
 	if err := encoder.Flush(); err != nil {
-		return fmt.Errorf("failed to flush encoder: %w", err)
+		return InputMetadata{}, fmt.Errorf("failed to flush encoder: %w", err)
 	}
 
 	// Finalize output measurements if enabled
@@ -266,7 +323,7 @@ func processWithFilters(inputPath, outputPath string, config *FilterChainConfig,
 		*outputMeasurements = finalizeOutputMeasurements(outputAcc)
 	}
 
-	return nil
+	return inputMetadata, nil
 }
 
 // generateOutputPath creates the intermediate output filename from the input filename.

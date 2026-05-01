@@ -369,16 +369,21 @@ func writeSection(f *os.File, title string) {
 	fmt.Fprintln(f, strings.Repeat("-", len(title)))
 }
 
+// ProcessingTimings contains reportable processing pass durations.
+type ProcessingTimings struct {
+	Pass1 time.Duration
+	Pass2 time.Duration
+	Pass3 time.Duration // Loudnorm measurement pass (may be 0 if skipped)
+	Pass4 time.Duration // Loudnorm application pass (may be 0 if skipped)
+}
+
 // ReportData contains all the information needed to generate an analysis report
 type ReportData struct {
 	InputPath    string
 	OutputPath   string
 	StartTime    time.Time
 	EndTime      time.Time
-	Pass1Time    time.Duration
-	Pass2Time    time.Duration
-	Pass3Time    time.Duration // Loudnorm measurement pass (may be 0 if skipped)
-	Pass4Time    time.Duration // Loudnorm application pass (may be 0 if skipped)
+	Timings      ProcessingTimings
 	Result       *processor.ProcessingResult
 	SampleRate   int
 	Channels     int
@@ -1027,15 +1032,26 @@ func writeReportHeader(f *os.File, data ReportData) {
 func writeProcessingSummary(f *os.File, data ReportData) {
 	writeSection(f, "Processing Summary")
 
-	fmt.Fprintf(f, "Pass 1 (Analysis):    %s\n", formatDuration(data.Pass1Time))
-	fmt.Fprintf(f, "Pass 2 (Processing):  %s\n", formatDuration(data.Pass2Time))
+	fmt.Fprintf(f, "Pass 1 (Analysis):    %s\n", formatDuration(data.Timings.Pass1))
+	fmt.Fprintf(f, "Pass 2 (Processing):  %s\n", formatDuration(data.Timings.Pass2))
 
-	if data.Pass3Time > 0 || data.Pass4Time > 0 {
-		fmt.Fprintf(f, "Pass 3 (Measuring):   %s\n", formatDuration(data.Pass3Time))
-		fmt.Fprintf(f, "Pass 4 (Normalising): %s\n", formatDuration(data.Pass4Time))
+	if data.Timings.Pass3 > 0 || data.Timings.Pass4 > 0 {
+		fmt.Fprintf(f, "Pass 3 (Measuring):   %s\n", formatDuration(data.Timings.Pass3))
+		fmt.Fprintf(f, "Pass 4 (Normalising): %s\n", formatDuration(data.Timings.Pass4))
 	} else if data.Result != nil && data.Result.NormResult != nil && data.Result.NormResult.Skipped {
 		fmt.Fprintln(f, "Pass 3 (Measuring):   skipped")
 		fmt.Fprintln(f, "Pass 4 (Normalising): skipped")
+	}
+
+	if data.Result != nil && (data.Result.RegionTimings.FilteredOutput > 0 || data.Result.RegionTimings.FinalOutput > 0) {
+		fmt.Fprintln(f, "")
+		fmt.Fprintln(f, "Metric Timings")
+		if data.Result.RegionTimings.FilteredOutput > 0 {
+			fmt.Fprintf(f, "Filtered Regions:     %s\n", formatDuration(data.Result.RegionTimings.FilteredOutput))
+		}
+		if data.Result.RegionTimings.FinalOutput > 0 {
+			fmt.Fprintf(f, "Final Regions:        %s\n", formatDuration(data.Result.RegionTimings.FinalOutput))
+		}
 	}
 
 	totalTime := data.EndTime.Sub(data.StartTime)

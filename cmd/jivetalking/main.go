@@ -130,31 +130,18 @@ func main() {
 			}
 			pass2Time := time.Since(pass2Start) - ph.pass1Time - ph.pass3Time - ph.pass4Time
 
-			// Get file metadata for logging
-			var metadata *audio.Metadata
-			if cliArgs.Logs {
-				reader, meta, err := audio.OpenAudioFile(inputPath)
-				if err == nil {
-					metadata = meta
-					reader.Close()
-				}
-			}
-
 			// Generate analysis report if --logs flag is set
-			if cliArgs.Logs && metadata != nil {
+			if cliArgs.Logs {
 				reportData := logging.ReportData{
 					InputPath:    inputPath,
 					OutputPath:   result.OutputPath,
 					StartTime:    fileStartTime,
 					EndTime:      time.Now(),
-					Pass1Time:    ph.pass1Time,
-					Pass2Time:    pass2Time,
-					Pass3Time:    ph.pass3Time,
-					Pass4Time:    ph.pass4Time,
+					Timings:      ph.timings(pass2Time),
 					Result:       result,
-					SampleRate:   metadata.SampleRate,
-					Channels:     metadata.Channels,
-					DurationSecs: metadata.Duration,
+					SampleRate:   result.InputMetadata.SampleRate,
+					Channels:     result.InputMetadata.Channels,
+					DurationSecs: result.InputMetadata.DurationSecs,
 				}
 				if err := logging.GenerateReport(reportData); err != nil {
 					log("[MAIN] Failed to generate log file: %v", err)
@@ -184,6 +171,15 @@ func main() {
 			debugLog.Close()
 		}
 		os.Exit(1) //nolint:gocritic // exitAfterDefer: debugLog explicitly closed above
+	}
+}
+
+func (ph *progressHandler) timings(pass2Time time.Duration) logging.ProcessingTimings {
+	return logging.ProcessingTimings{
+		Pass1: ph.pass1Time,
+		Pass2: pass2Time,
+		Pass3: ph.pass3Time,
+		Pass4: ph.pass4Time,
 	}
 }
 
