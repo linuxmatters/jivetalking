@@ -65,10 +65,12 @@ internal/
 
 **Filter chain order (Pass 2):**
 ```
-downmix → ds201_highpass → ds201_lowpass → noiseremove (anlmdn+compand) → ds201_gate → la2a_compressor → deesser → analysis → resample
+downmix → ds201_highpass → ds201_lowpass → noiseremove (32 kHz pre-anlmdn, r=0.0045 + compand) → ds201_gate → la2a_compressor → deesser → analysis → resample
 ```
 
-Order rationale: downmix to mono first; HP/LP removes frequency extremes before gate (DS201 frequency-conscious side-chain pattern); denoising before gating (lowers noise floor for gate); compression before de-essing (compression emphasises sibilance); analysis measures processed signal; resample standardises output format last.
+Order rationale: downmix to mono first; HP/LP removes frequency extremes before gate (DS201 frequency-conscious side-chain pattern); denoising before gating (lowers noise floor for gate); compression before de-essing (compression emphasises sibilance); analysis measures processed signal; final resample standardises output format last.
+
+**Noise removal default:** Production uses `anlmdn_sr_32000_best_r`: resample to 32 kHz before `anlmdn`, use `r=0.0045`, then continue through compand. In benchmark context, refer to the old production path as `anlmdn_legacy_default`.
 
 **Normalisation (Pass 3/4):**
 ```

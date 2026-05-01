@@ -112,6 +112,102 @@ bench-fullbench: _check-submodule
     echo "Using JIVETALKING_BENCH_FIXTURE when set; otherwise fullbench benchmarks skip"
     go test -run '^$' -bench 'BenchmarkPass(2|4)FilterAblations' -benchmem -count=3 ./internal/processor
 
+# Run focused anlmdn variant benchmarks.
+# Use the short local fixture for iteration:
+# JIVETALKING_BENCH_FIXTURE="$(pwd -P)/testdata/fixture-5m.flac" just bench-anlmdn
+# Opt in to artefact capture with:
+# JIVETALKING_ANLMDN_BENCH_CAPTURE=1 JIVETALKING_BENCH_FIXTURE="$(pwd -P)/testdata/fixture-5m.flac" just bench-anlmdn
+# Capture writes .bench/anlmdn/<variant>/ with processed.flac, filter.txt, metrics.json, validation.md, and timing.txt.
+bench-anlmdn: _check-submodule
+    #!/usr/bin/env bash
+    set -e
+    echo "Using JIVETALKING_BENCH_FIXTURE when set; otherwise anlmdn benchmarks skip"
+    echo "Set JIVETALKING_ANLMDN_BENCH_CAPTURE=1 to write .bench/anlmdn artefacts"
+    go test -run '^$' -bench 'BenchmarkAnlmdnVariants' -benchmem -count=3 ./internal/processor
+
+# Run focused anlmdn benchmark profiling.
+# Defaults to the production anlmdn variant:
+# JIVETALKING_BENCH_FIXTURE="$(pwd -P)/testdata/fixture-5m.flac" just bench-anlmdn-profile
+# Profile a named variant:
+# JIVETALKING_ANLMDN_PROFILE_VARIANT=anlmdn_legacy_default JIVETALKING_BENCH_FIXTURE="$(pwd -P)/testdata/fixture-5m.flac" just bench-anlmdn-profile
+bench-anlmdn-profile: _check-submodule
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p .bench/anlmdn
+    variant="${JIVETALKING_ANLMDN_PROFILE_VARIANT:-anlmdn_sr_32000_best_r}"
+    case "$variant" in
+        ""|*[!A-Za-z0-9_]*)
+            echo "Invalid JIVETALKING_ANLMDN_PROFILE_VARIANT: $variant" >&2
+            echo "Use an anlmdn benchmark variant name such as anlmdn_sr_32000_best_r or anlmdn_legacy_default." >&2
+            exit 1
+            ;;
+    esac
+    echo "Profiling BenchmarkAnlmdnVariants/$variant"
+    echo "Using JIVETALKING_BENCH_FIXTURE when set; otherwise anlmdn benchmarks skip"
+    go test -run '^$' -bench "^BenchmarkAnlmdnVariants/${variant}$" -benchmem -cpuprofile .bench/anlmdn/cpu.out ./internal/processor
+    echo "Run CPU profile analysis with:"
+    echo "  go tool pprof .bench/anlmdn/cpu.out"
+
+# Capture anlmdn benchmark artefacts with the 5-minute local fixture.
+bench-anlmdn-capture: _check-submodule
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    fixture="testdata/fixture-5m.flac"
+    root=".bench/anlmdn"
+    timing="$root/benchmark.txt"
+    environment="$root/environment.txt"
+
+    if [ ! -f "$fixture" ]; then
+        echo "Missing benchmark fixture: $fixture" >&2
+        exit 1
+    fi
+    fixture_abs="$(pwd -P)/$fixture"
+    root_abs="$(pwd -P)/$root"
+
+    if [ -d "$root" ]; then
+        echo "This will delete $root before capturing fresh anlmdn artefacts."
+        printf "Continue? [y/N] "
+        read -r answer
+        case "$answer" in
+            y|Y|yes|YES)
+                ;;
+            *)
+                echo "Aborted."
+                exit 1
+                ;;
+        esac
+        chmod -R u+w "$root" 2>/dev/null || true
+        rm -rf "$root"
+    fi
+    mkdir -p "$root"
+
+    {
+        echo "go_version: $(go version)"
+        echo "goos: $(go env GOOS)"
+        echo "goarch: $(go env GOARCH)"
+        echo "benchmark_fixture_path: $fixture_abs"
+        printf "ffmpeg_statigo_module: "
+        go list -m github.com/linuxmatters/ffmpeg-statigo 2>/dev/null || echo "unavailable"
+        case "$(go env GOOS)" in
+            linux)
+                cpu_model="$(awk -F: '/^(model name|Hardware|Processor)[[:space:]]*:/{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}' /proc/cpuinfo 2>/dev/null || true)"
+                ;;
+            darwin)
+                cpu_model="$(sysctl -n machdep.cpu.brand_string 2>/dev/null || sysctl -n hw.model 2>/dev/null || true)"
+                ;;
+            *)
+                cpu_model=""
+                ;;
+        esac
+        echo "cpu_model: ${cpu_model:-unavailable}"
+    } > "$environment"
+
+    JIVETALKING_ANLMDN_BENCH_CAPTURE=1 JIVETALKING_ANLMDN_BENCH_CAPTURE_ROOT="$root_abs" JIVETALKING_BENCH_FIXTURE="$fixture_abs" \
+        go test -run '^$' -bench 'BenchmarkAnlmdnVariants' -benchmem -count=1 ./internal/processor 2>&1 | tee "$timing"
+    echo "Anlmdn artefacts: $root"
+    echo "Benchmark timing: $timing"
+
 # Run processor package benchmarks with a CPU profile
 bench-profile: _check-submodule
     #!/usr/bin/env bash

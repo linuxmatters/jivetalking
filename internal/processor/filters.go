@@ -84,6 +84,20 @@ const (
 	NormToleranceLU = 0.5
 )
 
+// NoiseRemove production defaults.
+const (
+	noiseRemoveProductionPreSampleRate = 32000
+	noiseRemoveProductionStrength      = 0.00001
+	noiseRemoveProductionPatchSec      = 0.0060
+	noiseRemoveProductionResearchSec   = 0.0045
+	noiseRemoveProductionSmooth        = 11.0
+
+	noiseRemoveLegacyStrength    = 0.00001
+	noiseRemoveLegacyPatchSec    = 0.0060
+	noiseRemoveLegacyResearchSec = 0.0058
+	noiseRemoveLegacySmooth      = 11.0
+)
+
 // filterBuilderFunc is a function that builds a filter spec from config.
 // Returns the FFmpeg filter specification string, or empty string if disabled.
 type filterBuilderFunc func(*FilterChainConfig) string
@@ -167,8 +181,9 @@ type FilterChainConfig struct {
 
 	// NoiseRemove - anlmdn + compand noise reduction
 	// Non-Local Means denoiser (anlmdn) with a compand for residual suppression
-	// Validated fast-compand config: -13 to -20 dB silence reduction, 20-24x realtime, ±1-2% spectral preservation
+	// Validated 32 kHz fast config: lower CPU with baseline-equivalent output on EP 68 noise samples.
 	NoiseRemoveEnabled          bool    // Enable anlmdn+compand noise reduction
+	NoiseRemovePreSampleRate    int     // Optional sample-rate cap before anlmdn (0 = disabled)
 	NoiseRemoveCompandEnabled   bool    // Enable compand residual suppression (false = anlmdn-only)
 	NoiseRemoveStrength         float64 // anlmdn strength (0.00001 = minimum, kept constant)
 	NoiseRemovePatchSec         float64 // Patch size in seconds (context window for similarity)
@@ -308,18 +323,19 @@ func DefaultFilterConfig() *FilterChainConfig {
 		DS201LPMix:       1.0,     // Full wet signal
 		DS201LPTransform: "tdii",  // Transposed Direct Form II - best floating-point accuracy
 
-		// NoiseRemove - anlmdn + compand (validated fast-compand config)
-		NoiseRemoveEnabled:          true,    // Primary noise reduction filter
-		NoiseRemoveCompandEnabled:   true,    // Compand enabled when noise profile available
-		NoiseRemoveStrength:         0.00001, // Minimum strength (fixed from spike validation)
-		NoiseRemovePatchSec:         0.006,   // 6ms patch (fast-compand validated)
-		NoiseRemoveResearchSec:      0.0058,  // 5.8ms research (fast-compand validated)
-		NoiseRemoveSmooth:           11.0,    // Default smoothing
-		NoiseRemoveCompandThreshold: -55.0,   // Overridden by adaptive tuning
-		NoiseRemoveCompandExpansion: 6.0,     // Overridden by adaptive tuning
-		NoiseRemoveCompandAttack:    0.005,   // 5ms - fixed, empirically validated for speech
-		NoiseRemoveCompandDecay:     0.100,   // 100ms - fixed, empirically validated for speech
-		NoiseRemoveCompandKnee:      6.0,     // 6dB - fixed, soft knee for transparency
+		// NoiseRemove - anlmdn + compand (32 kHz fast default)
+		NoiseRemoveEnabled:          true,                               // Primary noise reduction filter
+		NoiseRemovePreSampleRate:    noiseRemoveProductionPreSampleRate, // 32 kHz cap before anlmdn for lower CPU
+		NoiseRemoveCompandEnabled:   true,                               // Compand enabled when noise profile available
+		NoiseRemoveStrength:         noiseRemoveProductionStrength,      // Minimum strength (fixed from spike validation)
+		NoiseRemovePatchSec:         noiseRemoveProductionPatchSec,      // 6ms patch
+		NoiseRemoveResearchSec:      noiseRemoveProductionResearchSec,   // 4.5ms research
+		NoiseRemoveSmooth:           noiseRemoveProductionSmooth,        // Default smoothing
+		NoiseRemoveCompandThreshold: -55.0,                              // Overridden by adaptive tuning
+		NoiseRemoveCompandExpansion: 6.0,                                // Overridden by adaptive tuning
+		NoiseRemoveCompandAttack:    0.005,                              // 5ms - fixed, empirically validated for speech
+		NoiseRemoveCompandDecay:     0.100,                              // 100ms - fixed, empirically validated for speech
+		NoiseRemoveCompandKnee:      6.0,                                // 6dB - fixed, soft knee for transparency
 
 		// DS201-Inspired Gate - soft expander for natural speech transitions
 		// All parameters set adaptively based on Pass 1 measurements
@@ -581,12 +597,13 @@ func (cfg *FilterChainConfig) buildDS201LowPassFilter() string {
 // buildNoiseRemoveFilter builds the anlmdn+compand noise reduction filter.
 // Non-Local Means denoiser followed a compand for residual suppression.
 //
-// Filter chain: anlmdn → compand
+// Filter chain: optional pre-sample-rate cap → anlmdn → compand
 //
-// anlmdn parameters (validated fast-compand config):
+// anlmdn parameters (validated 32 kHz fast default):
+// - pre-sample-rate: optional sample-rate cap before anlmdn; production uses 32 kHz
 // - s: strength (0.00001 = minimum, kept constant)
 // - p: patch size in seconds (6ms = 0.006s, context window for similarity)
-// - r: research radius in seconds (5.8ms = 0.0058s, search window for matching)
+// - r: research radius in seconds (4.5ms = 0.0045s, search window for matching)
 // - m: smoothing factor (11 = default, weight smoothing)
 //
 // compand parameters
@@ -600,24 +617,32 @@ func (cfg *FilterChainConfig) buildNoiseRemoveFilter() string {
 		return ""
 	}
 
-	// Build anlmdn filter
+	filters := make([]string, 0, 3)
+	if cfg.NoiseRemovePreSampleRate > 0 {
+		filters = append(filters, fmt.Sprintf(
+			"aformat=sample_rates=%d:channel_layouts=mono:sample_fmts=fltp",
+			cfg.NoiseRemovePreSampleRate,
+		))
+	}
+
 	anlmdnSpec := fmt.Sprintf("anlmdn=s=%.5f:p=%.4f:r=%.4f:m=%.0f",
 		cfg.NoiseRemoveStrength,
 		cfg.NoiseRemovePatchSec,
 		cfg.NoiseRemoveResearchSec,
 		cfg.NoiseRemoveSmooth,
 	)
+	filters = append(filters, anlmdnSpec)
 
 	// When compand is disabled (no noise profile to calibrate), use anlmdn only
 	if !cfg.NoiseRemoveCompandEnabled {
-		return anlmdnSpec
+		return strings.Join(filters, ",")
 	}
 
 	// Build compand filter for residual suppression
 	compandSpec := cfg.buildNoiseRemoveCompandFilter()
+	filters = append(filters, compandSpec)
 
-	// Combine: anlmdn,compand
-	return fmt.Sprintf("%s,%s", anlmdnSpec, compandSpec)
+	return strings.Join(filters, ",")
 }
 
 // buildNoiseRemoveCompandFilter builds the compand filter for residual noise suppression.

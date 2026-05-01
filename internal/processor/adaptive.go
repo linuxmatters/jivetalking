@@ -678,7 +678,7 @@ func tuneDS201LowPassForSpeech(config *FilterChainConfig, m *AudioMeasurements) 
 // anlmdn remains constant because spike testing validated these parameters:
 // - strength: 0.00001 (minimum)
 // - patch: 6ms (context window)
-// - research: 5.8ms (search window)
+// - research: production default (search window)
 // - smooth: 11 (weight smoothing)
 func tuneNoiseRemove(config *FilterChainConfig, m *AudioMeasurements) {
 	if !config.NoiseRemoveEnabled {

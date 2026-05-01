@@ -102,7 +102,7 @@ downmix → ds201_highpass → ds201_lowpass → noiseremove → ds201_gate → 
 |--------|---------------------|-------|
 | **DS201 Highpass** | Frequency (60-120Hz), poles, mix | Spectral centroid, spectral decrease, noise floor |
 | **DS201 Lowpass** | Cutoff frequency, enable/disable | Content type detection (speech/music/mixed), rolloff, ZCR |
-| **NoiseRemove** | Compand threshold, expansion depth (disabled when no noise profile) | Measured noise floor + 5 dB, noise severity; compand requires an elected silence region — `anlmdn` always active |
+| **NoiseRemove** | Compand threshold, expansion depth (disabled when no noise profile) | Measured noise floor + 5 dB, noise severity; compand requires an elected silence region; production `anlmdn` uses the `anlmdn_sr_32000_best_r` path |
 | **DS201 Gate** | Threshold, ratio, attack, release, range, knee | LRA, noise floor, quiet speech estimate, spectral flux, entropy |
 | **LA-2A Compressor** | Threshold, ratio, attack, release, knee, mix | Kurtosis, flux, dynamic range, spectral centroid |
 | **De-esser** | Intensity (0.0-0.6) | Spectral centroid + rolloff |
@@ -143,7 +143,7 @@ Jivetalking employs speech profile extraction for adaptive tuning:
 | **Look-ahead Capability** | Yes—infinite look-ahead via multiple passes | Yes—infinite look-ahead via Pass 1 analysis |
 | **Target Loudness Standard** | -18 dB RMS (custom RMS calculation) | -16 LUFS |
 | **Silence Detection** | Fixed: 50ms subsegments > -44 dB | Adaptive: spectral analysis + room tone scoring |
-| **Noise Reduction** | None | anlmdn (Non-Local Means) + compand |
+| **Noise Reduction** | None | `anlmdn` (Non-Local Means, 32 kHz pre-denoise path, `r=0.0045`) + compand |
 | **Dynamics Processing** | Implicit in leveling algorithm | Explicit LA-2A-style compressor + CBS Volumax limiter |
 | **Gating/Expansion** | None | DS201-inspired soft expander (2:1-4:1 ratio) |
 | **Highpass Filtering** | None | Adaptive 60-120Hz with warm voice protection |
@@ -220,7 +220,7 @@ Jivetalking employs speech profile extraction for adaptive tuning:
 
 ### Capabilities Jivetalking Has That Levelator Lacked
 
-1. **Noise Reduction:** Non-Local Means denoising (`anlmdn`) always active; adaptive compand applied when a silence region is elected as the noise profile
+1. **Noise Reduction:** Non-Local Means denoising (`anlmdn`) always active with the production `anlmdn_sr_32000_best_r` path: 32 kHz before `anlmdn`, `r=0.0045`, then restored to the standard processing/output rate. Adaptive compand applies when a silence region is elected as the noise profile
 2. **Gating:** Soft expander for inter-speech cleanup
 3. **True Peak Limiting:** Prevents inter-sample peaks
 4. **De-essing:** Automatic sibilance control

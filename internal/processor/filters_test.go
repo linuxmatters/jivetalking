@@ -64,6 +64,7 @@ func newTestConfig() *FilterChainConfig {
 		VolumaxOutputLevel: 1.0,
 
 		// NoiseRemove defaults (anlmdn + compand)
+		NoiseRemovePreSampleRate:    0,
 		NoiseRemoveCompandEnabled:   true,
 		NoiseRemoveStrength:         0.00001,
 		NoiseRemovePatchSec:         0.006,
@@ -650,6 +651,25 @@ func TestBuildNoiseRemoveFilter(t *testing.T) {
 		if strings.Contains(spec, "compand=") {
 			t.Errorf("compand-disabled spec should not contain compand, got: %s", spec)
 		}
+	})
+
+	t.Run("pre-sample-rate cap appears before anlmdn", func(t *testing.T) {
+		config := newTestConfig()
+		config.NoiseRemoveEnabled = true
+		config.NoiseRemovePreSampleRate = 32000
+
+		spec := config.buildNoiseRemoveFilter()
+
+		assertFullbenchSpecContains(t, spec, []string{
+			"aformat=sample_rates=32000:channel_layouts=mono:sample_fmts=fltp",
+			"anlmdn=",
+			"compand=",
+		})
+		assertFullbenchSpecOrder(t, spec, []string{
+			"aformat=sample_rates=32000",
+			"anlmdn=",
+			"compand=",
+		})
 	})
 
 	t.Run("different expansion levels", func(t *testing.T) {

@@ -43,6 +43,12 @@ type fullbenchPass4Seed struct {
 	Loudnorm  *fullbenchLoudnormSetup
 }
 
+type fullbenchFilterSpecRunResult struct {
+	InputMetadata      InputMetadata
+	OutputMetadata     *audio.Metadata
+	OutputMeasurements *OutputMeasurements
+}
+
 type fullbenchPass2AblationVariant struct {
 	Name                string
 	ExtractMeasurements bool
@@ -76,6 +82,9 @@ func resolveFullbenchFixtureFromEnv(tb testing.TB) (string, bool) {
 	}
 
 	if _, err := os.Stat(fixturePath); err != nil { // #nosec G703 -- local benchmark fixture path is explicitly supplied by JIVETALKING_BENCH_FIXTURE.
+		if os.IsNotExist(err) {
+			tb.Skipf("%s is set but benchmark fixture is absent: %s", fullbenchFixtureEnv, fixturePath)
+		}
 		tb.Fatalf("%s is set but cannot be accessed: %v", fullbenchFixtureEnv, err)
 	}
 	return copyBenchmarkFixture(tb, fixturePath, tb.TempDir()), true
@@ -130,6 +139,19 @@ func TestResolveFullbenchFixtureFromEnvCopiesEnvironmentFixture(t *testing.T) {
 }
 
 func runFullbenchFilterSpec(tb testing.TB, inputPath, outputPath, filterSpec string, extractMeasurements bool) (InputMetadata, *OutputMeasurements) {
+	tb.Helper()
+
+	result := runFullbenchFilterSpecCore(tb, inputPath, outputPath, filterSpec, extractMeasurements, false)
+	return result.InputMetadata, result.OutputMeasurements
+}
+
+func runFullbenchFilterSpecResult(tb testing.TB, inputPath, outputPath, filterSpec string, extractMeasurements bool) *fullbenchFilterSpecRunResult {
+	tb.Helper()
+
+	return runFullbenchFilterSpecCore(tb, inputPath, outputPath, filterSpec, extractMeasurements, true)
+}
+
+func runFullbenchFilterSpecCore(tb testing.TB, inputPath, outputPath, filterSpec string, extractMeasurements, includeOutputMetadata bool) *fullbenchFilterSpecRunResult {
 	tb.Helper()
 
 	if filterSpec == "" {
@@ -204,11 +226,17 @@ func runFullbenchFilterSpec(tb testing.TB, inputPath, outputPath, filterSpec str
 	}
 	encoderClosed = true
 
+	result := &fullbenchFilterSpecRunResult{
+		InputMetadata: inputMetadata,
+	}
+	if includeOutputMetadata {
+		result.OutputMetadata = readFullbenchOutputMetadata(tb, outputPath)
+	}
 	if outputAcc != nil {
-		return inputMetadata, finalizeOutputMeasurements(outputAcc)
+		result.OutputMeasurements = finalizeOutputMeasurements(outputAcc)
 	}
 
-	return inputMetadata, nil
+	return result
 }
 
 func fullbenchPass2AblationVariants() []fullbenchPass2AblationVariant {
@@ -736,6 +764,23 @@ func TestRunFullbenchFilterSpecSyntheticSmoke(t *testing.T) {
 	}
 	assertFullbenchFLACOutput(t, measuredOutputPath)
 
+	result := runFullbenchFilterSpecResult(t, inputPath, filepath.Join(t.TempDir(), "result.flac"), filterSpec, true)
+	if result.InputMetadata.SampleRate != 44100 {
+		t.Fatalf("result input metadata sample rate mismatch: got %d, want 44100", result.InputMetadata.SampleRate)
+	}
+	if result.OutputMetadata == nil {
+		t.Fatal("expected result output metadata")
+	}
+	if result.OutputMetadata.SampleRate != 44100 {
+		t.Fatalf("result output metadata sample rate mismatch: got %d, want 44100", result.OutputMetadata.SampleRate)
+	}
+	if result.OutputMetadata.Channels != 1 {
+		t.Fatalf("result output metadata channels mismatch: got %d, want 1", result.OutputMetadata.Channels)
+	}
+	if result.OutputMeasurements == nil {
+		t.Fatal("expected result output measurements when extraction is requested")
+	}
+
 	unmeasuredOutputPath := filepath.Join(t.TempDir(), "unmeasured.flac")
 	_, unmeasuredOutputMeasurements := runFullbenchFilterSpec(t, inputPath, unmeasuredOutputPath, filterSpec, false)
 	if unmeasuredOutputMeasurements != nil {
@@ -828,6 +873,18 @@ func BenchmarkPass4FilterAblations(b *testing.B) {
 	}
 }
 
+func readFullbenchOutputMetadata(tb testing.TB, outputPath string) *audio.Metadata {
+	tb.Helper()
+
+	reader, metadata, err := audio.OpenAudioFile(outputPath)
+	if err != nil {
+		tb.Fatalf("failed to reopen fullbench output: %v", err)
+	}
+	defer reader.Close()
+
+	return metadata
+}
+
 func assertFullbenchFLACOutput(tb testing.TB, outputPath string) {
 	tb.Helper()
 
@@ -839,12 +896,7 @@ func assertFullbenchFLACOutput(tb testing.TB, outputPath string) {
 		tb.Fatal("fullbench output is empty")
 	}
 
-	reader, metadata, err := audio.OpenAudioFile(outputPath)
-	if err != nil {
-		tb.Fatalf("failed to reopen fullbench output: %v", err)
-	}
-	defer reader.Close()
-
+	metadata := readFullbenchOutputMetadata(tb, outputPath)
 	if metadata.SampleRate != 44100 {
 		tb.Fatalf("output sample rate mismatch: got %d, want 44100", metadata.SampleRate)
 	}

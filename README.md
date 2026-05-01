@@ -30,7 +30,7 @@ Filter chain inspired by studio legends, tuned to your specific audio:
 | Filter | Hardware Inspiration | What It Does |
 |--------|---------------------|--------------|
 | **Highpass** | Drawmer DS201 | Removes subsonic rumble (60-120 Hz, adaptive to spectral content) |
-| **Noise reduction** | Non-Local Means | Adaptive anlmdn denoiser; compand residual suppression added when a noise profile is available |
+| **Noise reduction** | Non-Local Means | Adaptive `anlmdn` denoiser using the production `anlmdn_sr_32000_best_r` path: 32 kHz before `anlmdn`, `r=0.0045`, then compand residual suppression when a noise profile is available |
 | **Gate** | DS201 expander | Soft expansion for natural inter-phrase cleanup; breath reduction option positions threshold between noise floor and quiet speech level |
 | **Compressor** | Teletronix LA-2A | Programme-dependent optical compression; ratio and release adapt to kurtosis and flux. High-crest override pushes ratio, threshold, release, and knee when predicted limiter ceiling deficit is positive |
 | **De-esser** | — | Adaptive intensity (0.0-0.6) based on spectral centroid and rolloff |
@@ -210,7 +210,7 @@ Record → Process → Edit → Finalise
   └─ Each presenter records separately, exports FLAC
 ```
 
-**Include 10-15 seconds of silence somewhere in your recording.** Just sit quietly and let the room breathe - at the start, between sections, or at the end. Jivetalking scans the entire file to find the cleanest quiet section for building a noise profile, which drives the adaptive noise reduction in Pass 2. Without a clean quiet section, the NR compander is disabled entirely and only the self-adapting spectral denoiser runs.
+**Include 10-15 seconds of silence somewhere in your recording.** Just sit quietly and let the room breathe - at the start, between sections, or at the end. Jivetalking scans the entire file to find the cleanest quiet section for building a noise profile, which drives the adaptive noise reduction in Pass 2. Without a clean quiet section, the NR compander is disabled entirely and the 32 kHz `anlmdn` path still runs.
 
 ---
 
@@ -257,7 +257,23 @@ just bench-cli FILE
 
 # Analysis-only CLI benchmark against a copied input file
 just bench-analysis FILE
+
+# Focused anlmdn variant benchmarks
+JIVETALKING_BENCH_FIXTURE="$(pwd -P)/testdata/fixture-5m.flac" just bench-anlmdn
+
+# Capture processed outputs, filter specs, metrics, validation reports, and timing
+just bench-anlmdn-capture
+
+# Profile the production anlmdn variant, anlmdn_sr_32000_best_r
+JIVETALKING_BENCH_FIXTURE="$(pwd -P)/testdata/fixture-5m.flac" just bench-anlmdn-profile
+
+# Profile the legacy default for comparison
+JIVETALKING_ANLMDN_PROFILE_VARIANT=anlmdn_legacy_default \
+  JIVETALKING_BENCH_FIXTURE="$(pwd -P)/testdata/fixture-5m.flac" \
+  just bench-anlmdn-profile
 ```
+
+`anlmdn_sr_32000_best_r` is the production default. It caps the signal to 32 kHz before `anlmdn`, uses `r=0.0045`, and restores the normal 44.1 kHz mono output path afterwards. `anlmdn_legacy_default` keeps the old uncapped path with `r=0.0058` for comparison.
 
 ### Project Structure
 
