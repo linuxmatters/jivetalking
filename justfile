@@ -99,6 +99,52 @@ clean:
 test: _check-submodule
     go test ./...
 
+# Run processor package benchmarks
+bench: _check-submodule
+    go test -run '^$' -bench . -benchmem ./internal/processor
+
+# Run processor package benchmarks with a CPU profile
+bench-profile: _check-submodule
+    #!/usr/bin/env bash
+    set -e
+    mkdir -p .bench
+    go test -run '^$' -bench . -benchmem -cpuprofile .bench/cpu.out ./internal/processor
+    echo "Run CPU profile analysis with:"
+    echo "  go tool pprof .bench/cpu.out"
+
+# Benchmark a full CLI processing run against a copied input file
+bench-cli FILE: build
+    #!/usr/bin/env bash
+    set -e
+    mkdir -p .bench/input
+    input_name=$(basename -- "{{FILE}}")
+    bench_input=".bench/input/$input_name"
+    cp -- "{{FILE}}" "$bench_input"
+    time_bin="/usr/bin/time"
+    if [ ! -x "$time_bin" ]; then
+        time_bin=$(type -P time)
+    fi
+    if [ -t 1 ]; then
+        "$time_bin" -v -o .bench/cli-time.txt ./jivetalking "$bench_input"
+    else
+        cmd=$(printf './jivetalking %q' "$bench_input")
+        "$time_bin" -v -o .bench/cli-time.txt script -qefc "$cmd" /dev/null > .bench/cli-output.txt
+    fi
+
+# Benchmark a CLI analysis-only run against a copied input file
+bench-analysis FILE: build
+    #!/usr/bin/env bash
+    set -e
+    mkdir -p .bench/input
+    input_name=$(basename -- "{{FILE}}")
+    bench_input=".bench/input/$input_name"
+    cp -- "{{FILE}}" "$bench_input"
+    time_bin="/usr/bin/time"
+    if [ ! -x "$time_bin" ]; then
+        time_bin=$(type -P time)
+    fi
+    "$time_bin" -v -o .bench/analysis-time.txt ./jivetalking --analysis-only "$bench_input"
+
 # Install jivetalking to ~/.local/bin
 install: build
     @mkdir -p ~/.local/bin 2>/dev/null || true

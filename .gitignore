@@ -2,6 +2,7 @@
 /jivetalking
 jivetalking-debug.log
 testdata/
+.bench/
 
 # ffmpeg-statigo libraries (downloaded, not committed)
 third_party/ffmpeg-statigo/lib/*/libffmpeg.a

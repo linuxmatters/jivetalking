@@ -15,6 +15,7 @@ type TestAudioOptions struct {
 	ToneFreq     float64 // Sine wave frequency in Hz (0 = no tone)
 	ToneLevel    float64 // Tone level in dBFS (e.g., -23.0)
 	NoiseLevel   float64 // White noise level in dBFS (0 = no noise, -60 = quiet noise)
+	Dir          string  // Directory for the generated file (default: OS temp dir)
 	SilenceGap   struct {
 		Start    float64 // Start time of silence gap in seconds
 		Duration float64 // Duration of silence gap in seconds
@@ -24,8 +25,8 @@ type TestAudioOptions struct {
 // generateTestAudio creates a synthetic WAV audio file for testing.
 // The generated audio can include a sine wave tone, white noise, and silence gaps.
 // Returns the path to the temporary file (caller must clean up with os.Remove).
-func generateTestAudio(t *testing.T, opts TestAudioOptions) string {
-	t.Helper()
+func generateTestAudio(tb testing.TB, opts TestAudioOptions) string {
+	tb.Helper()
 
 	// Set defaults
 	if opts.SampleRate == 0 {
@@ -112,9 +113,9 @@ func generateTestAudio(t *testing.T, opts TestAudioOptions) string {
 	}
 
 	// Create temp file
-	tmpFile, err := os.CreateTemp("", "jivetalking-test-*.wav")
+	tmpFile, err := os.CreateTemp(opts.Dir, "jivetalking-test-*.wav")
 	if err != nil {
-		t.Fatalf("failed to create temp file: %v", err)
+		tb.Fatalf("failed to create temp file: %v", err)
 	}
 	tmpPath := tmpFile.Name()
 
@@ -122,12 +123,12 @@ func generateTestAudio(t *testing.T, opts TestAudioOptions) string {
 	if err := writeWAV(tmpFile, samples, opts.SampleRate); err != nil {
 		tmpFile.Close()
 		os.Remove(tmpPath)
-		t.Fatalf("failed to write WAV file: %v", err)
+		tb.Fatalf("failed to write WAV file: %v", err)
 	}
 
 	if err := tmpFile.Close(); err != nil {
 		os.Remove(tmpPath)
-		t.Fatalf("failed to close temp file: %v", err)
+		tb.Fatalf("failed to close temp file: %v", err)
 	}
 
 	return tmpPath
@@ -202,15 +203,15 @@ func writeWAV(f *os.File, samples []int16, sampleRate int) error {
 }
 
 // cleanupTestAudio removes a test audio file and its processed output (if any)
-func cleanupTestAudio(t *testing.T, path string) {
-	t.Helper()
+func cleanupTestAudio(tb testing.TB, path string) {
+	tb.Helper()
 	if path == "" {
 		return
 	}
 
 	// Remove the input file
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		t.Logf("warning: failed to remove test file %s: %v", path, err)
+		tb.Logf("warning: failed to remove test file %s: %v", path, err)
 	}
 
 	// Remove any processed output files (both old -processed and new -LUFS-NN-processed patterns)
