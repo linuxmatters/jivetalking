@@ -141,6 +141,86 @@ func TestDisplayAnalysisResults_CompanderEnabled(t *testing.T) {
 	}
 }
 
+func TestDisplayAnalysisResults_TimingLabels(t *testing.T) {
+	m := makeMinimalMeasurements()
+	config := processor.DefaultFilterConfig()
+	timings := AnalysisTimings{
+		Analysis:     2 * time.Second,
+		Adaptation:   100 * time.Millisecond,
+		ReportOutput: 50 * time.Millisecond,
+	}
+
+	var buf bytes.Buffer
+	DisplayAnalysisResults(&buf, "/tmp/test.wav", makeMinimalMetadata(), m, config, timings)
+	output := buf.String()
+
+	for _, want := range []string{
+		"ANALYSIS TIMINGS",
+		"Analysis:",
+		"Adaptation:",
+		"Report Output:",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("expected %q in output", want)
+		}
+	}
+}
+
+func TestCompleteAnalysisTimings_CapturesReportOutput(t *testing.T) {
+	timings := AnalysisTimings{
+		Analysis:   2 * time.Second,
+		Adaptation: 100 * time.Millisecond,
+	}
+
+	completed := completeAnalysisTimings(timings, time.Now().Add(-2*time.Second))
+
+	if completed.ReportOutput <= 0 {
+		t.Fatal("expected ReportOutput to be captured")
+	}
+	if completed.Analysis != timings.Analysis {
+		t.Errorf("Analysis = %s, want %s", completed.Analysis, timings.Analysis)
+	}
+	if completed.Adaptation != timings.Adaptation {
+		t.Errorf("Adaptation = %s, want %s", completed.Adaptation, timings.Adaptation)
+	}
+}
+
+func TestDisplayAnalysisResults_ExcludesProcessingOnlyFields(t *testing.T) {
+	m := makeMinimalMeasurements()
+	config := processor.DefaultFilterConfig()
+	timings := AnalysisTimings{
+		Analysis:   2 * time.Second,
+		Adaptation: 100 * time.Millisecond,
+	}
+
+	var buf bytes.Buffer
+	DisplayAnalysisResults(&buf, "/tmp/test.wav", makeMinimalMetadata(), m, config, timings)
+	output := buf.String()
+
+	for _, forbidden := range []string{
+		"Pass 2",
+		"Pass 3",
+		"Pass 4",
+		"Filtered Regions",
+		"Filtered Measurements",
+		"Final Regions",
+		"Final Measurements",
+		"Loudnorm",
+		"loudnorm",
+		"-processed.log",
+		".bench/",
+		"pprof",
+		"Wall Time",
+		"User CPU",
+		"System CPU",
+		"RSS",
+	} {
+		if strings.Contains(output, forbidden) {
+			t.Errorf("expected analysis output to omit %q", forbidden)
+		}
+	}
+}
+
 func TestWriteDiagnosticSilence_VoiceActivated_WithCandidates(t *testing.T) {
 	m := makeMinimalMeasurements()
 	m.VoiceActivated = true
