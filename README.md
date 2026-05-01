@@ -108,7 +108,6 @@ jivetalking [flags] <files...>
 | `-v, --version` | Show version and exit |
 | `-a, --analysis-only` | Run analysis only (Pass 1), display results, skip processing |
 | `-d, --debug` | Enable debug logging to `jivetalking-debug.log` |
-| `--logs` | Save detailed analysis reports alongside output |
 | `--silence-scan-duration=DURATION` | Cap silence-candidate scan to the first `DURATION` of input (e.g. `30s`, `1m30s`). Default `0s` scans the whole file |
 
 
@@ -122,11 +121,13 @@ jivetalking presenter1.flac presenter2.flac presenter3.flac
 jivetalking -a presenter1.flac presenter2.flac
 
 # Debug a problematic recording
-jivetalking -d --logs troublesome-recording.flac
+jivetalking -d troublesome-recording.flac
 
 # Process all FLAC files in directory
 jivetalking *.flac
 ```
+
+Processing writes a per-file `.log` report by default next to each processed output. For example, `recording-LUFS-16-processed.flac` gets `recording-LUFS-16-processed.log`.
 
 ### Limiting silence-scan duration
 
@@ -233,8 +234,29 @@ just build
 # Run tests
 just test
 
+# Run processor benchmarks
+just bench
+
 # Install to ~/.local/bin
 just install
+```
+
+### Benchmarks
+
+Benchmark artefacts live under `.bench/`. They are separate from generated per-file `.log` reports.
+
+```bash
+# Processor package benchmarks
+just bench
+
+# Processor benchmarks with CPU profile at .bench/cpu.out
+just bench-profile
+
+# Full CLI processing benchmark against a copied input file
+just bench-cli FILE
+
+# Analysis-only CLI benchmark against a copied input file
+just bench-analysis FILE
 ```
 
 ### Project Structure

@@ -19,7 +19,7 @@ mark-log-stash:
 # Process mark audio
 mark:
     @rm -f {{ testdata }}/LMP-{{ episode }}-mark-*-processed.*
-    @./jivetalking --debug --logs --silence-scan-duration=3m {{ testdata }}/LMP-{{ episode }}-mark.flac
+    @./jivetalking --debug --silence-scan-duration=3m {{ testdata }}/LMP-{{ episode }}-mark.flac
     @just mark-logs
 
 # Get Martin's processed logs
@@ -33,7 +33,7 @@ martin-log-stash:
 # Process martin audio
 martin:
     @rm -f {{ testdata }}/LMP-{{ episode }}-martin-*-processed.*
-    @./jivetalking --debug --logs --silence-scan-duration=3m {{ testdata }}/LMP-{{ episode }}-martin.flac
+    @./jivetalking --debug --silence-scan-duration=3m {{ testdata }}/LMP-{{ episode }}-martin.flac
     @just martin-logs
 
 # Get popey's processed logs
@@ -47,7 +47,7 @@ popey-log-stash:
 # Process popey audio
 popey:
     @rm -f {{ testdata }}/LMP-{{ episode }}-popey-*-processed.*
-    @./jivetalking --debug --logs --silence-scan-duration=3m {{ testdata }}/LMP-{{ episode }}-popey.flac
+    @./jivetalking --debug --silence-scan-duration=3m {{ testdata }}/LMP-{{ episode }}-popey.flac
     @just popey-logs
 
 # Analyse Mark's audio
@@ -76,7 +76,7 @@ all-episodes:
         for presenter in mark martin popey; do
             echo "--- $presenter ---"
             rm -f {{ testdata }}/LMP-${ep}-${presenter}-*-processed.*
-            ./jivetalking --debug --logs {{ testdata }}/LMP-${ep}-${presenter}.flac
+            ./jivetalking --debug {{ testdata }}/LMP-${ep}-${presenter}.flac
         done
     done
 
