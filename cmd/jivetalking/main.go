@@ -3,7 +3,9 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/alecthomas/kong"
@@ -185,6 +187,37 @@ func buildProcessingReportData(inputPath string, fileStartTime time.Time, timing
 	}
 }
 
+type analysisOnlyDeps struct {
+	stdout          io.Writer
+	hasTTY          func() bool
+	openMetadata    func(string) (*audio.Metadata, error)
+	runWithTUI      func(string, *processor.FilterChainConfig, func(string, ...any)) (*processor.AnalysisResult, error)
+	analyzeDetailed func(string, *processor.FilterChainConfig, func(processor.PassNumber, string, float64, float64, *processor.AudioMeasurements)) (*processor.AnalysisResult, error)
+	displayResults  func(io.Writer, string, *audio.Metadata, *processor.AudioMeasurements, *processor.FilterChainConfig, ...logging.AnalysisTimings)
+	printError      func(string)
+}
+
+func defaultAnalysisOnlyDeps() analysisOnlyDeps {
+	return analysisOnlyDeps{
+		stdout:          os.Stdout,
+		hasTTY:          isTTY,
+		openMetadata:    openAudioMetadata,
+		runWithTUI:      runAnalysisWithTUI,
+		analyzeDetailed: processor.AnalyzeOnlyDetailed,
+		displayResults:  logging.DisplayAnalysisResults,
+		printError:      cli.PrintError,
+	}
+}
+
+func openAudioMetadata(inputPath string) (*audio.Metadata, error) {
+	reader, metadata, err := audio.OpenAudioFile(inputPath)
+	if err != nil {
+		return nil, err
+	}
+	reader.Close()
+	return metadata, nil
+}
+
 func (ph *progressHandler) timings(pass2Time time.Duration) logging.ProcessingTimings {
 	return logging.ProcessingTimings{
 		Pass1: ph.pass1Time,
@@ -237,36 +270,39 @@ func (ph *progressHandler) callback(pass processor.PassNumber, passName string, 
 // runAnalysisOnly performs Pass 1 analysis on each file with a progress UI,
 // then displays results to console. Skips full 4-pass processing.
 func runAnalysisOnly(files []string, config *processor.FilterChainConfig, log func(string, ...any)) {
+	runAnalysisOnlyWithDeps(files, config, log, defaultAnalysisOnlyDeps())
+}
+
+func runAnalysisOnlyWithDeps(files []string, config *processor.FilterChainConfig, log func(string, ...any), deps analysisOnlyDeps) {
 	// Check if we have a TTY for the progress UI
-	hasTTY := isTTY()
+	hasTTY := deps.hasTTY()
 
 	for i, inputPath := range files {
 		// Add separator between multiple files
 		if i > 0 {
-			fmt.Println()
+			fmt.Fprintln(deps.stdout)
 		}
 
 		log("[ANALYSIS] Starting analysis for %s", inputPath)
 
 		// Get file metadata for duration/sample rate display
-		reader, metadata, err := audio.OpenAudioFile(inputPath)
+		metadata, err := deps.openMetadata(inputPath)
 		if err != nil {
-			cli.PrintError(fmt.Sprintf("Failed to open %s: %v", inputPath, err))
+			deps.printError(fmt.Sprintf("Failed to open %s: %v", inputPath, err))
 			continue
 		}
-		reader.Close()
 
 		var analysisResult *processor.AnalysisResult
 		var analysisErr error
 
 		if hasTTY {
 			// Run with TUI progress display
-			analysisResult, analysisErr = runAnalysisWithTUI(inputPath, config, log)
+			analysisResult, analysisErr = deps.runWithTUI(inputPath, config, log)
 		} else {
 			// Fallback: run without TUI (for non-interactive environments)
 			log("[ANALYSIS] No TTY available, running without progress UI")
-			fmt.Printf("Analysing: %s\n", inputPath)
-			analysisResult, analysisErr = processor.AnalyzeOnlyDetailed(inputPath, config, nil)
+			fmt.Fprintf(deps.stdout, "Analysing: %s\n", filepath.Base(inputPath))
+			analysisResult, analysisErr = deps.analyzeDetailed(inputPath, config, nil)
 		}
 
 		if analysisErr != nil {
@@ -274,7 +310,7 @@ func runAnalysisOnly(files []string, config *processor.FilterChainConfig, log fu
 				// User pressed Ctrl+C - exit immediately, don't process remaining files
 				return
 			}
-			cli.PrintError(fmt.Sprintf("Analysis failed for %s: %v", inputPath, analysisErr))
+			deps.printError(fmt.Sprintf("Analysis failed for %s: %v", inputPath, analysisErr))
 			continue
 		}
 
@@ -285,7 +321,7 @@ func runAnalysisOnly(files []string, config *processor.FilterChainConfig, log fu
 			Analysis:   analysisResult.AnalysisDuration,
 			Adaptation: analysisResult.AdaptationDuration,
 		}
-		logging.DisplayAnalysisResults(os.Stdout, inputPath, metadata, analysisResult.Measurements, analysisResult.Config, timings)
+		deps.displayResults(deps.stdout, inputPath, metadata, analysisResult.Measurements, analysisResult.Config, timings)
 	}
 }
 

@@ -40,7 +40,7 @@ internal/
 ├── logging/
 │   ├── analysis_display.go # DisplayAnalysisResults() - console output for --analysis-only mode
 │   ├── recording_tips.go   # Actionable recording advice from measurements
-│   ├── report.go           # GenerateReport() - detailed analysis log files (--logs)
+│   ├── report.go           # GenerateReport() - always-on detailed processing report files
 │   └── table.go            # MetricRow, reusable multi-column table formatting (Input/Filtered/Final)
 ├── ui/
 │   ├── analysis_model.go   # AnalysisModel - Bubbletea model for --analysis-only progress TUI
@@ -50,7 +50,7 @@ internal/
 └── cli/                    # Help styling, version output, error formatting
 ```
 
-**Data flow (processing):** `main.go` spawns goroutine → `ProcessAudio()` → Pass 1 (`AnalyzeAudio`) → `AdaptConfig()` → Pass 2 (filter chain) → Pass 3/4 (`ApplyNormalisation`) → sends `ui.*Msg` to TUI via `tea.Program.Send()`.
+**Data flow (processing):** `main.go` spawns goroutine → `ProcessAudio()` → Pass 1 (`AnalyzeAudio`) → `AdaptConfig()` → Pass 2 (filter chain) → Pass 3/4 (`ApplyNormalisation`) → `GenerateReport()` writes an always-on processing report → sends `ui.*Msg` to TUI via `tea.Program.Send()`.
 
 **Data flow (analysis-only):** `main.go` → `runAnalysisOnly()` → `AnalyzeOnly()` → Pass 1 + `AdaptConfig()` → `AnalysisModel` TUI shows progress → `DisplayAnalysisResults()` prints report to console. No output files created.
 
