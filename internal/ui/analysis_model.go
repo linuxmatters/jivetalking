@@ -29,6 +29,7 @@ type AnalysisModel struct {
 	spinnerIndex int
 
 	// Results (populated when complete)
+	Result       *processor.AnalysisResult
 	Measurements *processor.AudioMeasurements
 	Config       *processor.FilterChainConfig
 	Error        error
@@ -53,6 +54,7 @@ type AnalysisProgressMsg struct {
 
 // AnalysisCompleteMsg signals analysis has completed
 type AnalysisCompleteMsg struct {
+	Result       *processor.AnalysisResult
 	Measurements *processor.AudioMeasurements
 	Config       *processor.FilterChainConfig
 	Error        error
@@ -113,8 +115,14 @@ func (m AnalysisModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case AnalysisCompleteMsg:
-		m.Measurements = msg.Measurements
-		m.Config = msg.Config
+		m.Result = msg.Result
+		if msg.Result != nil {
+			m.Measurements = msg.Result.Measurements
+			m.Config = msg.Result.Config
+		} else {
+			m.Measurements = msg.Measurements
+			m.Config = msg.Config
+		}
 		m.Error = msg.Error
 		m.Done = true
 		return m, tea.Quit

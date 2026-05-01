@@ -256,18 +256,17 @@ func runAnalysisOnly(files []string, config *processor.FilterChainConfig, log fu
 		}
 		reader.Close()
 
-		var measurements *processor.AudioMeasurements
-		var adaptedConfig *processor.FilterChainConfig
+		var analysisResult *processor.AnalysisResult
 		var analysisErr error
 
 		if hasTTY {
 			// Run with TUI progress display
-			measurements, adaptedConfig, analysisErr = runAnalysisWithTUI(inputPath, config, log)
+			analysisResult, analysisErr = runAnalysisWithTUI(inputPath, config, log)
 		} else {
 			// Fallback: run without TUI (for non-interactive environments)
 			log("[ANALYSIS] No TTY available, running without progress UI")
 			fmt.Printf("Analysing: %s\n", inputPath)
-			measurements, adaptedConfig, analysisErr = processor.AnalyzeOnly(inputPath, config, nil)
+			analysisResult, analysisErr = processor.AnalyzeOnlyDetailed(inputPath, config, nil)
 		}
 
 		if analysisErr != nil {
@@ -282,7 +281,11 @@ func runAnalysisOnly(files []string, config *processor.FilterChainConfig, log fu
 		log("[ANALYSIS] Analysis complete for %s", inputPath)
 
 		// Display results to console
-		logging.DisplayAnalysisResults(os.Stdout, inputPath, metadata, measurements, adaptedConfig)
+		timings := logging.AnalysisTimings{
+			Analysis:   analysisResult.AnalysisDuration,
+			Adaptation: analysisResult.AdaptationDuration,
+		}
+		logging.DisplayAnalysisResults(os.Stdout, inputPath, metadata, analysisResult.Measurements, analysisResult.Config, timings)
 	}
 }
 
@@ -295,8 +298,8 @@ func isTTY() bool {
 	return (fileInfo.Mode() & os.ModeCharDevice) != 0
 }
 
-// runAnalysisWithTUI runs analysis with the Bubbletea progress UI
-func runAnalysisWithTUI(inputPath string, config *processor.FilterChainConfig, log func(string, ...any)) (*processor.AudioMeasurements, *processor.FilterChainConfig, error) {
+// runAnalysisWithTUI runs analysis with the Bubbletea progress UI.
+func runAnalysisWithTUI(inputPath string, config *processor.FilterChainConfig, log func(string, ...any)) (*processor.AnalysisResult, error) {
 	// Create the analysis UI model
 	model := ui.NewAnalysisModel()
 
@@ -321,37 +324,36 @@ func runAnalysisWithTUI(inputPath string, config *processor.FilterChainConfig, l
 		}
 
 		// Run analysis-only with progress callback
-		measurements, adaptedConfig, err := processor.AnalyzeOnly(path, config, progressCallback)
+		result, err := processor.AnalyzeOnlyDetailed(path, config, progressCallback)
 
 		// Signal completion
 		p.Send(ui.AnalysisCompleteMsg{
-			Measurements: measurements,
-			Config:       adaptedConfig,
-			Error:        err,
+			Result: result,
+			Error:  err,
 		})
 	}(inputPath)
 
 	// Run the TUI until analysis completes
 	finalModel, err := p.Run()
 	if err != nil {
-		return nil, nil, fmt.Errorf("UI error: %w", err)
+		return nil, fmt.Errorf("UI error: %w", err)
 	}
 
 	// Get the final model state
 	analysisModel, ok := finalModel.(ui.AnalysisModel)
 	if !ok {
-		return nil, nil, fmt.Errorf("unexpected model type")
+		return nil, fmt.Errorf("unexpected model type")
 	}
 
 	// Check for analysis error
 	if analysisModel.Error != nil {
-		return nil, nil, analysisModel.Error
+		return nil, analysisModel.Error
 	}
 
 	// Check for user cancellation (TUI exited without completing analysis)
 	if !analysisModel.Done {
-		return nil, nil, errCancelledByUser
+		return nil, errCancelledByUser
 	}
 
-	return analysisModel.Measurements, analysisModel.Config, nil
+	return analysisModel.Result, nil
 }

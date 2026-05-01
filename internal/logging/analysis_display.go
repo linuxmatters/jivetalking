@@ -15,13 +15,21 @@ import (
 	"github.com/linuxmatters/jivetalking/internal/processor"
 )
 
+// AnalysisTimings contains reportable analysis-only stage durations.
+type AnalysisTimings struct {
+	Analysis     time.Duration
+	Adaptation   time.Duration
+	ReportOutput time.Duration
+}
+
 // DisplayAnalysisResults outputs Pass 1 analysis results to the console.
 // Used by --analysis-only mode for rapid inspection without full processing.
-func DisplayAnalysisResults(w io.Writer, inputPath string, metadata *audio.Metadata, measurements *processor.AudioMeasurements, config *processor.FilterChainConfig) {
+func DisplayAnalysisResults(w io.Writer, inputPath string, metadata *audio.Metadata, measurements *processor.AudioMeasurements, config *processor.FilterChainConfig, timings ...AnalysisTimings) {
 	if measurements == nil {
 		fmt.Fprintf(w, "No analysis data available for %s\n", filepath.Base(inputPath))
 		return
 	}
+	reportOutputStart := time.Now()
 
 	// Header
 	fmt.Fprintln(w, strings.Repeat("=", 70))
@@ -300,6 +308,29 @@ func DisplayAnalysisResults(w io.Writer, inputPath string, metadata *audio.Metad
 			fmt.Fprintf(w, "  ⚠ %s\n", wrapped)
 		}
 	}
+
+	if len(timings) > 0 && hasAnalysisTimings(timings[0]) {
+		fmt.Fprintln(w)
+		writeAnalysisTimingSection(w, completeAnalysisTimings(timings[0], reportOutputStart))
+	}
+}
+
+func hasAnalysisTimings(timings AnalysisTimings) bool {
+	return timings.Analysis > 0 || timings.Adaptation > 0 || timings.ReportOutput > 0
+}
+
+func writeAnalysisTimingSection(w io.Writer, timings AnalysisTimings) {
+	writeAnalysisSection(w, "ANALYSIS TIMINGS")
+	fmt.Fprintf(w, "  Analysis:      %s\n", formatDurationHMS(timings.Analysis.Seconds()))
+	fmt.Fprintf(w, "  Adaptation:    %s\n", formatDurationHMS(timings.Adaptation.Seconds()))
+	fmt.Fprintf(w, "  Report Output: %s\n", formatDurationHMS(timings.ReportOutput.Seconds()))
+}
+
+func completeAnalysisTimings(timings AnalysisTimings, reportOutputStart time.Time) AnalysisTimings {
+	if timings.ReportOutput <= 0 {
+		timings.ReportOutput = time.Since(reportOutputStart)
+	}
+	return timings
 }
 
 // writeSilenceCandidateMetrics writes the metric lines for a single silence candidate.
