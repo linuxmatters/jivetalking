@@ -17,7 +17,7 @@ repository:
   merge_commit_message: PR_TITLE
   delete_branch_on_merge: true
   allow_update_branch: false
-  allow_auto_merge: true
+  allow_auto_merge: false
   web_commit_signoff_required: false
   default_workflow_permissions: read
   can_approve_pull_request_reviews: false
@@ -85,7 +85,7 @@ labels:
 
 swatches:
   - path: .github/workflows/tailor.yml
-    alteration: always
+    alteration: never
 
   - path: .github/dependabot.yml
     alteration: first-fit
@@ -133,7 +133,7 @@ swatches:
     alteration: first-fit
 
   - path: .tailor.yml
-    alteration: always
+    alteration: first-fit
 
   - path: .github/workflows/tailor-automerge.yml
-    alteration: triggered
+    alteration: never
