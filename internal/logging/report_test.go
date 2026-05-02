@@ -282,3 +282,254 @@ func TestGenerateReport_SkippedNormalisationTimingLabels(t *testing.T) {
 		}
 	}
 }
+
+func TestWriteDiagnosticSilence_CapsCandidatesChronologicallyWithElectedFirst(t *testing.T) {
+	m := makeInputMeasurements()
+	m.SilenceCandidates = makeRankedSilenceCandidates(12)
+	m.NoiseProfile = &processor.NoiseProfile{
+		Start:              m.SilenceCandidates[0].Region.Start,
+		Duration:           m.SilenceCandidates[0].Region.Duration,
+		MeasuredNoiseFloor: m.SilenceCandidates[0].RMSLevel,
+	}
+
+	output := captureReportDiagnostic(t, func(f *os.File) {
+		writeDiagnosticSilence(f, m)
+	})
+
+	for _, want := range []string{
+		"Silence Candidates:  12 evaluated",
+		"Displayed:           elected + top 10 chronological (1 omitted)",
+		"Candidate 1:       5.0s at 1.0s (score: 0.010, elected)",
+		"Candidate 2:       5.0s at 2.0s (score: 0.020)",
+		"RMS: -59.8 dBFS, Crest: 12.0 dB, Entropy: 0.420 (mixed voiced/unvoiced)",
+		"Rejected:            0",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("silence diagnostic missing %q", want)
+		}
+	}
+
+	for _, heading := range []string{"    Amplitude:\n", "    Spectral:\n", "    Loudness:\n"} {
+		if count := strings.Count(output, heading); count != 1 {
+			t.Fatalf("silence diagnostic %q heading count = %d, want 1", strings.TrimSpace(heading), count)
+		}
+	}
+
+	if count := strings.Count(output, "  Candidate "); count != 11 {
+		t.Fatalf("displayed silence candidates = %d, want 11", count)
+	}
+	assertAppearsBefore(t, output, "Candidate 1:", "Candidate 2:")
+	assertAppearsBefore(t, output, "Candidate 2:", "Candidate 3:")
+	assertAppearsBefore(t, output, "Candidate 10:", "Candidate 11:")
+	if strings.Contains(output, "Candidate 12:") {
+		t.Fatal("expected candidate 12 to be omitted")
+	}
+	if strings.Contains(output, "[SELECTED]") {
+		t.Fatal("expected silence diagnostic to use elected terminology")
+	}
+	assertCandidateSummaryTerminology(t, output, "Displayed:           elected + top 10 chronological (1 omitted)")
+}
+
+func TestWriteDiagnosticSpeech_CapsCandidatesChronologicallyWithElectedFirst(t *testing.T) {
+	m := makeInputMeasurements()
+	m.SpeechCandidates = makeRankedSpeechCandidates(12)
+	m.SpeechCandidates[0].VoicingDensity = 0.82
+	m.SpeechProfile = &m.SpeechCandidates[0]
+
+	output := captureReportDiagnostic(t, func(f *os.File) {
+		writeDiagnosticSpeech(f, m)
+	})
+
+	for _, want := range []string{
+		"Speech Candidates:   12 evaluated",
+		"Displayed:           elected + top 10 chronological (1 omitted)",
+		"Candidate 1:       60.0s at 1.0s (score: 0.010, elected)",
+		"Voicing Density: 82.0%",
+		"Candidate 2:       60.0s at 2.0s (score: 0.020)",
+		"RMS: -29.8 dBFS, Crest: 10.0 dB, Centroid: 2400 Hz (forward, clear)",
+		"Rejected:            0",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("speech diagnostic missing %q", want)
+		}
+	}
+
+	for _, heading := range []string{"    Amplitude:\n", "    Spectral:\n", "    Loudness:\n"} {
+		if count := strings.Count(output, heading); count != 1 {
+			t.Fatalf("speech diagnostic %q heading count = %d, want 1", strings.TrimSpace(heading), count)
+		}
+	}
+
+	if count := strings.Count(output, "  Candidate "); count != 11 {
+		t.Fatalf("displayed speech candidates = %d, want 11", count)
+	}
+	assertAppearsBefore(t, output, "Candidate 1:", "Candidate 2:")
+	assertAppearsBefore(t, output, "Candidate 2:", "Candidate 3:")
+	assertAppearsBefore(t, output, "Candidate 10:", "Candidate 11:")
+	if strings.Contains(output, "Candidate 12:") {
+		t.Fatal("expected candidate 12 to be omitted")
+	}
+	if strings.Contains(output, "[SELECTED]") {
+		t.Fatal("expected speech diagnostic to use elected terminology")
+	}
+	assertCandidateSummaryTerminology(t, output, "Displayed:           elected + top 10 chronological (1 omitted)")
+}
+
+func TestWriteDiagnosticSpeech_RejectionSummaryIncludesZeroScore(t *testing.T) {
+	m := makeInputMeasurements()
+	m.SpeechCandidates = makeRankedSpeechCandidates(3)
+	m.SpeechCandidates[1].Score = 0.0
+	m.SpeechProfile = &m.SpeechCandidates[0]
+
+	output := captureReportDiagnostic(t, func(f *os.File) {
+		writeDiagnosticSpeech(f, m)
+	})
+
+	for _, want := range []string{
+		"Speech Candidates:   3 evaluated",
+		"Displayed:           elected + 1 chronological (1 omitted)",
+		"Candidate 1:       60.0s at 1.0s (score: 0.010, elected)",
+		"Candidate 3:       60.0s at 3.0s (score: 0.030)",
+		"Rejected:            1 zero score",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("speech diagnostic missing %q", want)
+		}
+	}
+
+	if strings.Contains(output, "Candidate 2:") {
+		t.Fatal("expected zero-score speech candidate to be omitted from displayed candidates")
+	}
+	assertCandidateSummaryTerminology(t, output, "Displayed:           elected + 1 chronological (1 omitted)")
+}
+
+func TestWriteDiagnosticSpeech_DisplaySummaryIncludesZeroOmitted(t *testing.T) {
+	m := makeInputMeasurements()
+	m.SpeechCandidates = makeRankedSpeechCandidates(4)
+	m.SpeechProfile = &m.SpeechCandidates[0]
+
+	output := captureReportDiagnostic(t, func(f *os.File) {
+		writeDiagnosticSpeech(f, m)
+	})
+
+	for _, want := range []string{
+		"Speech Candidates:   4 evaluated",
+		"Displayed:           elected + 3 chronological (0 omitted)",
+		"Candidate 1:       60.0s at 1.0s (score: 0.010, elected)",
+		"Candidate 4:       60.0s at 4.0s (score: 0.040)",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("speech diagnostic missing %q", want)
+		}
+	}
+	assertCandidateSummaryTerminology(t, output, "Displayed:           elected + 3 chronological (0 omitted)")
+}
+
+func TestCandidateRejectionSummaries(t *testing.T) {
+	silenceCandidates := makeRankedSilenceCandidates(3)
+	if got := silenceRejectionSummary(silenceCandidates); got != "0" {
+		t.Fatalf("silenceRejectionSummary() = %q, want 0", got)
+	}
+
+	silenceCandidates[0].Score = 0.0
+	silenceCandidates[0].TransientWarning = "rejected: digital silence"
+	silenceCandidates[1].Score = 0.0
+	silenceCandidates[1].TransientWarning = "rejected: transient contamination"
+	if got := silenceRejectionSummary(silenceCandidates); got != "1 digital silence, 1 transient contamination" {
+		t.Fatalf("silenceRejectionSummary() = %q", got)
+	}
+
+	speechCandidates := makeRankedSpeechCandidates(3)
+	if got := speechRejectionSummary(speechCandidates); got != "0" {
+		t.Fatalf("speechRejectionSummary() = %q, want 0", got)
+	}
+	speechCandidates[1].Score = 0.0
+	if got := speechRejectionSummary(speechCandidates); got != "1 zero score" {
+		t.Fatalf("speechRejectionSummary() = %q", got)
+	}
+}
+
+func makeRankedSilenceCandidates(count int) []processor.SilenceCandidateMetrics {
+	candidates := make([]processor.SilenceCandidateMetrics, 0, count)
+	for i := 1; i <= count; i++ {
+		c := *makeSilenceSample(-60.0 + float64(i)/10.0)
+		start := time.Duration(i) * time.Second
+		c.Region = processor.SilenceRegion{
+			Start:    start,
+			End:      start + 5*time.Second,
+			Duration: 5 * time.Second,
+		}
+		c.Score = float64(i) / 100.0
+		candidates = append(candidates, c)
+	}
+	return candidates
+}
+
+func makeRankedSpeechCandidates(count int) []processor.SpeechCandidateMetrics {
+	candidates := make([]processor.SpeechCandidateMetrics, 0, count)
+	for i := 1; i <= count; i++ {
+		c := *makeSpeechSample(-30.0 + float64(i)/10.0)
+		start := time.Duration(i) * time.Second
+		c.Region = processor.SpeechRegion{
+			Start:    start,
+			End:      start + 60*time.Second,
+			Duration: 60 * time.Second,
+		}
+		c.Score = float64(i) / 100.0
+		candidates = append(candidates, c)
+	}
+	return candidates
+}
+
+func captureReportDiagnostic(t *testing.T, write func(*os.File)) string {
+	t.Helper()
+
+	tmpFile, err := os.CreateTemp("", "report-diagnostic-test-*.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	write(tmpFile)
+	if err := tmpFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(tmpFile.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+func assertAppearsBefore(t *testing.T, output, first, second string) {
+	t.Helper()
+
+	firstIndex := strings.Index(output, first)
+	if firstIndex < 0 {
+		t.Fatalf("missing %q", first)
+	}
+	secondIndex := strings.Index(output, second)
+	if secondIndex < 0 {
+		t.Fatalf("missing %q", second)
+	}
+	if firstIndex >= secondIndex {
+		t.Fatalf("expected %q to appear before %q", first, second)
+	}
+}
+
+func assertCandidateSummaryTerminology(t *testing.T, output, expectedSummary string) {
+	t.Helper()
+
+	if !strings.Contains(output, expectedSummary) {
+		t.Fatalf("missing candidate display summary %q", expectedSummary)
+	}
+	for _, forbidden := range []string{"by score", "[SELECTED]", "[ELECTED]"} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("candidate output contains legacy terminology %q", forbidden)
+		}
+	}
+	if !strings.Contains(output, "elected") {
+		t.Fatal("candidate output missing elected terminology")
+	}
+}

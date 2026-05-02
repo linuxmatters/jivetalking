@@ -70,82 +70,32 @@ func DisplayAnalysisResults(w io.Writer, inputPath string, metadata *audio.Metad
 
 	if len(measurements.SilenceCandidates) > 0 { //nolint:gocritic // ifElseChain: complex display logic unsuitable for switch
 		fmt.Fprintf(w, "  Candidates:     %d evaluated\n", len(measurements.SilenceCandidates))
-
-		// Find the elected candidate index
-		electedIdx := -1
-		electedWasRefined := false
-		var electedRefinedStart time.Duration
-		var electedRefinedDuration time.Duration
-		if measurements.NoiseProfile != nil {
-			for i, c := range measurements.SilenceCandidates {
-				if measurements.NoiseProfile.WasRefined {
-					if c.Region.Start == measurements.NoiseProfile.OriginalStart {
-						electedIdx = i
-						electedWasRefined = true
-						electedRefinedStart = measurements.NoiseProfile.Start
-						electedRefinedDuration = measurements.NoiseProfile.Duration
-						break
-					}
-				} else {
-					if c.Region.Start == measurements.NoiseProfile.Start {
-						electedIdx = i
-						break
-					}
-				}
-			}
+		electedCandidate, displayCandidates := rankedSilenceCandidateEntries(measurements)
+		if summary := candidateDisplaySummary(len(measurements.SilenceCandidates), electedCandidate != nil, len(displayCandidates)); summary != "" {
+			fmt.Fprintf(w, "  Displayed:      %s\n", summary)
 		}
 
-		if electedIdx >= 0 {
-			if measurements.VoiceActivated {
-				fmt.Fprintln(w, "  Voice-activated recording detected")
-			}
-			// Print elected candidate first with distinct header
-			c := measurements.SilenceCandidates[electedIdx]
-			fmt.Fprintf(w, "  ELECTED CANDIDATE\n")
-			fmt.Fprintf(w, "  #%d: %.1fs at %s\n",
-				electedIdx+1, c.Region.Duration.Seconds(), formatTimestamp(c.Region.Start))
-			if electedWasRefined {
-				fmt.Fprintf(w, "      Refined:     %.1fs at %s (golden sub-region)\n",
-					electedRefinedDuration.Seconds(), formatTimestamp(electedRefinedStart))
-			}
-			writeSilenceCandidateMetrics(w, c)
+		if measurements.VoiceActivated {
+			fmt.Fprintln(w, "  Voice-activated recording detected")
+		}
+		if electedCandidate != nil || len(displayCandidates) > 0 {
 			fmt.Fprintln(w)
-
-			// Print remaining candidates (skip zero-scored rejected candidates)
-			visibleCount := 0
-			for i, c := range measurements.SilenceCandidates {
-				if i == electedIdx || c.Score == 0.0 {
-					continue
-				}
-				visibleCount++
-			}
-			if visibleCount > 0 {
-				fmt.Fprintf(w, "  OTHER CANDIDATES\n")
-				for i, c := range measurements.SilenceCandidates {
-					if i == electedIdx {
-						continue
-					}
-					if c.Score == 0.0 {
-						continue
-					}
-					fmt.Fprintf(w, "  #%d: %.1fs at %s\n",
-						i+1, c.Region.Duration.Seconds(), formatTimestamp(c.Region.Start))
-					writeSilenceCandidateMetrics(w, c)
-					fmt.Fprintln(w)
-				}
-			}
-		} else {
-			// No elected candidate - print all in discovery order
-			if measurements.VoiceActivated {
-				fmt.Fprintln(w, "  Voice-activated recording detected")
-			}
-			for i, c := range measurements.SilenceCandidates {
-				if c.Score == 0.0 {
-					continue
-				}
-				fmt.Fprintf(w, "  #%d: %.1fs at %s\n",
+			if electedCandidate != nil {
+				i := electedCandidate.index
+				c := electedCandidate.candidate
+				fmt.Fprintf(w, "  #%d: %.1fs at %s (elected)\n",
 					i+1, c.Region.Duration.Seconds(), formatTimestamp(c.Region.Start))
+				if measurements.NoiseProfile.WasRefined {
+					fmt.Fprintf(w, "      Refined:     %.1fs at %s (golden sub-region)\n",
+						measurements.NoiseProfile.Duration.Seconds(), formatTimestamp(measurements.NoiseProfile.Start))
+				}
 				writeSilenceCandidateMetrics(w, c)
+				fmt.Fprintln(w)
+			}
+			for _, entry := range displayCandidates {
+				i := entry.index
+				c := entry.candidate
+				writeCompactAnalysisSilenceCandidateRow(w, i, c)
 				fmt.Fprintln(w)
 			}
 		}
@@ -168,50 +118,26 @@ func DisplayAnalysisResults(w io.Writer, inputPath string, metadata *audio.Metad
 	writeAnalysisSection(w, "SPEECH DETECTION")
 	if len(measurements.SpeechCandidates) > 0 { //nolint:gocritic // ifElseChain: complex display logic unsuitable for switch
 		fmt.Fprintf(w, "  Candidates:     %d evaluated\n", len(measurements.SpeechCandidates))
+		electedCandidate, displayCandidates := rankedSpeechCandidateEntries(measurements)
+		if summary := candidateDisplaySummary(len(measurements.SpeechCandidates), electedCandidate != nil, len(displayCandidates)); summary != "" {
+			fmt.Fprintf(w, "  Displayed:      %s\n", summary)
+		}
 		fmt.Fprintln(w)
 
-		for i, c := range measurements.SpeechCandidates {
-			// Check if this candidate was elected
-			// Note: When a candidate is refined to a golden sub-region, the candidate
-			// in the list is replaced with refined metrics. The refined candidate has:
-			// - Region.Start = refined start
-			// - WasRefined = true
-			// - OriginalStart = original candidate start
-			// - OriginalDuration = original candidate duration
-			isElected := false
-			wasRefined := c.WasRefined
+		if electedCandidate != nil {
+			i := electedCandidate.index
+			c := electedCandidate.candidate
+			fmt.Fprintf(w, "  #%d: %.1fs at %s (elected)\n",
+				i+1, c.Region.Duration.Seconds(), formatTimestamp(c.Region.Start))
 
-			if measurements.SpeechProfile != nil {
-				// If this candidate was refined, compare against SpeechProfile.Region.Start
-				// (both will have the refined start after replacement)
-				// If not refined, compare Region.Start directly
-				isElected = c.Region.Start == measurements.SpeechProfile.Region.Start
+			if c.WasRefined {
+				fmt.Fprintf(w, "      Refined:     %.1fs at %s -> %.1fs at %s (golden sub-region)\n",
+					c.OriginalDuration.Seconds(),
+					formatTimestamp(c.OriginalStart),
+					c.Region.Duration.Seconds(),
+					formatTimestamp(c.Region.Start))
 			}
 
-			electedMark := ""
-			if isElected {
-				electedMark = " [ELECTED]"
-			}
-
-			// For refined candidates, display the original duration/start, then show refined info
-			displayStart := c.Region.Start
-			displayDuration := c.Region.Duration
-			if wasRefined {
-				displayStart = c.OriginalStart
-				displayDuration = c.OriginalDuration
-			}
-
-			fmt.Fprintf(w, "  #%d: %.1fs at %s%s\n",
-				i+1, displayDuration.Seconds(), formatTimestamp(displayStart), electedMark)
-
-			// Show refinement details only for elected candidate
-			if isElected && wasRefined {
-				// Show refined region info (c.Region now contains the refined values)
-				fmt.Fprintf(w, "      Refined:     %.1fs at %s (golden sub-region)\n",
-					c.Region.Duration.Seconds(), formatTimestamp(c.Region.Start))
-			}
-
-			// Show full metrics for all candidates
 			fmt.Fprintf(w, "      Score:       %.2f\n", c.Score)
 			fmt.Fprintf(w, "      RMS Level:   %.1f dBFS\n", c.RMSLevel)
 			fmt.Fprintf(w, "      Crest:       %.1f dB\n", c.CrestFactor)
@@ -222,6 +148,13 @@ func DisplayAnalysisResults(w io.Writer, inputPath string, metadata *audio.Metad
 			}
 			fmt.Fprintln(w)
 		}
+		for _, entry := range displayCandidates {
+			i := entry.index
+			c := entry.candidate
+			writeCompactAnalysisSpeechCandidateRow(w, i, c)
+			fmt.Fprintln(w)
+		}
+		writeSpeechRejectionSummary(w, measurements.SpeechCandidates)
 	} else if measurements.SpeechProfile != nil {
 		fmt.Fprintf(w, "  Sample:         %.1fs at %s\n",
 			measurements.SpeechProfile.Region.Duration.Seconds(),
@@ -345,37 +278,32 @@ func writeSilenceCandidateMetrics(w io.Writer, c processor.SilenceCandidateMetri
 	fmt.Fprintf(w, "      Centroid:    %.0f Hz\n", c.Spectral.Centroid)
 }
 
+func writeCompactAnalysisSilenceCandidateRow(w io.Writer, index int, c processor.SilenceCandidateMetrics) {
+	fmt.Fprintf(w, "  #%d: %.1fs at %s (score: %.3f)\n",
+		index+1, c.Region.Duration.Seconds(), formatTimestamp(c.Region.Start), c.Score)
+	fmt.Fprintf(w, "      RMS: %.1f dBFS, Crest: %.1f dB, Entropy: %.3f (%s)\n",
+		c.RMSLevel, c.CrestFactor, c.Spectral.Entropy, interpretEntropy(c.Spectral.Entropy))
+}
+
+func writeCompactAnalysisSpeechCandidateRow(w io.Writer, index int, c processor.SpeechCandidateMetrics) {
+	fmt.Fprintf(w, "  #%d: %.1fs at %s (score: %.2f)\n",
+		index+1, c.Region.Duration.Seconds(), formatTimestamp(c.Region.Start), c.Score)
+	fmt.Fprintf(w, "      RMS: %.1f dBFS, Crest: %.1f dB, Centroid: %.0f Hz (%s)\n",
+		c.RMSLevel, c.CrestFactor, c.Spectral.Centroid, interpretCentroid(c.Spectral.Centroid))
+}
+
 // writeSilenceRejectionSummary outputs a compact summary of rejected silence candidates.
 // Groups zero-scored candidates by rejection reason extracted from TransientWarning.
 func writeSilenceRejectionSummary(w io.Writer, candidates []processor.SilenceCandidateMetrics) {
-	reasonCounts := make(map[string]int)
-	for _, c := range candidates {
-		if c.Score != 0.0 {
-			continue
-		}
-		reason := classifyRejectionReason(c.TransientWarning)
-		reasonCounts[reason]++
-	}
+	writeAnalysisCandidateRejectionSummary(w, silenceRejectionSummary(candidates))
+}
 
-	if len(reasonCounts) == 0 {
-		return
-	}
+func writeSpeechRejectionSummary(w io.Writer, candidates []processor.SpeechCandidateMetrics) {
+	writeAnalysisCandidateRejectionSummary(w, speechRejectionSummary(candidates))
+}
 
-	// Build summary parts in a stable order
-	order := []string{"digital silence", "crosstalk", "transient contamination", "too loud"}
-	var parts []string
-	for _, reason := range order {
-		if count, ok := reasonCounts[reason]; ok {
-			parts = append(parts, fmt.Sprintf("%d %s", count, reason))
-			delete(reasonCounts, reason)
-		}
-	}
-	// Any unexpected reasons
-	for reason, count := range reasonCounts {
-		parts = append(parts, fmt.Sprintf("%d %s", count, reason))
-	}
-
-	fmt.Fprintf(w, "  Rejected:       %s\n", strings.Join(parts, ", "))
+func writeAnalysisCandidateRejectionSummary(w io.Writer, summary string) {
+	fmt.Fprintf(w, "  Rejected:       %s\n", summary)
 }
 
 // classifyRejectionReason maps a TransientWarning string to a short label.

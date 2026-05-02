@@ -4,6 +4,7 @@ package logging
 
 import (
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -13,6 +14,18 @@ import (
 
 	"github.com/linuxmatters/jivetalking/internal/processor"
 )
+
+const candidateDisplayLimit = 10
+
+type silenceCandidateDisplayEntry struct {
+	index     int
+	candidate processor.SilenceCandidateMetrics
+}
+
+type speechCandidateDisplayEntry struct {
+	index     int
+	candidate processor.SpeechCandidateMetrics
+}
 
 // ============================================================================
 // Spectral Characteristic Interpretation Functions
@@ -1646,61 +1659,21 @@ func writeDiagnosticSilence(f *os.File, measurements *processor.AudioMeasurement
 		}
 	}
 
-	// Silence candidates (all evaluated candidates with scores)
+	// Silence candidates (ranked display of evaluated candidates with scores)
 	//nolint:gocritic // ifElseChain: complex display branches with different condition types
 	if len(measurements.SilenceCandidates) > 0 {
 		fmt.Fprintf(f, "Silence Candidates:  %d evaluated\n", len(measurements.SilenceCandidates))
 		if measurements.VoiceActivated {
 			fmt.Fprintf(f, "Voice-Activated:     yes (digital silence fraction >= 95%%)\n")
 		}
-		for i, c := range measurements.SilenceCandidates {
-			// Check if this candidate was selected (may have been refined, so check original start if refined)
-			isSelected := false
-			if measurements.NoiseProfile != nil {
-				if measurements.NoiseProfile.WasRefined {
-					// Compare against original candidate bounds before refinement
-					isSelected = c.Region.Start == measurements.NoiseProfile.OriginalStart
-				} else {
-					isSelected = c.Region.Start == measurements.NoiseProfile.Start
-				}
-			}
-
-			if isSelected {
-				fmt.Fprintf(f, "  Candidate %d:       %.1fs at %.1fs (score: %.3f) [SELECTED]\n",
-					i+1, c.Region.Duration.Seconds(), c.Region.Start.Seconds(), c.Score)
-
-				// Show refinement details if this candidate was refined to a golden sub-region
-				if measurements.NoiseProfile.WasRefined {
-					fmt.Fprintf(f, "    Refined:         %.1fs at %.1fs (golden sub-region)\n",
-						measurements.NoiseProfile.Duration.Seconds(),
-						measurements.NoiseProfile.Start.Seconds())
-				}
-
-				fmt.Fprintf(f, "    Amplitude:\n")
-				fmt.Fprintf(f, "      RMS Level:     %.1f dBFS\n", c.RMSLevel)
-				fmt.Fprintf(f, "      Peak Level:    %.1f dBFS\n", c.PeakLevel)
-				fmt.Fprintf(f, "      Crest Factor:  %.1f dB\n", c.CrestFactor)
-				fmt.Fprintf(f, "    Spectral:\n")
-				fmt.Fprintf(f, "      Centroid:      %.0f Hz (%s)\n", c.Spectral.Centroid, interpretCentroid(c.Spectral.Centroid))
-				fmt.Fprintf(f, "      Spread:        %.0f Hz\n", c.Spectral.Spread)
-				fmt.Fprintf(f, "      Rolloff:       %.0f Hz\n", c.Spectral.Rolloff)
-				fmt.Fprintf(f, "      Flatness:      %.3f (%s)\n", c.Spectral.Flatness, interpretFlatness(c.Spectral.Flatness))
-				fmt.Fprintf(f, "      Entropy:       %.3f (%s)\n", c.Spectral.Entropy, interpretEntropy(c.Spectral.Entropy))
-				fmt.Fprintf(f, "      Kurtosis:      %.1f (%s)\n", c.Spectral.Kurtosis, interpretKurtosis(c.Spectral.Kurtosis))
-				fmt.Fprintf(f, "      Skewness:      %.2f\n", c.Spectral.Skewness)
-				fmt.Fprintf(f, "      Flux:          %.4f\n", c.Spectral.Flux)
-				fmt.Fprintf(f, "      Slope:         %.2e\n", c.Spectral.Slope)
-				fmt.Fprintf(f, "    Loudness:\n")
-				fmt.Fprintf(f, "      Momentary:     %.1f LUFS\n", c.MomentaryLUFS)
-				fmt.Fprintf(f, "      Short-term:    %.1f LUFS\n", c.ShortTermLUFS)
-				fmt.Fprintf(f, "      True Peak:     %.1f dBTP\n", c.TruePeak)
-			} else {
-				if c.Score == 0.0 {
-					continue
-				}
-				fmt.Fprintf(f, "  Candidate %d:       %.1fs at %.1fs (score: %.3f, RMS %.1f dBFS)\n",
-					i+1, c.Region.Duration.Seconds(), c.Region.Start.Seconds(), c.Score, c.RMSLevel)
-			}
+		electedCandidate, displayCandidates := rankedSilenceCandidateEntries(measurements)
+		writeCandidateDisplaySummary(f, len(measurements.SilenceCandidates), electedCandidate != nil, len(displayCandidates))
+		if electedCandidate != nil {
+			entry := *electedCandidate
+			writeReportSilenceCandidateMetrics(f, entry.index, entry.candidate, true)
+		}
+		for _, entry := range displayCandidates {
+			writeReportSilenceCandidateMetrics(f, entry.index, entry.candidate, false)
 		}
 
 		// Rejection summary for zero-scored candidates
@@ -1727,34 +1700,105 @@ func writeDiagnosticSilence(f *os.File, measurements *processor.AudioMeasurement
 	fmt.Fprintln(f, "")
 }
 
-// writeReportRejectionSummary outputs a compact summary of rejected silence candidates to the report file.
-func writeReportRejectionSummary(f *os.File, candidates []processor.SilenceCandidateMetrics) {
-	reasonCounts := make(map[string]int)
-	for _, c := range candidates {
-		if c.Score != 0.0 {
-			continue
-		}
-		reason := classifyRejectionReason(c.TransientWarning)
-		reasonCounts[reason]++
-	}
-
-	if len(reasonCounts) == 0 {
+func writeReportSilenceCandidateMetrics(f io.Writer, index int, c processor.SilenceCandidateMetrics, elected bool) {
+	if !elected {
+		writeReportCompactSilenceCandidateRow(f, index, c)
 		return
 	}
 
-	order := []string{"digital silence", "crosstalk", "transient contamination", "too loud"}
-	var parts []string
-	for _, reason := range order {
-		if count, ok := reasonCounts[reason]; ok {
-			parts = append(parts, fmt.Sprintf("%d %s", count, reason))
-			delete(reasonCounts, reason)
-		}
+	electedLabel := ""
+	if elected {
+		electedLabel = ", elected"
 	}
-	for reason, count := range reasonCounts {
-		parts = append(parts, fmt.Sprintf("%d %s", count, reason))
+	fmt.Fprintf(f, "  Candidate %d:       %.1fs at %.1fs (score: %.3f%s)\n",
+		index+1, c.Region.Duration.Seconds(), c.Region.Start.Seconds(), c.Score, electedLabel)
+
+	if c.WasRefined {
+		fmt.Fprintf(f, "    Refined:         %.1fs at %.1fs -> %.1fs at %.1fs (golden sub-region)\n",
+			c.OriginalDuration.Seconds(),
+			c.OriginalStart.Seconds(),
+			c.Region.Duration.Seconds(),
+			c.Region.Start.Seconds())
 	}
 
-	fmt.Fprintf(f, "Rejected:            %s\n", strings.Join(parts, ", "))
+	fmt.Fprintf(f, "    Amplitude:\n")
+	fmt.Fprintf(f, "      RMS Level:     %.1f dBFS\n", c.RMSLevel)
+	fmt.Fprintf(f, "      Peak Level:    %.1f dBFS\n", c.PeakLevel)
+	fmt.Fprintf(f, "      Crest Factor:  %.1f dB\n", c.CrestFactor)
+	fmt.Fprintf(f, "    Spectral:\n")
+	fmt.Fprintf(f, "      Centroid:      %.0f Hz (%s)\n", c.Spectral.Centroid, interpretCentroid(c.Spectral.Centroid))
+	fmt.Fprintf(f, "      Spread:        %.0f Hz\n", c.Spectral.Spread)
+	fmt.Fprintf(f, "      Rolloff:       %.0f Hz\n", c.Spectral.Rolloff)
+	fmt.Fprintf(f, "      Flatness:      %.3f (%s)\n", c.Spectral.Flatness, interpretFlatness(c.Spectral.Flatness))
+	fmt.Fprintf(f, "      Entropy:       %.3f (%s)\n", c.Spectral.Entropy, interpretEntropy(c.Spectral.Entropy))
+	fmt.Fprintf(f, "      Kurtosis:      %.1f (%s)\n", c.Spectral.Kurtosis, interpretKurtosis(c.Spectral.Kurtosis))
+	fmt.Fprintf(f, "      Skewness:      %.2f\n", c.Spectral.Skewness)
+	fmt.Fprintf(f, "      Flux:          %.4f\n", c.Spectral.Flux)
+	fmt.Fprintf(f, "      Slope:         %.2e\n", c.Spectral.Slope)
+	fmt.Fprintf(f, "    Loudness:\n")
+	fmt.Fprintf(f, "      Momentary:     %.1f LUFS\n", c.MomentaryLUFS)
+	fmt.Fprintf(f, "      Short-term:    %.1f LUFS\n", c.ShortTermLUFS)
+	fmt.Fprintf(f, "      True Peak:     %.1f dBTP\n", c.TruePeak)
+}
+
+func writeReportCompactSilenceCandidateRow(f io.Writer, index int, c processor.SilenceCandidateMetrics) {
+	fmt.Fprintf(f, "  Candidate %d:       %.1fs at %.1fs (score: %.3f)\n",
+		index+1, c.Region.Duration.Seconds(), c.Region.Start.Seconds(), c.Score)
+	fmt.Fprintf(f, "    RMS: %.1f dBFS, Crest: %.1f dB, Entropy: %.3f (%s)\n",
+		c.RMSLevel, c.CrestFactor, c.Spectral.Entropy, interpretEntropy(c.Spectral.Entropy))
+}
+
+// writeReportRejectionSummary outputs a compact summary of rejected silence candidates to the report file.
+func writeReportRejectionSummary(f *os.File, candidates []processor.SilenceCandidateMetrics) {
+	writeReportCandidateRejectionSummary(f, silenceRejectionSummary(candidates))
+}
+
+func rankedSilenceCandidateEntries(measurements *processor.AudioMeasurements) (*silenceCandidateDisplayEntry, []silenceCandidateDisplayEntry) {
+	if measurements == nil || len(measurements.SilenceCandidates) == 0 {
+		return nil, nil
+	}
+
+	entries := make([]silenceCandidateDisplayEntry, 0, len(measurements.SilenceCandidates))
+	var elected *silenceCandidateDisplayEntry
+	for i, c := range measurements.SilenceCandidates {
+		entry := silenceCandidateDisplayEntry{index: i, candidate: c}
+		if isSelectedSilenceCandidate(c, measurements) {
+			electedEntry := entry
+			elected = &electedEntry
+			continue
+		}
+		if c.Score == 0.0 {
+			continue
+		}
+		entries = append(entries, entry)
+	}
+
+	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i].candidate.Region.Start == entries[j].candidate.Region.Start {
+			return entries[i].index < entries[j].index
+		}
+		return entries[i].candidate.Region.Start < entries[j].candidate.Region.Start
+	})
+
+	return elected, selectSilenceCandidateEntries(entries)
+}
+
+func selectSilenceCandidateEntries(entries []silenceCandidateDisplayEntry) []silenceCandidateDisplayEntry {
+	displayCount := min(candidateDisplayLimit, len(entries))
+
+	displayed := make([]silenceCandidateDisplayEntry, displayCount)
+	copy(displayed, entries[:displayCount])
+	return displayed
+}
+
+func isSelectedSilenceCandidate(c processor.SilenceCandidateMetrics, measurements *processor.AudioMeasurements) bool {
+	if measurements == nil || measurements.NoiseProfile == nil {
+		return false
+	}
+	if measurements.NoiseProfile.WasRefined {
+		return c.Region.Start == measurements.NoiseProfile.OriginalStart
+	}
+	return c.Region.Start == measurements.NoiseProfile.Start
 }
 
 // writeDiagnosticSpeech outputs detailed speech detection diagnostics.
@@ -1774,58 +1818,17 @@ func writeDiagnosticSpeech(f *os.File, measurements *processor.AudioMeasurements
 	//nolint:gocritic // ifElseChain: complex display branches with different condition types
 	if len(measurements.SpeechCandidates) > 0 {
 		fmt.Fprintf(f, "Speech Candidates:   %d evaluated\n", len(measurements.SpeechCandidates))
+		electedCandidate, displayCandidates := rankedSpeechCandidateEntries(measurements)
+		writeCandidateDisplaySummary(f, len(measurements.SpeechCandidates), electedCandidate != nil, len(displayCandidates))
 
-		for i, c := range measurements.SpeechCandidates {
-			// Check if this candidate was selected
-			// For refined regions, compare against original start since Region.Start is the refined position
-			isSelected := false
-			if measurements.SpeechProfile != nil {
-				if c.WasRefined {
-					isSelected = c.OriginalStart == measurements.SpeechProfile.OriginalStart
-				} else {
-					isSelected = c.Region.Start == measurements.SpeechProfile.Region.Start
-				}
-			}
-
-			if isSelected {
-				fmt.Fprintf(f, "  Candidate %d:       %.1fs at %.1fs (score: %.3f) [SELECTED]\n",
-					i+1, c.Region.Duration.Seconds(), c.Region.Start.Seconds(), c.Score)
-
-				// Show refinement details if this candidate was refined to a golden sub-region
-				if c.WasRefined {
-					fmt.Fprintf(f, "    Refined:         %.1fs at %.1fs → %.1fs at %.1fs (golden sub-region)\n",
-						c.OriginalDuration.Seconds(),
-						c.OriginalStart.Seconds(),
-						c.Region.Duration.Seconds(),
-						c.Region.Start.Seconds())
-				}
-
-				fmt.Fprintf(f, "    Amplitude:\n")
-				fmt.Fprintf(f, "      RMS Level:     %.1f dBFS\n", c.RMSLevel)
-				fmt.Fprintf(f, "      Peak Level:    %.1f dBFS\n", c.PeakLevel)
-				fmt.Fprintf(f, "      Crest Factor:  %.1f dB\n", c.CrestFactor)
-				fmt.Fprintf(f, "    Spectral:\n")
-				fmt.Fprintf(f, "      Centroid:      %.0f Hz (%s)\n", c.Spectral.Centroid, interpretCentroid(c.Spectral.Centroid))
-				fmt.Fprintf(f, "      Spread:        %.0f Hz\n", c.Spectral.Spread)
-				fmt.Fprintf(f, "      Rolloff:       %.0f Hz\n", c.Spectral.Rolloff)
-				fmt.Fprintf(f, "      Flatness:      %.3f (%s)\n", c.Spectral.Flatness, interpretFlatness(c.Spectral.Flatness))
-				fmt.Fprintf(f, "      Entropy:       %.3f (%s)\n", c.Spectral.Entropy, interpretEntropy(c.Spectral.Entropy))
-				fmt.Fprintf(f, "      Kurtosis:      %.1f (%s)\n", c.Spectral.Kurtosis, interpretKurtosis(c.Spectral.Kurtosis))
-				fmt.Fprintf(f, "      Skewness:      %.2f\n", c.Spectral.Skewness)
-				fmt.Fprintf(f, "      Flux:          %.4f\n", c.Spectral.Flux)
-				fmt.Fprintf(f, "      Slope:         %.2e\n", c.Spectral.Slope)
-				if c.VoicingDensity > 0 {
-					fmt.Fprintf(f, "    Voicing Density: %.1f%%\n", c.VoicingDensity*100)
-				}
-				fmt.Fprintf(f, "    Loudness:\n")
-				fmt.Fprintf(f, "      Momentary:     %.1f LUFS\n", c.MomentaryLUFS)
-				fmt.Fprintf(f, "      Short-term:    %.1f LUFS\n", c.ShortTermLUFS)
-				fmt.Fprintf(f, "      True Peak:     %.1f dBTP\n", c.TruePeak)
-			} else {
-				fmt.Fprintf(f, "  Candidate %d:       %.1fs at %.1fs (score: %.3f, RMS %.1f dBFS)\n",
-					i+1, c.Region.Duration.Seconds(), c.Region.Start.Seconds(), c.Score, c.RMSLevel)
-			}
+		if electedCandidate != nil {
+			entry := *electedCandidate
+			writeReportSpeechCandidateMetrics(f, entry.index, entry.candidate, true)
 		}
+		for _, entry := range displayCandidates {
+			writeReportSpeechCandidateMetrics(f, entry.index, entry.candidate, false)
+		}
+		writeReportSpeechRejectionSummary(f, measurements.SpeechCandidates)
 	} else if measurements.SpeechProfile != nil {
 		// Profile exists but no candidates list (shouldn't happen, but handle gracefully)
 		profile := measurements.SpeechProfile
@@ -1844,6 +1847,197 @@ func writeDiagnosticSpeech(f *os.File, measurements *processor.AudioMeasurements
 	}
 
 	fmt.Fprintln(f, "")
+}
+
+func writeReportSpeechCandidateMetrics(f io.Writer, index int, c processor.SpeechCandidateMetrics, elected bool) {
+	if !elected {
+		writeReportCompactSpeechCandidateRow(f, index, c)
+		return
+	}
+
+	electedLabel := ""
+	if elected {
+		electedLabel = ", elected"
+	}
+	fmt.Fprintf(f, "  Candidate %d:       %.1fs at %.1fs (score: %.3f%s)\n",
+		index+1, c.Region.Duration.Seconds(), c.Region.Start.Seconds(), c.Score, electedLabel)
+
+	if c.WasRefined {
+		fmt.Fprintf(f, "    Refined:         %.1fs at %.1fs -> %.1fs at %.1fs (golden sub-region)\n",
+			c.OriginalDuration.Seconds(),
+			c.OriginalStart.Seconds(),
+			c.Region.Duration.Seconds(),
+			c.Region.Start.Seconds())
+	}
+
+	fmt.Fprintf(f, "    Amplitude:\n")
+	fmt.Fprintf(f, "      RMS Level:     %.1f dBFS\n", c.RMSLevel)
+	fmt.Fprintf(f, "      Peak Level:    %.1f dBFS\n", c.PeakLevel)
+	fmt.Fprintf(f, "      Crest Factor:  %.1f dB\n", c.CrestFactor)
+	fmt.Fprintf(f, "    Spectral:\n")
+	fmt.Fprintf(f, "      Centroid:      %.0f Hz (%s)\n", c.Spectral.Centroid, interpretCentroid(c.Spectral.Centroid))
+	fmt.Fprintf(f, "      Spread:        %.0f Hz\n", c.Spectral.Spread)
+	fmt.Fprintf(f, "      Rolloff:       %.0f Hz\n", c.Spectral.Rolloff)
+	fmt.Fprintf(f, "      Flatness:      %.3f (%s)\n", c.Spectral.Flatness, interpretFlatness(c.Spectral.Flatness))
+	fmt.Fprintf(f, "      Entropy:       %.3f (%s)\n", c.Spectral.Entropy, interpretEntropy(c.Spectral.Entropy))
+	fmt.Fprintf(f, "      Kurtosis:      %.1f (%s)\n", c.Spectral.Kurtosis, interpretKurtosis(c.Spectral.Kurtosis))
+	fmt.Fprintf(f, "      Skewness:      %.2f\n", c.Spectral.Skewness)
+	fmt.Fprintf(f, "      Flux:          %.4f\n", c.Spectral.Flux)
+	fmt.Fprintf(f, "      Slope:         %.2e\n", c.Spectral.Slope)
+	if c.VoicingDensity > 0 {
+		fmt.Fprintf(f, "    Voicing Density: %.1f%%\n", c.VoicingDensity*100)
+	}
+	fmt.Fprintf(f, "    Loudness:\n")
+	fmt.Fprintf(f, "      Momentary:     %.1f LUFS\n", c.MomentaryLUFS)
+	fmt.Fprintf(f, "      Short-term:    %.1f LUFS\n", c.ShortTermLUFS)
+	fmt.Fprintf(f, "      True Peak:     %.1f dBTP\n", c.TruePeak)
+}
+
+func writeReportCompactSpeechCandidateRow(f io.Writer, index int, c processor.SpeechCandidateMetrics) {
+	fmt.Fprintf(f, "  Candidate %d:       %.1fs at %.1fs (score: %.3f)\n",
+		index+1, c.Region.Duration.Seconds(), c.Region.Start.Seconds(), c.Score)
+	fmt.Fprintf(f, "    RMS: %.1f dBFS, Crest: %.1f dB, Centroid: %.0f Hz (%s)\n",
+		c.RMSLevel, c.CrestFactor, c.Spectral.Centroid, interpretCentroid(c.Spectral.Centroid))
+}
+
+func rankedSpeechCandidateEntries(measurements *processor.AudioMeasurements) (*speechCandidateDisplayEntry, []speechCandidateDisplayEntry) {
+	if measurements == nil || len(measurements.SpeechCandidates) == 0 {
+		return nil, nil
+	}
+
+	entries := make([]speechCandidateDisplayEntry, 0, len(measurements.SpeechCandidates))
+	var elected *speechCandidateDisplayEntry
+	for i, c := range measurements.SpeechCandidates {
+		entry := speechCandidateDisplayEntry{index: i, candidate: c}
+		if isSelectedSpeechCandidate(c, measurements) {
+			electedEntry := entry
+			elected = &electedEntry
+			continue
+		}
+		if c.Score == 0.0 {
+			continue
+		}
+		entries = append(entries, entry)
+	}
+
+	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i].candidate.Region.Start == entries[j].candidate.Region.Start {
+			return entries[i].index < entries[j].index
+		}
+		return entries[i].candidate.Region.Start < entries[j].candidate.Region.Start
+	})
+
+	return elected, selectSpeechCandidateEntries(entries)
+}
+
+func selectSpeechCandidateEntries(entries []speechCandidateDisplayEntry) []speechCandidateDisplayEntry {
+	displayCount := min(candidateDisplayLimit, len(entries))
+
+	displayed := make([]speechCandidateDisplayEntry, displayCount)
+	copy(displayed, entries[:displayCount])
+	return displayed
+}
+
+func isSelectedSpeechCandidate(c processor.SpeechCandidateMetrics, measurements *processor.AudioMeasurements) bool {
+	if measurements == nil || measurements.SpeechProfile == nil {
+		return false
+	}
+	if c.WasRefined {
+		return c.OriginalStart == measurements.SpeechProfile.OriginalStart
+	}
+	return c.Region.Start == measurements.SpeechProfile.Region.Start
+}
+
+func writeCandidateDisplaySummary(f *os.File, totalCandidates int, hasElected bool, displayedCandidates int) {
+	summary := candidateDisplaySummary(totalCandidates, hasElected, displayedCandidates)
+	if summary == "" {
+		return
+	}
+	fmt.Fprintf(f, "Displayed:           %s\n", summary)
+}
+
+func candidateDisplaySummary(totalCandidates int, hasElected bool, displayedCandidates int) string {
+	if totalCandidates <= 0 {
+		return ""
+	}
+
+	electedCount := 0
+	if hasElected {
+		electedCount = 1
+	}
+	if displayedCandidates < 0 {
+		displayedCandidates = 0
+	}
+	omitted := totalCandidates - displayedCandidates
+	omitted -= electedCount
+	if omitted < 0 {
+		omitted = 0
+	}
+
+	if hasElected && displayedCandidates == 0 {
+		return fmt.Sprintf("elected (%d omitted)", omitted)
+	}
+
+	displayLabel := fmt.Sprintf("%d chronological", displayedCandidates)
+	if omitted > 0 && displayedCandidates == candidateDisplayLimit {
+		displayLabel = fmt.Sprintf("top %d chronological", candidateDisplayLimit)
+	}
+	if hasElected {
+		return fmt.Sprintf("elected + %s (%d omitted)", displayLabel, omitted)
+	}
+	return fmt.Sprintf("%s (%d omitted)", displayLabel, omitted)
+}
+
+func writeReportSpeechRejectionSummary(f *os.File, candidates []processor.SpeechCandidateMetrics) {
+	writeReportCandidateRejectionSummary(f, speechRejectionSummary(candidates))
+}
+
+func writeReportCandidateRejectionSummary(w io.Writer, summary string) {
+	fmt.Fprintf(w, "Rejected:            %s\n", summary)
+}
+
+func silenceRejectionSummary(candidates []processor.SilenceCandidateMetrics) string {
+	reasonCounts := make(map[string]int)
+	for _, c := range candidates {
+		if c.Score != 0.0 {
+			continue
+		}
+		reason := classifyRejectionReason(c.TransientWarning)
+		reasonCounts[reason]++
+	}
+
+	return formatRejectionSummary(reasonCounts, []string{"digital silence", "crosstalk", "transient contamination", "too loud"})
+}
+
+func speechRejectionSummary(candidates []processor.SpeechCandidateMetrics) string {
+	reasonCounts := make(map[string]int)
+	for _, c := range candidates {
+		if c.Score != 0.0 {
+			continue
+		}
+		reasonCounts["zero score"]++
+	}
+
+	return formatRejectionSummary(reasonCounts, []string{"zero score"})
+}
+
+func formatRejectionSummary(reasonCounts map[string]int, order []string) string {
+	if len(reasonCounts) == 0 {
+		return "0"
+	}
+
+	var parts []string
+	for _, reason := range order {
+		if count, ok := reasonCounts[reason]; ok {
+			parts = append(parts, fmt.Sprintf("%d %s", count, reason))
+			delete(reasonCounts, reason)
+		}
+	}
+	for reason, count := range reasonCounts {
+		parts = append(parts, fmt.Sprintf("%d %s", count, reason))
+	}
+
+	return strings.Join(parts, ", ")
 }
 
 // writeDiagnosticPeakLimiter outputs the Pass 4 pre-limiting diagnostics.
