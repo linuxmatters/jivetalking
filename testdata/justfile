@@ -106,7 +106,7 @@ stash: mark-log-stash martin-log-stash popey-log-stash
 # Run analysis-only mode on all episodes and presenters
 stash-analysis:
     #!/usr/bin/env bash
-    for ep in 68 69 70 71 72 73 74 75 77 78 79 80 81; do
+    for ep in 68 69 70 71 72 73 74 75 76 77 78 79 80 81; do
         for presenter in mark martin popey; do
             log_file="{{ testdata }}/LMP-${ep}-${presenter}-analysis.log"
             stash_log_file="{{ testdata }}/LMP-${ep}-${presenter}-analysis-before.log"

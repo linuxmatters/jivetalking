@@ -619,6 +619,36 @@ func TestFindBestSilenceRegion_AllBelowMinAcceptableScoreFallsBack(t *testing.T)
 	}
 }
 
+func TestFindBestSilenceRegion_AllRejectedCandidatesDoNotFallback(t *testing.T) {
+	regions := []SilenceRegion{
+		{Start: 0, End: 10 * time.Second, Duration: 10 * time.Second},
+		{Start: 15 * time.Second, End: 25 * time.Second, Duration: 10 * time.Second},
+	}
+
+	intervalsA := makeSilenceTestIntervals(0, 10*time.Second,
+		-120.0, -120.0, 100.0, 0.8, 2.0, 0.0)
+	intervalsB := makeSilenceTestIntervals(15*time.Second, 10*time.Second,
+		-120.0, -120.0, 100.0, 0.8, 2.0, 0.0)
+
+	allIntervals := make([]IntervalSample, 0, len(intervalsA)+len(intervalsB))
+	allIntervals = append(allIntervals, intervalsA...)
+	allIntervals = append(allIntervals, intervalsB...)
+
+	result := findBestSilenceRegion(regions, allIntervals, 3600.0)
+
+	if result.BestRegion != nil {
+		t.Fatalf("BestRegion = %+v, want nil for all rejected candidates", result.BestRegion)
+	}
+	if len(result.Candidates) != 2 {
+		t.Fatalf("len(Candidates) = %d, want 2", len(result.Candidates))
+	}
+	for _, c := range result.Candidates {
+		if c.Score != 0.0 {
+			t.Errorf("candidate start=%v score=%.4f, want 0.0", c.Region.Start, c.Score)
+		}
+	}
+}
+
 func TestFindBestSilenceRegion_SingleAcceptableCandidateElected(t *testing.T) {
 	// A single region with an acceptable score should be elected.
 
