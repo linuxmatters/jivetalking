@@ -65,12 +65,12 @@ internal/
 
 **Filter chain order (Pass 2):**
 ```
-downmix → ds201_highpass → ds201_lowpass → noiseremove (32 kHz pre-anlmdn, r=0.0045 + compand) → ds201_gate → la2a_compressor → deesser → analysis → resample
+downmix → ds201_highpass → ds201_lowpass → noiseremove (anlmdn at source rate, r=0.0020, m=3 + compand) → ds201_gate → la2a_compressor → deesser → analysis → resample
 ```
 
 Order rationale: downmix to mono first; HP/LP removes frequency extremes before gate (DS201 frequency-conscious side-chain pattern); denoising before gating (lowers noise floor for gate); compression before de-essing (compression emphasises sibilance); analysis measures processed signal; final resample standardises output format last.
 
-**Noise removal default:** Production uses `anlmdn_sr_32000_best_r`: resample to 32 kHz before `anlmdn`, use `r=0.0045`, then continue through compand. In benchmark context, refer to the old production path as `anlmdn_legacy_default`.
+**Noise removal default:** Production uses `anlmdn_production_current`: `anlmdn` runs at the source sample rate with `r=0.0020` (`r_min`) and `m=3` (`m_strict`), followed by `compand` for residual suppression when a noise profile is available. No sample-rate cap or exit restore - downstream filters (gate, LA-2A, de-esser, analysis) operate at the source rate throughout. The matrix spike at `.bench/anlmdn-matrix-spike` validated this path against the previous 32 kHz cap default (`r=0.0045`, `m=11`) at ~35 % faster Pass 2 with metric-equivalent quality. In benchmark context, refer to the 0.3.1 historical path as `anlmdn_legacy_default`.
 
 **Adeclick default:** Production uses `adeclick=t=2.0:w=55:o=50:m=s` (spline interpolation, halved overlap vs prior default) for ~75% Pass 4 runtime reduction at metric-parity quality; the gentle limiter attack keeps source clicks below the relaxed threshold. In benchmark context, refer to the production path as `adeclick_current_t_2_0_w_55_o_50_m_s`. No legacy variant is retained in the matrix.
 

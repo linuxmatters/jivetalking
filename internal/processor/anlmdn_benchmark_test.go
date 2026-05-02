@@ -36,11 +36,10 @@ type anlmdnBenchmarkParams struct {
 }
 
 type anlmdnBenchmarkVariant struct {
-	Name                string
-	ParameterIntent     string
-	ValidationPriority  string
-	PreAnlmdnSampleRate int
-	Params              anlmdnBenchmarkParams
+	Name               string
+	ParameterIntent    string
+	ValidationPriority string
+	Params             anlmdnBenchmarkParams
 }
 
 func anlmdnBenchmarkVariants() []anlmdnBenchmarkVariant {
@@ -60,7 +59,7 @@ func anlmdnBenchmarkVariants() []anlmdnBenchmarkVariant {
 	return []anlmdnBenchmarkVariant{
 		{
 			Name:               "anlmdn_legacy_default",
-			ParameterIntent:    "Legacy production baseline before the 32 kHz lower-r default.",
+			ParameterIntent:    "0.3.1 historical reference: source-rate anlmdn with r=0.0058, m=11.",
 			ValidationPriority: "baseline",
 			Params:             legacyDefault,
 		},
@@ -109,18 +108,10 @@ func anlmdnBenchmarkVariants() []anlmdnBenchmarkVariant {
 			},
 		},
 		{
-			Name:                "anlmdn_sr_32000",
-			ParameterIntent:     "32 kHz pre-anlmdn sample-rate cap with legacy anlmdn parameters.",
-			ValidationPriority:  "tier2-sample-rate-baseline-r",
-			PreAnlmdnSampleRate: noiseRemoveProductionPreSampleRate,
-			Params:              legacyDefault,
-		},
-		{
-			Name:                "anlmdn_sr_32000_best_r",
-			ParameterIntent:     "Production default: 32 kHz pre-anlmdn sample-rate cap with the selected lower-r candidate.",
-			ValidationPriority:  "production-default",
-			PreAnlmdnSampleRate: noiseRemoveProductionPreSampleRate,
-			Params:              productionDefault,
+			Name:               "anlmdn_production_current",
+			ParameterIntent:    "Production default: r_min (r=0.0020) with m_strict (m=3) at source rate.",
+			ValidationPriority: "production-default",
+			Params:             productionDefault,
 		},
 	}
 }
@@ -134,7 +125,6 @@ func buildAnlmdnBenchmarkVariantConfig(base *FilterChainConfig, variant anlmdnBe
 	config.Pass = PassProcessing
 	config.FilterOrder = Pass2FilterOrder
 	config.NoiseRemoveEnabled = true
-	config.NoiseRemovePreSampleRate = variant.PreAnlmdnSampleRate
 	config.NoiseRemoveStrength = variant.Params.Strength
 	config.NoiseRemovePatchSec = variant.Params.PatchSec
 	config.NoiseRemoveResearchSec = variant.Params.ResearchSec
@@ -201,7 +191,6 @@ type anlmdnBenchmarkMetricsSnapshot struct {
 	VariantName                 string                               `json:"variant_name"`
 	ParameterIntent             string                               `json:"parameter_intent"`
 	ValidationPriority          string                               `json:"validation_priority"`
-	PreAnlmdnSampleRate         int                                  `json:"pre_anlmdn_sample_rate,omitempty"`
 	FilterSpec                  string                               `json:"filter_spec"`
 	Pass2RuntimeMS              float64                              `json:"pass2_runtime_ms"`
 	FinalLUFS                   float64                              `json:"final_lufs"`
@@ -442,7 +431,6 @@ func buildAnlmdnBenchmarkMetricsSnapshot(
 		VariantName:                 variantSpec.Variant.Name,
 		ParameterIntent:             variantSpec.Variant.ParameterIntent,
 		ValidationPriority:          variantSpec.Variant.ValidationPriority,
-		PreAnlmdnSampleRate:         variantSpec.Variant.PreAnlmdnSampleRate,
 		FilterSpec:                  variantSpec.Spec,
 		Pass2RuntimeMS:              float64(pass2Runtime.Microseconds()) / 1000.0,
 		FinalLUFS:                   normResult.OutputLUFS,
@@ -822,8 +810,7 @@ func TestAnlmdnBenchmarkVariantManifest(t *testing.T) {
 		"anlmdn_r_4_5",
 		"anlmdn_r_4_0",
 		"anlmdn_r_patch_adjusted",
-		"anlmdn_sr_32000",
-		"anlmdn_sr_32000_best_r",
+		"anlmdn_production_current",
 	}
 
 	if len(variants) != len(expectedNames) {
@@ -847,21 +834,14 @@ func TestAnlmdnBenchmarkVariantManifest(t *testing.T) {
 		}
 	}
 
-	for _, name := range []string{"anlmdn_sr_32000", "anlmdn_sr_32000_best_r"} {
-		if variantByName[name].PreAnlmdnSampleRate != noiseRemoveProductionPreSampleRate {
-			t.Fatalf("%s PreAnlmdnSampleRate = %d, want %d",
-				name, variantByName[name].PreAnlmdnSampleRate, noiseRemoveProductionPreSampleRate)
-		}
-	}
-	for _, name := range []string{"anlmdn_legacy_default", "anlmdn_r_5_0", "anlmdn_r_4_5", "anlmdn_r_4_0", "anlmdn_r_patch_adjusted"} {
-		if variantByName[name].PreAnlmdnSampleRate != 0 {
-			t.Fatalf("%s should not use a pre-anlmdn sample-rate cap", name)
-		}
-	}
-
-	if got := variantByName["anlmdn_sr_32000_best_r"].Params.ResearchSec; got != noiseRemoveProductionResearchSec {
-		t.Fatalf("anlmdn_sr_32000_best_r research radius = %.4f, want production default %.4f",
+	productionVariant := variantByName["anlmdn_production_current"]
+	if got := productionVariant.Params.ResearchSec; got != noiseRemoveProductionResearchSec {
+		t.Fatalf("anlmdn_production_current research radius = %.4f, want production default %.4f",
 			got, noiseRemoveProductionResearchSec)
+	}
+	if got := productionVariant.Params.Smooth; got != noiseRemoveProductionSmooth {
+		t.Fatalf("anlmdn_production_current smooth = %.0f, want production default %.0f",
+			got, noiseRemoveProductionSmooth)
 	}
 }
 
@@ -879,6 +859,7 @@ func TestAnlmdnBenchmarkParameterOnlySpecs(t *testing.T) {
 		{name: "anlmdn_r_4_5", wantSpec: "anlmdn=s=0.00001:p=0.0060:r=0.0045:m=11"},
 		{name: "anlmdn_r_4_0", wantSpec: "anlmdn=s=0.00001:p=0.0060:r=0.0040:m=11"},
 		{name: "anlmdn_r_patch_adjusted", wantSpec: "anlmdn=s=0.00001:p=0.0050:r=0.0045:m=11"},
+		{name: "anlmdn_production_current", wantSpec: "anlmdn=s=0.00001:p=0.0060:r=0.0020:m=3"},
 	}
 
 	for _, tt := range tests {
@@ -910,50 +891,6 @@ func TestAnlmdnBenchmarkParameterOnlySpecs(t *testing.T) {
 	assertBaseLegacyAnlmdnConfigUnchanged(t, base)
 }
 
-func TestAnlmdnBenchmarkPreSampleRateSpecs(t *testing.T) {
-	base := newAnlmdnBenchmarkTestConfig()
-
-	tests := []struct {
-		name     string
-		wantSpec string
-	}{
-		{name: "anlmdn_sr_32000", wantSpec: "anlmdn=s=0.00001:p=0.0060:r=0.0058:m=11"},
-		{name: "anlmdn_sr_32000_best_r", wantSpec: "anlmdn=s=0.00001:p=0.0060:r=0.0045:m=11"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			variant := findAnlmdnBenchmarkVariant(t, tt.name)
-			spec := buildAnlmdnBenchmarkVariantSpec(base, variant)
-
-			assertFullbenchSpecContains(t, spec, []string{
-				"aformat=sample_rates=32000:channel_layouts=mono:sample_fmts=fltp",
-				tt.wantSpec,
-				"anlmdn=",
-				"compand=",
-				"aformat=sample_rates=44100:channel_layouts=mono:sample_fmts=s16",
-				"asetnsamples=n=4096",
-			})
-			assertFullbenchSpecOrder(t, spec, []string{
-				"aformat=channel_layouts=mono",
-				"highpass=",
-				"lowpass=",
-				"aformat=sample_rates=32000:channel_layouts=mono:sample_fmts=fltp",
-				"anlmdn=",
-				"compand=",
-				"agate=",
-				"acompressor=",
-				"deesser=",
-				"astats=",
-				"aspectralstats=",
-				"ebur128=",
-				"aformat=sample_rates=44100",
-				"asetnsamples=",
-			})
-		})
-	}
-}
-
 func TestAnlmdnBenchmarkVariantSpecsPreservePass2Ordering(t *testing.T) {
 	base := newAnlmdnBenchmarkTestConfig()
 
@@ -967,8 +904,14 @@ func TestAnlmdnBenchmarkVariantSpecsPreservePass2Ordering(t *testing.T) {
 			assertFullbenchSpecContains(t, spec, []string{
 				"anlmdn=",
 				"compand=",
-				"aformat=sample_rates=44100",
+				"aformat=sample_rates=44100:channel_layouts=mono:sample_fmts=s16",
 				"asetnsamples=",
+			})
+			assertFullbenchSpecExcludes(t, spec, []string{
+				// The cap+exit-restore architecture has been removed; no
+				// noise-removal sub-block aformat clauses should appear.
+				"aformat=sample_rates=32000",
+				"aformat=sample_rates=44100:channel_layouts=mono:sample_fmts=fltp",
 			})
 			assertFullbenchSpecOrder(t, spec, []string{
 				"aformat=channel_layouts=mono",
@@ -982,22 +925,18 @@ func TestAnlmdnBenchmarkVariantSpecsPreservePass2Ordering(t *testing.T) {
 				"astats=",
 				"aspectralstats=",
 				"ebur128=",
-				"aformat=sample_rates=44100",
+				"aformat=sample_rates=44100:channel_layouts=mono:sample_fmts=s16",
 				"asetnsamples=",
 			})
 		})
 	}
 }
 
-func TestAnlmdnBenchmarkProductionDefaultsMatchFastVariant(t *testing.T) {
+func TestAnlmdnBenchmarkProductionDefaultsMatchProductionVariant(t *testing.T) {
 	config := DefaultFilterConfig()
 
 	if !config.NoiseRemoveEnabled {
 		t.Fatal("production NoiseRemoveEnabled changed")
-	}
-	if config.NoiseRemovePreSampleRate != noiseRemoveProductionPreSampleRate {
-		t.Fatalf("production NoiseRemovePreSampleRate = %d, want %d",
-			config.NoiseRemovePreSampleRate, noiseRemoveProductionPreSampleRate)
 	}
 	if config.NoiseRemoveStrength != noiseRemoveProductionStrength {
 		t.Fatalf("production NoiseRemoveStrength = %.5f, want %.5f",
@@ -1016,9 +955,9 @@ func TestAnlmdnBenchmarkProductionDefaultsMatchFastVariant(t *testing.T) {
 			config.NoiseRemoveSmooth, noiseRemoveProductionSmooth)
 	}
 
-	fastVariant := findAnlmdnBenchmarkVariant(t, "anlmdn_sr_32000_best_r")
-	if got, want := buildAnlmdnBenchmarkVariantSpec(config, fastVariant), config.BuildFilterSpec(); got != want {
-		t.Fatalf("production filter spec drifted from anlmdn_sr_32000_best_r\nvariant:    %s\nproduction: %s", got, want)
+	productionVariant := findAnlmdnBenchmarkVariant(t, "anlmdn_production_current")
+	if got, want := buildAnlmdnBenchmarkVariantSpec(config, productionVariant), config.BuildFilterSpec(); got != want {
+		t.Fatalf("production filter spec drifted from anlmdn_production_current\nvariant:    %s\nproduction: %s", got, want)
 	}
 
 	expectedOrder := []FilterID{
@@ -1199,9 +1138,6 @@ func assertBaseLegacyAnlmdnConfigUnchanged(tb testing.TB, config *FilterChainCon
 
 	if !config.NoiseRemoveEnabled {
 		tb.Fatal("base config NoiseRemoveEnabled changed")
-	}
-	if config.NoiseRemovePreSampleRate != 0 {
-		tb.Fatalf("base NoiseRemovePreSampleRate changed: got %d", config.NoiseRemovePreSampleRate)
 	}
 	if config.NoiseRemoveStrength != noiseRemoveLegacyStrength {
 		tb.Fatalf("base NoiseRemoveStrength changed: got %.5f", config.NoiseRemoveStrength)

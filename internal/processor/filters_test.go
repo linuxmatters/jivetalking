@@ -64,7 +64,6 @@ func newTestConfig() *FilterChainConfig {
 		VolumaxOutputLevel: 1.0,
 
 		// NoiseRemove defaults (anlmdn + compand)
-		NoiseRemovePreSampleRate:    0,
 		NoiseRemoveCompandEnabled:   true,
 		NoiseRemoveStrength:         0.00001,
 		NoiseRemovePatchSec:         0.006,
@@ -654,23 +653,18 @@ func TestBuildNoiseRemoveFilter(t *testing.T) {
 		}
 	})
 
-	t.Run("pre-sample-rate cap appears before anlmdn", func(t *testing.T) {
+	t.Run("anlmdn appears before compand", func(t *testing.T) {
 		config := newTestConfig()
 		config.NoiseRemoveEnabled = true
-		config.NoiseRemovePreSampleRate = 32000
+		config.NoiseRemoveCompandEnabled = true
 
 		spec := config.buildNoiseRemoveFilter()
 
-		assertFullbenchSpecContains(t, spec, []string{
-			"aformat=sample_rates=32000:channel_layouts=mono:sample_fmts=fltp",
-			"anlmdn=",
-			"compand=",
-		})
-		assertFullbenchSpecOrder(t, spec, []string{
-			"aformat=sample_rates=32000",
-			"anlmdn=",
-			"compand=",
-		})
+		assertFullbenchSpecContains(t, spec, []string{"anlmdn=", "compand="})
+		assertFullbenchSpecOrder(t, spec, []string{"anlmdn=", "compand="})
+		if strings.Contains(spec, "aformat=sample_rates=") {
+			t.Errorf("noise-removal sub-block should not emit any aformat sample-rate clauses\nSpec: %s", spec)
+		}
 	})
 
 	t.Run("different expansion levels", func(t *testing.T) {

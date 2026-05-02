@@ -688,10 +688,7 @@ func formatNoiseRemoveFilter(f *os.File, cfg *processor.FilterChainConfig, m *pr
 	// Header: filter name and algorithm
 	fmt.Fprintf(f, "%snoiseremove: anlmdn + compand (Non-Local Means denoiser)\n", prefix)
 
-	// anlmdn parameters (fixed from spike validation)
-	if cfg.NoiseRemovePreSampleRate > 0 {
-		fmt.Fprintf(f, "        pre-anlmdn sample rate: %d Hz\n", cfg.NoiseRemovePreSampleRate)
-	}
+	// anlmdn parameters (matrix spike defaults: r_min + m_strict at source rate)
 	fmt.Fprintf(f, "        anlmdn: s=%.5f, p=%.4fs, r=%.4fs, m=%.0f\n",
 		cfg.NoiseRemoveStrength,
 		cfg.NoiseRemovePatchSec,

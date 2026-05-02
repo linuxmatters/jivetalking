@@ -85,12 +85,17 @@ const (
 )
 
 // NoiseRemove production defaults.
+//
+// The matrix spike at .bench/anlmdn-matrix-spike validated `r_min` (r=0.0020)
+// at native source rate against the previous 32 kHz cap path with r=0.0045,
+// confirming a ~35 % Pass 2 speedup at metric-equivalent quality. `m_strict`
+// (m=3) was a free quality lever - matched cleanup at zero speed cost on both
+// fixtures.
 const (
-	noiseRemoveProductionPreSampleRate = 32000
-	noiseRemoveProductionStrength      = 0.00001
-	noiseRemoveProductionPatchSec      = 0.0060
-	noiseRemoveProductionResearchSec   = 0.0045
-	noiseRemoveProductionSmooth        = 11.0
+	noiseRemoveProductionStrength    = 0.00001
+	noiseRemoveProductionPatchSec    = 0.0060
+	noiseRemoveProductionResearchSec = 0.0020
+	noiseRemoveProductionSmooth      = 3.0
 
 	noiseRemoveLegacyStrength    = 0.00001
 	noiseRemoveLegacyPatchSec    = 0.0060
@@ -180,10 +185,10 @@ type FilterChainConfig struct {
 	DS201LPRolloffRatio float64     // Actual rolloff/centroid ratio (for logging)
 
 	// NoiseRemove - anlmdn + compand noise reduction
-	// Non-Local Means denoiser (anlmdn) with a compand for residual suppression
-	// Validated 32 kHz fast config: lower CPU with baseline-equivalent output on EP 68 noise samples.
+	// Non-Local Means denoiser (anlmdn) with a compand for residual suppression.
+	// Production runs anlmdn at the source sample rate with r=0.0020 and m=3,
+	// validated by the matrix spike at .bench/anlmdn-matrix-spike.
 	NoiseRemoveEnabled          bool    // Enable anlmdn+compand noise reduction
-	NoiseRemovePreSampleRate    int     // Optional sample-rate cap before anlmdn (0 = disabled)
 	NoiseRemoveCompandEnabled   bool    // Enable compand residual suppression (false = anlmdn-only)
 	NoiseRemoveStrength         float64 // anlmdn strength (0.00001 = minimum, kept constant)
 	NoiseRemovePatchSec         float64 // Patch size in seconds (context window for similarity)
@@ -324,19 +329,18 @@ func DefaultFilterConfig() *FilterChainConfig {
 		DS201LPMix:       1.0,     // Full wet signal
 		DS201LPTransform: "tdii",  // Transposed Direct Form II - best floating-point accuracy
 
-		// NoiseRemove - anlmdn + compand (32 kHz fast default)
-		NoiseRemoveEnabled:          true,                               // Primary noise reduction filter
-		NoiseRemovePreSampleRate:    noiseRemoveProductionPreSampleRate, // 32 kHz cap before anlmdn for lower CPU
-		NoiseRemoveCompandEnabled:   true,                               // Compand enabled when noise profile available
-		NoiseRemoveStrength:         noiseRemoveProductionStrength,      // Minimum strength (fixed from spike validation)
-		NoiseRemovePatchSec:         noiseRemoveProductionPatchSec,      // 6ms patch
-		NoiseRemoveResearchSec:      noiseRemoveProductionResearchSec,   // 4.5ms research
-		NoiseRemoveSmooth:           noiseRemoveProductionSmooth,        // Default smoothing
-		NoiseRemoveCompandThreshold: -55.0,                              // Overridden by adaptive tuning
-		NoiseRemoveCompandExpansion: 6.0,                                // Overridden by adaptive tuning
-		NoiseRemoveCompandAttack:    0.005,                              // 5ms - fixed, empirically validated for speech
-		NoiseRemoveCompandDecay:     0.100,                              // 100ms - fixed, empirically validated for speech
-		NoiseRemoveCompandKnee:      6.0,                                // 6dB - fixed, soft knee for transparency
+		// NoiseRemove - anlmdn + compand at source sample rate (matrix spike defaults)
+		NoiseRemoveEnabled:          true,                             // Primary noise reduction filter
+		NoiseRemoveCompandEnabled:   true,                             // Compand enabled when noise profile available
+		NoiseRemoveStrength:         noiseRemoveProductionStrength,    // Minimum strength (fixed from spike validation)
+		NoiseRemovePatchSec:         noiseRemoveProductionPatchSec,    // 6ms patch
+		NoiseRemoveResearchSec:      noiseRemoveProductionResearchSec, // 2.0ms research (r_min)
+		NoiseRemoveSmooth:           noiseRemoveProductionSmooth,      // 3.0 smoothing (m_strict)
+		NoiseRemoveCompandThreshold: -55.0,                            // Overridden by adaptive tuning
+		NoiseRemoveCompandExpansion: 6.0,                              // Overridden by adaptive tuning
+		NoiseRemoveCompandAttack:    0.005,                            // 5ms - fixed, empirically validated for speech
+		NoiseRemoveCompandDecay:     0.100,                            // 100ms - fixed, empirically validated for speech
+		NoiseRemoveCompandKnee:      6.0,                              // 6dB - fixed, soft knee for transparency
 
 		// DS201-Inspired Gate - soft expander for natural speech transitions
 		// All parameters set adaptively based on Pass 1 measurements
@@ -597,18 +601,17 @@ func (cfg *FilterChainConfig) buildDS201LowPassFilter() string {
 }
 
 // buildNoiseRemoveFilter builds the anlmdn+compand noise reduction filter.
-// Non-Local Means denoiser followed a compand for residual suppression.
+// Non-Local Means denoiser followed by a compand for residual suppression.
+// Runs at the source sample rate; downstream filters (gate, LA-2A, de-esser,
+// analysis) operate at the same rate.
 //
-// Filter chain: optional pre-sample-rate cap → anlmdn → compand
-//
-// anlmdn parameters (validated 32 kHz fast default):
-// - pre-sample-rate: optional sample-rate cap before anlmdn; production uses 32 kHz
+// anlmdn parameters (matrix spike defaults at .bench/anlmdn-matrix-spike):
 // - s: strength (0.00001 = minimum, kept constant)
 // - p: patch size in seconds (6ms = 0.006s, context window for similarity)
-// - r: research radius in seconds (4.5ms = 0.0045s, search window for matching)
-// - m: smoothing factor (11 = default, weight smoothing)
+// - r: research radius in seconds (2.0ms = 0.0020s, r_min)
+// - m: smoothing factor (3 = m_strict)
 //
-// compand parameters
+// compand parameters:
 // - FLAT reduction curve: uniform expansion below threshold
 // - threshold/expansion: derived from Pass 1 measurements in tuneNoiseRemove
 // - attack: 5ms (fixed, empirically validated for speech)
@@ -619,30 +622,17 @@ func (cfg *FilterChainConfig) buildNoiseRemoveFilter() string {
 		return ""
 	}
 
-	filters := make([]string, 0, 3)
-	if cfg.NoiseRemovePreSampleRate > 0 {
-		filters = append(filters, fmt.Sprintf(
-			"aformat=sample_rates=%d:channel_layouts=mono:sample_fmts=fltp",
-			cfg.NoiseRemovePreSampleRate,
-		))
-	}
-
-	anlmdnSpec := fmt.Sprintf("anlmdn=s=%.5f:p=%.4f:r=%.4f:m=%.0f",
+	filters := make([]string, 0, 2)
+	filters = append(filters, fmt.Sprintf("anlmdn=s=%.5f:p=%.4f:r=%.4f:m=%.0f",
 		cfg.NoiseRemoveStrength,
 		cfg.NoiseRemovePatchSec,
 		cfg.NoiseRemoveResearchSec,
 		cfg.NoiseRemoveSmooth,
-	)
-	filters = append(filters, anlmdnSpec)
+	))
 
-	// When compand is disabled (no noise profile to calibrate), use anlmdn only
-	if !cfg.NoiseRemoveCompandEnabled {
-		return strings.Join(filters, ",")
+	if cfg.NoiseRemoveCompandEnabled {
+		filters = append(filters, cfg.buildNoiseRemoveCompandFilter())
 	}
-
-	// Build compand filter for residual suppression
-	compandSpec := cfg.buildNoiseRemoveCompandFilter()
-	filters = append(filters, compandSpec)
 
 	return strings.Join(filters, ",")
 }
