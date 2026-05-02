@@ -1127,7 +1127,7 @@ func findBestSilenceRegion(regions []SilenceRegion, intervals []IntervalSample, 
 		}
 		if result.BestRegion == nil {
 			for _, c := range result.Candidates {
-				if c.Score >= maxScore-selectionTolerance {
+				if c.Score > 0.0 && c.Score >= maxScore-selectionTolerance {
 					region := c.Region
 					result.BestRegion = &SilenceRegion{
 						Start:    region.Start,
