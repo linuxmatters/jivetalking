@@ -348,7 +348,7 @@ func captureAnlmdnBenchmarkArtifacts(
 
 		outputPath := filepath.Join(variantDir, "processed.flac")
 		start := time.Now()
-		runResult := runFullbenchFilterSpecResult(tb, inputPath, outputPath, variantSpec.Spec, true)
+		runResult := runFullbenchFilterSpecResult(tb, inputPath, outputPath, variantSpec.Spec)
 		pass2Runtime := time.Since(start)
 		if runResult.OutputMeasurements == nil {
 			tb.Fatalf("anlmdn artefact capture for %s produced no Pass 2 measurements", variantSpec.Variant.Name)

@@ -86,9 +86,10 @@ func newTestConfig() *FilterChainConfig {
 
 		// Adeclick defaults (Pass 4)
 		AdeclickEnabled:   true,
-		AdeclickThreshold: 1.5,
+		AdeclickThreshold: 2.0,
 		AdeclickWindow:    55.0,
-		AdeclickOverlap:   75.0,
+		AdeclickOverlap:   50.0,
+		AdeclickMethod:    "s",
 
 		FilterOrder: Pass2FilterOrder,
 	}
@@ -744,26 +745,14 @@ func TestBuildVolumaxFilter(t *testing.T) {
 }
 
 func TestBuildAdeclickFilter(t *testing.T) {
-	t.Run("default parameters", func(t *testing.T) {
-		config := newTestConfig()
-		config.AdeclickEnabled = true
-		config.AdeclickThreshold = 1.5
-		config.AdeclickWindow = 55.0
-		config.AdeclickOverlap = 75.0
+	t.Run("default config emits production clause", func(t *testing.T) {
+		config := DefaultFilterConfig()
 
 		spec := config.buildAdeclickFilter()
 
-		wantIn := []string{
-			"adeclick=",
-			"t=1.5",
-			"w=55",
-			"o=75",
-		}
-
-		for _, want := range wantIn {
-			if !strings.Contains(spec, want) {
-				t.Errorf("buildAdeclickFilter() = %q, want to contain %q", spec, want)
-			}
+		const want = "adeclick=t=2.0:w=55:o=50:m=s"
+		if spec != want {
+			t.Errorf("buildAdeclickFilter() = %q, want %q", spec, want)
 		}
 	})
 
@@ -773,17 +762,40 @@ func TestBuildAdeclickFilter(t *testing.T) {
 		config.AdeclickThreshold = 2.0
 		config.AdeclickWindow = 100.0
 		config.AdeclickOverlap = 50.0
+		config.AdeclickMethod = "s"
 
 		spec := config.buildAdeclickFilter()
 
-		if !strings.Contains(spec, "t=2.0") {
-			t.Errorf("buildAdeclickFilter() = %q, want to contain t=2.0", spec)
+		wantIn := []string{
+			"adeclick=",
+			"t=2.0",
+			"w=100",
+			"o=50",
+			"m=s",
 		}
-		if !strings.Contains(spec, "w=100") {
-			t.Errorf("buildAdeclickFilter() = %q, want to contain w=100", spec)
+		for _, want := range wantIn {
+			if !strings.Contains(spec, want) {
+				t.Errorf("buildAdeclickFilter() = %q, want to contain %q", spec, want)
+			}
 		}
-		if !strings.Contains(spec, "o=50") {
-			t.Errorf("buildAdeclickFilter() = %q, want to contain o=50", spec)
+	})
+
+	t.Run("empty method omits m segment", func(t *testing.T) {
+		config := newTestConfig()
+		config.AdeclickEnabled = true
+		config.AdeclickThreshold = 2.0
+		config.AdeclickWindow = 55.0
+		config.AdeclickOverlap = 50.0
+		config.AdeclickMethod = ""
+
+		spec := config.buildAdeclickFilter()
+
+		const want = "adeclick=t=2.0:w=55:o=50"
+		if spec != want {
+			t.Errorf("buildAdeclickFilter() = %q, want %q", spec, want)
+		}
+		if strings.Contains(spec, ":m=") {
+			t.Errorf("buildAdeclickFilter() = %q, must omit :m= segment when method is empty", spec)
 		}
 	})
 

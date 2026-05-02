@@ -276,6 +276,7 @@ type FilterChainConfig struct {
 	AdeclickThreshold float64 // Detection sensitivity (0.1-8.0, lower=more sensitive)
 	AdeclickWindow    float64 // Analysis window in ms (10-100)
 	AdeclickOverlap   float64 // Window overlap percentage (50-95)
+	AdeclickMethod    string  // Interpolation method ("" = default "a" = average; "s" = spline)
 
 	// Loudnorm (Pass 3) - EBU R128 dynamic loudness normalisation
 	// Replaces simple volume gain + limiting with integrated dynamic normalisation
@@ -387,11 +388,12 @@ func DefaultFilterConfig() *FilterChainConfig {
 		VolumaxOutputLevel: 1.0, // Unity output
 
 		// Adeclick - click/pop repair (Pass 4 only)
-		// Conservative parameters for transparent repair
+		// Tuned for transparent repair at lower CPU cost
 		AdeclickEnabled:   true,
-		AdeclickThreshold: 1.5,  // Slightly more sensitive than FFmpeg default (2.0)
+		AdeclickThreshold: 2.0,  // Less sensitive threshold reduces CPU cost without harming repair quality
 		AdeclickWindow:    55.0, // Default window, appropriate for speech
-		AdeclickOverlap:   75.0, // Default overlap, good detection coverage
+		AdeclickOverlap:   50.0, // Lower overlap further reduces cost while remaining within FFmpeg's valid range
+		AdeclickMethod:    "s",  // Spline interpolation preserves transient peak shapes better than the default average method
 
 		// Filter chain order - use default order
 		FilterOrder: Pass2FilterOrder,
@@ -787,12 +789,16 @@ func (cfg *FilterChainConfig) buildAdeclickFilter() string {
 	if !cfg.AdeclickEnabled {
 		return ""
 	}
-	return fmt.Sprintf(
+	spec := fmt.Sprintf(
 		"adeclick=t=%.1f:w=%.0f:o=%.0f",
 		cfg.AdeclickThreshold,
 		cfg.AdeclickWindow,
 		cfg.AdeclickOverlap,
 	)
+	if cfg.AdeclickMethod != "" {
+		spec += ":m=" + cfg.AdeclickMethod
+	}
+	return spec
 }
 
 // BuildFilterSpec builds the FFmpeg filter specification string for Pass 2 processing.
