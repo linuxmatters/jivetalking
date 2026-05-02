@@ -208,6 +208,102 @@ bench-anlmdn-capture: _check-submodule
     echo "Anlmdn artefacts: $root"
     echo "Benchmark timing: $timing"
 
+# Run focused Pass 4 adeclick variant benchmarks.
+# Use the short local fixture for iteration:
+# JIVETALKING_BENCH_FIXTURE="$(pwd -P)/testdata/fixture-5m.flac" just bench-adeclick
+# Opt in to artefact capture with:
+# JIVETALKING_ADECLICK_BENCH_CAPTURE=1 JIVETALKING_BENCH_FIXTURE="$(pwd -P)/testdata/fixture-5m.flac" just bench-adeclick
+# Capture writes .bench/adeclick/<variant>/ with processed.flac, filter.txt, metrics.json, validation.md, and timing.txt.
+bench-adeclick: _check-submodule
+    #!/usr/bin/env bash
+    set -e
+    echo "Using JIVETALKING_BENCH_FIXTURE when set; otherwise adeclick benchmarks skip"
+    echo "Set JIVETALKING_ADECLICK_BENCH_CAPTURE=1 to write .bench/adeclick artefacts"
+    go test -run '^$' -bench 'BenchmarkAdeclickVariants' -benchmem -count=3 ./internal/processor
+
+# Run focused adeclick benchmark profiling.
+# Defaults to the production adeclick variant:
+# JIVETALKING_BENCH_FIXTURE="$(pwd -P)/testdata/fixture-5m.flac" just bench-adeclick-profile
+# Profile a named variant:
+# JIVETALKING_ADECLICK_PROFILE_VARIANT=without_adeclick JIVETALKING_BENCH_FIXTURE="$(pwd -P)/testdata/fixture-5m.flac" just bench-adeclick-profile
+bench-adeclick-profile: _check-submodule
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p .bench/adeclick
+    variant="${JIVETALKING_ADECLICK_PROFILE_VARIANT:-adeclick_current_t_2_0_w_55_o_50_m_s}"
+    case "$variant" in
+        ""|*[!A-Za-z0-9_]*)
+            echo "Invalid JIVETALKING_ADECLICK_PROFILE_VARIANT: $variant" >&2
+            echo "Use an adeclick benchmark variant name such as adeclick_current_t_2_0_w_55_o_50_m_s or without_adeclick." >&2
+            exit 1
+            ;;
+    esac
+    echo "Profiling BenchmarkAdeclickVariants/$variant"
+    echo "Using JIVETALKING_BENCH_FIXTURE when set; otherwise adeclick benchmarks skip"
+    go test -run '^$' -bench "^BenchmarkAdeclickVariants/${variant}$" -benchmem -cpuprofile .bench/adeclick/cpu.out ./internal/processor
+    echo "Run CPU profile analysis with:"
+    echo "  go tool pprof .bench/adeclick/cpu.out"
+
+# Capture adeclick benchmark artefacts with the 5-minute local fixture.
+bench-adeclick-capture: _check-submodule
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    fixture="testdata/fixture-5m.flac"
+    root=".bench/adeclick"
+    timing="$root/benchmark.txt"
+    environment="$root/environment.txt"
+
+    if [ ! -f "$fixture" ]; then
+        echo "Missing benchmark fixture: $fixture" >&2
+        exit 1
+    fi
+    fixture_abs="$(pwd -P)/$fixture"
+    root_abs="$(pwd -P)/$root"
+
+    if [ -d "$root" ]; then
+        echo "This will delete $root before capturing fresh adeclick artefacts."
+        printf "Continue? [y/N] "
+        read -r answer
+        case "$answer" in
+            y|Y|yes|YES)
+                ;;
+            *)
+                echo "Aborted."
+                exit 1
+                ;;
+        esac
+        chmod -R u+w "$root" 2>/dev/null || true
+        rm -rf "$root"
+    fi
+    mkdir -p "$root"
+
+    {
+        echo "go_version: $(go version)"
+        echo "goos: $(go env GOOS)"
+        echo "goarch: $(go env GOARCH)"
+        echo "benchmark_fixture_path: $fixture_abs"
+        printf "ffmpeg_statigo_module: "
+        go list -m github.com/linuxmatters/ffmpeg-statigo 2>/dev/null || echo "unavailable"
+        case "$(go env GOOS)" in
+            linux)
+                cpu_model="$(awk -F: '/^(model name|Hardware|Processor)[[:space:]]*:/{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}' /proc/cpuinfo 2>/dev/null || true)"
+                ;;
+            darwin)
+                cpu_model="$(sysctl -n machdep.cpu.brand_string 2>/dev/null || sysctl -n hw.model 2>/dev/null || true)"
+                ;;
+            *)
+                cpu_model=""
+                ;;
+        esac
+        echo "cpu_model: ${cpu_model:-unavailable}"
+    } > "$environment"
+
+    JIVETALKING_ADECLICK_BENCH_CAPTURE=1 JIVETALKING_ADECLICK_BENCH_CAPTURE_ROOT="$root_abs" JIVETALKING_BENCH_FIXTURE="$fixture_abs" \
+        go test -run '^$' -bench 'BenchmarkAdeclickVariants' -benchmem -count=1 ./internal/processor 2>&1 | tee "$timing"
+    echo "Adeclick artefacts: $root"
+    echo "Benchmark timing: $timing"
+
 # Run processor package benchmarks with a CPU profile
 bench-profile: _check-submodule
     #!/usr/bin/env bash

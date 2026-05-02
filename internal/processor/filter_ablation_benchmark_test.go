@@ -145,10 +145,10 @@ func runFullbenchFilterSpec(tb testing.TB, inputPath, outputPath, filterSpec str
 	return result.InputMetadata, result.OutputMeasurements
 }
 
-func runFullbenchFilterSpecResult(tb testing.TB, inputPath, outputPath, filterSpec string, extractMeasurements bool) *fullbenchFilterSpecRunResult {
+func runFullbenchFilterSpecResult(tb testing.TB, inputPath, outputPath, filterSpec string) *fullbenchFilterSpecRunResult {
 	tb.Helper()
 
-	return runFullbenchFilterSpecCore(tb, inputPath, outputPath, filterSpec, extractMeasurements, true)
+	return runFullbenchFilterSpecCore(tb, inputPath, outputPath, filterSpec, true, true)
 }
 
 func runFullbenchFilterSpecCore(tb testing.TB, inputPath, outputPath, filterSpec string, extractMeasurements, includeOutputMetadata bool) *fullbenchFilterSpecRunResult {
@@ -764,7 +764,7 @@ func TestRunFullbenchFilterSpecSyntheticSmoke(t *testing.T) {
 	}
 	assertFullbenchFLACOutput(t, measuredOutputPath)
 
-	result := runFullbenchFilterSpecResult(t, inputPath, filepath.Join(t.TempDir(), "result.flac"), filterSpec, true)
+	result := runFullbenchFilterSpecResult(t, inputPath, filepath.Join(t.TempDir(), "result.flac"), filterSpec)
 	if result.InputMetadata.SampleRate != 44100 {
 		t.Fatalf("result input metadata sample rate mismatch: got %d, want 44100", result.InputMetadata.SampleRate)
 	}

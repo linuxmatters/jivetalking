@@ -762,11 +762,15 @@ func buildLoudnormFilterSpec(config *FilterChainConfig, measurement *LoudnormMea
 	// Repairs waveform discontinuities from limiter/loudnorm gain transitions
 	// Must come after loudnorm (catches its clicks) and before measurement filters
 	if config.AdeclickEnabled {
-		filters = append(filters, fmt.Sprintf("adeclick=t=%.1f:w=%.0f:o=%.0f",
+		spec := fmt.Sprintf("adeclick=t=%.1f:w=%.0f:o=%.0f",
 			config.AdeclickThreshold,
 			config.AdeclickWindow,
 			config.AdeclickOverlap,
-		))
+		)
+		if config.AdeclickMethod != "" {
+			spec += ":m=" + config.AdeclickMethod
+		}
+		filters = append(filters, spec)
 	}
 
 	// 4. astats for amplitude measurements (same as Pass 2)

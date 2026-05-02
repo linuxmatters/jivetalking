@@ -72,6 +72,8 @@ Order rationale: downmix to mono first; HP/LP removes frequency extremes before 
 
 **Noise removal default:** Production uses `anlmdn_sr_32000_best_r`: resample to 32 kHz before `anlmdn`, use `r=0.0045`, then continue through compand. In benchmark context, refer to the old production path as `anlmdn_legacy_default`.
 
+**Adeclick default:** Production uses `adeclick=t=2.0:w=55:o=50:m=s` (spline interpolation, halved overlap vs prior default) for ~75% Pass 4 runtime reduction at metric-parity quality; the gentle limiter attack keeps source clicks below the relaxed threshold. In benchmark context, refer to the production path as `adeclick_current_t_2_0_w_55_o_50_m_s`. No legacy variant is retained in the matrix.
+
 **Normalisation (Pass 3/4):**
 ```
 Pass 3: [volume (pre-gain, when clamped) → alimiter (Volumax)] → loudnorm (measure-only, print_format=json) → captures LoudnormStats JSON

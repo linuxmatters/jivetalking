@@ -243,37 +243,7 @@ just install
 
 ### Benchmarks
 
-Benchmark artefacts live under `.bench/`. They are separate from generated per-file `.log` reports.
-
-```bash
-# Processor package benchmarks
-just bench
-
-# Processor benchmarks with CPU profile at .bench/cpu.out
-just bench-profile
-
-# Full CLI processing benchmark against a copied input file
-just bench-cli FILE
-
-# Analysis-only CLI benchmark against a copied input file
-just bench-analysis FILE
-
-# Focused anlmdn variant benchmarks
-JIVETALKING_BENCH_FIXTURE="$(pwd -P)/testdata/fixture-5m.flac" just bench-anlmdn
-
-# Capture processed outputs, filter specs, metrics, validation reports, and timing
-just bench-anlmdn-capture
-
-# Profile the production anlmdn variant, anlmdn_sr_32000_best_r
-JIVETALKING_BENCH_FIXTURE="$(pwd -P)/testdata/fixture-5m.flac" just bench-anlmdn-profile
-
-# Profile the legacy default for comparison
-JIVETALKING_ANLMDN_PROFILE_VARIANT=anlmdn_legacy_default \
-  JIVETALKING_BENCH_FIXTURE="$(pwd -P)/testdata/fixture-5m.flac" \
-  just bench-anlmdn-profile
-```
-
-`anlmdn_sr_32000_best_r` is the production default. It caps the signal to 32 kHz before `anlmdn`, uses `r=0.0045`, and restores the normal 44.1 kHz mono output path afterwards. `anlmdn_legacy_default` keeps the old uncapped path with `r=0.0058` for comparison.
+Benchmark recipes, capture and profile workflows, and the `anlmdn`/`adeclick` variant matrices are documented in [docs/Benchmarks.md](docs/Benchmarks.md). Artefacts land under `.bench/`.
 
 ### Project Structure
 
