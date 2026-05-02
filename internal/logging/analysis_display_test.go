@@ -221,6 +221,164 @@ func TestDisplayAnalysisResults_ExcludesProcessingOnlyFields(t *testing.T) {
 	}
 }
 
+func TestDisplayAnalysisResults_CapsSilenceCandidatesChronologicallyWithElectedFirst(t *testing.T) {
+	m := makeMinimalMeasurements()
+	m.SilenceCandidates = makeRankedSilenceCandidates(12)
+	m.NoiseProfile = &processor.NoiseProfile{
+		Start:              m.SilenceCandidates[0].Region.Start,
+		Duration:           m.SilenceCandidates[0].Region.Duration,
+		MeasuredNoiseFloor: m.SilenceCandidates[0].RMSLevel,
+	}
+
+	config := processor.DefaultFilterConfig()
+	var buf bytes.Buffer
+	DisplayAnalysisResults(&buf, "/tmp/test.wav", makeMinimalMetadata(), m, config)
+	output := buf.String()
+
+	for _, want := range []string{
+		"  Candidates:     12 evaluated",
+		"  Displayed:      elected + top 10 chronological (1 omitted)",
+		"  #1: 5.0s at 1.0s (elected)",
+		"  #2: 5.0s at 2.0s (score: 0.020)",
+		"      RMS: -59.8 dBFS, Crest: 12.0 dB, Entropy: 0.420 (mixed voiced/unvoiced)",
+		"  Rejected:       0",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("analysis output missing %q", want)
+		}
+	}
+
+	for _, detailedLine := range []string{
+		"      Score:       ",
+		"      RMS Level:   ",
+		"      Peak Level:  ",
+		"      Flatness:    ",
+		"      Kurtosis:    ",
+	} {
+		if count := strings.Count(output, detailedLine); count != 1 {
+			t.Fatalf("analysis silence detail line %q count = %d, want 1", strings.TrimSpace(detailedLine), count)
+		}
+	}
+
+	if count := strings.Count(output, "  #"); count != 11 {
+		t.Fatalf("displayed analysis silence candidates = %d, want 11", count)
+	}
+	assertAppearsBefore(t, output, "#1:", "#2:")
+	assertAppearsBefore(t, output, "#2:", "#3:")
+	assertAppearsBefore(t, output, "#10:", "#11:")
+	if strings.Contains(output, "#12:") {
+		t.Fatal("expected silence candidate 12 to be omitted")
+	}
+	if strings.Contains(output, "[SELECTED]") {
+		t.Fatal("expected silence output to use elected terminology")
+	}
+	assertCandidateSummaryTerminology(t, output, "  Displayed:      elected + top 10 chronological (1 omitted)")
+}
+
+func TestDisplayAnalysisResults_CapsSpeechCandidatesChronologicallyWithElectedFirst(t *testing.T) {
+	m := makeMinimalMeasurements()
+	m.SpeechCandidates = makeRankedSpeechCandidates(12)
+	m.SpeechCandidates[0].VoicingDensity = 0.82
+	m.SpeechProfile = &m.SpeechCandidates[0]
+
+	config := processor.DefaultFilterConfig()
+	var buf bytes.Buffer
+	DisplayAnalysisResults(&buf, "/tmp/test.wav", makeMinimalMetadata(), m, config)
+	output := buf.String()
+
+	for _, want := range []string{
+		"  Candidates:     12 evaluated",
+		"  Displayed:      elected + top 10 chronological (1 omitted)",
+		"  #1: 60.0s at 1.0s (elected)",
+		"      Voicing:     82%",
+		"  #2: 60.0s at 2.0s (score: 0.02)",
+		"      RMS: -29.8 dBFS, Crest: 10.0 dB, Centroid: 2400 Hz (forward, clear)",
+		"  Rejected:       0",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("analysis output missing %q", want)
+		}
+	}
+
+	for _, detailedLine := range []string{
+		"      Score:       ",
+		"      RMS Level:   ",
+		"      Kurtosis:    ",
+		"      Voicing:     ",
+	} {
+		if count := strings.Count(output, detailedLine); count != 1 {
+			t.Fatalf("analysis speech detail line %q count = %d, want 1", strings.TrimSpace(detailedLine), count)
+		}
+	}
+
+	if count := strings.Count(output, "  #"); count != 11 {
+		t.Fatalf("displayed analysis speech candidates = %d, want 11", count)
+	}
+	assertAppearsBefore(t, output, "#1:", "#2:")
+	assertAppearsBefore(t, output, "#2:", "#3:")
+	assertAppearsBefore(t, output, "#10:", "#11:")
+	if strings.Contains(output, "#12:") {
+		t.Fatal("expected speech candidate 12 to be omitted")
+	}
+	if strings.Contains(output, "[SELECTED]") {
+		t.Fatal("expected speech output to use elected terminology")
+	}
+	assertCandidateSummaryTerminology(t, output, "  Displayed:      elected + top 10 chronological (1 omitted)")
+}
+
+func TestDisplayAnalysisResults_SpeechRejectionSummaryIncludesZeroScore(t *testing.T) {
+	m := makeMinimalMeasurements()
+	m.SpeechCandidates = makeRankedSpeechCandidates(3)
+	m.SpeechCandidates[1].Score = 0.0
+	m.SpeechProfile = &m.SpeechCandidates[0]
+
+	config := processor.DefaultFilterConfig()
+	var buf bytes.Buffer
+	DisplayAnalysisResults(&buf, "/tmp/test.wav", makeMinimalMetadata(), m, config)
+	output := buf.String()
+
+	for _, want := range []string{
+		"  Candidates:     3 evaluated",
+		"  Displayed:      elected + 1 chronological (1 omitted)",
+		"  #1: 60.0s at 1.0s (elected)",
+		"  #3: 60.0s at 3.0s (score: 0.03)",
+		"      RMS: -29.7 dBFS, Crest: 10.0 dB, Centroid: 2400 Hz (forward, clear)",
+		"  Rejected:       1 zero score",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("analysis speech output missing %q", want)
+		}
+	}
+
+	if strings.Contains(output, "#2:") {
+		t.Fatal("expected zero-score speech candidate to be omitted from displayed candidates")
+	}
+	assertCandidateSummaryTerminology(t, output, "  Displayed:      elected + 1 chronological (1 omitted)")
+}
+
+func TestDisplayAnalysisResults_SpeechDisplaySummaryIncludesZeroOmitted(t *testing.T) {
+	m := makeMinimalMeasurements()
+	m.SpeechCandidates = makeRankedSpeechCandidates(4)
+	m.SpeechProfile = &m.SpeechCandidates[0]
+
+	config := processor.DefaultFilterConfig()
+	var buf bytes.Buffer
+	DisplayAnalysisResults(&buf, "/tmp/test.wav", makeMinimalMetadata(), m, config)
+	output := buf.String()
+
+	for _, want := range []string{
+		"  Candidates:     4 evaluated",
+		"  Displayed:      elected + 3 chronological (0 omitted)",
+		"  #1: 60.0s at 1.0s (elected)",
+		"  #4: 60.0s at 4.0s (score: 0.04)",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("analysis speech output missing %q", want)
+		}
+	}
+	assertCandidateSummaryTerminology(t, output, "  Displayed:      elected + 3 chronological (0 omitted)")
+}
+
 func TestWriteDiagnosticSilence_VoiceActivated_WithCandidates(t *testing.T) {
 	m := makeMinimalMeasurements()
 	m.VoiceActivated = true
