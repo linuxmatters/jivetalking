@@ -8,7 +8,7 @@ testdata := source_directory()
 
 # Test episode number (change this to test different episodes)
 
-episode := "79"
+episode := "81"
 
 # Get Mark's processed logs
 mark-logs:
@@ -21,7 +21,7 @@ mark-log-stash:
 # Process mark audio
 mark:
     @rm -f {{ testdata }}/LMP-{{ episode }}-mark-*-processed.*
-    @./jivetalking --debug --silence-scan-duration=3m {{ testdata }}/LMP-{{ episode }}-mark.flac
+    @./jivetalking --debug {{ testdata }}/LMP-{{ episode }}-mark.flac
     @just mark-logs
 
 # Get Martin's processed logs
@@ -35,7 +35,7 @@ martin-log-stash:
 # Process martin audio
 martin:
     @rm -f {{ testdata }}/LMP-{{ episode }}-martin-*-processed.*
-    @./jivetalking --debug --silence-scan-duration=3m {{ testdata }}/LMP-{{ episode }}-martin.flac
+    @./jivetalking --debug {{ testdata }}/LMP-{{ episode }}-martin.flac
     @just martin-logs
 
 # Get popey's processed logs
@@ -49,20 +49,20 @@ popey-log-stash:
 # Process popey audio
 popey:
     @rm -f {{ testdata }}/LMP-{{ episode }}-popey-*-processed.*
-    @./jivetalking --debug --silence-scan-duration=3m {{ testdata }}/LMP-{{ episode }}-popey.flac
+    @./jivetalking --debug {{ testdata }}/LMP-{{ episode }}-popey.flac
     @just popey-logs
 
 # Analyse Mark's audio
 mark-analysis:
-    @./jivetalking -a --silence-scan-duration=3m {{ testdata }}/LMP-{{ episode }}-mark.flac | tee {{ testdata }}/LMP-{{ episode }}-mark-analysis.log
+    @./jivetalking -a {{ testdata }}/LMP-{{ episode }}-mark.flac | tee {{ testdata }}/LMP-{{ episode }}-mark-analysis.log
 
 # Analyse Martin's audio
 martin-analysis:
-    @./jivetalking -a --silence-scan-duration=3m {{ testdata }}/LMP-{{ episode }}-martin.flac | tee {{ testdata }}/LMP-{{ episode }}-martin-analysis.log
+    @./jivetalking -a {{ testdata }}/LMP-{{ episode }}-martin.flac | tee {{ testdata }}/LMP-{{ episode }}-martin-analysis.log
 
 # Analyse popey's audio
 popey-analysis:
-    @./jivetalking -a --silence-scan-duration=3m {{ testdata }}/LMP-{{ episode }}-popey.flac | tee {{ testdata }}/LMP-{{ episode }}-popey-analysis.log
+    @./jivetalking -a {{ testdata }}/LMP-{{ episode }}-popey.flac | tee {{ testdata }}/LMP-{{ episode }}-popey-analysis.log
 
 # Process all presenters
 presenters: mark martin popey
@@ -70,10 +70,10 @@ presenters: mark martin popey
 # Analyse all presenter
 analysis: mark-analysis martin-analysis popey-analysis
 
-# Process all presenters for episodes 70, 71, and 72
+# Process all presenters for all episodes
 all-episodes:
     #!/usr/bin/env bash
-    for ep in 68 69 70 71 72 73 74 75 76 77; do
+    for ep in 68 69 70 71 72 73 74 75 76 77 78 79 80 81; do
         echo "=== Processing Episode $ep ==="
         for presenter in mark martin popey; do
             echo "--- $presenter ---"
@@ -85,7 +85,7 @@ all-episodes:
 # Run analysis-only mode on all episodes and presenters
 all-analyse:
     #!/usr/bin/env bash
-    for ep in 68 69 70 71 72 73 74 75 76 77; do
+    for ep in 68 69 70 71 72 73 74 75 76 77 78 79 80 81; do
         echo "=== Analysing Episode $ep ==="
         for presenter in mark martin popey; do
             audio_file="{{ testdata }}/LMP-${ep}-${presenter}.flac"
@@ -106,7 +106,7 @@ stash: mark-log-stash martin-log-stash popey-log-stash
 # Run analysis-only mode on all episodes and presenters
 stash-analysis:
     #!/usr/bin/env bash
-    for ep in 68 69 70 71 72 73 74 75 77; do
+    for ep in 68 69 70 71 72 73 74 75 77 78 79 80 81; do
         for presenter in mark martin popey; do
             log_file="{{ testdata }}/LMP-${ep}-${presenter}-analysis.log"
             stash_log_file="{{ testdata }}/LMP-${ep}-${presenter}-analysis-before.log"

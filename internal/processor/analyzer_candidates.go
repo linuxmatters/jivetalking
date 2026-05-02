@@ -1107,7 +1107,10 @@ func findBestSilenceRegion(regions []SilenceRegion, intervals []IntervalSample, 
 			}
 		}
 
-		// Select earliest candidate within selectionTolerance of max
+		// Select earliest accepted candidate within selectionTolerance of max.
+		// If every measured candidate falls below the normal threshold, fall back
+		// to the earliest candidate within tolerance so detected room tone is never
+		// discarded wholesale.
 		// Uses Region field from metrics to avoid index correspondence issues
 		// (result.Candidates may have fewer entries than candidates if some
 		// returned nil from measureSilenceCandidateFromIntervals)
@@ -1120,6 +1123,19 @@ func findBestSilenceRegion(regions []SilenceRegion, intervals []IntervalSample, 
 					Duration: region.Duration,
 				}
 				break
+			}
+		}
+		if result.BestRegion == nil {
+			for _, c := range result.Candidates {
+				if c.Score >= maxScore-selectionTolerance {
+					region := c.Region
+					result.BestRegion = &SilenceRegion{
+						Start:    region.Start,
+						End:      region.End,
+						Duration: region.Duration,
+					}
+					break
+				}
 			}
 		}
 	}
@@ -1621,6 +1637,9 @@ func findBestSpeechRegion(regions []SpeechRegion, intervals []IntervalSample, no
 
 	var bestCandidate *SpeechRegion
 	var bestDuration time.Duration
+	var fallbackCandidate *SpeechRegion
+	var fallbackScore float64
+	hasFallback := false
 
 	for i := range regions {
 		candidate := &regions[i]
@@ -1657,12 +1676,23 @@ func findBestSpeechRegion(regions []SpeechRegion, intervals []IntervalSample, no
 		// Store for reporting
 		result.Candidates = append(result.Candidates, *metrics)
 
+		if !hasFallback || score > fallbackScore {
+			fallbackRegion := metrics.Region
+			fallbackCandidate = &fallbackRegion
+			fallbackScore = score
+			hasFallback = true
+		}
+
 		// Selection: longest candidate above minimum quality
 		const minAcceptableSpeechScore = 0.3
 		if score >= minAcceptableSpeechScore && candidate.Duration > bestDuration {
 			bestCandidate = candidate
 			bestDuration = candidate.Duration
 		}
+	}
+
+	if bestCandidate == nil && hasFallback {
+		bestCandidate = fallbackCandidate
 	}
 
 	// Refine long candidates to golden sub-region

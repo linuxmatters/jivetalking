@@ -573,7 +573,7 @@ func TestFindBestSilenceRegion_EarlierCandidatePreferredWithinTolerance(t *testi
 	}
 }
 
-func TestFindBestSilenceRegion_BelowMinAcceptableScoreNeverElected(t *testing.T) {
+func TestFindBestSilenceRegion_AllBelowMinAcceptableScoreFallsBack(t *testing.T) {
 	// Two regions that will score below minAcceptableScore (0.3).
 	// Both have poor characteristics: high RMS, voice-range centroid, etc.
 
@@ -598,8 +598,19 @@ func TestFindBestSilenceRegion_BelowMinAcceptableScoreNeverElected(t *testing.T)
 
 	result := findBestSilenceRegion(regions, allIntervals, 3600.0)
 
-	if result.BestRegion != nil {
-		t.Errorf("expected BestRegion to be nil (all candidates below minAcceptableScore), got start=%v", result.BestRegion.Start)
+	if result.BestRegion == nil {
+		t.Fatal("expected fallback BestRegion when candidates exist below minAcceptableScore")
+	}
+	if result.BestRegion.Start != 0 {
+		t.Errorf("BestRegion.Start = %v, want 0 (earliest fallback candidate within tolerance)", result.BestRegion.Start)
+	}
+	if len(result.Candidates) != 2 {
+		t.Fatalf("len(Candidates) = %d, want 2", len(result.Candidates))
+	}
+	for _, c := range result.Candidates {
+		if c.Score >= minAcceptableScore {
+			t.Errorf("candidate start=%v score=%.4f, want below minAcceptableScore %.1f", c.Region.Start, c.Score, minAcceptableScore)
+		}
 	}
 
 	// Log scores for debugging
@@ -1174,6 +1185,58 @@ func TestFindBestSpeechRegion(t *testing.T) {
 			t.Errorf("expected 2 candidates stored, got %d", len(result.Candidates))
 		}
 	})
+}
+
+func TestFindBestSpeechRegion_AllBelowMinAcceptableScoreFallsBack(t *testing.T) {
+	regions := []SpeechRegion{
+		{Start: 0, End: 30 * time.Second, Duration: 30 * time.Second},
+		{Start: 35 * time.Second, End: 65 * time.Second, Duration: 30 * time.Second},
+	}
+
+	makePoorSpeechIntervals := func(start time.Duration, duration time.Duration, rolloff float64) []IntervalSample {
+		count := int(duration / (250 * time.Millisecond))
+		intervals := make([]IntervalSample, count)
+		for i := range intervals {
+			intervals[i] = IntervalSample{
+				Timestamp:        start + time.Duration(i)*250*time.Millisecond,
+				RMSLevel:         -35.0,
+				PeakLevel:        -10.0,
+				SpectralKurtosis: 2.0,
+				SpectralCentroid: 8000.0,
+				SpectralRolloff:  rolloff,
+				SpectralFlux:     0.05,
+			}
+		}
+		return intervals
+	}
+
+	lowScoreIntervals := makePoorSpeechIntervals(0, 30*time.Second, 12000.0)
+	higherScoreIntervals := makePoorSpeechIntervals(35*time.Second, 30*time.Second, 6000.0)
+	intervals := make([]IntervalSample, 0, len(lowScoreIntervals)+len(higherScoreIntervals))
+	intervals = append(intervals, lowScoreIntervals...)
+	intervals = append(intervals, higherScoreIntervals...)
+
+	result := findBestSpeechRegion(regions, intervals, nil)
+
+	if result.BestRegion == nil {
+		t.Fatal("expected fallback BestRegion when speech candidates exist below threshold")
+	}
+	if result.BestRegion.Start != 35*time.Second {
+		t.Errorf("BestRegion.Start = %v, want 35s (highest-scored fallback candidate)", result.BestRegion.Start)
+	}
+	if len(result.Candidates) != 2 {
+		t.Fatalf("len(Candidates) = %d, want 2", len(result.Candidates))
+	}
+
+	const minAcceptableSpeechScore = 0.3
+	for _, c := range result.Candidates {
+		if c.Score >= minAcceptableSpeechScore {
+			t.Errorf("candidate start=%v score=%.4f, want below speech threshold %.1f", c.Region.Start, c.Score, minAcceptableSpeechScore)
+		}
+	}
+	if result.Candidates[1].Score <= result.Candidates[0].Score {
+		t.Errorf("expected second candidate score %.4f to exceed first %.4f", result.Candidates[1].Score, result.Candidates[0].Score)
+	}
 }
 
 func TestScoreSpeechCandidate(t *testing.T) {
