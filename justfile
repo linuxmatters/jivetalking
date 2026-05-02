@@ -394,9 +394,16 @@ bench-cli FILE: build
     input_name=$(basename -- "{{FILE}}")
     bench_input=".bench/input/$input_name"
     cp -- "{{FILE}}" "$bench_input"
+    # Resolve a GNU-compatible time(1). /usr/bin/time on macOS is BSD time and
+    # rejects -v/-o; fall back to gtime (brew install coreutils) when present.
     time_bin="/usr/bin/time"
-    if [ ! -x "$time_bin" ]; then
-        time_bin=$(type -P time)
+    if ! "$time_bin" -v true >/dev/null 2>&1; then
+        if command -v gtime >/dev/null 2>&1 && gtime -v true >/dev/null 2>&1; then
+            time_bin="gtime"
+        else
+            echo "GNU time required for verbose output. On macOS install via 'brew install coreutils' (provides gtime)." >&2
+            exit 1
+        fi
     fi
     if [ -t 1 ]; then
         "$time_bin" -v -o .bench/cli-time.txt ./jivetalking "$bench_input"
@@ -413,9 +420,16 @@ bench-analysis FILE: build
     input_name=$(basename -- "{{FILE}}")
     bench_input=".bench/input/$input_name"
     cp -- "{{FILE}}" "$bench_input"
+    # Resolve a GNU-compatible time(1). /usr/bin/time on macOS is BSD time and
+    # rejects -v/-o; fall back to gtime (brew install coreutils) when present.
     time_bin="/usr/bin/time"
-    if [ ! -x "$time_bin" ]; then
-        time_bin=$(type -P time)
+    if ! "$time_bin" -v true >/dev/null 2>&1; then
+        if command -v gtime >/dev/null 2>&1 && gtime -v true >/dev/null 2>&1; then
+            time_bin="gtime"
+        else
+            echo "GNU time required for verbose output. On macOS install via 'brew install coreutils' (provides gtime)." >&2
+            exit 1
+        fi
     fi
     "$time_bin" -v -o .bench/analysis-time.txt ./jivetalking --analysis-only "$bench_input"
 
