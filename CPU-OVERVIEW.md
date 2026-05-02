@@ -123,7 +123,6 @@ The Go-side CPU candidates are smaller than the FFmpeg filter costs, but they ru
 **Measurement:**
 
 - Run full processing with the always-on default metric set on 10, 30, and 60 minute fixtures.
-- Until metrics become default, use `--logs` as the proxy for that baseline.
 - Compare total wall time, pass timings, and CPU profile before and after.
 - Check region RMS, peak, centroid, LUFS, true peak, and sample peak deltas against existing `MeasureOutputRegions`.
 
@@ -297,10 +296,9 @@ Run the built binary so CGO and version-injected build settings match normal use
 just build
 /usr/bin/time -v ./jivetalking --analysis-only testdata/LMP-72-martin.flac
 /usr/bin/time -v ./jivetalking testdata/LMP-72-martin.flac
-/usr/bin/time -v ./jivetalking --logs testdata/LMP-72-martin.flac
 ```
 
-Treat the always-on report or metric path as the baseline. Until the CLI default changes, the `--logs` run is the closest proxy for always-on default metrics. Keep text report generation separate from metric collection when profiling report-related cost.
+The default `./jivetalking` invocation is now the always-on baseline since reports are always written. Keep text report generation separate from metric collection when profiling report-related cost.
 
 ### FFmpeg Filter Timing
 
