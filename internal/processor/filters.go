@@ -34,8 +34,7 @@ const (
 	// Processing filters (Pass 2 only)
 	FilterLA2ACompressor FilterID = "la2a_compressor" // Teletronix LA-2A style optical compressor
 	FilterDeesser        FilterID = "deesser"
-	FilterVolumax        FilterID = "volumax_limiter" // CBS Volumax-inspired transparent limiter
-	FilterAdeclick       FilterID = "adeclick"        // Click/pop repair via interpolation
+	FilterAdeclick       FilterID = "adeclick" // Click/pop repair via interpolation
 )
 
 // Pass1FilterOrder defines the filter chain for analysis pass.
@@ -114,7 +113,6 @@ var filterBuilders = map[FilterID]filterBuilderFunc{
 	FilterDS201Gate:      (*FilterChainConfig).buildDS201GateFilter,
 	FilterLA2ACompressor: (*FilterChainConfig).buildLA2ACompressorFilter,
 	FilterDeesser:        (*FilterChainConfig).buildDeesserFilter,
-	FilterVolumax:        (*FilterChainConfig).buildVolumaxFilter,
 	FilterAdeclick:       (*FilterChainConfig).buildAdeclickFilter,
 }
 
@@ -246,18 +244,6 @@ type FilterChainConfig struct {
 	TargetTP  float64 // dBTP, true peak ceiling reference
 	TargetLRA float64 // LU, loudness range reference
 
-	// CBS Volumax-Inspired Limiter - transparent peak protection
-	// Designed for maximum transparency with gentle, program-dependent limiting
-	// that is essentially inaudible
-	VolumaxEnabled     bool    // Enable Volumax-inspired limiter
-	VolumaxCeiling     float64 // dBTP - peak ceiling (-1.0 = podcast standard)
-	VolumaxAttack      float64 // ms - attack time (5ms for transparency)
-	VolumaxRelease     float64 // ms - release time (100ms for smooth recovery)
-	VolumaxASC         bool    // Enable Auto Soft Clipping (program-dependent release)
-	VolumaxASCLevel    float64 // 0.0-1.0 - ASC release influence (0.8 for high smoothing)
-	VolumaxInputLevel  float64 // Linear - input gain (default 1.0)
-	VolumaxOutputLevel float64 // Linear - output gain (default 1.0)
-
 	// Filter chain order - controls the sequence of filters in the processing chain
 	// Use Pass2FilterOrder or customise for experimentation
 	FilterOrder []FilterID
@@ -375,16 +361,6 @@ func DefaultFilterConfig() *FilterChainConfig {
 		TargetI:   -16.0, // Reference LUFS target (not enforced)
 		TargetTP:  -0.3,  // Reference true peak (not enforced, alimiter does real limiting at -1.5)
 		TargetLRA: 7.0,   // Reference loudness range (EBU R128 default)
-
-		// CBS Volumax-Inspired Limiter - enabled by default as final safety net
-		VolumaxEnabled:     true,
-		VolumaxCeiling:     -1.0,  // -1.0 dBTP (podcast standard)
-		VolumaxAttack:      5.0,   // 5ms - gentle attack preserves transient shape
-		VolumaxRelease:     100.0, // 100ms - smooth recovery eliminates pumping
-		VolumaxASC:         true,
-		VolumaxASCLevel:    0.8, // High value = more program-dependent smoothing
-		VolumaxInputLevel:  1.0, // Unity input
-		VolumaxOutputLevel: 1.0, // Unity output
 
 		// Adeclick - click/pop repair (Pass 4 only)
 		// Tuned for transparent repair at lower CPU cost
@@ -718,48 +694,6 @@ func (cfg *FilterChainConfig) buildDeesserFilter() string {
 		cfg.DeessAmount,
 		cfg.DeessFreq,
 	)
-}
-
-// buildVolumaxFilter builds the CBS Volumax-inspired limiter filter specification.
-// Uses FFmpeg's alimiter with parameters tuned for maximum transparency.
-// The CBS Volumax was the broadcast standard for transparent, program-dependent
-// limiting that was essentially inaudible.
-func (cfg *FilterChainConfig) buildVolumaxFilter() string {
-	if !cfg.VolumaxEnabled {
-		return ""
-	}
-
-	// Convert ceiling from dBTP to linear (0.0-1.0)
-	ceiling := math.Pow(10, cfg.VolumaxCeiling/20.0)
-
-	// Default input/output levels to unity if not set (0.0 would mute audio)
-	inputLevel := cfg.VolumaxInputLevel
-	if inputLevel == 0.0 {
-		inputLevel = 1.0
-	}
-	outputLevel := cfg.VolumaxOutputLevel
-	if outputLevel == 0.0 {
-		outputLevel = 1.0
-	}
-
-	// Build filter with Volumax-style parameters
-	spec := fmt.Sprintf(
-		"alimiter=limit=%.6f:attack=%.1f:release=%.1f:level_in=%.4f:level_out=%.4f:level=0:latency=1",
-		ceiling,
-		cfg.VolumaxAttack,
-		cfg.VolumaxRelease,
-		inputLevel,
-		outputLevel,
-	)
-
-	// Add ASC parameters
-	if cfg.VolumaxASC {
-		spec += fmt.Sprintf(":asc=1:asc_level=%.2f", cfg.VolumaxASCLevel)
-	} else {
-		spec += ":asc=0"
-	}
-
-	return spec
 }
 
 // buildAdeclickFilter builds the click/pop repair filter specification.

@@ -26,7 +26,6 @@ func newTestConfig() *FilterChainConfig {
 		DS201GateEnabled:   false,
 		LA2AEnabled:        false,
 		DeessEnabled:       false,
-		VolumaxEnabled:     false,
 
 		// Sensible defaults for parameters (used when filter is enabled)
 		DS201HPFreq:        80.0,
@@ -54,14 +53,6 @@ func newTestConfig() *FilterChainConfig {
 		TargetI:            -16.0,
 		TargetTP:           -0.3,
 		TargetLRA:          7.0,
-
-		VolumaxCeiling:     -1.0,
-		VolumaxAttack:      5.0,
-		VolumaxRelease:     100.0,
-		VolumaxASC:         true,
-		VolumaxASCLevel:    0.8,
-		VolumaxInputLevel:  1.0,
-		VolumaxOutputLevel: 1.0,
 
 		// NoiseRemove defaults (anlmdn + compand)
 		NoiseRemoveCompandEnabled:   true,
@@ -135,7 +126,6 @@ func TestBuildFilterSpec(t *testing.T) {
 		config.DS201GateEnabled = true
 		config.LA2AEnabled = true
 		config.DeessEnabled = true
-		config.VolumaxEnabled = true
 		config.ResampleEnabled = true // Required for output format filters
 
 		spec := config.BuildFilterSpec()
@@ -149,7 +139,6 @@ func TestBuildFilterSpec(t *testing.T) {
 			{"agate=threshold=", "agate"},
 			{"acompressor=threshold=", "acompressor"},
 			{"deesser=i=", "deesser"},
-			// alimiter (Volumax) moved to Pass 3 for peak protection after gain normalisation
 			{"aformat=sample_rates=44100", "aformat (output)"},
 		}
 
@@ -167,7 +156,6 @@ func TestBuildFilterSpec(t *testing.T) {
 		config.DS201GateEnabled = true
 		config.LA2AEnabled = true
 		config.DeessEnabled = true
-		config.VolumaxEnabled = true
 
 		spec := config.BuildFilterSpec()
 
@@ -183,7 +171,6 @@ func TestBuildFilterSpec(t *testing.T) {
 		config.DS201GateEnabled = true
 		config.LA2AEnabled = true
 		config.DeessEnabled = true
-		config.VolumaxEnabled = true
 
 		spec := config.BuildFilterSpec()
 
@@ -687,57 +674,6 @@ func TestBuildNoiseRemoveFilter(t *testing.T) {
 	})
 }
 
-func TestBuildVolumaxFilter(t *testing.T) {
-	t.Run("typical podcast limiter", func(t *testing.T) {
-		config := newTestConfig()
-		config.VolumaxEnabled = true
-		config.VolumaxCeiling = -1.0
-		config.VolumaxAttack = 5.0
-		config.VolumaxRelease = 100.0
-		config.VolumaxASC = true
-		config.VolumaxASCLevel = 0.8
-
-		spec := config.buildVolumaxFilter()
-
-		wantIn := []string{
-			"alimiter=",
-			"limit=",      // dBTP ceiling converted to linear
-			"attack=5",    // attack in ms
-			"release=100", // release in ms
-			"asc=1",       // ASC enabled for program-dependent release
-			"asc_level=0.8",
-		}
-
-		for _, want := range wantIn {
-			if !strings.Contains(spec, want) {
-				t.Errorf("buildVolumaxFilter() = %q, want to contain %q", spec, want)
-			}
-		}
-	})
-
-	t.Run("ASC disabled", func(t *testing.T) {
-		config := newTestConfig()
-		config.VolumaxEnabled = true
-		config.VolumaxASC = false
-
-		spec := config.buildVolumaxFilter()
-
-		if !strings.Contains(spec, "asc=0") {
-			t.Errorf("buildVolumaxFilter() = %q, want to contain asc=0", spec)
-		}
-	})
-
-	t.Run("disabled returns empty", func(t *testing.T) {
-		config := newTestConfig()
-		config.VolumaxEnabled = false
-
-		spec := config.buildVolumaxFilter()
-		if spec != "" {
-			t.Errorf("buildVolumaxFilter() = %q, want empty when disabled", spec)
-		}
-	})
-}
-
 func TestBuildAdeclickFilter(t *testing.T) {
 	t.Run("default config emits production clause", func(t *testing.T) {
 		config := DefaultFilterConfig()
@@ -809,7 +745,6 @@ func TestFilterOrderRespected(t *testing.T) {
 	// Enable filters that appear at start and end
 	config.DS201HPEnabled = true
 	config.DS201GateEnabled = true
-	// Volumax moved to Pass 3 for peak protection after gain normalisation
 	config.DeessEnabled = true
 	config.DeessIntensity = 0.5
 	config.ResampleEnabled = true // Required for aformat output filter
@@ -824,7 +759,6 @@ func TestFilterOrderRespected(t *testing.T) {
 	aformatPos := strings.Index(spec, "aformat=sample_rates=")
 
 	// Verify order: highpass < gate < deesser < aformat
-	// Note: alimiter (Volumax) is now in Pass 3, not Pass 2
 	if highpassPos >= gatePos {
 		t.Errorf("highpass (pos %d) should come before agate (pos %d)", highpassPos, gatePos)
 	}
@@ -1073,7 +1007,6 @@ func TestPass2FilterOrder(t *testing.T) {
 			FilterDS201Gate,
 			FilterLA2ACompressor,
 			FilterDeesser,
-			// FilterVolumax moved to Pass 3
 			FilterAnalysis,
 			FilterResample,
 		}
@@ -1086,15 +1019,6 @@ func TestPass2FilterOrder(t *testing.T) {
 		for _, required := range requiredFilters {
 			if !filterSet[required] {
 				t.Errorf("Pass2FilterOrder missing required filter %q", required)
-			}
-		}
-	})
-
-	t.Run("Volumax not in Pass2FilterOrder", func(t *testing.T) {
-		// Volumax has been moved to Pass 3 for peak protection after gain normalisation
-		for _, id := range Pass2FilterOrder {
-			if id == FilterVolumax {
-				t.Errorf("FilterVolumax should not be in Pass2FilterOrder (moved to Pass 3)")
 			}
 		}
 	})

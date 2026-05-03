@@ -554,8 +554,6 @@ func formatFilter(f *os.File, filterID processor.FilterID, cfg *processor.Filter
 		formatLA2ACompressorFilter(f, cfg, m, prefix)
 	case processor.FilterDeesser:
 		formatDeesserFilter(f, cfg, m, prefix)
-	case processor.FilterVolumax:
-		formatVolumaxFilter(f, cfg, m, prefix)
 	default:
 		fmt.Fprintf(f, "%s%s: (unknown filter)\n", prefix, filterID)
 	}
@@ -929,73 +927,6 @@ func formatDeesserFilter(f *os.File, cfg *processor.FilterChainConfig, m *proces
 		fmt.Fprintf(f, "        Rationale: %s voice\n", voiceType)
 		fmt.Fprintf(f, "        spectral centroid: %.0f Hz (%s)\n", centroid, centroidSource)
 		fmt.Fprintf(f, "        spectral rolloff: %.0f Hz (%s)\n", rolloff, rolloffSource)
-	}
-}
-
-// formatVolumaxFilter outputs CBS Volumax-inspired limiter filter details with rationale
-func formatVolumaxFilter(f *os.File, cfg *processor.FilterChainConfig, m *processor.AudioMeasurements, prefix string) {
-	if !cfg.VolumaxEnabled {
-		fmt.Fprintf(f, "%sCBS Volumax limiter: DISABLED\n", prefix)
-		return
-	}
-
-	// Header with ceiling
-	fmt.Fprintf(f, "%sCBS Volumax limiter: ceiling %.1f dBTP\n", prefix, cfg.VolumaxCeiling)
-
-	// Timing with classification
-	attackClass := classifyVolumaxAttack(cfg.VolumaxAttack)
-	releaseClass := classifyVolumaxRelease(cfg.VolumaxRelease)
-	fmt.Fprintf(f, "        Timing: attack %.1fms (%s), release %.0fms (%s)\n",
-		cfg.VolumaxAttack, attackClass, cfg.VolumaxRelease, releaseClass)
-
-	// ASC mode
-	if cfg.VolumaxASC {
-		fmt.Fprintf(f, "        ASC: enabled (level %.2f) — program-dependent release\n", cfg.VolumaxASCLevel)
-	} else {
-		fmt.Fprintln(f, "        ASC: disabled — direct limiting")
-	}
-
-	// Gain staging (only show if not unity)
-	if cfg.VolumaxInputLevel != 1.0 || cfg.VolumaxOutputLevel != 1.0 {
-		inputDB := processor.LinearToDb(cfg.VolumaxInputLevel)
-		outputDB := processor.LinearToDb(cfg.VolumaxOutputLevel)
-		fmt.Fprintf(f, "        Gain: input %.1f dB, output %.1f dB\n", inputDB, outputDB)
-	}
-
-	// Rationale from measurements
-	if m != nil {
-		// Normalize MaxDifference to percentage (from sample units 0-32768)
-		maxDiffPct := (m.MaxDifference / 32768.0) * 100
-		fmt.Fprintf(f, "        Rationale: MaxDiff %.1f%%, Crest %.1f dB, DR %.1f dB, Flux %.4f\n",
-			maxDiffPct, m.SpectralCrest, m.DynamicRange, m.SpectralFlux)
-	}
-}
-
-// classifyVolumaxAttack returns a human-readable attack classification
-func classifyVolumaxAttack(attack float64) string {
-	switch {
-	case attack <= 2:
-		return "fast (may introduce artifacts)"
-	case attack <= 5:
-		return "transparent"
-	case attack <= 10:
-		return "very gentle"
-	default:
-		return "slow"
-	}
-}
-
-// classifyVolumaxRelease returns a human-readable release classification
-func classifyVolumaxRelease(release float64) string {
-	switch {
-	case release >= 150:
-		return "very smooth"
-	case release >= 100:
-		return "smooth"
-	case release >= 50:
-		return "moderate"
-	default:
-		return "fast (may pump)"
 	}
 }
 

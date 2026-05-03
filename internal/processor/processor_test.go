@@ -87,7 +87,6 @@ func TestProcessAudio(t *testing.T) {
 	config.AnalysisEnabled = true
 	config.ResampleEnabled = true
 	config.DS201HPEnabled = true // Basic processing
-	config.VolumaxEnabled = true // CBS Volumax-style limiter
 
 	// Process the audio with a no-op progress callback
 	result, err := ProcessAudio(testFile, config, func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements) {
@@ -318,7 +317,6 @@ func TestFilterChainBuilder(t *testing.T) {
 
 	// Enable additional filters for Pass 2 test
 	config.DS201HPEnabled = true
-	config.VolumaxEnabled = true
 
 	filterSpec = config.BuildFilterSpec()
 	t.Logf("Pass 2 filter spec: %s", filterSpec)
