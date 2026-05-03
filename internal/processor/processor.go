@@ -275,7 +275,7 @@ func processWithFilters(inputPath, outputPath string, config *FilterChainConfig,
 				progressCallback(PassProcessing, "Processing", progress, currentLevel, measurements)
 			}
 		},
-		OnFrame: func(inputFrame, filteredFrame *ffmpeg.AVFrame) (FrameAction, error) {
+		OnFrame: func(inputFrame, filteredFrame *ffmpeg.AVFrame) error {
 			// Calculate audio level from FILTERED frame (shows processed audio in VU meter)
 			currentLevel = calculateFrameLevel(filteredFrame)
 
@@ -289,10 +289,10 @@ func processWithFilters(inputPath, outputPath string, config *FilterChainConfig,
 
 			// Encode and write the filtered frame
 			if err := encoder.WriteFrame(filteredFrame); err != nil {
-				return FrameDiscard, fmt.Errorf("failed to write frame: %w", err)
+				return fmt.Errorf("failed to write frame: %w", err)
 			}
 
-			return FrameDiscard, nil
+			return nil
 		},
 	}); err != nil {
 		return InputMetadata{}, err

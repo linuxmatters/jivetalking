@@ -2258,9 +2258,9 @@ func TestRunFilterGraph(t *testing.T) {
 		OnInputFrame: func(_ *ffmpeg.AVFrame) {
 			inputFrameCount++
 		},
-		OnFrame: func(_, _ *ffmpeg.AVFrame) (FrameAction, error) {
+		OnFrame: func(_, _ *ffmpeg.AVFrame) error {
 			filteredFrameCount++
-			return FrameDiscard, nil
+			return nil
 		},
 	})
 	if err != nil {
@@ -2310,9 +2310,9 @@ func TestRunFilterGraphLenientErrors(t *testing.T) {
 	var frameCount int
 	err = runFilterGraph(reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
 		OnPushError: func(_ error) error { return nil }, // lenient: continue
-		OnFrame: func(_, _ *ffmpeg.AVFrame) (FrameAction, error) {
+		OnFrame: func(_, _ *ffmpeg.AVFrame) error {
 			frameCount++
-			return FrameDiscard, nil
+			return nil
 		},
 	})
 	if err != nil {

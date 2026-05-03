@@ -634,14 +634,13 @@ func applyLoudnormAndMeasure(
 		OnInputFrame: func(inputFrame *ffmpeg.AVFrame) {
 			samplesProcessed += int64(inputFrame.NbSamples())
 		},
-		OnFrame: func(inputFrame, filteredFrame *ffmpeg.AVFrame) (FrameAction, error) {
+		OnFrame: func(inputFrame, filteredFrame *ffmpeg.AVFrame) error {
 			// Extract validation measurements using Pass 2's function
 			extractOutputFrameMetadata(filteredFrame.Metadata(), &acc)
 
 			// Encode frame
 			if err := encoder.WriteFrame(filteredFrame); err != nil {
-				ffmpeg.AVFrameUnref(filteredFrame)
-				return FrameDiscard, fmt.Errorf("encoding failed: %w", err)
+				return fmt.Errorf("encoding failed: %w", err)
 			}
 
 			framesProcessed++
@@ -652,7 +651,7 @@ func applyLoudnormAndMeasure(
 				progressCallback(PassNormalising, "Normalising", progress, acc.ebur128OutputI, nil)
 			}
 
-			return FrameDiscard, nil
+			return nil
 		},
 	})
 	if loopErr != nil {
