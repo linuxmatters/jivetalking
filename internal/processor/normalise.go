@@ -45,11 +45,20 @@ type LoudnormStats struct {
 
 // loudnormLogCapture manages thread-safe capture of loudnorm's JSON output.
 var loudnormLogCapture = struct {
+	lifecycleMu  sync.Mutex
 	mu           sync.Mutex
 	buffer       strings.Builder
 	capturing    bool
 	prevLogLevel int
 }{}
+
+var (
+	loudnormAVLogGetLevel     = ffmpeg.AVLogGetLevel
+	loudnormAVLogSetLevel     = ffmpeg.AVLogSetLevel
+	loudnormAVLogSetCallback  = ffmpeg.AVLogSetCallback
+	loudnormAVFilterGraphFree = ffmpeg.AVFilterGraphFree
+	loudnormRunFilterGraph    = runFilterGraph
+)
 
 // loudnormLogCallback captures loudnorm JSON output from FFmpeg's logging system.
 // loudnorm outputs JSON at AV_LOG_INFO level when print_format=json is set.
@@ -65,26 +74,32 @@ func loudnormLogCallback(_ *ffmpeg.LogCtx, _ int, msg string) {
 // startLoudnormCapture begins capturing loudnorm log output.
 // Must be called before processing frames through the loudnorm filter.
 // Temporarily raises log level to INFO since loudnorm outputs JSON at that level.
+// FFmpeg logging is process-global, so capture is serialised from start through
+// stop for both Pass 3 measurement and Pass 4 application.
 func startLoudnormCapture() {
+	loudnormLogCapture.lifecycleMu.Lock()
+
 	loudnormLogCapture.mu.Lock()
 	defer loudnormLogCapture.mu.Unlock()
 
 	loudnormLogCapture.buffer.Reset()
 	loudnormLogCapture.capturing = true
-	loudnormLogCapture.prevLogLevel, _ = ffmpeg.AVLogGetLevel()
-	ffmpeg.AVLogSetLevel(ffmpeg.AVLogInfo) // loudnorm outputs JSON at INFO level
-	ffmpeg.AVLogSetCallback(loudnormLogCallback)
+	loudnormLogCapture.prevLogLevel, _ = loudnormAVLogGetLevel()
+	loudnormAVLogSetLevel(ffmpeg.AVLogInfo) // loudnorm outputs JSON at INFO level
+	loudnormAVLogSetCallback(loudnormLogCallback)
 }
 
 // stopLoudnormCapture ends capture, restores default logging, and parses the JSON.
 // Returns the parsed LoudnormStats or an error if JSON was not found/parseable.
 func stopLoudnormCapture() (*LoudnormStats, error) {
+	defer loudnormLogCapture.lifecycleMu.Unlock()
+
 	loudnormLogCapture.mu.Lock()
 	defer loudnormLogCapture.mu.Unlock()
 
 	loudnormLogCapture.capturing = false
-	ffmpeg.AVLogSetCallback(nil)                          // Restore default logging
-	ffmpeg.AVLogSetLevel(loudnormLogCapture.prevLogLevel) // Restore previous log level
+	loudnormAVLogSetCallback(nil)                          // Restore default logging
+	loudnormAVLogSetLevel(loudnormLogCapture.prevLogLevel) // Restore previous log level
 
 	// Extract JSON from captured log output
 	output := loudnormLogCapture.buffer.String()
@@ -181,7 +196,7 @@ func measureWithLoudnorm(inputPath string, config *FilterChainConfig, filterPref
 
 	// Process all frames through loudnorm (no encoding - just measurement)
 	lenientHandler := func(err error) error { return nil }
-	_ = runFilterGraph(reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
+	loopErr := loudnormRunFilterGraph(reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
 		OnPushError: lenientHandler,
 		OnPullError: lenientHandler,
 		OnInputFrame: func(inputFrame *ffmpeg.AVFrame) {
@@ -195,10 +210,13 @@ func measureWithLoudnorm(inputPath string, config *FilterChainConfig, filterPref
 	})
 
 	// Free filter graph to trigger loudnorm JSON output
-	ffmpeg.AVFilterGraphFree(&filterGraph)
+	loudnormAVFilterGraphFree(&filterGraph)
 
 	// Capture loudnorm stats from log output
 	stats, err := stopLoudnormCapture()
+	if loopErr != nil {
+		return nil, fmt.Errorf("loudnorm measurement loop failed: %w", loopErr)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to capture loudnorm measurements: %w", err)
 	}
@@ -613,7 +631,7 @@ func applyLoudnormAndMeasure(
 	// Create output encoder (same format as input)
 	encoder, err := createOutputEncoder(tempPath, metadata, bufferSinkCtx)
 	if err != nil {
-		ffmpeg.AVFilterGraphFree(&filterGraph)
+		loudnormAVFilterGraphFree(&filterGraph)
 		return 0.0, 0.0, nil, getLoudnormStats(), 0, fmt.Errorf("failed to create encoder: %w", err)
 	}
 	defer encoder.Close()
@@ -628,7 +646,7 @@ func applyLoudnormAndMeasure(
 	const progressUpdateInterval = 100 // Send progress update every N frames
 
 	lenientHandler := func(err error) error { return nil }
-	loopErr := runFilterGraph(reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
+	loopErr := loudnormRunFilterGraph(reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
 		OnPushError: lenientHandler,
 		OnPullError: lenientHandler,
 		OnInputFrame: func(inputFrame *ffmpeg.AVFrame) {
@@ -655,30 +673,30 @@ func applyLoudnormAndMeasure(
 		},
 	})
 	if loopErr != nil {
-		ffmpeg.AVFilterGraphFree(&filterGraph)
+		loudnormAVFilterGraphFree(&filterGraph)
 		return 0.0, 0.0, nil, getLoudnormStats(), 0, loopErr
 	}
 
 	// Flush encoder
 	if err := encoder.Flush(); err != nil {
-		ffmpeg.AVFilterGraphFree(&filterGraph)
+		loudnormAVFilterGraphFree(&filterGraph)
 		return 0.0, 0.0, nil, getLoudnormStats(), 0, fmt.Errorf("failed to flush encoder: %w", err)
 	}
 
 	// Close encoder before rename
 	if err := encoder.Close(); err != nil {
-		ffmpeg.AVFilterGraphFree(&filterGraph)
+		loudnormAVFilterGraphFree(&filterGraph)
 		return 0.0, 0.0, nil, getLoudnormStats(), 0, fmt.Errorf("failed to close encoder: %w", err)
 	}
 
 	// Atomic rename: temp file → original file (in-place update)
 	if err := os.Rename(tempPath, inputPath); err != nil {
-		ffmpeg.AVFilterGraphFree(&filterGraph)
+		loudnormAVFilterGraphFree(&filterGraph)
 		return 0.0, 0.0, nil, getLoudnormStats(), 0, fmt.Errorf("failed to rename output: %w", err)
 	}
 
 	// Free filter graph before getting stats — loudnorm outputs JSON on graph destruction
-	ffmpeg.AVFilterGraphFree(&filterGraph)
+	loudnormAVFilterGraphFree(&filterGraph)
 
 	// Capture loudnorm stats (JSON output captured during filter graph free)
 	stats := getLoudnormStats()

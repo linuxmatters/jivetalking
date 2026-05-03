@@ -2,11 +2,209 @@
 package processor
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	ffmpeg "github.com/linuxmatters/ffmpeg-statigo"
+	"github.com/linuxmatters/jivetalking/internal/audio"
 )
+
+const loudnormCaptureTestJSON = `{"input_i":"-23.0","input_tp":"-4.0","input_lra":"5.0","input_thresh":"-33.0","output_i":"-16.0","output_tp":"-2.0","output_lra":"5.0","output_thresh":"-26.0","normalization_type":"linear","target_offset":"0.0"}`
+
+func replaceLoudnormLogOps(
+	t *testing.T,
+	getLevel func() (int, error),
+	setLevel func(int),
+	setCallback func(ffmpeg.LogCallback),
+) {
+	t.Helper()
+
+	oldGetLevel := loudnormAVLogGetLevel
+	oldSetLevel := loudnormAVLogSetLevel
+	oldSetCallback := loudnormAVLogSetCallback
+
+	loudnormAVLogGetLevel = getLevel
+	loudnormAVLogSetLevel = setLevel
+	loudnormAVLogSetCallback = setCallback
+
+	t.Cleanup(func() {
+		loudnormAVLogGetLevel = oldGetLevel
+		loudnormAVLogSetLevel = oldSetLevel
+		loudnormAVLogSetCallback = oldSetCallback
+	})
+}
+
+func TestLoudnormCaptureLogOperationSeams(t *testing.T) {
+	var calls []string
+	replaceLoudnormLogOps(t,
+		func() (int, error) {
+			calls = append(calls, "get-level")
+			return 7, nil
+		},
+		func(level int) {
+			calls = append(calls, fmt.Sprintf("set-level-%d", level))
+		},
+		func(callback ffmpeg.LogCallback) {
+			if callback == nil {
+				calls = append(calls, "set-callback-nil")
+				return
+			}
+			calls = append(calls, "set-callback-capture")
+		},
+	)
+
+	startLoudnormCapture()
+	loudnormLogCallback(nil, ffmpeg.AVLogInfo, loudnormCaptureTestJSON)
+	stats, err := stopLoudnormCapture()
+	if err != nil {
+		t.Fatalf("stopLoudnormCapture() error = %v", err)
+	}
+	if stats.InputI != "-23.0" {
+		t.Fatalf("stats.InputI = %q, want -23.0", stats.InputI)
+	}
+
+	wantCalls := []string{
+		"get-level",
+		fmt.Sprintf("set-level-%d", ffmpeg.AVLogInfo),
+		"set-callback-capture",
+		"set-callback-nil",
+		"set-level-7",
+	}
+	if strings.Join(calls, ",") != strings.Join(wantCalls, ",") {
+		t.Fatalf("calls = %v, want %v", calls, wantCalls)
+	}
+}
+
+func TestLoudnormCaptureSerialisesFullLifecycle(t *testing.T) {
+	replaceLoudnormLogOps(t,
+		func() (int, error) { return 7, nil },
+		func(int) {},
+		func(ffmpeg.LogCallback) {},
+	)
+
+	startLoudnormCapture()
+
+	secondStarted := make(chan struct{})
+	go func() {
+		startLoudnormCapture()
+		close(secondStarted)
+	}()
+
+	select {
+	case <-secondStarted:
+		t.Fatal("second capture started before first capture stopped")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	loudnormLogCallback(nil, ffmpeg.AVLogInfo, loudnormCaptureTestJSON)
+	if _, err := stopLoudnormCapture(); err != nil {
+		t.Fatalf("first stopLoudnormCapture() error = %v", err)
+	}
+
+	select {
+	case <-secondStarted:
+	case <-time.After(time.Second):
+		t.Fatal("second capture did not start after first capture stopped")
+	}
+
+	loudnormLogCallback(nil, ffmpeg.AVLogInfo, loudnormCaptureTestJSON)
+	if _, err := stopLoudnormCapture(); err != nil {
+		t.Fatalf("second stopLoudnormCapture() error = %v", err)
+	}
+}
+
+func TestMeasureWithLoudnormStopsCaptureOnOpenError(t *testing.T) {
+	var callbackStops int
+	replaceLoudnormLogOps(t,
+		func() (int, error) { return 7, nil },
+		func(int) {},
+		func(callback ffmpeg.LogCallback) {
+			if callback == nil {
+				callbackStops++
+			}
+		},
+	)
+
+	_, err := measureWithLoudnorm("/does/not/exist.wav", DefaultFilterConfig(), "", nil)
+	if err == nil {
+		t.Fatal("measureWithLoudnorm() error = nil, want open error")
+	}
+	if callbackStops != 1 {
+		t.Fatalf("stop callback count = %d, want 1", callbackStops)
+	}
+}
+
+func TestMeasureWithLoudnormLoopErrorFreesGraphBeforeStoppingCapture(t *testing.T) {
+	testFile := generateTestAudio(t, TestAudioOptions{
+		DurationSecs: 0.2,
+		SampleRate:   44100,
+		ToneFreq:     440.0,
+		ToneLevel:    -18.0,
+		Dir:          t.TempDir(),
+	})
+	defer cleanupTestAudio(t, testFile)
+
+	var (
+		mu    sync.Mutex
+		order []string
+	)
+	record := func(value string) {
+		mu.Lock()
+		defer mu.Unlock()
+		order = append(order, value)
+	}
+
+	replaceLoudnormLogOps(t,
+		func() (int, error) { return 7, nil },
+		func(int) {},
+		func(callback ffmpeg.LogCallback) {
+			if callback == nil {
+				record("stop")
+			}
+		},
+	)
+
+	oldFree := loudnormAVFilterGraphFree
+	loudnormAVFilterGraphFree = func(graph **ffmpeg.AVFilterGraph) {
+		record("free")
+		loudnormLogCallback(nil, ffmpeg.AVLogInfo, loudnormCaptureTestJSON)
+		oldFree(graph)
+	}
+	t.Cleanup(func() {
+		loudnormAVFilterGraphFree = oldFree
+	})
+
+	runErr := errors.New("injected frame loop failure")
+	oldRun := loudnormRunFilterGraph
+	loudnormRunFilterGraph = func(
+		reader *audio.Reader,
+		bufferSrcCtx, bufferSinkCtx *ffmpeg.AVFilterContext,
+		config FrameLoopConfig,
+	) error {
+		return runErr
+	}
+	t.Cleanup(func() {
+		loudnormRunFilterGraph = oldRun
+	})
+
+	_, err := measureWithLoudnorm(testFile, DefaultFilterConfig(), "", nil)
+	if !errors.Is(err, runErr) {
+		t.Fatalf("measureWithLoudnorm() error = %v, want wrapped run error", err)
+	}
+	if !strings.Contains(err.Error(), "loudnorm measurement loop failed") {
+		t.Fatalf("measureWithLoudnorm() error = %q, want measurement loop context", err.Error())
+	}
+
+	gotOrder := strings.Join(order, ",")
+	if gotOrder != "free,stop" {
+		t.Fatalf("cleanup order = %s, want free,stop", gotOrder)
+	}
+}
 
 func TestCalculateLinearModeTarget(t *testing.T) {
 	// Note: calculateLinearModeTarget includes a 0.1 dB safety margin to ensure
