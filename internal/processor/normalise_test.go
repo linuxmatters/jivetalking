@@ -485,6 +485,9 @@ func TestBuildLoudnormFilterSpec_PreGain(t *testing.T) {
 func TestBuildLoudnormFilterSpec_DoesNotMutateConfig(t *testing.T) {
 	config := DefaultFilterConfig()
 	config.ResampleEnabled = false
+	config.ResampleSampleRate = 48000
+	config.ResampleFormat = "s32"
+	config.ResampleFrameSize = 2048
 
 	measurement := &LoudnormMeasurement{
 		InputI:       -24.0,
@@ -494,10 +497,15 @@ func TestBuildLoudnormFilterSpec_DoesNotMutateConfig(t *testing.T) {
 		TargetOffset: -0.5,
 	}
 
-	_ = buildLoudnormFilterSpec(config, measurement, 0, -1.0, false)
+	filterSpec := buildLoudnormFilterSpec(config, measurement, 0, -1.0, false)
 
 	if config.ResampleEnabled {
 		t.Error("buildLoudnormFilterSpec mutated config.ResampleEnabled")
+	}
+
+	want := "aformat=sample_rates=48000:channel_layouts=mono:sample_fmts=s32,asetnsamples=n=2048"
+	if !strings.Contains(filterSpec, want) {
+		t.Errorf("buildLoudnormFilterSpec() missing required output format %q\nfilterSpec: %s", want, filterSpec)
 	}
 }
 

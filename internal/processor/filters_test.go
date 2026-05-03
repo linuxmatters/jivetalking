@@ -947,6 +947,21 @@ func TestBuildResampleFilter(t *testing.T) {
 	})
 }
 
+func TestBuildRequiredOutputFormatFilter(t *testing.T) {
+	config := newTestConfig()
+	config.ResampleEnabled = false
+	config.ResampleSampleRate = 48000
+	config.ResampleFormat = "s32"
+	config.ResampleFrameSize = 2048
+
+	result := config.buildRequiredOutputFormatFilter()
+
+	expected := "aformat=sample_rates=48000:channel_layouts=mono:sample_fmts=s32,asetnsamples=n=2048"
+	if result != expected {
+		t.Errorf("buildRequiredOutputFormatFilter() = %q, want %q", result, expected)
+	}
+}
+
 func TestPass1FilterOrder(t *testing.T) {
 	t.Run("includes correct filters in order", func(t *testing.T) {
 		// Pass 1 now uses interval sampling for silence detection (no silencedetect filter)
