@@ -475,6 +475,13 @@ func (cfg *FilterChainConfig) buildResampleFilter() string {
 	if !cfg.ResampleEnabled {
 		return ""
 	}
+	return cfg.buildRequiredOutputFormatFilter()
+}
+
+// buildRequiredOutputFormatFilter builds the mandatory output format filter.
+// Use this when a pass must restore encoder-compatible audio regardless of
+// ResampleEnabled.
+func (cfg *FilterChainConfig) buildRequiredOutputFormatFilter() string {
 	return fmt.Sprintf("aformat=sample_rates=%d:channel_layouts=mono:sample_fmts=%s,asetnsamples=n=%d",
 		cfg.ResampleSampleRate, cfg.ResampleFormat, cfg.ResampleFrameSize)
 }

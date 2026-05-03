@@ -17,14 +17,9 @@ import (
 
 const candidateDisplayLimit = 10
 
-type silenceCandidateDisplayEntry struct {
+type candidateDisplayEntry[T any] struct {
 	index     int
-	candidate processor.SilenceCandidateMetrics
-}
-
-type speechCandidateDisplayEntry struct {
-	index     int
-	candidate processor.SpeechCandidateMetrics
+	candidate T
 }
 
 // ============================================================================
@@ -1025,95 +1020,25 @@ func writeLoudnessTable(f *os.File, input *processor.AudioMeasurements, filtered
 
 	table := NewMetricTable()
 
-	// Integrated Loudness
-	inputI := math.NaN()
-	filteredI := math.NaN()
-	finalI := math.NaN()
-	if input != nil {
-		inputI = input.InputI
+	v := func(inputField func(*processor.AudioMeasurements) float64, outputField func(*processor.OutputMeasurements) float64) [3]float64 {
+		return [3]float64{
+			valOr(input, inputField),
+			valOr(filtered, outputField),
+			valOr(final, outputField),
+		}
 	}
-	if filtered != nil {
-		filteredI = filtered.OutputI
-	}
-	if final != nil {
-		finalI = final.OutputI
-	}
-	table.AddMetricRow("Integrated Loudness", inputI, filteredI, finalI, 1, "LUFS", "")
 
-	// True Peak
-	inputTP := math.NaN()
-	filteredTP := math.NaN()
-	finalTP := math.NaN()
-	if input != nil {
-		inputTP = input.InputTP
+	specs := []threeColMetricSpec{
+		{"Integrated Loudness", v(func(m *processor.AudioMeasurements) float64 { return m.InputI }, func(m *processor.OutputMeasurements) float64 { return m.OutputI }), 1, "LUFS", 0, nil},
+		{"True Peak", v(func(m *processor.AudioMeasurements) float64 { return m.InputTP }, func(m *processor.OutputMeasurements) float64 { return m.OutputTP }), 1, "dBTP", 0, nil},
+		{"Loudness Range", v(func(m *processor.AudioMeasurements) float64 { return m.InputLRA }, func(m *processor.OutputMeasurements) float64 { return m.OutputLRA }), 1, "LU", 0, nil},
+		{"Sample Peak", v(func(m *processor.AudioMeasurements) float64 { return m.SamplePeak }, func(m *processor.OutputMeasurements) float64 { return m.SamplePeak }), 1, "dBFS", 0, nil},
+		{"Momentary Loudness", v(func(m *processor.AudioMeasurements) float64 { return m.MomentaryLoudness }, func(m *processor.OutputMeasurements) float64 { return m.MomentaryLoudness }), 1, "LUFS", 0, nil},
+		{"Short-term Loudness", v(func(m *processor.AudioMeasurements) float64 { return m.ShortTermLoudness }, func(m *processor.OutputMeasurements) float64 { return m.ShortTermLoudness }), 1, "LUFS", 0, nil},
 	}
-	if filtered != nil {
-		filteredTP = filtered.OutputTP
+	for _, s := range specs {
+		table.AddMetricRow(s.label, s.vals[0], s.vals[1], s.vals[2], s.decimals, s.unit, "")
 	}
-	if final != nil {
-		finalTP = final.OutputTP
-	}
-	table.AddMetricRow("True Peak", inputTP, filteredTP, finalTP, 1, "dBTP", "")
-
-	// Loudness Range
-	inputLRA := math.NaN()
-	filteredLRA := math.NaN()
-	finalLRA := math.NaN()
-	if input != nil {
-		inputLRA = input.InputLRA
-	}
-	if filtered != nil {
-		filteredLRA = filtered.OutputLRA
-	}
-	if final != nil {
-		finalLRA = final.OutputLRA
-	}
-	table.AddMetricRow("Loudness Range", inputLRA, filteredLRA, finalLRA, 1, "LU", "")
-
-	// Sample Peak
-	inputSP := math.NaN()
-	filteredSP := math.NaN()
-	finalSP := math.NaN()
-	if input != nil {
-		inputSP = input.SamplePeak
-	}
-	if filtered != nil {
-		filteredSP = filtered.SamplePeak
-	}
-	if final != nil {
-		finalSP = final.SamplePeak
-	}
-	table.AddMetricRow("Sample Peak", inputSP, filteredSP, finalSP, 1, "dBFS", "")
-
-	// Momentary Loudness
-	inputML := math.NaN()
-	filteredML := math.NaN()
-	finalML := math.NaN()
-	if input != nil {
-		inputML = input.MomentaryLoudness
-	}
-	if filtered != nil {
-		filteredML = filtered.MomentaryLoudness
-	}
-	if final != nil {
-		finalML = final.MomentaryLoudness
-	}
-	table.AddMetricRow("Momentary Loudness", inputML, filteredML, finalML, 1, "LUFS", "")
-
-	// Short-term Loudness
-	inputSTL := math.NaN()
-	filteredSTL := math.NaN()
-	finalSTL := math.NaN()
-	if input != nil {
-		inputSTL = input.ShortTermLoudness
-	}
-	if filtered != nil {
-		filteredSTL = filtered.ShortTermLoudness
-	}
-	if final != nil {
-		finalSTL = final.ShortTermLoudness
-	}
-	table.AddMetricRow("Short-term Loudness", inputSTL, filteredSTL, finalSTL, 1, "LUFS", "")
 
 	fmt.Fprint(f, table.String())
 	fmt.Fprintln(f, "")
@@ -1684,42 +1609,17 @@ func writeReportRejectionSummary(f *os.File, candidates []processor.SilenceCandi
 	writeReportCandidateRejectionSummary(f, silenceRejectionSummary(candidates))
 }
 
-func rankedSilenceCandidateEntries(measurements *processor.AudioMeasurements) (*silenceCandidateDisplayEntry, []silenceCandidateDisplayEntry) {
+func rankedSilenceCandidateEntries(measurements *processor.AudioMeasurements) (*candidateDisplayEntry[processor.SilenceCandidateMetrics], []candidateDisplayEntry[processor.SilenceCandidateMetrics]) {
 	if measurements == nil || len(measurements.SilenceCandidates) == 0 {
 		return nil, nil
 	}
 
-	entries := make([]silenceCandidateDisplayEntry, 0, len(measurements.SilenceCandidates))
-	var elected *silenceCandidateDisplayEntry
-	for i, c := range measurements.SilenceCandidates {
-		entry := silenceCandidateDisplayEntry{index: i, candidate: c}
-		if isSelectedSilenceCandidate(c, measurements) {
-			electedEntry := entry
-			elected = &electedEntry
-			continue
-		}
-		if c.Score == 0.0 {
-			continue
-		}
-		entries = append(entries, entry)
-	}
-
-	sort.SliceStable(entries, func(i, j int) bool {
-		if entries[i].candidate.Region.Start == entries[j].candidate.Region.Start {
-			return entries[i].index < entries[j].index
-		}
-		return entries[i].candidate.Region.Start < entries[j].candidate.Region.Start
-	})
-
-	return elected, selectSilenceCandidateEntries(entries)
-}
-
-func selectSilenceCandidateEntries(entries []silenceCandidateDisplayEntry) []silenceCandidateDisplayEntry {
-	displayCount := min(candidateDisplayLimit, len(entries))
-
-	displayed := make([]silenceCandidateDisplayEntry, displayCount)
-	copy(displayed, entries[:displayCount])
-	return displayed
+	return rankedCandidateEntries(
+		measurements.SilenceCandidates,
+		func(c processor.SilenceCandidateMetrics) bool { return isSelectedSilenceCandidate(c, measurements) },
+		func(c processor.SilenceCandidateMetrics) time.Duration { return c.Region.Start },
+		func(c processor.SilenceCandidateMetrics) float64 { return c.Score },
+	)
 }
 
 func isSelectedSilenceCandidate(c processor.SilenceCandidateMetrics, measurements *processor.AudioMeasurements) bool {
@@ -1831,40 +1731,51 @@ func writeReportCompactSpeechCandidateRow(f io.Writer, index int, c processor.Sp
 		c.RMSLevel, c.CrestFactor, c.Spectral.Centroid, interpretCentroid(c.Spectral.Centroid))
 }
 
-func rankedSpeechCandidateEntries(measurements *processor.AudioMeasurements) (*speechCandidateDisplayEntry, []speechCandidateDisplayEntry) {
+func rankedSpeechCandidateEntries(measurements *processor.AudioMeasurements) (*candidateDisplayEntry[processor.SpeechCandidateMetrics], []candidateDisplayEntry[processor.SpeechCandidateMetrics]) {
 	if measurements == nil || len(measurements.SpeechCandidates) == 0 {
 		return nil, nil
 	}
 
-	entries := make([]speechCandidateDisplayEntry, 0, len(measurements.SpeechCandidates))
-	var elected *speechCandidateDisplayEntry
-	for i, c := range measurements.SpeechCandidates {
-		entry := speechCandidateDisplayEntry{index: i, candidate: c}
-		if isSelectedSpeechCandidate(c, measurements) {
+	return rankedCandidateEntries(
+		measurements.SpeechCandidates,
+		func(c processor.SpeechCandidateMetrics) bool { return isSelectedSpeechCandidate(c, measurements) },
+		func(c processor.SpeechCandidateMetrics) time.Duration { return c.Region.Start },
+		func(c processor.SpeechCandidateMetrics) float64 { return c.Score },
+	)
+}
+
+func rankedCandidateEntries[T any](candidates []T, isSelected func(T) bool, start func(T) time.Duration, score func(T) float64) (*candidateDisplayEntry[T], []candidateDisplayEntry[T]) {
+	entries := make([]candidateDisplayEntry[T], 0, len(candidates))
+	var elected *candidateDisplayEntry[T]
+	for i, c := range candidates {
+		entry := candidateDisplayEntry[T]{index: i, candidate: c}
+		if isSelected(c) {
 			electedEntry := entry
 			elected = &electedEntry
 			continue
 		}
-		if c.Score == 0.0 {
+		if score(c) == 0.0 {
 			continue
 		}
 		entries = append(entries, entry)
 	}
 
 	sort.SliceStable(entries, func(i, j int) bool {
-		if entries[i].candidate.Region.Start == entries[j].candidate.Region.Start {
+		leftStart := start(entries[i].candidate)
+		rightStart := start(entries[j].candidate)
+		if leftStart == rightStart {
 			return entries[i].index < entries[j].index
 		}
-		return entries[i].candidate.Region.Start < entries[j].candidate.Region.Start
+		return leftStart < rightStart
 	})
 
-	return elected, selectSpeechCandidateEntries(entries)
+	return elected, selectCandidateEntries(entries)
 }
 
-func selectSpeechCandidateEntries(entries []speechCandidateDisplayEntry) []speechCandidateDisplayEntry {
+func selectCandidateEntries[T any](entries []candidateDisplayEntry[T]) []candidateDisplayEntry[T] {
 	displayCount := min(candidateDisplayLimit, len(entries))
 
-	displayed := make([]speechCandidateDisplayEntry, displayCount)
+	displayed := make([]candidateDisplayEntry[T], displayCount)
 	copy(displayed, entries[:displayCount])
 	return displayed
 }
