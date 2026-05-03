@@ -22,7 +22,7 @@ type AnalysisResult struct {
 }
 
 // AnalyzeOnlyDetailed performs Pass 1 analysis and returns stage timing details.
-func AnalyzeOnlyDetailed(inputPath string, config *FilterChainConfig,
+func AnalyzeOnlyDetailed(inputPath string, config *BaseFilterConfig,
 	progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements),
 ) (*AnalysisResult, error) {
 	// Pass 1: Analysis
@@ -31,7 +31,8 @@ func AnalyzeOnlyDetailed(inputPath string, config *FilterChainConfig,
 	}
 
 	analysisStart := time.Now()
-	measurements, err := AnalyzeAudio(inputPath, config, progressCallback)
+	analysisConfig := derivePerFileConfig(config)
+	measurements, err := AnalyzeAudio(inputPath, analysisConfig, progressCallback)
 	if err != nil {
 		return nil, fmt.Errorf("analysis failed: %w", err)
 	}
@@ -61,13 +62,14 @@ func AnalyzeOnlyDetailed(inputPath string, config *FilterChainConfig,
 //
 // The output file will be named <basename>-LUFS-NN-processed.<ext> in the same directory as the input
 // If progressCallback is not nil, it will be called with progress updates
-func ProcessAudio(inputPath string, config *FilterChainConfig, progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements)) (*ProcessingResult, error) {
+func ProcessAudio(inputPath string, config *BaseFilterConfig, progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements)) (*ProcessingResult, error) {
 	// Pass 1: Analysis
 	if progressCallback != nil {
 		progressCallback(PassAnalysis, "Analyzing", 0.0, 0.0, nil)
 	}
 
-	measurements, err := AnalyzeAudio(inputPath, config, progressCallback)
+	analysisConfig := derivePerFileConfig(config)
+	measurements, err := AnalyzeAudio(inputPath, analysisConfig, progressCallback)
 	if err != nil {
 		return nil, fmt.Errorf("pass 1 failed: %w", err)
 	}

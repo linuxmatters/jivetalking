@@ -9,11 +9,11 @@ import (
 	"time"
 )
 
-// newTestConfig creates a minimal FilterChainConfig for testing.
+// newTestBaseConfig creates a minimal BaseFilterConfig for testing.
 // All filters are disabled by default - enable only what you need for each test.
 // This isolates tests from application default configuration changes.
-func newTestConfig() *FilterChainConfig {
-	return &FilterChainConfig{
+func newTestBaseConfig() *BaseFilterConfig {
+	return &BaseFilterConfig{filterConfigDefaults: filterConfigDefaults{
 		// Infrastructure filters (disabled by default for isolated tests)
 		DownmixEnabled:     false,
 		AnalysisEnabled:    false,
@@ -84,7 +84,13 @@ func newTestConfig() *FilterChainConfig {
 		AdeclickMethod:    "s",
 
 		FilterOrder: Pass2FilterOrder,
-	}
+	}}
+}
+
+// newTestConfig creates a minimal effective FilterChainConfig for builder and
+// tuner tests that operate after seed assembly.
+func newTestConfig() *FilterChainConfig {
+	return derivePerFileConfig(newTestBaseConfig())
 }
 
 func TestBuildFilterSpec(t *testing.T) {
@@ -260,6 +266,196 @@ func TestBuildFilterSpec(t *testing.T) {
 			t.Errorf("asetnsamples must appear AFTER aformat\nSpec: %s", spec)
 		}
 	})
+}
+
+func TestBuildFilterSpecBehaviourBaseline(t *testing.T) {
+	tests := []struct {
+		name   string
+		config *FilterChainConfig
+		want   string
+	}{
+		{
+			name:   "default pass 2 chain",
+			config: DefaultEffectiveFilterConfig(),
+			want: "aformat=channel_layouts=mono," +
+				"highpass=f=80:poles=2:width_type=q:width=0.707:normalize=1:a=tdii," +
+				"lowpass=f=16000:poles=2:width_type=q:width=0.707:normalize=1:a=tdii," +
+				"anlmdn=s=0.00001:p=0.0060:r=0.0020:m=3," +
+				"compand=attacks=0.005:decays=0.100:soft-knee=6.0:points=-90/-96|-75/-81|-55/-55|-30/-30|0/0," +
+				"agate=threshold=0.010000:ratio=2.0:attack=12.00:release=350:range=0.0625:knee=3.0:detection=rms:makeup=1.0," +
+				"acompressor=threshold=0.125893:ratio=3.0:attack=10:release=200:makeup=1.00:knee=4.0:detection=rms:mix=1.00," +
+				"astats=metadata=1:measure_perchannel=all," +
+				"aspectralstats=win_size=2048:win_func=hann:measure=all," +
+				"ebur128=metadata=1:peak=sample+true:dualmono=true:target=-16," +
+				"aformat=sample_rates=44100:channel_layouts=mono:sample_fmts=s16,asetnsamples=n=4096",
+		},
+		{
+			name: "low-pass disabled",
+			config: func() *FilterChainConfig {
+				config := newTestConfig()
+				config.DS201LPEnabled = false
+				config.FilterOrder = []FilterID{FilterDS201LowPass}
+				return config
+			}(),
+			want: "",
+		},
+		{
+			name: "low-pass enabled",
+			config: func() *FilterChainConfig {
+				config := newTestConfig()
+				config.DS201LPEnabled = true
+				config.DS201LPFreq = 14500.0
+				config.DS201LPPoles = 1
+				config.DS201LPWidth = 0.5
+				config.DS201LPMix = 0.75
+				config.DS201LPTransform = "zdf"
+				config.FilterOrder = []FilterID{FilterDS201LowPass}
+				return config
+			}(),
+			want: "lowpass=f=14500:poles=1:width_type=q:width=0.500:normalize=1:a=zdf:m=0.75",
+		},
+		{
+			name: "gate tuned",
+			config: func() *FilterChainConfig {
+				config := newTestConfig()
+				config.DS201GateEnabled = true
+				config.DS201GateThreshold = 0.003162
+				config.DS201GateRatio = 3.5
+				config.DS201GateAttack = 10.5
+				config.DS201GateRelease = 425
+				config.DS201GateRange = 0.0316
+				config.DS201GateKnee = 4.5
+				config.DS201GateDetection = "peak"
+				config.DS201GateMakeup = 1.2
+				config.FilterOrder = []FilterID{FilterDS201Gate}
+				return config
+			}(),
+			want: "agate=threshold=0.003162:ratio=3.5:attack=10.50:release=425:range=0.0316:knee=4.5:detection=peak:makeup=1.2",
+		},
+		{
+			name: "LA-2A high-crest tuned values",
+			config: func() *FilterChainConfig {
+				config := newTestConfig()
+				config.LA2AEnabled = true
+				config.LA2AThreshold = -30.0
+				config.LA2ARatio = 4.0
+				config.LA2AAttack = 10
+				config.LA2ARelease = 60
+				config.LA2AMakeup = 0
+				config.LA2AKnee = 6.0
+				config.LA2AMix = 0.85
+				config.LA2AHighCrestActive = true
+				config.LA2AHighCrestDeficit = 2.6
+				config.LA2AHighCrestSeverity = 0.433
+				config.LA2AHighCrestProjectedTP = 0.6
+				config.FilterOrder = []FilterID{FilterLA2ACompressor}
+				return config
+			}(),
+			want: "acompressor=threshold=0.031623:ratio=4.0:attack=10:release=60:makeup=1.00:knee=6.0:detection=rms:mix=0.85",
+		},
+		{
+			name: "noise-remove compand disabled",
+			config: func() *FilterChainConfig {
+				config := newTestConfig()
+				config.NoiseRemoveEnabled = true
+				config.NoiseRemoveCompandEnabled = false
+				config.FilterOrder = []FilterID{FilterNoiseRemove}
+				return config
+			}(),
+			want: "anlmdn=s=0.00001:p=0.0060:r=0.0058:m=11",
+		},
+		{
+			name: "noise-remove compand enabled",
+			config: func() *FilterChainConfig {
+				config := newTestConfig()
+				config.NoiseRemoveEnabled = true
+				config.NoiseRemoveCompandEnabled = true
+				config.NoiseRemoveCompandThreshold = -48.0
+				config.NoiseRemoveCompandExpansion = 12.0
+				config.FilterOrder = []FilterID{FilterNoiseRemove}
+				return config
+			}(),
+			want: "anlmdn=s=0.00001:p=0.0060:r=0.0058:m=11," +
+				"compand=attacks=0.005:decays=0.100:soft-knee=6.0:points=-90/-102|-75/-87|-48/-48|-30/-30|0/0",
+		},
+		{
+			name: "de-esser disabled",
+			config: func() *FilterChainConfig {
+				config := newTestConfig()
+				config.DeessEnabled = true
+				config.DeessIntensity = 0
+				config.FilterOrder = []FilterID{FilterDeesser}
+				return config
+			}(),
+			want: "",
+		},
+		{
+			name: "de-esser enabled",
+			config: func() *FilterChainConfig {
+				config := newTestConfig()
+				config.DeessEnabled = true
+				config.DeessIntensity = 0.6
+				config.DeessAmount = 0.4
+				config.DeessFreq = 0.7
+				config.FilterOrder = []FilterID{FilterDeesser}
+				return config
+			}(),
+			want: "deesser=i=0.60:m=0.40:f=0.70",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.config.BuildFilterSpec()
+			if got != tt.want {
+				t.Errorf("BuildFilterSpec() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDefaultFilterConfigSeedOwnershipBoundary(t *testing.T) {
+	assertSeedConfigTypeCannotOwnPerFileState(t, reflect.TypeOf(DefaultFilterConfig()))
+}
+
+func assertSeedConfigTypeCannotOwnPerFileState(t *testing.T, typ reflect.Type) {
+	t.Helper()
+
+	if typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
+	}
+	if typ.Kind() != reflect.Struct {
+		t.Fatalf("seed config type = %s, want struct or pointer to struct", typ)
+	}
+
+	for _, name := range perFileStateFieldNames() {
+		if field, ok := typ.FieldByName(name); ok {
+			t.Errorf("seed config type %s owns per-file state field %s of type %s", typ.Name(), name, field.Type)
+		}
+	}
+}
+
+func perFileStateFieldNames() []string {
+	return []string{
+		"Pass",
+		"Measurements",
+		"OutputAnalysisEnabled",
+		"DS201LPContentType",
+		"DS201LPReason",
+		"DS201LPRolloffRatio",
+		"DS201GateGentleMode",
+		"DS201GateAggression",
+		"DS201GateDynamicRange",
+		"DS201GateQuietSpeechEstimate",
+		"DS201GateSpeechSeparation",
+		"DS201GateSpeechHeadroom",
+		"DS201GateThresholdUnclamped",
+		"DS201GateClampReason",
+		"LA2AHighCrestActive",
+		"LA2AHighCrestDeficit",
+		"LA2AHighCrestSeverity",
+		"LA2AHighCrestProjectedTP",
+	}
 }
 
 func TestBuildDS201HighpassFilter(t *testing.T) {
@@ -688,7 +884,7 @@ func TestBuildNoiseRemoveFilter(t *testing.T) {
 
 func TestBuildAdeclickFilter(t *testing.T) {
 	t.Run("default config emits production clause", func(t *testing.T) {
-		config := DefaultFilterConfig()
+		config := DefaultEffectiveFilterConfig()
 
 		spec := config.buildAdeclickFilter()
 
@@ -782,41 +978,110 @@ func TestFilterOrderRespected(t *testing.T) {
 	}
 }
 
-func TestDerivePerFileConfig(t *testing.T) {
-	measurements := &AudioMeasurements{InputI: -24.0}
+func TestDeriveAdaptiveFilterResultDeepCopiesFilterOrder(t *testing.T) {
 	base := DefaultFilterConfig()
-	base.Pass = PassProcessing
 	base.FilterOrder = []FilterID{FilterDeesser, FilterAnalysis}
-	base.Measurements = measurements
-	base.OutputAnalysisEnabled = true
+
+	adaptive := deriveAdaptiveFilterResult(base)
+	if adaptive == nil {
+		t.Fatal("deriveAdaptiveFilterResult returned nil")
+	}
+	if !reflect.DeepEqual(adaptive.FilterOrder, base.FilterOrder) {
+		t.Errorf("FilterOrder = %v, want %v", adaptive.FilterOrder, base.FilterOrder)
+	}
+
+	adaptive.FilterOrder[0] = FilterDownmix
+	if base.FilterOrder[0] == FilterDownmix {
+		t.Fatal("adaptive FilterOrder mutation changed base FilterOrder")
+	}
+}
+
+func TestAssembleEffectiveFilterConfig(t *testing.T) {
+	base := DefaultFilterConfig()
+	base.FilterOrder = []FilterID{FilterDeesser, FilterAnalysis}
+	base.TargetI = -18.0
+	base.SilenceScanDuration = 2 * time.Second
+
+	adaptive := deriveAdaptiveFilterResult(base)
+	adaptive.DS201HPFreq = 65.0
+	adaptive.NoiseRemoveCompandEnabled = false
+	adaptive.FilterOrder = []FilterID{FilterDownmix}
+
+	effective := assembleEffectiveFilterConfig(base, adaptive)
+	if effective == nil {
+		t.Fatal("assembleEffectiveFilterConfig returned nil")
+	}
+	if effective.DS201HPFreq != adaptive.DS201HPFreq {
+		t.Errorf("DS201HPFreq = %.1f, want adaptive %.1f", effective.DS201HPFreq, adaptive.DS201HPFreq)
+	}
+	if effective.NoiseRemoveCompandEnabled {
+		t.Error("NoiseRemoveCompandEnabled = true, want adaptive false")
+	}
+	if effective.TargetI != base.TargetI {
+		t.Errorf("TargetI = %.1f, want base %.1f", effective.TargetI, base.TargetI)
+	}
+	if effective.SilenceScanDuration != base.SilenceScanDuration {
+		t.Errorf("SilenceScanDuration = %s, want base %s",
+			effective.SilenceScanDuration, base.SilenceScanDuration)
+	}
+	if !reflect.DeepEqual(effective.FilterOrder, base.FilterOrder) {
+		t.Errorf("FilterOrder = %v, want base order %v", effective.FilterOrder, base.FilterOrder)
+	}
+
+	effective.FilterOrder[0] = FilterDownmix
+	if base.FilterOrder[0] == FilterDownmix {
+		t.Fatal("effective FilterOrder mutation changed base FilterOrder")
+	}
+	if adaptive.FilterOrder[0] != FilterDownmix {
+		t.Fatal("effective FilterOrder mutation changed adaptive FilterOrder")
+	}
+
+	if effective.Pass != 0 {
+		t.Errorf("Pass = %d, want 0", effective.Pass)
+	}
+	if effective.Measurements != nil {
+		t.Errorf("Measurements = %p, want nil", effective.Measurements)
+	}
+	if effective.OutputAnalysisEnabled {
+		t.Error("OutputAnalysisEnabled = true, want false")
+	}
+	if effective.DS201LPContentType != 0 || effective.DS201LPReason != "" || effective.DS201LPRolloffRatio != 0 {
+		t.Errorf("low-pass diagnostics copied into effective config: type=%v reason=%q ratio=%.2f",
+			effective.DS201LPContentType, effective.DS201LPReason, effective.DS201LPRolloffRatio)
+	}
+	if effective.DS201GateGentleMode ||
+		effective.DS201GateAggression != 0 ||
+		effective.DS201GateDynamicRange != 0 ||
+		effective.DS201GateQuietSpeechEstimate != 0 ||
+		effective.DS201GateSpeechSeparation != 0 ||
+		effective.DS201GateSpeechHeadroom != 0 ||
+		effective.DS201GateThresholdUnclamped != 0 ||
+		effective.DS201GateClampReason != "" {
+		t.Errorf("gate diagnostics copied into effective config: %+v", effective)
+	}
+	if effective.LA2AHighCrestActive ||
+		effective.LA2AHighCrestDeficit != 0 ||
+		effective.LA2AHighCrestSeverity != 0 ||
+		effective.LA2AHighCrestProjectedTP != 0 {
+		t.Errorf("LA-2A diagnostics copied into effective config: active=%v deficit=%.2f severity=%.2f projected=%.2f",
+			effective.LA2AHighCrestActive,
+			effective.LA2AHighCrestDeficit,
+			effective.LA2AHighCrestSeverity,
+			effective.LA2AHighCrestProjectedTP)
+	}
+}
+
+func TestDerivePerFileConfig(t *testing.T) {
+	base := DefaultFilterConfig()
+	base.FilterOrder = []FilterID{FilterDeesser, FilterAnalysis}
 	base.TargetI = -18.0
 	base.SilenceScanDuration = 2 * time.Second
 	base.NoiseRemoveCompandThreshold = -48.0
-
-	base.DS201LPContentType = ContentMusic
-	base.DS201LPReason = "stale lowpass reason"
-	base.DS201LPRolloffRatio = 3.5
-	base.DS201GateGentleMode = true
-	base.DS201GateAggression = 0.45
-	base.DS201GateDynamicRange = 12.0
-	base.DS201GateQuietSpeechEstimate = -42.0
-	base.DS201GateSpeechSeparation = 18.0
-	base.DS201GateSpeechHeadroom = 7.0
-	base.DS201GateThresholdUnclamped = -35.0
-	base.DS201GateClampReason = "speech_rms"
-	base.LA2AHighCrestActive = true
-	base.LA2AHighCrestDeficit = 2.5
-	base.LA2AHighCrestSeverity = 0.4
-	base.LA2AHighCrestProjectedTP = 1.2
 
 	derived := derivePerFileConfig(base)
 	if derived == nil {
 		t.Fatal("derivePerFileConfig returned nil")
 	}
-	if derived == base {
-		t.Fatal("derivePerFileConfig returned the base pointer")
-	}
-
 	if derived.Pass != 0 {
 		t.Errorf("Pass = %d, want 0", derived.Pass)
 	}
@@ -871,12 +1136,11 @@ func TestDerivePerFileConfig(t *testing.T) {
 			derived.LA2AHighCrestProjectedTP)
 	}
 
-	if base.Pass != PassProcessing ||
-		base.Measurements != measurements ||
-		!base.OutputAnalysisEnabled ||
-		base.DS201GateClampReason != "speech_rms" ||
-		!base.LA2AHighCrestActive {
-		t.Error("derivePerFileConfig mutated the base config")
+	if !reflect.DeepEqual(base.FilterOrder, []FilterID{FilterDeesser, FilterAnalysis}) ||
+		base.TargetI != -18.0 ||
+		base.SilenceScanDuration != 2*time.Second ||
+		base.NoiseRemoveCompandThreshold != -48.0 {
+		t.Error("derivePerFileConfig mutated caller-owned defaults")
 	}
 }
 

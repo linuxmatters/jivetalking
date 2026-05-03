@@ -7,7 +7,6 @@ import (
 )
 
 func TestAdaptConfigReturnsEffectiveConfig(t *testing.T) {
-	staleMeasurements := &AudioMeasurements{InputI: -12.0}
 	measurements := &AudioMeasurements{
 		BaseMeasurements: BaseMeasurements{
 			SpectralCentroid: 5000,
@@ -28,11 +27,8 @@ func TestAdaptConfigReturnsEffectiveConfig(t *testing.T) {
 		},
 	}
 
-	base := newTestConfig()
-	base.Pass = PassProcessing
+	base := newTestBaseConfig()
 	base.FilterOrder = []FilterID{FilterDeesser, FilterAnalysis}
-	base.Measurements = staleMeasurements
-	base.OutputAnalysisEnabled = true
 	base.DS201HPEnabled = true
 	base.DS201HPFreq = 95.0
 	base.TargetI = -18.0
@@ -41,24 +37,12 @@ func TestAdaptConfigReturnsEffectiveConfig(t *testing.T) {
 	if effective == nil {
 		t.Fatal("AdaptConfig returned nil")
 	}
-	if effective == base {
-		t.Fatal("AdaptConfig returned the base pointer")
-	}
 	if effective.Measurements != measurements {
 		t.Fatal("effective Measurements was not set to Pass 1 measurements")
 	}
 
-	if base.Pass != PassProcessing {
-		t.Errorf("base Pass = %d, want %d", base.Pass, PassProcessing)
-	}
 	if !reflect.DeepEqual(base.FilterOrder, []FilterID{FilterDeesser, FilterAnalysis}) {
 		t.Errorf("base FilterOrder = %v, want unchanged custom order", base.FilterOrder)
-	}
-	if base.Measurements != staleMeasurements {
-		t.Fatal("base Measurements was mutated")
-	}
-	if !base.OutputAnalysisEnabled {
-		t.Fatal("base OutputAnalysisEnabled was mutated")
 	}
 	if base.DS201HPFreq != 95.0 {
 		t.Errorf("base DS201HPFreq = %.1f, want unchanged 95.0", base.DS201HPFreq)
@@ -110,28 +94,66 @@ func TestAdaptConfigOrderIndependence(t *testing.T) {
 		t.Fatal("AdaptConfig returned nil for file B")
 	}
 
-	if afterA == sharedSeed {
-		t.Fatal("AdaptConfig returned shared seed for file B after file A")
-	}
-	if alone == sharedSeed {
-		t.Fatal("AdaptConfig returned shared seed for file B alone")
-	}
-
 	assertOrderIndependentAdaptiveFields(t, afterA, alone)
 
-	if sharedSeed.DS201GateGentleMode {
-		t.Fatal("shared seed retained file A gentle gate state")
-	}
 	if !sharedSeed.NoiseRemoveCompandEnabled {
 		t.Fatal("shared seed retained file A compand disabled state")
 	}
-	if sharedSeed.LA2AHighCrestActive {
-		t.Fatal("shared seed retained file A high-crest state")
+}
+
+func TestAdaptConfigFilterSpecBehaviourBaseline(t *testing.T) {
+	tests := []struct {
+		name         string
+		measurements *AudioMeasurements
+		want         string
+	}{
+		{
+			name:         "warm voice without noise profile",
+			measurements: orderIndependenceWarmNoProfileMeasurements(),
+			want: "highpass=f=60:poles=1:width_type=q:width=0.500:normalize=1:a=tdii:m=0.80," +
+				"anlmdn=s=0.00001:p=0.0060:r=0.0058:m=11," +
+				"agate=threshold=0.012589:ratio=1.2:attack=17.00:release=400:range=0.0447:knee=2.0:detection=rms:makeup=1.0," +
+				"acompressor=threshold=0.011839:ratio=4.9:attack=10:release=340:makeup=1.00:knee=5.9:detection=rms:mix=0.93",
+		},
+		{
+			name:         "bright speech with noise profile",
+			measurements: orderIndependenceBrightSpeechMeasurements(),
+			want: "highpass=f=110:poles=2:width_type=q:width=0.707:normalize=1:a=tdii," +
+				"lowpass=f=17000:poles=1:width_type=q:width=0.707:normalize=1," +
+				"anlmdn=s=0.00001:p=0.0060:r=0.0058:m=11," +
+				"compand=attacks=0.005:decays=0.100:soft-knee=6.0:points=-90/-96|-75/-81|-55/-55|-30/-30|0/0," +
+				"agate=threshold=0.019953:ratio=2.0:attack=10.00:release=250:range=0.0447:knee=5.0:detection=rms:makeup=1.0," +
+				"acompressor=threshold=0.050119:ratio=3.0:attack=10:release=150:makeup=1.00:knee=4.0:detection=rms:mix=0.93",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := newOrderIndependenceSeed()
+			got := AdaptConfig(config, tt.measurements)
+			if got == nil {
+				t.Fatal("AdaptConfig returned nil")
+			}
+
+			spec := got.BuildFilterSpec()
+			if spec != tt.want {
+				t.Errorf("BuildFilterSpec() = %q, want %q", spec, tt.want)
+			}
+		})
 	}
 }
 
-func newOrderIndependenceSeed() *FilterChainConfig {
-	config := newTestConfig()
+func TestAdaptConfigSeedParameterOwnershipBoundary(t *testing.T) {
+	typ := reflect.TypeOf(AdaptConfig)
+	if typ.NumIn() != 2 {
+		t.Fatalf("AdaptConfig has %d parameters, want 2", typ.NumIn())
+	}
+
+	assertSeedConfigTypeCannotOwnPerFileState(t, typ.In(0))
+}
+
+func newOrderIndependenceSeed() *BaseFilterConfig {
+	config := newTestBaseConfig()
 	config.DS201HPEnabled = true
 	config.DS201LPEnabled = true
 	config.NoiseRemoveEnabled = true

@@ -102,7 +102,7 @@ func TestAnalyzeAudioDoesNotMutateCallerConfig(t *testing.T) {
 	defer cleanupTestAudio(t, testFile)
 
 	seedMeasurements := &AudioMeasurements{InputI: -30.0}
-	config := DefaultFilterConfig()
+	config := DefaultEffectiveFilterConfig()
 	config.Pass = PassProcessing
 	config.FilterOrder = []FilterID{FilterNoiseRemove, FilterAnalysis}
 	config.Measurements = seedMeasurements

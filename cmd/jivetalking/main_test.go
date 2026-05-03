@@ -33,11 +33,11 @@ func TestRunAnalysisOnlyWithDeps_NonTTYOmitsBenchPath(t *testing.T) {
 				Channels:   1,
 			}, nil
 		},
-		runWithTUI: func(string, *processor.FilterChainConfig, func(string, ...any)) (*processor.AnalysisResult, error) {
+		runWithTUI: func(string, *processor.BaseFilterConfig, func(string, ...any)) (*processor.AnalysisResult, error) {
 			t.Fatal("runWithTUI should not be called for non-TTY output")
 			return nil, nil
 		},
-		analyzeDetailed: func(path string, cfg *processor.FilterChainConfig, progress func(processor.PassNumber, string, float64, float64, *processor.AudioMeasurements)) (*processor.AnalysisResult, error) {
+		analyzeDetailed: func(path string, cfg *processor.BaseFilterConfig, progress func(processor.PassNumber, string, float64, float64, *processor.AudioMeasurements)) (*processor.AnalysisResult, error) {
 			if path != inputPath {
 				t.Fatalf("analyzeDetailed path = %q, want %q", path, inputPath)
 			}
@@ -46,7 +46,7 @@ func TestRunAnalysisOnlyWithDeps_NonTTYOmitsBenchPath(t *testing.T) {
 			}
 			return &processor.AnalysisResult{
 				Measurements:       makeAnalysisOnlyTestMeasurements(),
-				Config:             cfg,
+				Config:             processor.AdaptConfig(cfg, makeAnalysisOnlyTestMeasurements()),
 				AnalysisDuration:   2 * time.Second,
 				AdaptationDuration: 100 * time.Millisecond,
 			}, nil
@@ -87,7 +87,7 @@ func TestRunAnalysisOnlyWithDeps_UsesPerFileResultConfig(t *testing.T) {
 	resultConfigs[1].DS201HPFreq = 100.0
 	secondFilterOrder := append([]processor.FilterID(nil), resultConfigs[1].FilterOrder...)
 
-	var analyzedConfigs []*processor.FilterChainConfig
+	var analyzedConfigs []*processor.BaseFilterConfig
 	var displayedConfigs []*processor.FilterChainConfig
 
 	runAnalysisOnlyWithDeps(files, baseConfig, func(string, ...any) {}, analysisOnlyDeps{
@@ -102,11 +102,11 @@ func TestRunAnalysisOnlyWithDeps_UsesPerFileResultConfig(t *testing.T) {
 				Channels:   1,
 			}, nil
 		},
-		runWithTUI: func(string, *processor.FilterChainConfig, func(string, ...any)) (*processor.AnalysisResult, error) {
+		runWithTUI: func(string, *processor.BaseFilterConfig, func(string, ...any)) (*processor.AnalysisResult, error) {
 			t.Fatal("runWithTUI should not be called for non-TTY output")
 			return nil, nil
 		},
-		analyzeDetailed: func(path string, cfg *processor.FilterChainConfig, progress func(processor.PassNumber, string, float64, float64, *processor.AudioMeasurements)) (*processor.AnalysisResult, error) {
+		analyzeDetailed: func(path string, cfg *processor.BaseFilterConfig, progress func(processor.PassNumber, string, float64, float64, *processor.AudioMeasurements)) (*processor.AnalysisResult, error) {
 			if cfg != baseConfig {
 				t.Fatalf("analyzeDetailed config = %p, want shared base %p", cfg, baseConfig)
 			}

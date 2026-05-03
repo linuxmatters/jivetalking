@@ -191,8 +191,8 @@ type analysisOnlyDeps struct {
 	stdout          io.Writer
 	hasTTY          func() bool
 	openMetadata    func(string) (*audio.Metadata, error)
-	runWithTUI      func(string, *processor.FilterChainConfig, func(string, ...any)) (*processor.AnalysisResult, error)
-	analyzeDetailed func(string, *processor.FilterChainConfig, func(processor.PassNumber, string, float64, float64, *processor.AudioMeasurements)) (*processor.AnalysisResult, error)
+	runWithTUI      func(string, *processor.BaseFilterConfig, func(string, ...any)) (*processor.AnalysisResult, error)
+	analyzeDetailed func(string, *processor.BaseFilterConfig, func(processor.PassNumber, string, float64, float64, *processor.AudioMeasurements)) (*processor.AnalysisResult, error)
 	displayResults  func(io.Writer, string, *audio.Metadata, *processor.AudioMeasurements, *processor.FilterChainConfig, ...logging.AnalysisTimings)
 	printError      func(string)
 }
@@ -269,11 +269,11 @@ func (ph *progressHandler) callback(pass processor.PassNumber, passName string, 
 
 // runAnalysisOnly performs Pass 1 analysis on each file with a progress UI,
 // then displays results to console. Skips full 4-pass processing.
-func runAnalysisOnly(files []string, config *processor.FilterChainConfig, log func(string, ...any)) {
+func runAnalysisOnly(files []string, config *processor.BaseFilterConfig, log func(string, ...any)) {
 	runAnalysisOnlyWithDeps(files, config, log, defaultAnalysisOnlyDeps())
 }
 
-func runAnalysisOnlyWithDeps(files []string, config *processor.FilterChainConfig, log func(string, ...any), deps analysisOnlyDeps) {
+func runAnalysisOnlyWithDeps(files []string, config *processor.BaseFilterConfig, log func(string, ...any), deps analysisOnlyDeps) {
 	// Check if we have a TTY for the progress UI
 	hasTTY := deps.hasTTY()
 
@@ -335,7 +335,7 @@ func isTTY() bool {
 }
 
 // runAnalysisWithTUI runs analysis with the Bubbletea progress UI.
-func runAnalysisWithTUI(inputPath string, config *processor.FilterChainConfig, log func(string, ...any)) (*processor.AnalysisResult, error) {
+func runAnalysisWithTUI(inputPath string, config *processor.BaseFilterConfig, log func(string, ...any)) (*processor.AnalysisResult, error) {
 	// Create the analysis UI model
 	model := ui.NewAnalysisModel()
 

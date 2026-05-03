@@ -61,7 +61,7 @@ func TestGenerateLUFSOutputPath(t *testing.T) {
 }
 
 func TestEffectiveConfigFilterOrderIsolation(t *testing.T) {
-	base := newTestConfig()
+	base := newTestBaseConfig()
 	base.FilterOrder = []FilterID{FilterAnalysis, FilterDeesser}
 
 	first := AdaptConfig(base, &AudioMeasurements{
@@ -91,6 +91,39 @@ func TestEffectiveConfigFilterOrderIsolation(t *testing.T) {
 	}
 }
 
+func TestProcessorSeedParameterOwnershipBoundary(t *testing.T) {
+	tests := []struct {
+		name       string
+		fn         any
+		configArg  int
+		parameters int
+	}{
+		{
+			name:       "ProcessAudio",
+			fn:         ProcessAudio,
+			configArg:  1,
+			parameters: 3,
+		},
+		{
+			name:       "AnalyzeOnlyDetailed",
+			fn:         AnalyzeOnlyDetailed,
+			configArg:  1,
+			parameters: 3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			typ := reflect.TypeOf(tt.fn)
+			if typ.NumIn() != tt.parameters {
+				t.Fatalf("%s has %d parameters, want %d", tt.name, typ.NumIn(), tt.parameters)
+			}
+
+			assertSeedConfigTypeCannotOwnPerFileState(t, typ.In(tt.configArg))
+		})
+	}
+}
+
 // TestProcessAudio tests the complete three-pass processing pipeline
 func TestProcessAudio(t *testing.T) {
 	// Generate synthetic test audio: 3-second 440Hz tone at -18 dBFS input level
@@ -114,16 +147,13 @@ func TestProcessAudio(t *testing.T) {
 
 	// Create isolated test config with minimal filters for integration test
 	// This ensures the test doesn't break when application defaults change
-	config := newTestConfig()
+	config := newTestBaseConfig()
 	config.DownmixEnabled = true
 	config.AnalysisEnabled = true
 	config.ResampleEnabled = true
 	config.DS201HPEnabled = true // Basic processing
 	config.DS201HPFreq = 95.0
-	basePass := config.Pass
 	baseFilterOrder := append([]FilterID(nil), config.FilterOrder...)
-	baseMeasurements := config.Measurements
-	baseOutputAnalysisEnabled := config.OutputAnalysisEnabled
 
 	// Process the audio with a no-op progress callback
 	result, err := ProcessAudio(testFile, config, func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements) {
@@ -176,26 +206,14 @@ func TestProcessAudio(t *testing.T) {
 	if result.Measurements == nil {
 		t.Error("ProcessAudio returned nil measurements")
 	}
-	if config.Pass != basePass {
-		t.Errorf("base Pass = %d, want %d", config.Pass, basePass)
-	}
 	if !reflect.DeepEqual(config.FilterOrder, baseFilterOrder) {
 		t.Errorf("base FilterOrder = %v, want %v", config.FilterOrder, baseFilterOrder)
-	}
-	if config.Measurements != baseMeasurements {
-		t.Fatal("base Measurements was mutated")
-	}
-	if config.OutputAnalysisEnabled != baseOutputAnalysisEnabled {
-		t.Errorf("base OutputAnalysisEnabled = %v, want %v", config.OutputAnalysisEnabled, baseOutputAnalysisEnabled)
 	}
 	if config.DS201HPFreq != 95.0 {
 		t.Errorf("base DS201HPFreq = %.1f, want unchanged 95.0", config.DS201HPFreq)
 	}
 	if result.Config == nil {
 		t.Fatal("ProcessAudio returned nil config")
-	}
-	if result.Config == config {
-		t.Fatal("ProcessAudio returned the caller seed config")
 	}
 	if result.Config.Measurements != result.Measurements {
 		t.Fatal("result config Measurements does not point at Pass 1 measurements")
@@ -319,15 +337,12 @@ func TestAnalyzeOnlyDetailedTimings(t *testing.T) {
 	})
 	defer cleanupTestAudio(t, testFile)
 
-	config := newTestConfig()
+	config := newTestBaseConfig()
 	config.DownmixEnabled = true
 	config.AnalysisEnabled = true
 	config.DS201HPEnabled = true
 	config.DS201HPFreq = 95.0
-	basePass := config.Pass
 	baseFilterOrder := append([]FilterID(nil), config.FilterOrder...)
-	baseMeasurements := config.Measurements
-	baseOutputAnalysisEnabled := config.OutputAnalysisEnabled
 
 	result, err := AnalyzeOnlyDetailed(testFile, config, nil)
 	if err != nil {
@@ -340,23 +355,11 @@ func TestAnalyzeOnlyDetailedTimings(t *testing.T) {
 	if result.Config == nil {
 		t.Fatal("AnalyzeOnlyDetailed returned nil config")
 	}
-	if result.Config == config {
-		t.Fatal("AnalyzeOnlyDetailed returned the caller seed config")
-	}
 	if result.Config.Measurements != result.Measurements {
 		t.Fatal("result config Measurements does not point at Pass 1 measurements")
 	}
-	if config.Pass != basePass {
-		t.Errorf("base Pass = %d, want %d", config.Pass, basePass)
-	}
 	if !reflect.DeepEqual(config.FilterOrder, baseFilterOrder) {
 		t.Errorf("base FilterOrder = %v, want %v", config.FilterOrder, baseFilterOrder)
-	}
-	if config.Measurements != baseMeasurements {
-		t.Fatal("base Measurements was mutated")
-	}
-	if config.OutputAnalysisEnabled != baseOutputAnalysisEnabled {
-		t.Errorf("base OutputAnalysisEnabled = %v, want %v", config.OutputAnalysisEnabled, baseOutputAnalysisEnabled)
 	}
 	if config.DS201HPFreq != 95.0 {
 		t.Errorf("base DS201HPFreq = %.1f, want unchanged 95.0", config.DS201HPFreq)

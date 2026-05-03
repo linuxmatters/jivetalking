@@ -28,7 +28,7 @@ func makeReportData(t *testing.T) ReportData {
 		Result: &processor.ProcessingResult{
 			Measurements:         makeInputMeasurements(),
 			FilteredMeasurements: makeOutputMeasurements(-20.2, -2.1, 6.4, makeSilenceSample(-64.0), makeSpeechSample(-24.0)),
-			Config:               processor.DefaultFilterConfig(),
+			Config:               processor.DefaultEffectiveFilterConfig(),
 			NormResult: &processor.NormalisationResult{
 				InputLUFS:  -20.2,
 				OutputLUFS: -16.0,

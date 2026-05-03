@@ -142,7 +142,7 @@ func TestDisplayAnalysisResults_VoiceActivated_NoElectedCandidate(t *testing.T) 
 		},
 	}
 
-	config := processor.DefaultFilterConfig()
+	config := processor.DefaultEffectiveFilterConfig()
 	var buf bytes.Buffer
 	DisplayAnalysisResults(&buf, "/tmp/test.wav", makeMinimalMetadata(), m, config)
 	output := buf.String()
@@ -154,7 +154,7 @@ func TestDisplayAnalysisResults_VoiceActivated_NoElectedCandidate(t *testing.T) 
 
 func TestDisplayAnalysisResults_FullOutputFixture(t *testing.T) {
 	m := makeFullAnalysisMeasurements()
-	config := processor.DefaultFilterConfig()
+	config := processor.DefaultEffectiveFilterConfig()
 	config.NoiseRemoveCompandEnabled = true
 	config.NoiseRemoveCompandThreshold = -53
 	config.NoiseRemoveCompandExpansion = 7
@@ -278,7 +278,7 @@ func TestDisplayAnalysisResults_VoiceActivated_NoSilence(t *testing.T) {
 	m.VoiceActivated = true
 	// No SilenceCandidates, no NoiseProfile
 
-	config := processor.DefaultFilterConfig()
+	config := processor.DefaultEffectiveFilterConfig()
 	var buf bytes.Buffer
 	DisplayAnalysisResults(&buf, "/tmp/test.wav", makeMinimalMetadata(), m, config)
 	output := buf.String()
@@ -306,7 +306,7 @@ func TestDisplayAnalysisResults_Normal_NoVoiceActivated(t *testing.T) {
 		},
 	}
 
-	config := processor.DefaultFilterConfig()
+	config := processor.DefaultEffectiveFilterConfig()
 	var buf bytes.Buffer
 	DisplayAnalysisResults(&buf, "/tmp/test.wav", makeMinimalMetadata(), m, config)
 	output := buf.String()
@@ -318,7 +318,7 @@ func TestDisplayAnalysisResults_Normal_NoVoiceActivated(t *testing.T) {
 
 func TestDisplayAnalysisResults_CompanderDisabled(t *testing.T) {
 	m := makeMinimalMeasurements()
-	config := processor.DefaultFilterConfig()
+	config := processor.DefaultEffectiveFilterConfig()
 	config.NoiseRemoveCompandEnabled = false
 
 	var buf bytes.Buffer
@@ -338,7 +338,7 @@ func TestDisplayAnalysisResults_CompanderDisabled(t *testing.T) {
 
 func TestDisplayAnalysisResults_CompanderEnabled(t *testing.T) {
 	m := makeMinimalMeasurements()
-	config := processor.DefaultFilterConfig()
+	config := processor.DefaultEffectiveFilterConfig()
 	config.NoiseRemoveCompandEnabled = true
 	config.NoiseRemoveCompandThreshold = -55
 	config.NoiseRemoveCompandExpansion = 6
@@ -360,7 +360,7 @@ func TestDisplayAnalysisResults_CompanderEnabled(t *testing.T) {
 
 func TestDisplayAnalysisResults_TimingLabels(t *testing.T) {
 	m := makeMinimalMeasurements()
-	config := processor.DefaultFilterConfig()
+	config := processor.DefaultEffectiveFilterConfig()
 	timings := AnalysisTimings{
 		Analysis:     2 * time.Second,
 		Adaptation:   100 * time.Millisecond,
@@ -404,7 +404,7 @@ func TestCompleteAnalysisTimings_CapturesReportOutput(t *testing.T) {
 
 func TestDisplayAnalysisResults_ExcludesProcessingOnlyFields(t *testing.T) {
 	m := makeMinimalMeasurements()
-	config := processor.DefaultFilterConfig()
+	config := processor.DefaultEffectiveFilterConfig()
 	timings := AnalysisTimings{
 		Analysis:   2 * time.Second,
 		Adaptation: 100 * time.Millisecond,
@@ -447,7 +447,7 @@ func TestDisplayAnalysisResults_CapsSilenceCandidatesChronologicallyWithElectedF
 		MeasuredNoiseFloor: m.SilenceCandidates[0].RMSLevel,
 	}
 
-	config := processor.DefaultFilterConfig()
+	config := processor.DefaultEffectiveFilterConfig()
 	var buf bytes.Buffer
 	DisplayAnalysisResults(&buf, "/tmp/test.wav", makeMinimalMetadata(), m, config)
 	output := buf.String()
@@ -498,7 +498,7 @@ func TestDisplayAnalysisResults_CapsSpeechCandidatesChronologicallyWithElectedFi
 	m.SpeechCandidates[0].VoicingDensity = 0.82
 	m.SpeechProfile = &m.SpeechCandidates[0]
 
-	config := processor.DefaultFilterConfig()
+	config := processor.DefaultEffectiveFilterConfig()
 	var buf bytes.Buffer
 	DisplayAnalysisResults(&buf, "/tmp/test.wav", makeMinimalMetadata(), m, config)
 	output := buf.String()
@@ -549,7 +549,7 @@ func TestDisplayAnalysisResults_SpeechRejectionSummaryIncludesZeroScore(t *testi
 	m.SpeechCandidates[1].Score = 0.0
 	m.SpeechProfile = &m.SpeechCandidates[0]
 
-	config := processor.DefaultFilterConfig()
+	config := processor.DefaultEffectiveFilterConfig()
 	var buf bytes.Buffer
 	DisplayAnalysisResults(&buf, "/tmp/test.wav", makeMinimalMetadata(), m, config)
 	output := buf.String()
@@ -578,7 +578,7 @@ func TestDisplayAnalysisResults_SpeechDisplaySummaryIncludesZeroOmitted(t *testi
 	m.SpeechCandidates = makeRankedSpeechCandidates(4)
 	m.SpeechProfile = &m.SpeechCandidates[0]
 
-	config := processor.DefaultFilterConfig()
+	config := processor.DefaultEffectiveFilterConfig()
 	var buf bytes.Buffer
 	DisplayAnalysisResults(&buf, "/tmp/test.wav", makeMinimalMetadata(), m, config)
 	output := buf.String()

@@ -238,7 +238,7 @@ func TestMeasureWithLoudnormStopsCaptureOnOpenError(t *testing.T) {
 		},
 	)
 
-	_, err := measureWithLoudnorm("/does/not/exist.wav", DefaultFilterConfig(), "", nil)
+	_, err := measureWithLoudnorm("/does/not/exist.wav", DefaultEffectiveFilterConfig(), "", nil)
 	if err == nil {
 		t.Fatal("measureWithLoudnorm() error = nil, want open error")
 	}
@@ -300,7 +300,7 @@ func TestMeasureWithLoudnormLoopErrorFreesGraphBeforeStoppingCapture(t *testing.
 		loudnormRunFilterGraph = oldRun
 	})
 
-	_, err := measureWithLoudnorm(testFile, DefaultFilterConfig(), "", nil)
+	_, err := measureWithLoudnorm(testFile, DefaultEffectiveFilterConfig(), "", nil)
 	if !errors.Is(err, runErr) {
 		t.Fatalf("measureWithLoudnorm() error = %v, want wrapped run error", err)
 	}
@@ -481,7 +481,7 @@ func (e *loudnormTestEncoder) Close() error {
 }
 
 func loudnormApplicationTestConfig() *FilterChainConfig {
-	config := DefaultFilterConfig()
+	config := DefaultEffectiveFilterConfig()
 	config.AdeclickEnabled = false
 	return config
 }
@@ -1200,7 +1200,7 @@ func TestBuildLoudnormFilterSpec_PreGain(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config := DefaultFilterConfig()
+			config := DefaultEffectiveFilterConfig()
 			measurement := &LoudnormMeasurement{
 				InputI:       tt.inputI,
 				InputTP:      tt.inputTP,
@@ -1282,7 +1282,7 @@ func TestBuildLoudnormFilterSpec_PreGain(t *testing.T) {
 }
 
 func TestBuildLoudnormFilterSpec_DoesNotMutateConfig(t *testing.T) {
-	config := DefaultFilterConfig()
+	config := DefaultEffectiveFilterConfig()
 	config.ResampleEnabled = false
 	config.ResampleSampleRate = 48000
 	config.ResampleFormat = "s32"
@@ -1318,7 +1318,7 @@ func TestBuildLoudnormFilterSpec_Adeclick(t *testing.T) {
 	}
 
 	t.Run("uses Pass 4 adeclick helper", func(t *testing.T) {
-		config := DefaultFilterConfig()
+		config := DefaultEffectiveFilterConfig()
 
 		filterSpec := buildLoudnormFilterSpec(config, measurement, 0, -1.0, false)
 
@@ -1329,7 +1329,7 @@ func TestBuildLoudnormFilterSpec_Adeclick(t *testing.T) {
 	})
 
 	t.Run("omits disabled adeclick", func(t *testing.T) {
-		config := DefaultFilterConfig()
+		config := DefaultEffectiveFilterConfig()
 		config.AdeclickEnabled = false
 
 		filterSpec := buildLoudnormFilterSpec(config, measurement, 0, -1.0, false)
@@ -1518,7 +1518,7 @@ func TestClampedTargetPropagation_Arithmetic(t *testing.T) {
 			}
 
 			// Step 4: verify buildLoudnormFilterSpec receives the full target
-			config := DefaultFilterConfig()
+			config := DefaultEffectiveFilterConfig()
 			config.LoudnormTargetI = effectiveTargetI
 			measurement := &LoudnormMeasurement{
 				InputI:       tt.measuredI,

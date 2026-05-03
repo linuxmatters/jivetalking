@@ -399,7 +399,7 @@ func detectContentType(m *AudioMeasurements) ContentType {
 // AdaptConfig tunes all filter parameters based on Pass 1 measurements.
 // This is the main entry point for adaptive configuration.
 // It returns a per-file effective config without mutating the caller's base seed.
-func AdaptConfig(config *FilterChainConfig, measurements *AudioMeasurements) *FilterChainConfig {
+func AdaptConfig(config *BaseFilterConfig, measurements *AudioMeasurements) *FilterChainConfig {
 	effectiveConfig := derivePerFileConfig(config)
 	if effectiveConfig == nil {
 		return nil
@@ -869,7 +869,13 @@ func tuneDeesserCentroidOnly(config *FilterChainConfig, measurements *AudioMeasu
 //   - Makeup: 1.0 (loudness normalisation handles level compensation)
 func tuneDS201Gate(config *FilterChainConfig, measurements *AudioMeasurements) {
 	config.DS201GateGentleMode = false
-	resetDS201GateDiagnostics(config)
+	config.DS201GateAggression = 0
+	config.DS201GateDynamicRange = 0
+	config.DS201GateQuietSpeechEstimate = 0
+	config.DS201GateSpeechSeparation = 0
+	config.DS201GateSpeechHeadroom = 0
+	config.DS201GateThresholdUnclamped = 0
+	config.DS201GateClampReason = ""
 
 	// Extract silence sample characteristics for gate tuning
 	var silenceEntropy, silenceCrest, silencePeak float64
