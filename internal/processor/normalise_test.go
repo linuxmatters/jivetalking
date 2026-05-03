@@ -719,8 +719,8 @@ func TestApplyLoudnormAndMeasureCloseErrorFreesGraphBeforeStoppingCapture(t *tes
 	if gotOrder := recorder.orderString(); gotOrder != "free,stop" {
 		t.Fatalf("cleanup order = %s, want free,stop", gotOrder)
 	}
-	if encoder.closeN != 2 {
-		t.Fatalf("encoder close calls = %d, want 2", encoder.closeN)
+	if encoder.closeN != 1 {
+		t.Fatalf("encoder close calls = %d, want 1", encoder.closeN)
 	}
 	requireLoudnormCaptureStoppedOnce(t, recorder)
 }

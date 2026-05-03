@@ -730,11 +730,11 @@ func applyLoudnormAndMeasure(
 	}
 
 	// Close encoder before rename
+	encoderClosed = true
 	if err := encoder.Close(); err != nil {
 		loudnormAVFilterGraphFree(&filterGraph)
 		return 0.0, 0.0, nil, getLoudnormStats(), 0, fmt.Errorf("failed to close encoder: %w", err)
 	}
-	encoderClosed = true
 
 	// Atomic rename: temp file → original file (in-place update)
 	if err := loudnormRename(tempPath, inputPath); err != nil {
