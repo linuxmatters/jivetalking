@@ -34,7 +34,6 @@ const (
 	// Processing filters (Pass 2 only)
 	FilterLA2ACompressor FilterID = "la2a_compressor" // Teletronix LA-2A style optical compressor
 	FilterDeesser        FilterID = "deesser"
-	FilterAdeclick       FilterID = "adeclick" // Click/pop repair via interpolation
 )
 
 // Pass1FilterOrder defines the filter chain for analysis pass.
@@ -113,7 +112,6 @@ var filterBuilders = map[FilterID]filterBuilderFunc{
 	FilterDS201Gate:      (*FilterChainConfig).buildDS201GateFilter,
 	FilterLA2ACompressor: (*FilterChainConfig).buildLA2ACompressorFilter,
 	FilterDeesser:        (*FilterChainConfig).buildDeesserFilter,
-	FilterAdeclick:       (*FilterChainConfig).buildAdeclickFilter,
 }
 
 // PassNumber identifies which processing pass is being executed.
