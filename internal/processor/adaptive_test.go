@@ -85,6 +85,158 @@ func TestAdaptConfigReturnsEffectiveConfig(t *testing.T) {
 	}
 }
 
+func TestAdaptConfigOrderIndependence(t *testing.T) {
+	sharedSeed := newOrderIndependenceSeed()
+	fileA := orderIndependenceWarmNoProfileMeasurements()
+	fileB := orderIndependenceBrightSpeechMeasurements()
+
+	firstEffective := AdaptConfig(sharedSeed, fileA)
+	if firstEffective == nil {
+		t.Fatal("AdaptConfig returned nil for file A")
+	}
+	if !firstEffective.DS201GateGentleMode {
+		t.Fatal("file A setup failed: expected gentle gate mode")
+	}
+	if firstEffective.NoiseRemoveCompandEnabled {
+		t.Fatal("file A setup failed: expected compand disabled without a noise profile")
+	}
+	if !firstEffective.LA2AHighCrestActive {
+		t.Fatal("file A setup failed: expected high-crest diagnostics active")
+	}
+
+	afterA := AdaptConfig(sharedSeed, fileB)
+	alone := AdaptConfig(newOrderIndependenceSeed(), fileB)
+	if afterA == nil || alone == nil {
+		t.Fatal("AdaptConfig returned nil for file B")
+	}
+
+	if afterA == sharedSeed {
+		t.Fatal("AdaptConfig returned shared seed for file B after file A")
+	}
+	if alone == sharedSeed {
+		t.Fatal("AdaptConfig returned shared seed for file B alone")
+	}
+
+	assertOrderIndependentAdaptiveFields(t, afterA, alone)
+
+	if sharedSeed.DS201GateGentleMode {
+		t.Fatal("shared seed retained file A gentle gate state")
+	}
+	if !sharedSeed.NoiseRemoveCompandEnabled {
+		t.Fatal("shared seed retained file A compand disabled state")
+	}
+	if sharedSeed.LA2AHighCrestActive {
+		t.Fatal("shared seed retained file A high-crest state")
+	}
+}
+
+func newOrderIndependenceSeed() *FilterChainConfig {
+	config := newTestConfig()
+	config.DS201HPEnabled = true
+	config.DS201LPEnabled = true
+	config.NoiseRemoveEnabled = true
+	config.DS201GateEnabled = true
+	config.LA2AEnabled = true
+	config.LoudnormTargetTP = -2.0
+	return config
+}
+
+func orderIndependenceWarmNoProfileMeasurements() *AudioMeasurements {
+	return &AudioMeasurements{
+		BaseMeasurements: BaseMeasurements{
+			SpectralCentroid: 6500,
+			SpectralDecrease: -0.12,
+			SpectralSkewness: 1.6,
+			SpectralKurtosis: 4.0,
+			SpectralFlatness: 0.62,
+			SpectralFlux:     0.008,
+			SpectralCrest:    20.0,
+			SpectralRolloff:  18000,
+			DynamicRange:     90.0,
+			PeakLevel:        -10.0,
+		},
+		InputI:     -42.1,
+		InputTP:    -4.9,
+		InputLRA:   6.0,
+		NoiseFloor: -58.0,
+	}
+}
+
+func orderIndependenceBrightSpeechMeasurements() *AudioMeasurements {
+	return &AudioMeasurements{
+		BaseMeasurements: BaseMeasurements{
+			SpectralCentroid:  5000,
+			SpectralDecrease:  0.0,
+			SpectralSkewness:  0.0,
+			SpectralKurtosis:  9.0,
+			SpectralFlatness:  0.38,
+			SpectralFlux:      0.002,
+			SpectralCrest:     45.0,
+			SpectralRolloff:   15000,
+			DynamicRange:      32.0,
+			PeakLevel:         -6.0,
+			ZeroCrossingsRate: 0.05,
+		},
+		InputI:     -20.0,
+		InputTP:    -2.5,
+		InputLRA:   12.0,
+		NoiseFloor: -60.0,
+		NoiseProfile: &NoiseProfile{
+			MeasuredNoiseFloor: -60.0,
+			PeakLevel:          -45.0,
+			CrestFactor:        15.0,
+			Entropy:            0.8,
+		},
+		SpeechProfile: &SpeechCandidateMetrics{
+			RMSLevel:    -24.0,
+			CrestFactor: 12.0,
+			Spectral: SpectralMetrics{
+				Centroid: 5000,
+				Decrease: 0.0,
+				Skewness: 0.0,
+				Kurtosis: 9.0,
+				Flux:     0.002,
+				Rolloff:  15000,
+			},
+		},
+	}
+}
+
+func assertOrderIndependentAdaptiveFields(t *testing.T, got, want *FilterChainConfig) {
+	t.Helper()
+
+	tests := []struct {
+		name string
+		got  any
+		want any
+	}{
+		{"DS201HPFreq", got.DS201HPFreq, want.DS201HPFreq},
+		{"DS201HPPoles", got.DS201HPPoles, want.DS201HPPoles},
+		{"DS201HPWidth", got.DS201HPWidth, want.DS201HPWidth},
+		{"DS201HPMix", got.DS201HPMix, want.DS201HPMix},
+		{"DS201HPTransform", got.DS201HPTransform, want.DS201HPTransform},
+		{"DS201GateGentleMode", got.DS201GateGentleMode, want.DS201GateGentleMode},
+		{"NoiseRemoveCompandEnabled", got.NoiseRemoveCompandEnabled, want.NoiseRemoveCompandEnabled},
+		{"NoiseRemoveCompandThreshold", got.NoiseRemoveCompandThreshold, want.NoiseRemoveCompandThreshold},
+		{"NoiseRemoveCompandExpansion", got.NoiseRemoveCompandExpansion, want.NoiseRemoveCompandExpansion},
+		{"DS201LPEnabled", got.DS201LPEnabled, want.DS201LPEnabled},
+		{"DS201LPFreq", got.DS201LPFreq, want.DS201LPFreq},
+		{"DS201LPContentType", got.DS201LPContentType, want.DS201LPContentType},
+		{"DS201LPReason", got.DS201LPReason, want.DS201LPReason},
+		{"DS201LPRolloffRatio", got.DS201LPRolloffRatio, want.DS201LPRolloffRatio},
+		{"LA2AHighCrestActive", got.LA2AHighCrestActive, want.LA2AHighCrestActive},
+		{"LA2AHighCrestDeficit", got.LA2AHighCrestDeficit, want.LA2AHighCrestDeficit},
+		{"LA2AHighCrestSeverity", got.LA2AHighCrestSeverity, want.LA2AHighCrestSeverity},
+		{"LA2AHighCrestProjectedTP", got.LA2AHighCrestProjectedTP, want.LA2AHighCrestProjectedTP},
+	}
+
+	for _, tt := range tests {
+		if !reflect.DeepEqual(tt.got, tt.want) {
+			t.Errorf("%s = %v, want %v", tt.name, tt.got, tt.want)
+		}
+	}
+}
+
 func TestTuneDS201HighPass(t *testing.T) {
 	// Helper to create noise profile with given characteristics
 	makeNoiseProfile := func(noiseFloor, entropy float64) *NoiseProfile {
