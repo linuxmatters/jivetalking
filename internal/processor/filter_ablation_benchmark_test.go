@@ -254,7 +254,6 @@ func fullbenchPass2AblationVariants() []fullbenchPass2AblationVariant {
 			BuildSpec: func(config *EffectiveFilterConfig) string {
 				ablated := *config
 				ablated.AnalysisEnabled = false
-				ablated.OutputAnalysisEnabled = false
 				return ablated.BuildFilterSpec()
 			},
 		},
@@ -396,7 +395,7 @@ func buildFullbenchPass4ResampleFilter(config *EffectiveFilterConfig) string {
 func buildFullbenchProductionPass4SpecWithoutAdeclick(config *EffectiveFilterConfig, measurement *LoudnormMeasurement) string {
 	pass4Config := *config
 	pass4Config.AdeclickEnabled = false
-	return buildLoudnormFilterSpec(&pass4Config.FilterChainConfig, measurement, 0, 0, false)
+	return buildLoudnormFilterSpec(&pass4Config, measurement, 0, 0, false)
 }
 
 func extractFullbenchFilterClause(spec, prefix string) string {
@@ -421,7 +420,6 @@ func TestFullbenchPass2AblationSpecs(t *testing.T) {
 	config.DeessEnabled = true
 	config.DeessIntensity = 0.5
 	config.AnalysisEnabled = true
-	config.OutputAnalysisEnabled = true
 	config.ResampleEnabled = true
 	config.FilterOrder = Pass2FilterOrder
 
@@ -552,7 +550,7 @@ func TestFullbenchLoudnormClauseMatchesProduction(t *testing.T) {
 	productionConfig := *config
 	productionConfig.AdeclickEnabled = false
 	productionClause := extractFullbenchFilterClause(
-		buildLoudnormFilterSpec(&productionConfig, measurement, 0, 0, false),
+		buildLoudnormFilterSpec(effectiveFromFilterChainConfig(&productionConfig), measurement, 0, 0, false),
 		"loudnorm=",
 	)
 	benchmarkClause := buildFullbenchLoudnormClause(effectiveFromFilterChainConfig(config), measurement)
@@ -919,10 +917,9 @@ func setupFullbenchAdaptedConfig(tb testing.TB, inputPath string) *fullbenchAdap
 
 	analysisResult.Config.Pass = PassProcessing
 	analysisResult.Config.FilterOrder = Pass2FilterOrder
-	analysisResult.Config.OutputAnalysisEnabled = true
 
 	return &fullbenchAdaptedSetup{
-		Config:       analysisResult.Config,
+		Config:       &analysisResult.Config.FilterChainConfig,
 		Measurements: analysisResult.Measurements,
 	}
 }
@@ -938,7 +935,6 @@ func setupFullbenchPass2Seed(tb testing.TB, inputPath string, adapted *fullbench
 	config.Pass = PassProcessing
 	config.FilterOrder = Pass2FilterOrder
 	config.AnalysisEnabled = true
-	config.OutputAnalysisEnabled = true
 
 	outputPath := filepath.Join(tb.TempDir(), "fullbench-pass2-seed.flac")
 	inputMetadata, outputMeasurements := runFullbenchFilterSpec(
@@ -985,7 +981,7 @@ func setupFullbenchLoudnormMeasurement(tb testing.TB, seed *fullbenchPass2Seed) 
 	}
 
 	filterPrefix := buildPreLimiterPrefix(preGainDB, limiterCeiling, limiterNeeded)
-	measurement, err := measureWithLoudnorm(seed.OutputPath, &config, filterPrefix, nil)
+	measurement, err := measureWithLoudnorm(seed.OutputPath, effectiveFromFilterChainConfig(&config), filterPrefix, nil)
 	if err != nil {
 		tb.Fatalf("failed to prepare fullbench loudnorm measurement: %v", err)
 	}

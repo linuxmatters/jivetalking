@@ -16,7 +16,8 @@ import (
 // AnalysisResult contains analysis-only measurements and stage timings.
 type AnalysisResult struct {
 	Measurements       *AudioMeasurements
-	Config             *FilterChainConfig
+	Config             *EffectiveFilterConfig
+	Diagnostics        *AdaptiveDiagnostics
 	AnalysisDuration   time.Duration
 	AdaptationDuration time.Duration
 }
@@ -31,8 +32,7 @@ func AnalyzeOnlyDetailed(inputPath string, config *BaseFilterConfig,
 	}
 
 	analysisStart := time.Now()
-	analysisConfig := derivePerFileConfig(config)
-	measurements, err := AnalyzeAudio(inputPath, analysisConfig, progressCallback)
+	measurements, err := AnalyzeAudio(inputPath, config, progressCallback)
 	if err != nil {
 		return nil, fmt.Errorf("analysis failed: %w", err)
 	}
@@ -44,16 +44,13 @@ func AnalyzeOnlyDetailed(inputPath string, config *BaseFilterConfig,
 
 	// Adapt config to show what would be used in Pass 2
 	adaptationStart := time.Now()
-	effectiveConfig, _ := AdaptConfig(config, measurements)
+	effectiveConfig, diagnostics := AdaptConfig(config, measurements)
 	adaptationDuration := time.Since(adaptationStart)
-	var resultConfig *FilterChainConfig
-	if effectiveConfig != nil {
-		resultConfig = &effectiveConfig.FilterChainConfig
-	}
 
 	return &AnalysisResult{
 		Measurements:       measurements,
-		Config:             resultConfig,
+		Config:             effectiveConfig,
+		Diagnostics:        diagnostics,
 		AnalysisDuration:   analysisDuration,
 		AdaptationDuration: adaptationDuration,
 	}, nil
@@ -72,8 +69,7 @@ func ProcessAudio(inputPath string, config *BaseFilterConfig, progressCallback f
 		progressCallback(PassAnalysis, "Analyzing", 0.0, 0.0, nil)
 	}
 
-	analysisConfig := derivePerFileConfig(config)
-	measurements, err := AnalyzeAudio(inputPath, analysisConfig, progressCallback)
+	measurements, err := AnalyzeAudio(inputPath, config, progressCallback)
 	if err != nil {
 		return nil, fmt.Errorf("pass 1 failed: %w", err)
 	}
@@ -83,11 +79,10 @@ func ProcessAudio(inputPath string, config *BaseFilterConfig, progressCallback f
 	}
 
 	// Adapt filter configuration based on Pass 1 measurements
-	effectiveConfig, _ := AdaptConfig(config, measurements)
+	effectiveConfig, diagnostics := AdaptConfig(config, measurements)
 	if effectiveConfig == nil {
 		return nil, fmt.Errorf("adaptive config failed")
 	}
-	filterConfig := &effectiveConfig.FilterChainConfig
 
 	// Pass 2: Processing
 	if progressCallback != nil {
@@ -97,18 +92,15 @@ func ProcessAudio(inputPath string, config *BaseFilterConfig, progressCallback f
 	// Generate output filename: input.flac → input-processed.flac
 	outputPath := generateOutputPath(inputPath)
 
-	// Enable output analysis to measure processed audio characteristics
-	filterConfig.OutputAnalysisEnabled = true
-
 	// Set Pass 2 configuration for filter chain
-	filterConfig.Pass = PassProcessing
-	filterConfig.FilterOrder = append([]FilterID(nil), Pass2FilterOrder...)
+	effectiveConfig.Pass = PassProcessing
+	effectiveConfig.FilterOrder = append([]FilterID(nil), Pass2FilterOrder...)
 
 	// Track output measurements from Pass 2 (filtered but not yet normalised)
 	var filteredMeasurements *OutputMeasurements
 	var regionTimings RegionMeasurementTimings
 
-	inputMetadata, err := processWithFilters(inputPath, outputPath, filterConfig, progressCallback, measurements, &filteredMeasurements)
+	inputMetadata, err := processWithFilters(inputPath, outputPath, effectiveConfig, progressCallback, measurements, &filteredMeasurements)
 	if err != nil {
 		return nil, fmt.Errorf("pass 2 failed: %w", err)
 	}
@@ -133,7 +125,7 @@ func ProcessAudio(inputPath string, config *BaseFilterConfig, progressCallback f
 	// The FinalMeasurements in the result include region measurements captured in Pass 4
 	var normResult *NormalisationResult
 	if filteredMeasurements != nil {
-		normResult, err = ApplyNormalisation(outputPath, filterConfig, filteredMeasurements, measurements, progressCallback)
+		normResult, err = ApplyNormalisation(outputPath, effectiveConfig, filteredMeasurements, measurements, progressCallback)
 		if err != nil {
 			return nil, fmt.Errorf("pass 3 failed: %w", err)
 		}
@@ -147,7 +139,8 @@ func ProcessAudio(inputPath string, config *BaseFilterConfig, progressCallback f
 		OutputLUFS:           0.0, // Will be set to final value below
 		NoiseFloor:           measurements.NoiseFloor,
 		Measurements:         measurements,
-		Config:               filterConfig, // Include per-file config for logging adaptive parameters
+		Config:               effectiveConfig, // Include per-file config for logging adaptive parameters
+		Diagnostics:          diagnostics,
 		InputMetadata:        inputMetadata,
 		RegionTimings:        regionTimings,
 		FilteredMeasurements: filteredMeasurements,
@@ -192,12 +185,13 @@ type ProcessingResult struct {
 	OutputLUFS   float64 // Final output loudness (after normalisation if applied)
 	NoiseFloor   float64
 	Measurements *AudioMeasurements
-	Config       *FilterChainConfig // Contains adaptive parameters used
+	Config       *EffectiveFilterConfig // Contains adaptive parameters used
+	Diagnostics  *AdaptiveDiagnostics
 
 	InputMetadata InputMetadata
 	RegionTimings RegionMeasurementTimings
 
-	// Pass 2 output analysis (populated when OutputAnalysisEnabled is true)
+	// Pass 2 output analysis (populated when requested by the processing pass)
 	// Contains measurements after filter chain but before normalisation
 	FilteredMeasurements *OutputMeasurements
 
@@ -209,8 +203,8 @@ type ProcessingResult struct {
 // processWithFilters performs audio processing using the standard single-input filter graph.
 // Applies the filter chain built by BuildFilterSpec() which includes asendcmd for noise profile learning
 // when NoiseProfileStart/End timestamps are set in the config.
-// If outputMeasurements is non-nil and config.OutputAnalysisEnabled is true, populates it with Pass 2 output analysis.
-func processWithFilters(inputPath, outputPath string, config *FilterChainConfig, progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements), measurements *AudioMeasurements, outputMeasurements **OutputMeasurements) (InputMetadata, error) {
+// If outputMeasurements is non-nil, populates it with Pass 2 output analysis.
+func processWithFilters(inputPath, outputPath string, config *EffectiveFilterConfig, progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements), measurements *AudioMeasurements, outputMeasurements **OutputMeasurements) (InputMetadata, error) {
 	// Open input audio file
 	reader, metadata, err := audio.OpenAudioFile(inputPath)
 	if err != nil {
@@ -237,7 +231,7 @@ func processWithFilters(inputPath, outputPath string, config *FilterChainConfig,
 	// (no measure-only mode). Loudnorm measurement is done separately in Pass 3.
 	filterGraph, bufferSrcCtx, bufferSinkCtx, err := CreateProcessingFilterGraph(
 		reader.GetDecoderContext(),
-		effectiveFromFilterChainConfig(config),
+		config,
 	)
 	if err != nil {
 		return InputMetadata{}, fmt.Errorf("failed to create filter graph: %w", err)
@@ -251,9 +245,9 @@ func processWithFilters(inputPath, outputPath string, config *FilterChainConfig,
 	}
 	defer encoder.Close()
 
-	// Initialize output measurement accumulators if output analysis is enabled
+	// Initialize output measurement accumulators if the caller requested output analysis.
 	var outputAcc *outputMetadataAccumulators
-	if config.OutputAnalysisEnabled && outputMeasurements != nil {
+	if outputMeasurements != nil {
 		outputAcc = &outputMetadataAccumulators{}
 	}
 

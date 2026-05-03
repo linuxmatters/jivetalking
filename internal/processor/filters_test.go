@@ -1038,9 +1038,6 @@ func TestAssembleEffectiveFilterConfig(t *testing.T) {
 	if effective.Measurements != nil {
 		t.Errorf("Measurements = %p, want nil", effective.Measurements)
 	}
-	if effective.OutputAnalysisEnabled {
-		t.Error("OutputAnalysisEnabled = true, want false")
-	}
 	assertCompatibilityDiagnosticsClear(t, &effective.FilterChainConfig)
 }
 
@@ -1061,10 +1058,6 @@ func TestDerivePerFileConfig(t *testing.T) {
 	if derived.Measurements != nil {
 		t.Errorf("Measurements = %p, want nil", derived.Measurements)
 	}
-	if derived.OutputAnalysisEnabled {
-		t.Error("OutputAnalysisEnabled = true, want false")
-	}
-
 	if !reflect.DeepEqual(derived.FilterOrder, base.FilterOrder) {
 		t.Errorf("FilterOrder = %v, want %v", derived.FilterOrder, base.FilterOrder)
 	}

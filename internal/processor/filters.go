@@ -256,9 +256,8 @@ type AdaptiveDiagnostics struct {
 
 // ProcessingFilterContext holds pass execution state outside caller-owned defaults.
 type ProcessingFilterContext struct {
-	Pass                  PassNumber
-	Measurements          *AudioMeasurements
-	OutputAnalysisEnabled bool
+	Pass         PassNumber
+	Measurements *AudioMeasurements
 }
 
 // filterBuilderFunc is a function that builds a filter spec from effective config.
@@ -394,10 +393,6 @@ type FilterChainConfig struct {
 
 	// Pass 1 measurements (nil for first pass)
 	Measurements *AudioMeasurements
-
-	// Output Analysis - enables astats/ebur128/aspectralstats at end of Pass 2 filter chain
-	// When enabled, measurements are extracted from processed audio for comparison with Pass 1
-	OutputAnalysisEnabled bool
 
 	// Temporary compatibility for report consumers until diagnostics are routed
 	// explicitly through ProcessingResult.

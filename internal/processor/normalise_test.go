@@ -238,7 +238,7 @@ func TestMeasureWithLoudnormStopsCaptureOnOpenError(t *testing.T) {
 		},
 	)
 
-	_, err := measureWithLoudnorm("/does/not/exist.wav", DefaultEffectiveFilterConfig(), "", nil)
+	_, err := measureWithLoudnorm("/does/not/exist.wav", defaultNormalisationTestConfig(), "", nil)
 	if err == nil {
 		t.Fatal("measureWithLoudnorm() error = nil, want open error")
 	}
@@ -300,7 +300,7 @@ func TestMeasureWithLoudnormLoopErrorFreesGraphBeforeStoppingCapture(t *testing.
 		loudnormRunFilterGraph = oldRun
 	})
 
-	_, err := measureWithLoudnorm(testFile, DefaultEffectiveFilterConfig(), "", nil)
+	_, err := measureWithLoudnorm(testFile, defaultNormalisationTestConfig(), "", nil)
 	if !errors.Is(err, runErr) {
 		t.Fatalf("measureWithLoudnorm() error = %v, want wrapped run error", err)
 	}
@@ -480,8 +480,12 @@ func (e *loudnormTestEncoder) Close() error {
 	return e.closeErr
 }
 
-func loudnormApplicationTestConfig() *FilterChainConfig {
-	config := DefaultEffectiveFilterConfig()
+func defaultNormalisationTestConfig() *EffectiveFilterConfig {
+	return effectiveFromFilterChainConfig(DefaultEffectiveFilterConfig())
+}
+
+func loudnormApplicationTestConfig() *EffectiveFilterConfig {
+	config := defaultNormalisationTestConfig()
 	config.AdeclickEnabled = false
 	return config
 }
@@ -1200,7 +1204,7 @@ func TestBuildLoudnormFilterSpec_PreGain(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config := DefaultEffectiveFilterConfig()
+			config := defaultNormalisationTestConfig()
 			measurement := &LoudnormMeasurement{
 				InputI:       tt.inputI,
 				InputTP:      tt.inputTP,
@@ -1282,7 +1286,7 @@ func TestBuildLoudnormFilterSpec_PreGain(t *testing.T) {
 }
 
 func TestBuildLoudnormFilterSpec_DoesNotMutateConfig(t *testing.T) {
-	config := DefaultEffectiveFilterConfig()
+	config := defaultNormalisationTestConfig()
 	config.ResampleEnabled = false
 	config.ResampleSampleRate = 48000
 	config.ResampleFormat = "s32"
@@ -1318,7 +1322,7 @@ func TestBuildLoudnormFilterSpec_Adeclick(t *testing.T) {
 	}
 
 	t.Run("uses Pass 4 adeclick helper", func(t *testing.T) {
-		config := DefaultEffectiveFilterConfig()
+		config := defaultNormalisationTestConfig()
 
 		filterSpec := buildLoudnormFilterSpec(config, measurement, 0, -1.0, false)
 
@@ -1329,7 +1333,7 @@ func TestBuildLoudnormFilterSpec_Adeclick(t *testing.T) {
 	})
 
 	t.Run("omits disabled adeclick", func(t *testing.T) {
-		config := DefaultEffectiveFilterConfig()
+		config := defaultNormalisationTestConfig()
 		config.AdeclickEnabled = false
 
 		filterSpec := buildLoudnormFilterSpec(config, measurement, 0, -1.0, false)
@@ -1338,6 +1342,40 @@ func TestBuildLoudnormFilterSpec_Adeclick(t *testing.T) {
 			t.Errorf("buildLoudnormFilterSpec() emitted disabled adeclick\nfilterSpec: %s", filterSpec)
 		}
 	})
+}
+
+func TestBuildLoudnormFilterSpecIgnoresPassStateAndDiagnostics(t *testing.T) {
+	measurement := &LoudnormMeasurement{
+		InputI:       -24.0,
+		InputTP:      -5.0,
+		InputLRA:     6.0,
+		InputThresh:  -34.0,
+		TargetOffset: -0.5,
+	}
+
+	base := defaultNormalisationTestConfig()
+	controlSpec := buildLoudnormFilterSpec(base, measurement, 0, -1.0, false)
+
+	withPassState := *base
+	withPassState.Pass = PassAnalysis
+	withPassState.Measurements = &AudioMeasurements{InputI: -99.0}
+	withPassState.AdaptiveDiagnostics = AdaptiveDiagnostics{
+		DS201LPReason:            "diagnostic-only low-pass reason",
+		DS201GateClampReason:     "diagnostic-only gate reason",
+		LA2AHighCrestActive:      true,
+		LA2AHighCrestDeficit:     12.0,
+		LA2AHighCrestSeverity:    0.8,
+		LA2AHighCrestProjectedTP: -0.5,
+	}
+	withPassState.FilterOrder = []FilterID{FilterAnalysis}
+	withPassState.DS201LPFreq = 12000
+	withPassState.DS201GateRatio = 4.0
+	withPassState.LA2AThreshold = -30.0
+
+	gotSpec := buildLoudnormFilterSpec(&withPassState, measurement, 0, -1.0, false)
+	if gotSpec != controlSpec {
+		t.Fatalf("buildLoudnormFilterSpec() changed when pass state or diagnostics changed\ncontrol: %s\ngot:     %s", controlSpec, gotSpec)
+	}
 }
 
 func TestPreGainCeilingRederivation(t *testing.T) {
@@ -1518,7 +1556,7 @@ func TestClampedTargetPropagation_Arithmetic(t *testing.T) {
 			}
 
 			// Step 4: verify buildLoudnormFilterSpec receives the full target
-			config := DefaultEffectiveFilterConfig()
+			config := defaultNormalisationTestConfig()
 			config.LoudnormTargetI = effectiveTargetI
 			measurement := &LoudnormMeasurement{
 				InputI:       tt.measuredI,

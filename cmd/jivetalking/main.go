@@ -321,7 +321,11 @@ func runAnalysisOnlyWithDeps(files []string, config *processor.BaseFilterConfig,
 			Analysis:   analysisResult.AnalysisDuration,
 			Adaptation: analysisResult.AdaptationDuration,
 		}
-		deps.displayResults(deps.stdout, inputPath, metadata, analysisResult.Measurements, analysisResult.Config, timings)
+		var displayConfig *processor.FilterChainConfig
+		if analysisResult.Config != nil {
+			displayConfig = &analysisResult.Config.FilterChainConfig
+		}
+		deps.displayResults(deps.stdout, inputPath, metadata, analysisResult.Measurements, displayConfig, timings)
 	}
 }
 

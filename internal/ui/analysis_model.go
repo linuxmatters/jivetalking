@@ -31,7 +31,7 @@ type AnalysisModel struct {
 	// Results (populated when complete)
 	Result       *processor.AnalysisResult
 	Measurements *processor.AudioMeasurements
-	Config       *processor.FilterChainConfig
+	Config       *processor.EffectiveFilterConfig
 	Error        error
 	Done         bool
 
@@ -56,7 +56,7 @@ type AnalysisProgressMsg struct {
 type AnalysisCompleteMsg struct {
 	Result       *processor.AnalysisResult
 	Measurements *processor.AudioMeasurements
-	Config       *processor.FilterChainConfig
+	Config       *processor.EffectiveFilterConfig
 	Error        error
 }
 

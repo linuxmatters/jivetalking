@@ -191,7 +191,7 @@ type LoudnormMeasurement struct {
 // Returns:
 //   - measurement: Loudnorm measurements for second pass
 //   - err: Error if measurement failed
-func measureWithLoudnorm(inputPath string, config *FilterChainConfig, filterPrefix string, progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements)) (*LoudnormMeasurement, error) {
+func measureWithLoudnorm(inputPath string, config *EffectiveFilterConfig, filterPrefix string, progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements)) (*LoudnormMeasurement, error) {
 	// Start capturing loudnorm log output
 	capture := beginLoudnormCapture()
 	defer capture.StopDiscard()
@@ -506,7 +506,7 @@ type NormalisationResult struct {
 //   - err: Error if normalisation failed
 func ApplyNormalisation(
 	inputPath string,
-	config *FilterChainConfig,
+	config *EffectiveFilterConfig,
 	outputMeasurements *OutputMeasurements,
 	inputMeasurements *AudioMeasurements,
 	progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements),
@@ -627,7 +627,7 @@ func ApplyNormalisation(
 // and loudnorm diagnostic stats.
 func applyLoudnormAndMeasure(
 	inputPath string,
-	config *FilterChainConfig,
+	config *EffectiveFilterConfig,
 	measurement *LoudnormMeasurement,
 	inputMeasurements *AudioMeasurements,
 	preGainDB float64,
@@ -788,7 +788,7 @@ func applyLoudnormAndMeasure(
 //
 // Per ffmpeg-loudnorm-helper: the offset parameter MUST come from loudnorm's own
 // first pass measurement, not from external calculations.
-func buildLoudnormFilterSpec(config *FilterChainConfig, measurement *LoudnormMeasurement, preGainDB float64, ceiling float64, needsLimiting bool) string {
+func buildLoudnormFilterSpec(config *EffectiveFilterConfig, measurement *LoudnormMeasurement, preGainDB float64, ceiling float64, needsLimiting bool) string {
 	var filters []string
 
 	// 1. Build pre-limiter prefix (volume + alimiter) from pre-computed values

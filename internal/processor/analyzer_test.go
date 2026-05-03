@@ -29,7 +29,7 @@ func TestAnalyzeAudio(t *testing.T) {
 	defer cleanupTestAudio(t, testFile)
 
 	// Use test config with podcast standard targets
-	config := newTestConfig()
+	config := newTestBaseConfig()
 	config.AnalysisEnabled = true
 
 	t.Run("synthetic_tone_with_silence", func(t *testing.T) {
@@ -101,22 +101,17 @@ func TestAnalyzeAudioDoesNotMutateCallerConfig(t *testing.T) {
 	})
 	defer cleanupTestAudio(t, testFile)
 
-	seedMeasurements := &AudioMeasurements{InputI: -30.0}
-	config := DefaultEffectiveFilterConfig()
-	config.Pass = PassProcessing
+	config := DefaultFilterConfig()
 	config.FilterOrder = []FilterID{FilterNoiseRemove, FilterAnalysis}
-	config.Measurements = seedMeasurements
-	config.OutputAnalysisEnabled = true
+	config.SilenceScanDuration = 250 * time.Millisecond
 
 	originalOrder := append([]FilterID(nil), config.FilterOrder...)
+	originalSilenceScanDuration := config.SilenceScanDuration
 
 	if _, err := AnalyzeAudio(testFile, config, nil); err != nil {
 		t.Fatalf("AnalyzeAudio failed: %v", err)
 	}
 
-	if config.Pass != PassProcessing {
-		t.Errorf("Pass = %d, want %d", config.Pass, PassProcessing)
-	}
 	if len(config.FilterOrder) != len(originalOrder) {
 		t.Fatalf("FilterOrder length = %d, want %d", len(config.FilterOrder), len(originalOrder))
 	}
@@ -125,11 +120,8 @@ func TestAnalyzeAudioDoesNotMutateCallerConfig(t *testing.T) {
 			t.Errorf("FilterOrder[%d] = %q, want %q", i, config.FilterOrder[i], originalOrder[i])
 		}
 	}
-	if config.Measurements != seedMeasurements {
-		t.Errorf("Measurements = %p, want %p", config.Measurements, seedMeasurements)
-	}
-	if !config.OutputAnalysisEnabled {
-		t.Error("OutputAnalysisEnabled = false, want true")
+	if config.SilenceScanDuration != originalSilenceScanDuration {
+		t.Errorf("SilenceScanDuration = %v, want %v", config.SilenceScanDuration, originalSilenceScanDuration)
 	}
 }
 
@@ -2550,7 +2542,7 @@ func TestAnalyzeAudio_SilenceScanDuration(t *testing.T) {
 	// any non-determinism in floating-point reductions across runs.
 	const loudnessTolerance = 0.01
 
-	baselineConfig := newTestConfig()
+	baselineConfig := newTestBaseConfig()
 	baselineConfig.AnalysisEnabled = true
 
 	baseline, err := AnalyzeAudio(testFile, baselineConfig, nil)
@@ -2591,7 +2583,7 @@ func TestAnalyzeAudio_SilenceScanDuration(t *testing.T) {
 
 	t.Run("zero_matches_baseline", func(t *testing.T) {
 		// AC1 / AC5: explicit zero is identical to flag absent (no cap).
-		config := newTestConfig()
+		config := newTestBaseConfig()
 		config.AnalysisEnabled = true
 		config.SilenceScanDuration = 0
 
@@ -2620,7 +2612,7 @@ func TestAnalyzeAudio_SilenceScanDuration(t *testing.T) {
 		// AC6: with a cap of 2 s, the silence at 8-55 s falls outside the silence
 		// pipeline's view, so no candidates are formed and no profile is extracted.
 		// 2 s lands cleanly between the 1.75 s and 2.0 s interval start times.
-		config := newTestConfig()
+		config := newTestBaseConfig()
 		config.AnalysisEnabled = true
 		config.SilenceScanDuration = 2 * time.Second
 
@@ -2642,7 +2634,7 @@ func TestAnalyzeAudio_SilenceScanDuration(t *testing.T) {
 		// AC7: cap at 60 s comfortably covers the silence at 8-55 s, so the
 		// silence pipeline elects the same region as the uncapped run and
 		// produces the same NoiseProfile placement.
-		config := newTestConfig()
+		config := newTestBaseConfig()
 		config.AnalysisEnabled = true
 		config.SilenceScanDuration = 60 * time.Second
 
@@ -2670,7 +2662,7 @@ func TestAnalyzeAudio_SilenceScanDuration(t *testing.T) {
 		// elects the same region), whole-file measurements (loudness, true peak,
 		// LRA, speech regions, interval samples) match the uncapped run because
 		// only the silence pipeline reads the capped slice.
-		config := newTestConfig()
+		config := newTestBaseConfig()
 		config.AnalysisEnabled = true
 		config.SilenceScanDuration = 60 * time.Second
 

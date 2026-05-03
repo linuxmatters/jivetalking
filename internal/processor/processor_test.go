@@ -127,6 +127,45 @@ func TestProcessorSeedParameterOwnershipBoundary(t *testing.T) {
 	}
 }
 
+func TestProcessorResultsExposeEffectiveConfigAndDiagnostics(t *testing.T) {
+	effectiveConfigType := reflect.TypeFor[*EffectiveFilterConfig]()
+	diagnosticsType := reflect.TypeFor[*AdaptiveDiagnostics]()
+
+	tests := []struct {
+		name string
+		typ  reflect.Type
+	}{
+		{
+			name: "AnalysisResult",
+			typ:  reflect.TypeFor[AnalysisResult](),
+		},
+		{
+			name: "ProcessingResult",
+			typ:  reflect.TypeFor[ProcessingResult](),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configField, ok := tt.typ.FieldByName("Config")
+			if !ok {
+				t.Fatalf("%s has no Config field", tt.name)
+			}
+			if configField.Type != effectiveConfigType {
+				t.Fatalf("%s.Config = %s, want %s", tt.name, configField.Type, effectiveConfigType)
+			}
+
+			diagnosticsField, ok := tt.typ.FieldByName("Diagnostics")
+			if !ok {
+				t.Fatalf("%s has no Diagnostics field", tt.name)
+			}
+			if diagnosticsField.Type != diagnosticsType {
+				t.Fatalf("%s.Diagnostics = %s, want %s", tt.name, diagnosticsField.Type, diagnosticsType)
+			}
+		})
+	}
+}
+
 // TestProcessAudio tests the complete three-pass processing pipeline
 func TestProcessAudio(t *testing.T) {
 	// Generate synthetic test audio: 3-second 440Hz tone at -18 dBFS input level
@@ -218,6 +257,9 @@ func TestProcessAudio(t *testing.T) {
 	if result.Config == nil {
 		t.Fatal("ProcessAudio returned nil config")
 	}
+	if result.Diagnostics == nil {
+		t.Fatal("ProcessAudio returned nil diagnostics")
+	}
 	if result.Config.Measurements != result.Measurements {
 		t.Fatal("result config Measurements does not point at Pass 1 measurements")
 	}
@@ -226,9 +268,6 @@ func TestProcessAudio(t *testing.T) {
 	}
 	if !reflect.DeepEqual(result.Config.FilterOrder, Pass2FilterOrder) {
 		t.Errorf("result config FilterOrder = %v, want %v", result.Config.FilterOrder, Pass2FilterOrder)
-	}
-	if !result.Config.OutputAnalysisEnabled {
-		t.Fatal("result config OutputAnalysisEnabled = false, want true")
 	}
 	if result.Config.DS201HPFreq == 95.0 {
 		t.Fatal("result config DS201HPFreq did not adapt from base seed value")
@@ -357,6 +396,9 @@ func TestAnalyzeOnlyDetailedTimings(t *testing.T) {
 	}
 	if result.Config == nil {
 		t.Fatal("AnalyzeOnlyDetailed returned nil config")
+	}
+	if result.Diagnostics == nil {
+		t.Fatal("AnalyzeOnlyDetailed returned nil diagnostics")
 	}
 	if result.Config.Measurements != result.Measurements {
 		t.Fatal("result config Measurements does not point at Pass 1 measurements")

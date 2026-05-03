@@ -276,11 +276,12 @@ type OutputMeasurements struct {
 //
 // The noise floor and silence threshold are computed from interval data AFTER the full pass,
 // eliminating the need for a separate pre-scan phase.
-func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements)) (*AudioMeasurements, error) {
+func AnalyzeAudio(filename string, config *BaseFilterConfig, progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements)) (*AudioMeasurements, error) {
 	// Default fallback threshold if interval analysis yields insufficient data
 	const defaultNoiseFloor = -50.0
 
-	collection, err := collectAnalysisFrames(filename, config, progressCallback)
+	analysisContext := &ProcessingFilterContext{Pass: PassAnalysis}
+	collection, err := collectAnalysisFrames(filename, config, analysisContext, progressCallback)
 	if err != nil {
 		return nil, err
 	}
@@ -371,7 +372,7 @@ func selectSpeechProfile(measurements *AudioMeasurements, intervals []IntervalSa
 	}
 }
 
-func buildInputMeasurements(filename string, collection *analysisFrameCollection, config *FilterChainConfig, defaultNoiseFloor float64) (*AudioMeasurements, error) {
+func buildInputMeasurements(filename string, collection *analysisFrameCollection, config *BaseFilterConfig, defaultNoiseFloor float64) (*AudioMeasurements, error) {
 	acc := collection.accumulators
 
 	noiseFloorEstimate, silenceThreshold, ok := estimateNoiseFloorAndThreshold(collection.silenceIntervals, collection.silenceMedians)
@@ -496,7 +497,7 @@ type analysisFrameCollection struct {
 	silenceMedians   silenceMedians
 }
 
-func collectAnalysisFrames(filename string, config *FilterChainConfig, progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements)) (*analysisFrameCollection, error) {
+func collectAnalysisFrames(filename string, config *BaseFilterConfig, context *ProcessingFilterContext, progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements)) (*analysisFrameCollection, error) {
 	reader, metadata, err := audio.OpenAudioFile(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open audio file: %w", err)
@@ -511,6 +512,7 @@ func collectAnalysisFrames(filename string, config *FilterChainConfig, progressC
 	filterGraph, bufferSrcCtx, bufferSinkCtx, err := createAnalysisFilterGraph(
 		reader.GetDecoderContext(),
 		config,
+		context,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create filter graph: %w", err)
@@ -569,7 +571,7 @@ func collectAnalysisFrames(filename string, config *FilterChainConfig, progressC
 				if progress > 1.0 {
 					progress = 1.0
 				}
-				progressCallback(PassAnalysis, "Analyzing", progress, currentLevel, nil)
+				progressCallback(context.Pass, "Analyzing", progress, currentLevel, nil)
 			}
 			frameCount++
 		},
@@ -677,19 +679,20 @@ func calculateAdaptiveDS201GateThreshold(noiseFloor, rmsTrough float64) float64 
 // Silence detection is now performed in Go using 250ms interval sampling.
 func createAnalysisFilterGraph(
 	decCtx *ffmpeg.AVCodecContext,
-	config *FilterChainConfig,
+	config *BaseFilterConfig,
+	context *ProcessingFilterContext,
 ) (*ffmpeg.AVFilterGraph, *ffmpeg.AVFilterContext, *ffmpeg.AVFilterContext, error) {
-	// Configure for Pass 1 analysis
-	// Uses unified BuildFilterSpec() with Pass1FilterOrder:
-	// Downmix → Analysis
-	analysisConfig := *config
-	if config.FilterOrder != nil {
-		analysisConfig.FilterOrder = append([]FilterID(nil), config.FilterOrder...)
+	if context == nil {
+		context = &ProcessingFilterContext{Pass: PassAnalysis}
 	}
-	analysisConfig.Measurements = nil
-	analysisConfig.OutputAnalysisEnabled = false
-	analysisConfig.Pass = PassAnalysis
-	analysisConfig.FilterOrder = Pass1FilterOrder
+	if context.Pass == 0 {
+		context.Pass = PassAnalysis
+	}
 
-	return setupFilterGraph(decCtx, (&analysisConfig).BuildFilterSpec())
+	analysisConfig := deriveEffectiveFilterConfig(config)
+	analysisConfig.FilterOrder = cloneFilterOrder(Pass1FilterOrder)
+	analysisConfig.Measurements = context.Measurements
+	analysisConfig.Pass = context.Pass
+
+	return setupFilterGraph(decCtx, analysisConfig.BuildFilterSpec())
 }

@@ -446,17 +446,17 @@ func GenerateReport(data ReportData) error {
 
 	// Filter Chain Applied
 	if data.Result != nil && data.Result.Config != nil {
-		writeFilterChainApplied(f, data.Result.Config, data.Result.Measurements)
+		writeFilterChainApplied(f, &data.Result.Config.FilterChainConfig, data.Result.Measurements)
 	}
 
 	// Peak Limiter (Pass 4 pre-limiting before loudnorm)
 	if data.Result != nil && data.Result.NormResult != nil {
-		writeDiagnosticPeakLimiter(f, data.Result.NormResult, data.Result.Config)
+		writeDiagnosticPeakLimiter(f, data.Result.NormResult, &data.Result.Config.FilterChainConfig)
 	}
 
 	// Loudnorm (follows filter chain as it's the final processing stage)
 	if data.Result != nil && data.Result.Config != nil {
-		writeDiagnosticLoudnorm(f, data.Result.NormResult, data.Result.Config)
+		writeDiagnosticLoudnorm(f, data.Result.NormResult, &data.Result.Config.FilterChainConfig)
 	}
 
 	// Loudness Measurements Table (Input → Filtered → Final)

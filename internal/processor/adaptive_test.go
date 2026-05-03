@@ -57,9 +57,6 @@ func TestAdaptConfigReturnsEffectiveConfig(t *testing.T) {
 	if effective.Pass != 0 {
 		t.Errorf("effective Pass = %d, want cleared pass state", effective.Pass)
 	}
-	if effective.OutputAnalysisEnabled {
-		t.Fatal("effective OutputAnalysisEnabled = true, want cleared pass state")
-	}
 	if !reflect.DeepEqual(effective.FilterOrder, base.FilterOrder) {
 		t.Errorf("effective FilterOrder = %v, want copied base order %v", effective.FilterOrder, base.FilterOrder)
 	}

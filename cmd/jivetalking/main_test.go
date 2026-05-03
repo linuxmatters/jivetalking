@@ -47,7 +47,7 @@ func TestRunAnalysisOnlyWithDeps_NonTTYOmitsBenchPath(t *testing.T) {
 			effective, _ := processor.AdaptConfig(cfg, makeAnalysisOnlyTestMeasurements())
 			return &processor.AnalysisResult{
 				Measurements:       makeAnalysisOnlyTestMeasurements(),
-				Config:             &effective.FilterChainConfig,
+				Config:             effective,
 				AnalysisDuration:   2 * time.Second,
 				AdaptationDuration: 100 * time.Millisecond,
 			}, nil
@@ -82,9 +82,9 @@ func TestRunAnalysisOnlyWithDeps_UsesPerFileResultConfig(t *testing.T) {
 	var output bytes.Buffer
 	firstEffective, _ := processor.AdaptConfig(processor.DefaultFilterConfig(), makeAnalysisOnlyTestMeasurements())
 	secondEffective, _ := processor.AdaptConfig(processor.DefaultFilterConfig(), makeAnalysisOnlyTestMeasurements())
-	resultConfigs := []*processor.FilterChainConfig{
-		&firstEffective.FilterChainConfig,
-		&secondEffective.FilterChainConfig,
+	resultConfigs := []*processor.EffectiveFilterConfig{
+		firstEffective,
+		secondEffective,
 	}
 	resultConfigs[0].DS201HPFreq = 60.0
 	resultConfigs[1].DS201HPFreq = 100.0
@@ -144,8 +144,8 @@ func TestRunAnalysisOnlyWithDeps_UsesPerFileResultConfig(t *testing.T) {
 		t.Fatalf("displayed config count = %d, want %d", len(displayedConfigs), len(resultConfigs))
 	}
 	for i := range resultConfigs {
-		if displayedConfigs[i] != resultConfigs[i] {
-			t.Fatalf("displayed config %d = %p, want AnalysisResult.Config %p", i, displayedConfigs[i], resultConfigs[i])
+		if displayedConfigs[i] != &resultConfigs[i].FilterChainConfig {
+			t.Fatalf("displayed config %d = %p, want AnalysisResult.Config %p", i, displayedConfigs[i], &resultConfigs[i].FilterChainConfig)
 		}
 	}
 	if !reflect.DeepEqual(resultConfigs[1].FilterOrder, secondFilterOrder) {

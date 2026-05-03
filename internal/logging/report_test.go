@@ -14,6 +14,7 @@ func makeReportData(t *testing.T) ReportData {
 	t.Helper()
 
 	start := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	config := processor.DefaultEffectiveFilterConfig()
 	return ReportData{
 		InputPath:  filepath.Join(t.TempDir(), "input.wav"),
 		OutputPath: filepath.Join(t.TempDir(), "input-LUFS-16-processed.flac"),
@@ -28,7 +29,7 @@ func makeReportData(t *testing.T) ReportData {
 		Result: &processor.ProcessingResult{
 			Measurements:         makeInputMeasurements(),
 			FilteredMeasurements: makeOutputMeasurements(-20.2, -2.1, 6.4, makeSilenceSample(-64.0), makeSpeechSample(-24.0)),
-			Config:               processor.DefaultEffectiveFilterConfig(),
+			Config:               &processor.EffectiveFilterConfig{FilterChainConfig: *config},
 			NormResult: &processor.NormalisationResult{
 				InputLUFS:  -20.2,
 				OutputLUFS: -16.0,
