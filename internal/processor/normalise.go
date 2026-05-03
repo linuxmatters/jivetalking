@@ -761,15 +761,7 @@ func buildLoudnormFilterSpec(config *FilterChainConfig, measurement *LoudnormMea
 	// 3. adeclick for click/pop repair
 	// Repairs waveform discontinuities from limiter/loudnorm gain transitions
 	// Must come after loudnorm (catches its clicks) and before measurement filters
-	if config.AdeclickEnabled {
-		spec := fmt.Sprintf("adeclick=t=%.1f:w=%.0f:o=%.0f",
-			config.AdeclickThreshold,
-			config.AdeclickWindow,
-			config.AdeclickOverlap,
-		)
-		if config.AdeclickMethod != "" {
-			spec += ":m=" + config.AdeclickMethod
-		}
+	if spec := config.buildAdeclickFilter(); spec != "" {
 		filters = append(filters, spec)
 	}
 

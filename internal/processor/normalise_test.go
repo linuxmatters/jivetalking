@@ -501,6 +501,38 @@ func TestBuildLoudnormFilterSpec_DoesNotMutateConfig(t *testing.T) {
 	}
 }
 
+func TestBuildLoudnormFilterSpec_Adeclick(t *testing.T) {
+	measurement := &LoudnormMeasurement{
+		InputI:       -24.0,
+		InputTP:      -5.0,
+		InputLRA:     6.0,
+		InputThresh:  -34.0,
+		TargetOffset: -0.5,
+	}
+
+	t.Run("uses Pass 4 adeclick helper", func(t *testing.T) {
+		config := DefaultFilterConfig()
+
+		filterSpec := buildLoudnormFilterSpec(config, measurement, 0, -1.0, false)
+
+		const want = "adeclick=t=2.0:w=55:o=50:m=s"
+		if !strings.Contains(filterSpec, want) {
+			t.Errorf("buildLoudnormFilterSpec() missing %q\nfilterSpec: %s", want, filterSpec)
+		}
+	})
+
+	t.Run("omits disabled adeclick", func(t *testing.T) {
+		config := DefaultFilterConfig()
+		config.AdeclickEnabled = false
+
+		filterSpec := buildLoudnormFilterSpec(config, measurement, 0, -1.0, false)
+
+		if strings.Contains(filterSpec, "adeclick=") {
+			t.Errorf("buildLoudnormFilterSpec() emitted disabled adeclick\nfilterSpec: %s", filterSpec)
+		}
+	})
+}
+
 func TestPreGainCeilingRederivation(t *testing.T) {
 	// Validates the mathematical invariant: applying the deficit as pre-gain
 	// converts a clamped scenario into a non-clamped scenario, with the

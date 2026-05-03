@@ -119,6 +119,16 @@ func TestBuildFilterSpec(t *testing.T) {
 		}
 	})
 
+	t.Run("default pass 2 chain omits pass 4 adeclick", func(t *testing.T) {
+		config := DefaultFilterConfig()
+
+		spec := config.BuildFilterSpec()
+
+		if strings.Contains(spec, "adeclick=") {
+			t.Errorf("BuildFilterSpec() emitted Pass 4 adeclick in Pass 2 chain: %s", spec)
+		}
+	})
+
 	t.Run("enabled filters appear in spec", func(t *testing.T) {
 		config := newTestConfig()
 		// Enable specific filters for this test
@@ -1020,6 +1030,17 @@ func TestPass2FilterOrder(t *testing.T) {
 			if !filterSet[required] {
 				t.Errorf("Pass2FilterOrder missing required filter %q", required)
 			}
+		}
+	})
+
+	t.Run("omits Pass 4 adeclick registry entry", func(t *testing.T) {
+		for _, id := range Pass2FilterOrder {
+			if id == FilterID("adeclick") {
+				t.Error("Pass2FilterOrder should not include Pass 4 adeclick")
+			}
+		}
+		if _, ok := filterBuilders[FilterID("adeclick")]; ok {
+			t.Error("filterBuilders should not register Pass 4 adeclick for Pass 2")
 		}
 	})
 }
