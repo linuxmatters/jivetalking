@@ -2153,6 +2153,40 @@ func TestSanitizeConfig(t *testing.T) {
 	}
 }
 
+func TestTuneLA2AThresholdAcceptsZeroDBPeak(t *testing.T) {
+	config := newTestConfig()
+	measurements := &AudioMeasurements{
+		BaseMeasurements: BaseMeasurements{
+			DynamicRange: 35.0,
+			PeakLevel:    0.0,
+		},
+		InputTP: -2.0,
+	}
+
+	tuneLA2AThreshold(config, measurements, la2aOverrides{})
+
+	if math.Abs(config.LA2AThreshold-(-20.0)) > 0.001 {
+		t.Errorf("LA2AThreshold = %.3f, want -20.000", config.LA2AThreshold)
+	}
+}
+
+func TestTuneLA2AThresholdFallsBackForInvalidPeak(t *testing.T) {
+	config := newTestConfig()
+	measurements := &AudioMeasurements{
+		BaseMeasurements: BaseMeasurements{
+			DynamicRange: 35.0,
+			PeakLevel:    math.NaN(),
+		},
+		InputTP: -2.0,
+	}
+
+	tuneLA2AThreshold(config, measurements, la2aOverrides{})
+
+	if math.Abs(config.LA2AThreshold-defaultLA2AThreshold) > 0.001 {
+		t.Errorf("LA2AThreshold = %.3f, want %.3f", config.LA2AThreshold, defaultLA2AThreshold)
+	}
+}
+
 func TestClamp(t *testing.T) {
 	// Tests for the clamp helper function
 	// clamp(val, min, max) returns val constrained to [min, max]

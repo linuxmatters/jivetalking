@@ -60,7 +60,7 @@ const (
 // - Only boost cutoff if silence sample shows actual broadband LF noise
 //
 // Hum notch strategy:
-// - Low entropy (< 0.7) indicates periodic/tonal noise → enable hum removal
+// - Low entropy (< 0.30) indicates periodic/tonal noise → enable hum removal
 // - High entropy indicates broadband noise → skip notch filter
 // - Voice-aware: reduces harmonics for warm voices to protect vocal fundamentals
 func tuneDS201HighPass(config *EffectiveFilterConfig, measurements *AudioMeasurements) {
@@ -152,14 +152,14 @@ func tuneDS201HighPass(config *EffectiveFilterConfig, measurements *AudioMeasure
 	switch {
 	case decrease < spectralDecreaseVeryWarm:
 		// Very warm voice
-		// Use minimal settings: 30Hz cutoff, gentle Q, 50% mix
+		// Use minimal settings: 60Hz cutoff, gentle Q, 80% mix
 		config.DS201HPFreq = ds201HPVeryWarmFreq
 		config.DS201HPWidth = ds201HPVeryWarmWidth
 		config.DS201HPMix = ds201HPVeryWarmMix
 		config.DS201HPPoles = 1 // Gentle 6dB/oct slope
 	case skewness > spectralSkewnessLFEmphasis:
 		// Significant LF emphasis
-		// Use warm settings: 40Hz cutoff, gentle Q, 70% mix
+		// Use warm settings: 70Hz cutoff, gentle Q, 90% mix
 		config.DS201HPFreq = ds201HPWarmFreq
 		config.DS201HPWidth = ds201HPWarmWidth
 		config.DS201HPMix = ds201HPWarmMix

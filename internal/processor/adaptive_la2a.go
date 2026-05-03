@@ -79,7 +79,7 @@ const (
 	la2aCentroidBright = 6000.0 // Hz - above: bright voice
 
 	// LA-2A Skewness adaptation (bass-concentrated voices get extra warmth)
-	// Negative skewness = energy concentrated in bass (warm voice)
+	// Positive skewness = energy concentrated in bass (warm voice)
 	la2aSkewnessWarm     = 1.5  // Above: warm/bass-heavy voice
 	la2aKneeWarmBoost    = 0.5  // Added to knee for warm voices
 	la2aReleaseWarmBoost = 30.0 // ms added for warm voices (preserve body)
@@ -332,8 +332,7 @@ func tuneLA2ARatio(config *EffectiveFilterConfig, measurements *AudioMeasurement
 // LA-2A's Peak Reduction knob effectively sets threshold relative to signal.
 // We calculate threshold as peak level minus headroom, where headroom determines depth.
 func tuneLA2AThreshold(config *EffectiveFilterConfig, measurements *AudioMeasurements, overrides la2aOverrides) {
-	// Fallback if no peak measurement
-	if measurements.PeakLevel == 0 {
+	if math.IsNaN(measurements.PeakLevel) || math.IsInf(measurements.PeakLevel, 0) {
 		config.LA2AThreshold = defaultLA2AThreshold
 		return
 	}

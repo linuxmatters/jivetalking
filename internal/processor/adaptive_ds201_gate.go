@@ -417,7 +417,7 @@ func calculateDS201GateAttack(maxDiff, spectralFlux, spectralCrest float64) floa
 	var baseAttack float64
 	switch {
 	case maxDiffPercent > ds201GateMaxDiffExtreme || spectralCrest > ds201GateCrestExtreme:
-		// Extreme transients - 500µs for pristine attack preservation
+		// Extreme transients - fastest attack, with 10ms floor to prevent click artifacts
 		baseAttack = ds201GateAttackUltraFast
 	case maxDiffPercent > ds201GateMaxDiffHigh || spectralCrest > 30.0:
 		// Sharp transients - fast opening
@@ -443,9 +443,9 @@ func calculateDS201GateAttack(maxDiff, spectralFlux, spectralCrest float64) floa
 //
 // Entropy-based adaptation:
 //   - Very tonal noise (entropy < 0.1): slowest release - hide pumping on pure hum/bleed
-//   - Tonal noise (entropy < 0.15): slow release - some pumping hiding needed
-//   - Mixed noise (entropy < 0.2): moderate release
-//   - Broadband-ish (entropy >= 0.2): faster release - cut noise quickly without pumping risk
+//   - Tonal noise (entropy < 0.12): slow release - some pumping hiding needed
+//   - Mixed noise (entropy < 0.16): moderate release
+//   - Broadband-ish (entropy >= 0.16): faster release - cut noise quickly without pumping risk
 //
 // LRA-based extension:
 //   - Low LRA (<10 LU): speech at similar levels, gate opens/closes rapidly → pumping
