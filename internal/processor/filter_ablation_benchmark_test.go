@@ -202,17 +202,17 @@ func runFullbenchFilterSpecCore(tb testing.TB, inputPath, outputPath, filterSpec
 		OnPullError: func(err error) error {
 			return fmt.Errorf("failed to pull frame from filter: %w", err)
 		},
-		OnFrame: func(inputFrame, filteredFrame *ffmpeg.AVFrame) (FrameAction, error) {
+		OnFrame: func(inputFrame, filteredFrame *ffmpeg.AVFrame) error {
 			if outputAcc != nil {
 				extractOutputFrameMetadata(filteredFrame.Metadata(), outputAcc)
 			}
 
 			filteredFrame.SetTimeBase(ffmpeg.AVBuffersinkGetTimeBase(bufferSinkCtx))
 			if err := encoder.WriteFrame(filteredFrame); err != nil {
-				return FrameDiscard, fmt.Errorf("failed to write frame: %w", err)
+				return fmt.Errorf("failed to write frame: %w", err)
 			}
 
-			return FrameDiscard, nil
+			return nil
 		},
 	}); err != nil {
 		tb.Fatalf("fullbench filter graph failed: %v", err)

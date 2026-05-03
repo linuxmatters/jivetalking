@@ -61,7 +61,7 @@ func measureOutputRegionFromReader(reader *audio.Reader, start, duration time.Du
 	var spectralAcc SpectralMetrics
 	var spectralFrameCount int64
 
-	extractMeasurements := func(_ *ffmpeg.AVFrame, filteredFrame *ffmpeg.AVFrame) (FrameAction, error) {
+	extractMeasurements := func(_ *ffmpeg.AVFrame, filteredFrame *ffmpeg.AVFrame) error {
 		if metadata := filteredFrame.Metadata(); metadata != nil {
 			if value, ok := getFloatMetadata(metadata, metaKeyOverallRMSLevel); ok {
 				rmsLevel = value
@@ -95,7 +95,7 @@ func measureOutputRegionFromReader(reader *audio.Reader, start, duration time.Du
 		}
 
 		framesProcessed++
-		return FrameDiscard, nil
+		return nil
 	}
 
 	lenientHandler := func(err error) error { return nil }

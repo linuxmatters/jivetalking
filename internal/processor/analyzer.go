@@ -280,23 +280,234 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 	// Default fallback threshold if interval analysis yields insufficient data
 	const defaultNoiseFloor = -50.0
 
-	// Open audio file
+	collection, err := collectAnalysisFrames(filename, config, progressCallback)
+	if err != nil {
+		return nil, err
+	}
+
+	intervals := collection.intervals
+	silenceIntervals := collection.silenceIntervals
+	silMedians := collection.silenceMedians
+
+	measurements, err := buildInputMeasurements(filename, collection, config, defaultNoiseFloor)
+	if err != nil {
+		return nil, err
+	}
+
+	noiseSelection := selectNoiseProfile(measurements, intervals, silenceIntervals, silMedians)
+	selectSpeechProfile(measurements, intervals, noiseSelection)
+
+	assignInputMeasurementSuggestions(measurements)
+
+	return measurements, nil
+}
+
+type noiseProfileSelection struct {
+	silenceResult *findBestSilenceRegionResult
+	noiseProfile  *NoiseProfile
+}
+
+func selectNoiseProfile(measurements *AudioMeasurements, intervals, silenceIntervals []IntervalSample, silMedians silenceMedians) noiseProfileSelection {
+	measurements.SilenceRegions = findSilenceCandidatesFromIntervals(silenceIntervals, measurements.SilenceDetectLevel, silMedians)
+
+	silenceResult := findBestSilenceRegion(measurements.SilenceRegions, silenceIntervals)
+	measurements.SilenceCandidates = silenceResult.Candidates
+	measurements.VoiceActivated = detectVoiceActivated(silenceResult.Candidates)
+
+	selection := noiseProfileSelection{silenceResult: silenceResult}
+	if silenceResult.BestRegion == nil {
+		return selection
+	}
+
+	originalRegion := silenceResult.BestRegion
+	refinedRegion := refineToGoldenSubregion(originalRegion, intervals)
+	wasRefined := refinedRegion.Start != originalRegion.Start || refinedRegion.Duration != originalRegion.Duration
+
+	profile := extractNoiseProfileFromIntervals(refinedRegion, silenceIntervals)
+	if profile == nil {
+		return selection
+	}
+
+	selection.noiseProfile = profile
+	measurements.NoiseProfile = profile
+
+	if wasRefined {
+		profile.WasRefined = true
+		profile.OriginalStart = originalRegion.Start
+		profile.OriginalDuration = originalRegion.Duration
+	}
+
+	if profile.MeasuredNoiseFloor != 0 && !math.IsInf(profile.MeasuredNoiseFloor, -1) {
+		measurements.NoiseFloor = profile.MeasuredNoiseFloor
+		measurements.NoiseFloorSource = "silence_profile"
+	}
+
+	return selection
+}
+
+func selectSpeechProfile(measurements *AudioMeasurements, intervals []IntervalSample, noiseSelection noiseProfileSelection) {
+	speechSearchStart := 30 * time.Second
+	switch {
+	case noiseSelection.silenceResult != nil && noiseSelection.silenceResult.BestRegion != nil:
+		speechSearchStart = noiseSelection.silenceResult.BestRegion.End
+	case len(measurements.SilenceRegions) > 0:
+		speechSearchStart = measurements.SilenceRegions[0].End
+	}
+
+	measurements.SpeechRegions = findSpeechCandidatesFromIntervals(intervals, speechSearchStart, measurements.VoiceActivated, measurements.RMSLevel, measurements.NoiseFloor)
+
+	speechResult := findBestSpeechRegion(measurements.SpeechRegions, intervals, noiseSelection.noiseProfile)
+	measurements.SpeechCandidates = speechResult.Candidates
+
+	if speechResult.BestRegion == nil {
+		return
+	}
+
+	for i := range speechResult.Candidates {
+		if speechResult.Candidates[i].Region.Start == speechResult.BestRegion.Start {
+			measurements.SpeechProfile = &speechResult.Candidates[i]
+			return
+		}
+	}
+}
+
+func buildInputMeasurements(filename string, collection *analysisFrameCollection, config *FilterChainConfig, defaultNoiseFloor float64) (*AudioMeasurements, error) {
+	acc := collection.accumulators
+
+	noiseFloorEstimate, silenceThreshold, ok := estimateNoiseFloorAndThreshold(collection.silenceIntervals, collection.silenceMedians)
+	if !ok {
+		noiseFloorEstimate = defaultNoiseFloor
+		silenceThreshold = calculateAdaptiveSilenceThreshold(defaultNoiseFloor)
+	}
+
+	measurements := &AudioMeasurements{
+		PreScanNoiseFloor:  noiseFloorEstimate,
+		SilenceDetectLevel: silenceThreshold,
+		IntervalSamples:    collection.intervals,
+	}
+
+	if !acc.ebur128Found {
+		return nil, fmt.Errorf("ebur128 measurements not found in metadata for file: %s", filename)
+	}
+
+	measurements.InputI = acc.ebur128InputI
+	measurements.InputTP = acc.ebur128InputTP
+	measurements.InputLRA = acc.ebur128InputLRA
+	measurements.InputThresh = acc.ebur128InputI - 10.0
+	measurements.TargetOffset = config.TargetI - acc.ebur128InputI
+	measurements.MomentaryLoudness = acc.ebur128InputM
+	measurements.ShortTermLoudness = acc.ebur128InputS
+	measurements.SamplePeak = acc.ebur128InputSP
+
+	acc.finalizeSpectral().writeSpectralTo(&measurements.BaseMeasurements)
+	assignAstatsMeasurements(measurements, acc)
+	assignInputNoiseFloor(measurements, acc)
+
+	return measurements, nil
+}
+
+func assignAstatsMeasurements(measurements *AudioMeasurements, acc *metadataAccumulators) {
+	if !acc.astatsFound {
+		return
+	}
+
+	measurements.DynamicRange = acc.astatsDynamicRange
+	measurements.RMSLevel = acc.astatsRMSLevel
+	measurements.PeakLevel = acc.astatsPeakLevel
+	measurements.RMSTrough = acc.astatsRMSTrough
+	measurements.RMSPeak = acc.astatsRMSPeak
+	measurements.DCOffset = acc.astatsDCOffset
+	measurements.FlatFactor = acc.astatsFlatFactor
+	measurements.CrestFactor = acc.astatsCrestFactor
+	measurements.ZeroCrossingsRate = acc.astatsZeroCrossingsRate
+	measurements.ZeroCrossings = acc.astatsZeroCrossings
+	measurements.MaxDifference = acc.astatsMaxDifference
+	measurements.MinDifference = acc.astatsMinDifference
+	measurements.MeanDifference = acc.astatsMeanDifference
+	measurements.RMSDifference = acc.astatsRMSDifference
+	measurements.Entropy = acc.astatsEntropy
+	measurements.MinLevel = acc.astatsMinLevel
+	measurements.MaxLevel = acc.astatsMaxLevel
+	measurements.AstatsNoiseFloor = acc.astatsNoiseFloor
+	measurements.NoiseFloorCount = acc.astatsNoiseFloorCount
+	measurements.BitDepth = acc.astatsBitDepth
+	measurements.NumberOfSamples = acc.astatsNumberOfSamples
+}
+
+func assignInputNoiseFloor(measurements *AudioMeasurements, acc *metadataAccumulators) {
+	switch {
+	case acc.astatsRMSTrough != 0 && !math.IsInf(acc.astatsRMSTrough, -1):
+		measurements.NoiseFloor = acc.astatsRMSTrough
+		measurements.NoiseFloorSource = "astats"
+	case acc.astatsRMSLevel != 0 && !math.IsInf(acc.astatsRMSLevel, -1):
+		measurements.NoiseFloor = acc.astatsRMSLevel - 15.0
+		measurements.NoiseFloorSource = "rms_estimate"
+	default:
+		var noiseFloorOffset float64
+		switch {
+		case measurements.InputI > -20:
+			noiseFloorOffset = 18.0
+		case measurements.InputI > -30:
+			noiseFloorOffset = 12.0
+		default:
+			noiseFloorOffset = 8.0
+		}
+		measurements.NoiseFloor = measurements.InputThresh - noiseFloorOffset
+		measurements.NoiseFloorSource = "ebur128_estimate"
+	}
+
+	if measurements.NoiseFloor < -90.0 {
+		measurements.NoiseFloor = -90.0
+	} else if measurements.NoiseFloor > -30.0 {
+		measurements.NoiseFloor = -30.0
+	}
+}
+
+func assignInputMeasurementSuggestions(measurements *AudioMeasurements) {
+	gateThresholdDB := calculateAdaptiveDS201GateThreshold(measurements.NoiseFloor, measurements.RMSTrough)
+	measurements.SuggestedGateThreshold = math.Pow(10, gateThresholdDB/20.0)
+
+	if measurements.RMSLevel != 0 && measurements.NoiseFloor != 0 {
+		measurements.NoiseReductionHeadroom = measurements.RMSLevel - measurements.NoiseFloor
+		if measurements.NoiseReductionHeadroom < 0 {
+			measurements.NoiseReductionHeadroom = 0
+		}
+		if measurements.NoiseReductionHeadroom > 60 {
+			measurements.NoiseReductionHeadroom = 60
+		}
+		return
+	}
+
+	switch {
+	case measurements.InputI > -20:
+		measurements.NoiseReductionHeadroom = 40.0
+	case measurements.InputI > -30:
+		measurements.NoiseReductionHeadroom = 25.0
+	default:
+		measurements.NoiseReductionHeadroom = 15.0
+	}
+}
+
+type analysisFrameCollection struct {
+	metadata         *audio.Metadata
+	accumulators     *metadataAccumulators
+	intervals        []IntervalSample
+	silenceIntervals []IntervalSample
+	silenceMedians   silenceMedians
+}
+
+func collectAnalysisFrames(filename string, config *FilterChainConfig, progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements)) (*analysisFrameCollection, error) {
 	reader, metadata, err := audio.OpenAudioFile(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open audio file: %w", err)
 	}
 	defer reader.Close()
 
-	// Get total duration for progress calculation
 	totalDuration := metadata.Duration
 	sampleRate := float64(metadata.SampleRate)
-
-	// Calculate total frames estimate (duration * sample_rate / samples_per_frame)
-	// For FLAC, typical frame size is 4096 samples
 	samplesPerFrame := 4096.0
 	estimatedTotalFrames := (totalDuration * sampleRate) / samplesPerFrame
 
-	// Create filter graph for Pass 1 analysis (astats + aspectralstats + ebur128)
 	filterGraph, bufferSrcCtx, bufferSinkCtx, err := createAnalysisFilterGraph(
 		reader.GetDecoderContext(),
 		config,
@@ -304,9 +515,6 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 	if err != nil {
 		return nil, fmt.Errorf("failed to create filter graph: %w", err)
 	}
-	// NOTE: filterGraph is explicitly freed at the end (not in defer) to ensure
-	// measurements are output via av_log before we try to extract them.
-	// On error paths, we still free it immediately
 	var filterFreed bool
 	defer func() {
 		if !filterFreed && filterGraph != nil {
@@ -314,32 +522,21 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 		}
 	}()
 
-	// Track frames for periodic progress updates
 	frameCount := 0
-	updateInterval := 100 // Send progress update every N frames
+	updateInterval := 100
 	currentLevel := 0.0
 
-	// Accumulators for frame metadata extraction
 	acc := &metadataAccumulators{}
 
-	// Interval sampling for silence detection (250ms windows)
 	const intervalDuration = 250 * time.Millisecond
 	var intervals []IntervalSample
-	// silenceIntervals is the prefix-restricted view fed to the silence pipeline
-	// (room-tone election, noise profile). When config.SilenceScanDuration is zero
-	// (no cap), it is aliased to intervals after the loop. When a cap is set, only
-	// intervals whose start time is before the cap are appended here. The whole-file
-	// intervals slice continues to feed speech detection and measurements.IntervalSamples
-	// so loudness, spectral, and reporting remain whole-file.
 	var silenceIntervals []IntervalSample
 	var intervalAcc intervalAccumulator
 	var intervalStartTime time.Duration
 
-	// Track input frame time (before filter graph, which upsamples to 192kHz)
 	var inputSamplesProcessed int64
 	inputSampleRate := float64(reader.GetDecoderContext().SampleRate())
 
-	// Process all frames through the filter graph
 	if err := runFilterGraph(reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
 		OnReadError: func(err error) error {
 			return fmt.Errorf("failed to read frame: %w", err)
@@ -351,19 +548,13 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 			return fmt.Errorf("failed to get filtered frame: %w", err)
 		},
 		OnInputFrame: func(inputFrame *ffmpeg.AVFrame) {
-			// Calculate audio level from frame
 			currentLevel = calculateFrameLevel(inputFrame)
 
-			// Calculate input frame time based on samples processed (before filter graph upsampling)
 			inputFrameTime := time.Duration(float64(inputSamplesProcessed) / inputSampleRate * float64(time.Second))
 			inputSamplesProcessed += int64(inputFrame.NbSamples())
-			// Accumulate RMS and peak from INPUT frame (before filter graph which upsamples to 192kHz)
-			// This gives accurate RMS and peak values matching the original audio levels
 			intervalAcc.addFrameRMSAndPeak(inputFrame)
 
-			// Check if interval complete (250ms elapsed) based on input time
 			if inputFrameTime-intervalStartTime >= intervalDuration {
-				// Finalize and store completed interval
 				finalised := intervalAcc.finalize(intervalStartTime)
 				intervals = append(intervals, finalised)
 				if config.SilenceScanDuration > 0 && intervalStartTime < config.SilenceScanDuration {
@@ -373,7 +564,6 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 				intervalAcc.reset()
 			}
 
-			// Send periodic progress updates based on frame count
 			if frameCount%updateInterval == 0 && progressCallback != nil && estimatedTotalFrames > 0 {
 				progress := float64(frameCount) / estimatedTotalFrames
 				if progress > 1.0 {
@@ -383,25 +573,19 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 			}
 			frameCount++
 		},
-		OnFrame: func(_, filteredFrame *ffmpeg.AVFrame) (FrameAction, error) {
-			// Extract spectral metrics once, reuse for both whole-file and interval accumulators
+		OnFrame: func(_, filteredFrame *ffmpeg.AVFrame) error {
 			metadata := filteredFrame.Metadata()
 			spectral := extractSpectralMetrics(metadata)
 
-			// Extract measurements from frame metadata (whole-file accumulators)
 			extractFrameMetadata(metadata, acc, spectral)
-
-			// Also accumulate into current interval for per-interval spectral data
-			// Filtered frames roughly correspond to input timing (just at higher sample rate)
 			intervalAcc.add(extractIntervalFrameMetrics(metadata, spectral))
 
-			return FrameDiscard, nil
+			return nil
 		},
 	}); err != nil {
 		return nil, err
 	}
 
-	// Finalize any remaining partial interval (if it has data)
 	if intervalAcc.rawSampleCount > 0 {
 		finalised := intervalAcc.finalize(intervalStartTime)
 		intervals = append(intervals, finalised)
@@ -410,258 +594,20 @@ func AnalyzeAudio(filename string, config *FilterChainConfig, progressCallback f
 		}
 	}
 
-	// When no cap is set, the silence pipeline reads the same whole-file slice as
-	// the rest of the analysis. Aliasing avoids duplicating every append above.
 	if config.SilenceScanDuration == 0 {
 		silenceIntervals = intervals
 	}
 
-	// Note: We intentionally discard partial intervals with no data
-
-	// Free the filter graph
 	ffmpeg.AVFilterGraphFree(&filterGraph)
 	filterFreed = true
 
-	// Estimate noise floor and silence threshold from interval data
-	// This replaces the previous separate pre-scan pass
-
-	// Pre-compute silence detection medians (shared by noise estimation and candidate detection)
-	silMedians := computeSilenceMedians(silenceIntervals)
-
-	noiseFloorEstimate, silenceThreshold, ok := estimateNoiseFloorAndThreshold(silenceIntervals, silMedians)
-	if !ok {
-		// Fallback if insufficient interval data (very short recordings)
-		noiseFloorEstimate = defaultNoiseFloor
-		silenceThreshold = calculateAdaptiveSilenceThreshold(defaultNoiseFloor)
-	}
-
-	// Create measurements struct and populate from accumulators
-	measurements := &AudioMeasurements{
-		// Noise floor estimated from interval data (replaces pre-scan)
-		PreScanNoiseFloor:  noiseFloorEstimate,
-		SilenceDetectLevel: silenceThreshold,
-	}
-
-	// Populate ebur128 loudness measurements
-	if acc.ebur128Found {
-		measurements.InputI = acc.ebur128InputI
-		measurements.InputTP = acc.ebur128InputTP
-		measurements.InputLRA = acc.ebur128InputLRA
-		// Calculate threshold based on integrated loudness (ebur128 doesn't provide this directly)
-		// Threshold is typically around 10 LU below the integrated loudness
-		measurements.InputThresh = acc.ebur128InputI - 10.0
-		// Target offset for normalization (difference between measured and target)
-		measurements.TargetOffset = config.TargetI - acc.ebur128InputI
-	} else {
-		return nil, fmt.Errorf("ebur128 measurements not found in metadata for file: %s", filename)
-	}
-
-	// Calculate average spectral statistics from aspectralstats
-	acc.finalizeSpectral().writeSpectralTo(&measurements.BaseMeasurements)
-
-	// Store astats measurements (if captured)
-	if acc.astatsFound {
-		measurements.DynamicRange = acc.astatsDynamicRange
-		measurements.RMSLevel = acc.astatsRMSLevel
-		measurements.PeakLevel = acc.astatsPeakLevel
-		measurements.RMSTrough = acc.astatsRMSTrough
-		measurements.RMSPeak = acc.astatsRMSPeak
-
-		// Additional astats measurements for adaptive processing
-		measurements.DCOffset = acc.astatsDCOffset
-		measurements.FlatFactor = acc.astatsFlatFactor
-		measurements.CrestFactor = acc.astatsCrestFactor
-		measurements.ZeroCrossingsRate = acc.astatsZeroCrossingsRate
-		measurements.ZeroCrossings = acc.astatsZeroCrossings
-		measurements.MaxDifference = acc.astatsMaxDifference
-		measurements.MinDifference = acc.astatsMinDifference
-		measurements.MeanDifference = acc.astatsMeanDifference
-		measurements.RMSDifference = acc.astatsRMSDifference
-		measurements.Entropy = acc.astatsEntropy
-		measurements.MinLevel = acc.astatsMinLevel
-		measurements.MaxLevel = acc.astatsMaxLevel
-		measurements.AstatsNoiseFloor = acc.astatsNoiseFloor
-		measurements.NoiseFloorCount = acc.astatsNoiseFloorCount
-		measurements.BitDepth = acc.astatsBitDepth
-		measurements.NumberOfSamples = acc.astatsNumberOfSamples
-	}
-
-	// Store ebur128 momentary/short-term loudness
-	if acc.ebur128Found {
-		measurements.MomentaryLoudness = acc.ebur128InputM
-		measurements.ShortTermLoudness = acc.ebur128InputS
-		measurements.SamplePeak = acc.ebur128InputSP
-	}
-
-	// Derive noise floor using three-tier approach based on audio engineering best practices:
-	// Tier 1 (Primary): RMS_trough from astats - most accurate
-	//   - Measures RMS level during quietest segments (inter-word silence in speech)
-	//   - These quiet periods contain primarily room noise, HVAC, electronics noise
-	//   - Directly represents the actual noise floor of the recording environment
-	// Tier 2 (Secondary): Estimate from RMS_level - 15dB
-	//   - Based on typical speech crest factor where quiet segments are 12-18dB below average RMS
-	//   - Reasonable approximation when RMS_trough unavailable
-	// Tier 3 (Tertiary): Estimate from ebur128 InputThresh with loudness-based offset
-	//   - Fallback for when astats data is completely unavailable
-	//   - Uses integrated loudness to infer likely noise floor characteristics
-
-	switch {
-	case acc.astatsRMSTrough != 0 && !math.IsInf(acc.astatsRMSTrough, -1):
-		// Tier 1: Use RMS_trough (best - actual measurement of quiet segments)
-		measurements.NoiseFloor = acc.astatsRMSTrough
-		measurements.NoiseFloorSource = "astats"
-	case acc.astatsRMSLevel != 0 && !math.IsInf(acc.astatsRMSLevel, -1):
-		// Tier 2: Estimate from overall RMS level
-		// Typical speech has quiet segments 12-18dB below average RMS; use 15dB as balanced estimate
-		measurements.NoiseFloor = acc.astatsRMSLevel - 15.0
-		measurements.NoiseFloorSource = "rms_estimate"
-	default:
-		// Tier 3: Estimate from ebur128 integrated loudness threshold
-		// Louder recordings typically have better SNR (lower relative noise floor)
-		var noiseFloorOffset float64
-		switch {
-		case measurements.InputI > -20:
-			noiseFloorOffset = 18.0 // Professional: very low noise floor
-		case measurements.InputI > -30:
-			noiseFloorOffset = 12.0 // Typical podcast: moderate noise floor
-		default:
-			noiseFloorOffset = 8.0 // Quiet source: higher relative noise
-		}
-		measurements.NoiseFloor = measurements.InputThresh - noiseFloorOffset
-		measurements.NoiseFloorSource = "ebur128_estimate"
-	}
-
-	// Safety clamp: -90dB (digital silence) to -30dB (very noisy environment)
-	// Prevents extreme values while allowing wide range of recording quality
-	if measurements.NoiseFloor < -90.0 {
-		measurements.NoiseFloor = -90.0
-	} else if measurements.NoiseFloor > -30.0 {
-		measurements.NoiseFloor = -30.0
-	}
-
-	// Store 250ms interval samples for data-driven silence candidate detection
-	measurements.IntervalSamples = intervals
-
-	// Detect silence regions using threshold already computed from interval distribution
-	// The silenceThreshold was calculated above via estimateNoiseFloorAndThreshold()
-	measurements.SilenceRegions = findSilenceCandidatesFromIntervals(silenceIntervals, silenceThreshold, silMedians)
-
-	// Extract noise profile from best silence region (if available)
-	// Uses interval data for all measurements - no file re-reading required
-	silenceResult := findBestSilenceRegion(measurements.SilenceRegions, silenceIntervals)
-
-	// Store all evaluated candidates for reporting/debugging
-	measurements.SilenceCandidates = silenceResult.Candidates
-
-	// Detect voice-activated recordings from digital silence candidate fraction
-	measurements.VoiceActivated = detectVoiceActivated(silenceResult.Candidates)
-
-	// Extract noise profile from best silence region BEFORE speech region selection.
-	// This allows the SNR margin check in findBestSpeechRegion to penalise candidates
-	// that are too close to the noise floor.
-	var noiseProfile *NoiseProfile
-	if silenceResult.BestRegion != nil {
-		// Refine to golden sub-region: find cleanest 10s window within the candidate.
-		// This isolates optimal noise profile from long candidates that may span
-		// both pre-intentional (noisier) and intentional (cleaner) silence.
-		originalRegion := silenceResult.BestRegion
-		refinedRegion := refineToGoldenSubregion(originalRegion, intervals)
-		wasRefined := refinedRegion.Start != originalRegion.Start || refinedRegion.Duration != originalRegion.Duration
-
-		// Extract noise profile from interval data (no file re-read)
-		if profile := extractNoiseProfileFromIntervals(refinedRegion, silenceIntervals); profile != nil {
-			noiseProfile = profile
-			measurements.NoiseProfile = profile
-
-			// Store refinement info for logging/debugging
-			if wasRefined {
-				profile.WasRefined = true
-				profile.OriginalStart = originalRegion.Start
-				profile.OriginalDuration = originalRegion.Duration
-			}
-
-			// If we got a noise profile measurement, use it as the primary noise floor
-			// This is more accurate than the overall RMS_trough because it's from pure silence
-			if profile.MeasuredNoiseFloor != 0 && !math.IsInf(profile.MeasuredNoiseFloor, -1) {
-				measurements.NoiseFloor = profile.MeasuredNoiseFloor
-				measurements.NoiseFloorSource = "silence_profile"
-			}
-		}
-	}
-
-	// Detect speech candidates (must come after elected silence)
-	var speechSearchStart time.Duration
-	switch {
-	case silenceResult.BestRegion != nil:
-		speechSearchStart = silenceResult.BestRegion.End
-	case len(measurements.SilenceRegions) > 0:
-		// Fallback: use end of first silence region
-		speechSearchStart = measurements.SilenceRegions[0].End
-	default:
-		// No silence found - start speech search after 30 seconds
-		speechSearchStart = 30 * time.Second
-	}
-
-	measurements.SpeechRegions = findSpeechCandidatesFromIntervals(intervals, speechSearchStart, measurements.VoiceActivated, measurements.RMSLevel, measurements.NoiseFloor)
-
-	// Select best speech region (passing noiseProfile for SNR margin checking)
-	speechResult := findBestSpeechRegion(measurements.SpeechRegions, intervals, noiseProfile)
-	measurements.SpeechCandidates = speechResult.Candidates
-
-	if speechResult.BestRegion != nil {
-		// Store elected speech profile
-		for i := range speechResult.Candidates {
-			if speechResult.Candidates[i].Region.Start == speechResult.BestRegion.Start {
-				measurements.SpeechProfile = &speechResult.Candidates[i]
-				break
-			}
-		}
-	}
-
-	// Calculate derived suggestions for Pass 2 adaptive processing
-	// These are data-driven values based on actual measurements
-
-	// SuggestedGateThreshold: linear amplitude threshold for gate
-	// Data-driven calculation based on actual noise floor and quiet speech measurements
-	// Gate should open above noise floor but below quiet speech
-	//
-	// Strategy:
-	// - Use RMSTrough (quietest segments with speech) as reference for quiet speech
-	// - Calculate adaptive offset based on gap between noise floor and quiet speech
-	// - Smaller gap = smaller offset (preserve speech in noisy recordings)
-	// - Larger gap = larger offset (more aggressive gating for clean recordings)
-	gateThresholdDB := calculateAdaptiveDS201GateThreshold(measurements.NoiseFloor, measurements.RMSTrough)
-	measurements.SuggestedGateThreshold = math.Pow(10, gateThresholdDB/20.0)
-
-	// NoiseReductionHeadroom: dB gap between noise floor and quiet speech
-	// This determines how aggressively we can apply noise reduction
-	// RMS_trough represents the quietest RMS segments (should be near noise floor)
-	// RMS_level represents average level (speech)
-	// The gap tells us how much "room" we have to reduce noise without affecting speech
-	if measurements.RMSLevel != 0 && measurements.NoiseFloor != 0 {
-		// Headroom is the gap between average speech level and noise floor
-		// Larger headroom = more aggressive NR possible
-		measurements.NoiseReductionHeadroom = measurements.RMSLevel - measurements.NoiseFloor
-		if measurements.NoiseReductionHeadroom < 0 {
-			measurements.NoiseReductionHeadroom = 0 // Sanity check
-		}
-		if measurements.NoiseReductionHeadroom > 60 {
-			measurements.NoiseReductionHeadroom = 60 // Cap at 60dB (very clean recording)
-		}
-	} else {
-		// Fallback: estimate based on integrated loudness
-		// Louder recordings typically have better SNR
-		switch {
-		case measurements.InputI > -20:
-			measurements.NoiseReductionHeadroom = 40.0 // Professional recording
-		case measurements.InputI > -30:
-			measurements.NoiseReductionHeadroom = 25.0 // Typical podcast
-		default:
-			measurements.NoiseReductionHeadroom = 15.0 // Quiet recording
-		}
-	}
-
-	return measurements, nil
+	return &analysisFrameCollection{
+		metadata:         metadata,
+		accumulators:     acc,
+		intervals:        intervals,
+		silenceIntervals: silenceIntervals,
+		silenceMedians:   computeSilenceMedians(silenceIntervals),
+	}, nil
 }
 
 // calculateAdaptiveDS201GateThreshold computes a data-driven gate threshold based on

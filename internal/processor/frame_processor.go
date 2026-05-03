@@ -9,14 +9,6 @@ import (
 	"github.com/linuxmatters/jivetalking/internal/audio"
 )
 
-// FrameAction controls what runFilterGraph does with a filtered frame after OnFrame returns.
-type FrameAction int
-
-const (
-	// FrameDiscard unrefs and discards the filtered frame.
-	FrameDiscard FrameAction = iota
-)
-
 // FrameLoopConfig controls the behaviour of runFilterGraph.
 type FrameLoopConfig struct {
 	// OnReadError is called when reader.ReadFrame returns an error.
@@ -39,9 +31,8 @@ type FrameLoopConfig struct {
 	// OnFrame is called for each filtered frame pulled from the sink.
 	// inputFrame is the most recently read input frame (before filtering).
 	// filteredFrame is the frame pulled from the filter graph output.
-	// Return FrameDiscard to have runFilterGraph unref the filtered frame.
 	// A non-nil error aborts both loops.
-	OnFrame func(inputFrame, filteredFrame *ffmpeg.AVFrame) (FrameAction, error)
+	OnFrame func(inputFrame, filteredFrame *ffmpeg.AVFrame) error
 
 	// OnInputFrame is called for each input frame before it is pushed into
 	// the filter graph. Use for pre-filter work (progress tracking, RMS accumulation).
@@ -81,12 +72,10 @@ func runFilterGraph(
 			}
 
 			if config.OnFrame != nil {
-				action, err := config.OnFrame(inputFrame, filteredFrame)
+				err := config.OnFrame(inputFrame, filteredFrame)
+				ffmpeg.AVFrameUnref(filteredFrame)
 				if err != nil {
 					return err
-				}
-				if action == FrameDiscard {
-					ffmpeg.AVFrameUnref(filteredFrame)
 				}
 			} else {
 				ffmpeg.AVFrameUnref(filteredFrame)
