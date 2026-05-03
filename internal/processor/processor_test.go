@@ -60,6 +60,37 @@ func TestGenerateLUFSOutputPath(t *testing.T) {
 	}
 }
 
+func TestEffectiveConfigFilterOrderIsolation(t *testing.T) {
+	base := newTestConfig()
+	base.FilterOrder = []FilterID{FilterAnalysis, FilterDeesser}
+
+	first := AdaptConfig(base, &AudioMeasurements{
+		BaseMeasurements: BaseMeasurements{
+			SpectralCentroid: 5000,
+		},
+	})
+	second := AdaptConfig(base, &AudioMeasurements{
+		BaseMeasurements: BaseMeasurements{
+			SpectralCentroid: 2000,
+		},
+	})
+	if first == nil || second == nil {
+		t.Fatal("AdaptConfig returned nil")
+	}
+
+	first.FilterOrder[0] = FilterDownmix
+
+	if reflect.DeepEqual(first.FilterOrder, base.FilterOrder) {
+		t.Fatal("test setup failed: first effective FilterOrder did not change")
+	}
+	if !reflect.DeepEqual(base.FilterOrder, []FilterID{FilterAnalysis, FilterDeesser}) {
+		t.Errorf("base FilterOrder = %v, want unchanged custom order", base.FilterOrder)
+	}
+	if !reflect.DeepEqual(second.FilterOrder, []FilterID{FilterAnalysis, FilterDeesser}) {
+		t.Errorf("second effective FilterOrder = %v, want independent copy", second.FilterOrder)
+	}
+}
+
 // TestProcessAudio tests the complete three-pass processing pipeline
 func TestProcessAudio(t *testing.T) {
 	// Generate synthetic test audio: 3-second 440Hz tone at -18 dBFS input level

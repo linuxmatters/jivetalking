@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -79,11 +80,12 @@ func TestRunAnalysisOnlyWithDeps_UsesPerFileResultConfig(t *testing.T) {
 	baseConfig := processor.DefaultFilterConfig()
 	var output bytes.Buffer
 	resultConfigs := []*processor.FilterChainConfig{
-		processor.DefaultFilterConfig(),
-		processor.DefaultFilterConfig(),
+		processor.AdaptConfig(processor.DefaultFilterConfig(), makeAnalysisOnlyTestMeasurements()),
+		processor.AdaptConfig(processor.DefaultFilterConfig(), makeAnalysisOnlyTestMeasurements()),
 	}
 	resultConfigs[0].DS201HPFreq = 60.0
 	resultConfigs[1].DS201HPFreq = 100.0
+	secondFilterOrder := append([]processor.FilterID(nil), resultConfigs[1].FilterOrder...)
 
 	var analyzedConfigs []*processor.FilterChainConfig
 	var displayedConfigs []*processor.FilterChainConfig
@@ -120,6 +122,9 @@ func TestRunAnalysisOnlyWithDeps_UsesPerFileResultConfig(t *testing.T) {
 		},
 		displayResults: func(w io.Writer, inputPath string, metadata *audio.Metadata, measurements *processor.AudioMeasurements, config *processor.FilterChainConfig, timings ...logging.AnalysisTimings) {
 			displayedConfigs = append(displayedConfigs, config)
+			if len(displayedConfigs) == 1 {
+				config.FilterOrder[0] = processor.FilterAnalysis
+			}
 		},
 		printError: func(message string) {
 			t.Fatalf("printError called: %s", message)
@@ -139,6 +144,9 @@ func TestRunAnalysisOnlyWithDeps_UsesPerFileResultConfig(t *testing.T) {
 		if displayedConfigs[i] != resultConfigs[i] {
 			t.Fatalf("displayed config %d = %p, want AnalysisResult.Config %p", i, displayedConfigs[i], resultConfigs[i])
 		}
+	}
+	if !reflect.DeepEqual(resultConfigs[1].FilterOrder, secondFilterOrder) {
+		t.Fatalf("second result config FilterOrder = %v, want unaffected %v", resultConfigs[1].FilterOrder, secondFilterOrder)
 	}
 	if baseConfig.DS201HPFreq == resultConfigs[0].DS201HPFreq || baseConfig.DS201HPFreq == resultConfigs[1].DS201HPFreq {
 		t.Fatal("test setup failed: result configs should differ from the shared base seed")
