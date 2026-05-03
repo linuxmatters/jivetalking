@@ -13,19 +13,6 @@ import (
 	"github.com/linuxmatters/jivetalking/internal/audio"
 )
 
-// AnalyzeOnly performs Pass 1 analysis without processing.
-// Returns measurements and the adapted filter configuration.
-// Useful for rapid testing of silence detection algorithms without full processing.
-func AnalyzeOnly(inputPath string, config *FilterChainConfig,
-	progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements),
-) (*AudioMeasurements, *FilterChainConfig, error) {
-	result, err := AnalyzeOnlyDetailed(inputPath, config, progressCallback)
-	if err != nil {
-		return nil, nil, err
-	}
-	return result.Measurements, result.Config, nil
-}
-
 // AnalysisResult contains analysis-only measurements and stage timings.
 type AnalysisResult struct {
 	Measurements       *AudioMeasurements

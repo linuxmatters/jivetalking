@@ -113,14 +113,17 @@ func TestProcessAudio(t *testing.T) {
 		t.Errorf("Output extension = %q, want %q (path: %s)", ext, ".flac", result.OutputPath)
 	}
 
-	// Verify the output container is the FLAC demuxer (not WAV with FLAC payload)
-	reader, _, err := audio.OpenAudioFile(result.OutputPath)
+	// Verify output metadata is readable through the supported audio metadata API.
+	reader, outputMetadata, err := audio.OpenAudioFile(result.OutputPath)
 	if err != nil {
 		t.Fatalf("Failed to reopen output file: %v", err)
 	}
 	defer reader.Close()
-	if got := reader.FormatName(); got != "flac" {
-		t.Errorf("Output FormatName = %q, want %q", got, "flac")
+	if outputMetadata.SampleRate != config.ResampleSampleRate {
+		t.Errorf("Output sample rate = %d, want %d", outputMetadata.SampleRate, config.ResampleSampleRate)
+	}
+	if outputMetadata.Channels != 1 {
+		t.Errorf("Output channels = %d, want 1", outputMetadata.Channels)
 	}
 
 	// Verify the file starts with the FLAC magic bytes ("fLaC")
@@ -259,32 +262,6 @@ func TestAnalyzeOnlyDetailedTimings(t *testing.T) {
 	}
 	if result.AdaptationDuration <= 0 {
 		t.Errorf("AdaptationDuration = %s, want > 0", result.AdaptationDuration)
-	}
-}
-
-func TestAnalyzeOnlyWrapper(t *testing.T) {
-	testFile := generateTestAudio(t, TestAudioOptions{
-		DurationSecs: 1.0,
-		SampleRate:   44100,
-		ToneFreq:     440.0,
-		ToneLevel:    -18.0,
-		NoiseLevel:   -55.0,
-	})
-	defer cleanupTestAudio(t, testFile)
-
-	config := newTestConfig()
-	config.DownmixEnabled = true
-	config.AnalysisEnabled = true
-
-	measurements, config, err := AnalyzeOnly(testFile, config, nil)
-	if err != nil {
-		t.Fatalf("AnalyzeOnly failed: %v", err)
-	}
-	if measurements == nil {
-		t.Fatal("AnalyzeOnly returned nil measurements")
-	}
-	if config == nil {
-		t.Fatal("AnalyzeOnly returned nil config")
 	}
 }
 
