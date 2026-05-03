@@ -176,8 +176,10 @@ Makeup gain stays at 0 dB. Loudnorm handles final level adjustment after compres
 
 ### FFmpeg Filter Specification
 
+`LA2AThreshold` and `LA2AMakeup` are configured in dB, then converted to FFmpeg's linear `acompressor` values:
+
 ```
-acompressor=threshold=-24dB:ratio=3:attack=10:release=200:makeup=2dB:knee=4:mix=1
+acompressor=threshold=0.125893:ratio=3.0:attack=10:release=200:makeup=1.00:knee=4.0:detection=rms:mix=1.00
 ```
 
 ---
