@@ -194,17 +194,17 @@ func writeAnalysisFilterAdaptation(w io.Writer, measurements *processor.AudioMea
 func writeAnalysisSpectralSummary(w io.Writer, measurements *processor.AudioMeasurements) {
 	writeAnalysisSection(w, "SPECTRAL SUMMARY")
 	writeAnalysisMetricRows(w, "  ", 15, []analysisMetricSpec{
-		{"Centroid", fmt.Sprintf("%.0f Hz (%s)", measurements.SpectralCentroid, interpretCentroid(measurements.SpectralCentroid))},
-		{"Spread", fmt.Sprintf("%.0f Hz (%s)", measurements.SpectralSpread, interpretSpread(measurements.SpectralSpread))},
-		{"Rolloff", fmt.Sprintf("%.0f Hz (%s)", measurements.SpectralRolloff, interpretRolloff(measurements.SpectralRolloff))},
-		{"Flatness", fmt.Sprintf("%.3f (%s)", measurements.SpectralFlatness, interpretFlatness(measurements.SpectralFlatness))},
-		{"Kurtosis", fmt.Sprintf("%.1f (%s)", measurements.SpectralKurtosis, interpretKurtosis(measurements.SpectralKurtosis))},
-		{"Skewness", fmt.Sprintf("%.2f (%s)", measurements.SpectralSkewness, interpretSkewness(measurements.SpectralSkewness))},
-		{"Crest", fmt.Sprintf("%.1f (%s)", measurements.SpectralCrest, interpretCrest(measurements.SpectralCrest))},
-		{"Slope", fmt.Sprintf("%.2e (%s)", measurements.SpectralSlope, interpretSlope(measurements.SpectralSlope))},
-		{"Decrease", fmt.Sprintf("%.4f (%s)", measurements.SpectralDecrease, interpretDecrease(measurements.SpectralDecrease))},
-		{"Entropy", fmt.Sprintf("%.3f (%s)", measurements.SpectralEntropy, interpretEntropy(measurements.SpectralEntropy))},
-		{"Flux", fmt.Sprintf("%.4f (%s)", measurements.SpectralFlux, interpretFlux(measurements.SpectralFlux))},
+		{"Centroid", fmt.Sprintf("%.0f Hz (%s)", measurements.Spectral.Centroid, interpretCentroid(measurements.Spectral.Centroid))},
+		{"Spread", fmt.Sprintf("%.0f Hz (%s)", measurements.Spectral.Spread, interpretSpread(measurements.Spectral.Spread))},
+		{"Rolloff", fmt.Sprintf("%.0f Hz (%s)", measurements.Spectral.Rolloff, interpretRolloff(measurements.Spectral.Rolloff))},
+		{"Flatness", fmt.Sprintf("%.3f (%s)", measurements.Spectral.Flatness, interpretFlatness(measurements.Spectral.Flatness))},
+		{"Kurtosis", fmt.Sprintf("%.1f (%s)", measurements.Spectral.Kurtosis, interpretKurtosis(measurements.Spectral.Kurtosis))},
+		{"Skewness", fmt.Sprintf("%.2f (%s)", measurements.Spectral.Skewness, interpretSkewness(measurements.Spectral.Skewness))},
+		{"Crest", fmt.Sprintf("%.1f (%s)", measurements.Spectral.Crest, interpretCrest(measurements.Spectral.Crest))},
+		{"Slope", fmt.Sprintf("%.2e (%s)", measurements.Spectral.Slope, interpretSlope(measurements.Spectral.Slope))},
+		{"Decrease", fmt.Sprintf("%.4f (%s)", measurements.Spectral.Decrease, interpretDecrease(measurements.Spectral.Decrease))},
+		{"Entropy", fmt.Sprintf("%.3f (%s)", measurements.Spectral.Entropy, interpretEntropy(measurements.Spectral.Entropy))},
+		{"Flux", fmt.Sprintf("%.4f (%s)", measurements.Spectral.Flux, interpretFlux(measurements.Spectral.Flux))},
 	})
 }
 

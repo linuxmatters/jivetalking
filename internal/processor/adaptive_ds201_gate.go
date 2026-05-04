@@ -226,8 +226,8 @@ func tuneDS201Gate(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagnosti
 	// DS201-inspired: supports sub-millisecond attack for transient preservation
 	config.DS201GateAttack = calculateDS201GateAttack(
 		measurements.MaxDifference,
-		measurements.SpectralFlux,
-		measurements.SpectralCrest,
+		measurements.Spectral.Flux,
+		measurements.Spectral.Crest,
 	)
 
 	// 4. Release: based on flux, ZCR, noise character (entropy), and LRA
@@ -235,7 +235,7 @@ func tuneDS201Gate(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagnosti
 	// Higher entropy = more broadband noise = faster release to cut noise quickly
 	// Low LRA = narrow dynamics = extend release to prevent pumping
 	config.DS201GateRelease = calculateDS201GateRelease(
-		measurements.SpectralFlux,
+		measurements.Spectral.Flux,
 		measurements.ZeroCrossingsRate,
 		silenceEntropy,
 		measurements.InputLRA,
@@ -249,7 +249,7 @@ func tuneDS201Gate(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagnosti
 	config.DS201GateRange = DbToLinear(rangeDB)
 
 	// 6. Knee: based on spectral crest - soft knee for natural transitions
-	config.DS201GateKnee = calculateDS201GateKnee(measurements.SpectralCrest)
+	config.DS201GateKnee = calculateDS201GateKnee(measurements.Spectral.Crest)
 
 	// 7. Detection: RMS for bleed, peak for clean
 	config.DS201GateDetection = calculateDS201GateDetection(silenceEntropy, silenceCrest)

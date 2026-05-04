@@ -119,7 +119,7 @@ func measureSilenceCandidateFromIntervals(region SilenceRegion, intervals []Inte
 			peakMax = interval.PeakLevel
 		}
 
-		spectralSum.add(interval.spectralFields())
+		spectralSum.add(interval.Spectral)
 
 		momentarySum += interval.MomentaryLUFS
 		shortTermSum += interval.ShortTermLUFS
@@ -195,13 +195,13 @@ func scoreSpeechIntervalWindow(intervals []IntervalSample) float64 {
 	kurtosisValues := make([]float64, len(intervals))
 
 	for i, interval := range intervals {
-		kurtosisSum += interval.SpectralKurtosis
-		flatnessSum += interval.SpectralFlatness
-		centroidSum += interval.SpectralCentroid
+		kurtosisSum += interval.Spectral.Kurtosis
+		flatnessSum += interval.Spectral.Flatness
+		centroidSum += interval.Spectral.Centroid
 		rmsSum += interval.RMSLevel
-		rolloffSum += interval.SpectralRolloff
-		fluxSum += interval.SpectralFlux
-		kurtosisValues[i] = interval.SpectralKurtosis
+		rolloffSum += interval.Spectral.Rolloff
+		fluxSum += interval.Spectral.Flux
+		kurtosisValues[i] = interval.Spectral.Kurtosis
 	}
 
 	avgKurtosis := kurtosisSum / n
@@ -321,7 +321,7 @@ func measureSpeechCandidateFromIntervals(region SpeechRegion, intervals []Interv
 			peakMax = interval.PeakLevel
 		}
 
-		spectralSum.add(interval.spectralFields())
+		spectralSum.add(interval.Spectral)
 
 		momentarySum += interval.MomentaryLUFS
 		shortTermSum += interval.ShortTermLUFS
@@ -340,7 +340,7 @@ func measureSpeechCandidateFromIntervals(region SpeechRegion, intervals []Interv
 	// Calculate voicing density for stability assessment
 	voicedCount := 0
 	for _, interval := range regionIntervals {
-		if interval.SpectralKurtosis > voicedKurtosisThreshold {
+		if interval.Spectral.Kurtosis > voicedKurtosisThreshold {
 			voicedCount++
 		}
 	}

@@ -55,30 +55,30 @@ func detectContentType(m *AudioMeasurements) ContentType {
 	musicScore := 0
 
 	// Kurtosis: speech is peaked, music is spread
-	if m.SpectralKurtosis > lpContentKurtosisSpeech {
+	if m.Spectral.Kurtosis > lpContentKurtosisSpeech {
 		speechScore++
-	} else if m.SpectralKurtosis < lpContentKurtosisMusic {
+	} else if m.Spectral.Kurtosis < lpContentKurtosisMusic {
 		musicScore++
 	}
 
 	// Flatness: speech is tonal, music is flatter
-	if m.SpectralFlatness < lpContentFlatnessSpeech {
+	if m.Spectral.Flatness < lpContentFlatnessSpeech {
 		speechScore++
-	} else if m.SpectralFlatness > lpContentFlatnessMusic {
+	} else if m.Spectral.Flatness > lpContentFlatnessMusic {
 		musicScore++
 	}
 
 	// Flux: speech is stable, music varies
-	if m.SpectralFlux < lpContentFluxSpeech {
+	if m.Spectral.Flux < lpContentFluxSpeech {
 		speechScore++
-	} else if m.SpectralFlux > lpContentFluxMusic {
+	} else if m.Spectral.Flux > lpContentFluxMusic {
 		musicScore++
 	}
 
 	// Crest: speech has dominant peaks
-	if m.SpectralCrest > lpContentCrestSpeech {
+	if m.Spectral.Crest > lpContentCrestSpeech {
 		speechScore++
-	} else if m.SpectralCrest < lpContentCrestMusic {
+	} else if m.Spectral.Crest < lpContentCrestMusic {
 		musicScore++
 	}
 

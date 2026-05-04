@@ -39,13 +39,13 @@ func tuneDeesser(config *EffectiveFilterConfig, measurements *AudioMeasurements)
 	}
 
 	// Both centroid and rolloff available - full adaptive logic
-	if measurements.SpectralCentroid > 0 && measurements.SpectralRolloff > 0 {
+	if measurements.Spectral.Centroid > 0 && measurements.Spectral.Rolloff > 0 {
 		tuneDeesserFull(config, measurements)
 		return
 	}
 
 	// Only centroid available - simplified fallback
-	if measurements.SpectralCentroid > 0 {
+	if measurements.Spectral.Centroid > 0 {
 		tuneDeesserCentroidOnly(config, measurements)
 		return
 	}
@@ -56,8 +56,8 @@ func tuneDeesser(config *EffectiveFilterConfig, measurements *AudioMeasurements)
 // tuneDeesserFull uses both centroid and rolloff for precise de-esser tuning
 func tuneDeesserFull(config *EffectiveFilterConfig, measurements *AudioMeasurements) {
 	// Prefer speech-specific measurements for sibilance detection
-	centroid := measurements.SpectralCentroid
-	rolloff := measurements.SpectralRolloff
+	centroid := measurements.Spectral.Centroid
+	rolloff := measurements.Spectral.Rolloff
 	if measurements.SpeechProfile != nil {
 		centroid = preferSpeechMetric(centroid, measurements.SpeechProfile.Spectral.Centroid)
 		rolloff = preferSpeechMetric(rolloff, measurements.SpeechProfile.Spectral.Rolloff)
@@ -101,7 +101,7 @@ func tuneDeesserFull(config *EffectiveFilterConfig, measurements *AudioMeasureme
 func tuneDeesserCentroidOnly(config *EffectiveFilterConfig, measurements *AudioMeasurements) {
 	// Prefer speech-specific centroid when available.
 	// Full-file averages are diluted by silence in multi-track recordings.
-	centroid := measurements.SpectralCentroid
+	centroid := measurements.Spectral.Centroid
 	if measurements.SpeechProfile != nil {
 		centroid = preferSpeechMetric(centroid, measurements.SpeechProfile.Spectral.Centroid)
 	}

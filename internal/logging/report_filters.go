@@ -87,21 +87,21 @@ func formatDS201HighpassFilter(f *os.File, cfg *processor.EffectiveFilterConfig,
 	fmt.Fprintln(f, header)
 
 	// Show adaptive rationale
-	if m != nil && m.SpectralCentroid > 0 {
+	if m != nil && m.Spectral.Centroid > 0 {
 		voiceType := "normal"
-		if m.SpectralCentroid > 6000 {
+		if m.Spectral.Centroid > 6000 {
 			voiceType = "bright"
-		} else if m.SpectralCentroid < 4000 {
+		} else if m.Spectral.Centroid < 4000 {
 			voiceType = "dark/warm"
 		}
-		fmt.Fprintf(f, "        Rationale: %s voice (centroid %.0f Hz)\n", voiceType, m.SpectralCentroid)
+		fmt.Fprintf(f, "        Rationale: %s voice (centroid %.0f Hz)\n", voiceType, m.Spectral.Centroid)
 
 		// Show warm voice protection if applicable (using mix)
 		if cfg.DS201HPMix > 0 && cfg.DS201HPMix < 1.0 {
 			reason := "warm voice"
-			if m.SpectralDecrease < -0.08 {
+			if m.Spectral.Decrease < -0.08 {
 				reason = "very warm voice"
-			} else if m.SpectralSkewness > 1.0 {
+			} else if m.Spectral.Skewness > 1.0 {
 				reason = "LF emphasis"
 			}
 			fmt.Fprintf(f, "        Mix: %.0f%% (%s — blending filtered with dry signal)\n", cfg.DS201HPMix*100, reason)
@@ -172,7 +172,7 @@ func formatDS201LowPassFilter(f *os.File, cfg *processor.EffectiveFilterConfig, 
 			contentType = diagnostics.DS201LPContentType
 		}
 		fmt.Fprintf(f, "        Content type: %s (kurtosis %.1f, flatness %.3f, flux %.4f)\n",
-			contentType.String(), m.SpectralKurtosis, m.SpectralFlatness, m.SpectralFlux)
+			contentType.String(), m.Spectral.Kurtosis, m.Spectral.Flatness, m.Spectral.Flux)
 
 		// Show the triggering metric details
 		lpReason := ""
@@ -184,12 +184,12 @@ func formatDS201LowPassFilter(f *os.File, cfg *processor.EffectiveFilterConfig, 
 		switch lpReason {
 		case "rolloff/centroid gap":
 			fmt.Fprintf(f, "        Rolloff/centroid ratio: %.2f > 2.5 (rolloff %.0f Hz, centroid %.0f Hz)\n",
-				rolloffRatio, m.SpectralRolloff, m.SpectralCentroid)
+				rolloffRatio, m.Spectral.Rolloff, m.Spectral.Centroid)
 		case "flat spectral slope":
-			fmt.Fprintf(f, "        Spectral slope: %.2e > -1e-05 (unusual HF emphasis)\n", m.SpectralSlope)
+			fmt.Fprintf(f, "        Spectral slope: %.2e > -1e-05 (unusual HF emphasis)\n", m.Spectral.Slope)
 		case "high ZCR with low centroid":
 			fmt.Fprintf(f, "        ZCR: %.4f > 0.10, centroid %.0f Hz < 4000 Hz (HF noise pattern)\n",
-				m.ZeroCrossingsRate, m.SpectralCentroid)
+				m.ZeroCrossingsRate, m.Spectral.Centroid)
 		}
 	}
 }
@@ -353,8 +353,8 @@ func formatLA2ACompressorFilter(f *os.File, cfg *processor.EffectiveFilterConfig
 		fmt.Fprintf(f, "        Rationale: DR %.1f dB (%s), LRA %.1f LU\n", m.DynamicRange, dynamicsType, m.InputLRA)
 
 		// Show kurtosis and flux with sources (used for ratio and release tuning)
-		kurtosis := m.SpectralKurtosis
-		flux := m.SpectralFlux
+		kurtosis := m.Spectral.Kurtosis
+		flux := m.Spectral.Flux
 		kurtosisSource := "full-file"
 		fluxSource := "full-file"
 		if m.SpeechProfile != nil {
@@ -411,10 +411,10 @@ func formatDeesserFilter(f *os.File, cfg *processor.EffectiveFilterConfig, m *pr
 		prefix, cfg.DeessIntensity*100, cfg.DeessAmount*100, cfg.DeessFreq*100)
 
 	// Show rationale with measurement source
-	if m != nil && m.SpectralCentroid > 0 {
+	if m != nil && m.Spectral.Centroid > 0 {
 		// Determine which values were used and their sources
-		centroid := m.SpectralCentroid
-		rolloff := m.SpectralRolloff
+		centroid := m.Spectral.Centroid
+		rolloff := m.Spectral.Rolloff
 		centroidSource := "full-file"
 		rolloffSource := "full-file"
 		if m.SpeechProfile != nil {

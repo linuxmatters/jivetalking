@@ -568,8 +568,8 @@ func TestTipProximityEffect(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := &processor.AudioMeasurements{}
-			m.SpectralDecrease = tt.spectralDecrease
-			m.SpectralSkewness = tt.spectralSkewness
+			m.Spectral.Decrease = tt.spectralDecrease
+			m.Spectral.Skewness = tt.spectralSkewness
 			m.SpeechProfile = tt.speechProfile
 			tip := tipProximityEffect(m, nil)
 			if (tip != nil) != tt.wantTip {
@@ -657,8 +657,8 @@ func TestTipSibilance(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := &processor.AudioMeasurements{}
-			m.SpectralCentroid = tt.centroid
-			m.SpectralRolloff = tt.rolloff
+			m.Spectral.Centroid = tt.centroid
+			m.Spectral.Rolloff = tt.rolloff
 			m.SpeechProfile = tt.speechProfile
 			tip := tipSibilance(m, tt.config)
 			if (tip != nil) != tt.wantTip {
@@ -895,7 +895,7 @@ func TestGenerateRecordingTips(t *testing.T) {
 				m.InputTP = 0.5
 				m.AstatsNoiseFloor = -42.0
 				m.NoiseReductionHeadroom = 8.0
-				m.SpectralDecrease = -0.15
+				m.Spectral.Decrease = -0.15
 				m.InputLRA = 20.0
 				m.CrestFactor = 4.0
 				return m
@@ -912,8 +912,8 @@ func TestGenerateRecordingTips(t *testing.T) {
 				m.AstatsNoiseFloor = -70.0
 				m.CrestFactor = 12.0
 				m.NoiseReductionHeadroom = 25.0
-				m.SpectralDecrease = -0.02
-				m.SpectralSkewness = 0.5
+				m.Spectral.Decrease = -0.02
+				m.Spectral.Skewness = 0.5
 				return m
 			}(),
 			wantEmpty: true,
@@ -928,8 +928,8 @@ func TestGenerateRecordingTips(t *testing.T) {
 				m.AstatsNoiseFloor = -70.0
 				m.CrestFactor = 12.0
 				m.NoiseReductionHeadroom = 25.0
-				m.SpectralCentroid = 4500.0
-				m.SpectralRolloff = 11000.0
+				m.Spectral.Centroid = 4500.0
+				m.Spectral.Rolloff = 11000.0
 				return m
 			}(),
 			config:      &processor.EffectiveFilterConfig{DeessIntensity: 0.6},
@@ -967,7 +967,7 @@ func TestGenerateRecordingTips(t *testing.T) {
 				m.InputTP = 0.5
 				m.AstatsNoiseFloor = -42.0
 				m.NoiseReductionHeadroom = 8.0
-				m.SpectralDecrease = -0.15
+				m.Spectral.Decrease = -0.15
 				m.InputLRA = 20.0
 				m.CrestFactor = 4.0
 				m.NoiseProfile = &processor.NoiseProfile{
