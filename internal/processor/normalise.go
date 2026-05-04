@@ -82,10 +82,10 @@ func loudnormLogCallback(_ *ffmpeg.LogCtx, _ int, msg string) {
 }
 
 // startLoudnormCapture begins capturing loudnorm log output.
-// Must be called before processing frames through the loudnorm filter.
 // Temporarily raises log level to INFO since loudnorm outputs JSON at that level.
 // FFmpeg logging is process-global, so capture is serialised from start through
-// stop for both Pass 3 measurement and Pass 4 application.
+// stop. The narrow capture boundary is graph finalisation, where loudnorm emits
+// JSON as the filter graph is freed.
 func startLoudnormCapture() {
 	loudnormLogCapture.lifecycleMu.Lock()
 
@@ -99,7 +99,8 @@ func startLoudnormCapture() {
 	loudnormAVLogSetCallback(loudnormLogCallback)
 }
 
-// stopLoudnormCapture ends capture, restores default logging, and parses the JSON.
+// stopLoudnormCapture ends capture, restores default logging, and parses the JSON
+// emitted while loudnorm graph finalisation was captured.
 // Returns the parsed LoudnormStats or an error if JSON was not found/parseable.
 func stopLoudnormCapture() (*LoudnormStats, error) {
 	defer loudnormLogCapture.lifecycleMu.Unlock()
@@ -136,11 +137,15 @@ type loudnormCaptureSession struct {
 	stopped bool
 }
 
+// beginLoudnormCapture starts a capture session for a graph-finalisation boundary.
+// The returned session must be stopped once graph free has completed.
 func beginLoudnormCapture() *loudnormCaptureSession {
 	startLoudnormCapture()
 	return &loudnormCaptureSession{}
 }
 
+// Stop restores FFmpeg logging and parses the captured graph-finalisation output.
+// Repeated calls are safe and do not restore logging twice.
 func (session *loudnormCaptureSession) Stop() (*LoudnormStats, error) {
 	if session == nil {
 		return nil, nil
@@ -157,8 +162,20 @@ func (session *loudnormCaptureSession) Stop() (*LoudnormStats, error) {
 	return stopLoudnormCapture()
 }
 
+// StopDiscard restores FFmpeg logging and discards any graph-finalisation stats.
 func (session *loudnormCaptureSession) StopDiscard() {
 	_, _ = session.Stop()
+}
+
+func captureLoudnormGraphFinalisation(graph **ffmpeg.AVFilterGraph) (*LoudnormStats, error) {
+	capture := beginLoudnormCapture()
+	loudnormAVFilterGraphFree(graph)
+
+	stats, err := capture.Stop()
+	if err != nil {
+		return nil, fmt.Errorf("failed to capture loudnorm graph finalisation: %w", err)
+	}
+	return stats, nil
 }
 
 // LoudnormMeasurement holds the results from loudnorm's first pass (measurement mode).
@@ -191,10 +208,6 @@ type LoudnormMeasurement struct {
 //   - measurement: Loudnorm measurements for second pass
 //   - err: Error if measurement failed
 func measureWithLoudnorm(inputPath string, config *EffectiveFilterConfig, filterPrefix string, progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements)) (*LoudnormMeasurement, error) {
-	// Start capturing loudnorm log output
-	capture := beginLoudnormCapture()
-	defer capture.StopDiscard()
-
 	// Open input file
 	reader, metadata, err := audio.OpenAudioFile(inputPath)
 	if err != nil {
@@ -224,7 +237,7 @@ func measureWithLoudnorm(inputPath string, config *EffectiveFilterConfig, filter
 	}
 
 	// Create filter graph
-	filterGraph, bufferSrcCtx, bufferSinkCtx, err := setupFilterGraph(
+	filterGraph, bufferSrcCtx, bufferSinkCtx, err := loudnormSetupFilterGraph(
 		reader.GetDecoderContext(),
 		filterSpec,
 	)
@@ -248,16 +261,13 @@ func measureWithLoudnorm(inputPath string, config *EffectiveFilterConfig, filter
 		},
 	})
 
-	// Free filter graph to trigger loudnorm JSON output
-	loudnormAVFilterGraphFree(&filterGraph)
-
-	// Capture loudnorm stats from log output
-	stats, err := capture.Stop()
+	// Free filter graph to trigger loudnorm JSON output and capture only that boundary.
+	stats, captureErr := captureLoudnormGraphFinalisation(&filterGraph)
 	if loopErr != nil {
 		return nil, fmt.Errorf("loudnorm measurement loop failed: %w", loopErr)
 	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to capture loudnorm measurements: %w", err)
+	if captureErr != nil {
+		return nil, fmt.Errorf("failed to capture loudnorm measurements: %w", captureErr)
 	}
 
 	// Parse string values to measurement struct
@@ -634,27 +644,17 @@ func applyLoudnormAndMeasure(
 	needsLimiting bool,
 	progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements),
 ) (float64, float64, *OutputMeasurements, *LoudnormStats, time.Duration, error) {
-	// Start capturing loudnorm's JSON output for diagnostics
-	capture := beginLoudnormCapture()
-	defer capture.StopDiscard()
-
-	// Helper to stop capture and return stats (may be nil if capture failed)
-	getLoudnormStats := func() *LoudnormStats {
-		stats, _ := capture.Stop()
-		return stats
-	}
-
 	// Open input file
 	reader, metadata, err := audio.OpenAudioFile(inputPath)
 	if err != nil {
-		return 0.0, 0.0, nil, getLoudnormStats(), 0, fmt.Errorf("failed to open input: %w", err)
+		return 0.0, 0.0, nil, nil, 0, fmt.Errorf("failed to open input: %w", err)
 	}
 	defer reader.Close()
 
 	// Create temporary output file - always FLAC since output is pinned to FLAC
 	tempPath, err := createSiblingTempPath(inputPath, "loudnorm")
 	if err != nil {
-		return 0.0, 0.0, nil, getLoudnormStats(), 0, fmt.Errorf("failed to create loudnorm temp output: %w", err)
+		return 0.0, 0.0, nil, nil, 0, fmt.Errorf("failed to create loudnorm temp output: %w", err)
 	}
 	removeTemp := func() {
 		_ = os.Remove(tempPath)
@@ -670,17 +670,25 @@ func applyLoudnormAndMeasure(
 	)
 	if err != nil {
 		removeTemp()
-		return 0.0, 0.0, nil, getLoudnormStats(), 0, fmt.Errorf("failed to create filter graph: %w", err)
+		return 0.0, 0.0, nil, nil, 0, fmt.Errorf("failed to create filter graph: %w", err)
 	}
 	// Note: We free the filter graph explicitly before getting stats, not via defer.
 	// loudnorm outputs its JSON when the filter graph is freed.
+	captureGraphStats := func() *LoudnormStats {
+		stats, err := captureLoudnormGraphFinalisation(&filterGraph)
+		if err != nil {
+			debugLog("Warning: failed to capture Pass 4 loudnorm diagnostics: %v", err)
+			return nil
+		}
+		return stats
+	}
 
 	// Create output encoder (same format as input)
 	encoder, err := loudnormCreateEncoder(tempPath, metadata, bufferSinkCtx)
 	if err != nil {
-		loudnormAVFilterGraphFree(&filterGraph)
+		stats := captureGraphStats()
 		removeTemp()
-		return 0.0, 0.0, nil, getLoudnormStats(), 0, fmt.Errorf("failed to create encoder: %w", err)
+		return 0.0, 0.0, nil, stats, 0, fmt.Errorf("failed to create encoder: %w", err)
 	}
 	encoderClosed := false
 	defer func() {
@@ -726,42 +734,39 @@ func applyLoudnormAndMeasure(
 		},
 	})
 	if loopErr != nil {
-		loudnormAVFilterGraphFree(&filterGraph)
+		stats := captureGraphStats()
 		encoderClosed = true
 		_ = encoder.Close()
 		removeTemp()
-		return 0.0, 0.0, nil, getLoudnormStats(), 0, loopErr
+		return 0.0, 0.0, nil, stats, 0, loopErr
 	}
 
 	// Flush encoder
 	if err := encoder.Flush(); err != nil {
-		loudnormAVFilterGraphFree(&filterGraph)
+		stats := captureGraphStats()
 		encoderClosed = true
 		_ = encoder.Close()
 		removeTemp()
-		return 0.0, 0.0, nil, getLoudnormStats(), 0, fmt.Errorf("failed to flush encoder: %w", err)
+		return 0.0, 0.0, nil, stats, 0, fmt.Errorf("failed to flush encoder: %w", err)
 	}
 
 	// Close encoder before rename
 	encoderClosed = true
 	if err := encoder.Close(); err != nil {
-		loudnormAVFilterGraphFree(&filterGraph)
+		stats := captureGraphStats()
 		removeTemp()
-		return 0.0, 0.0, nil, getLoudnormStats(), 0, fmt.Errorf("failed to close encoder: %w", err)
+		return 0.0, 0.0, nil, stats, 0, fmt.Errorf("failed to close encoder: %w", err)
 	}
 
 	// Atomic rename: temp file → original file (in-place update)
 	if err := loudnormRename(tempPath, inputPath); err != nil {
-		loudnormAVFilterGraphFree(&filterGraph)
+		stats := captureGraphStats()
 		removeTemp()
-		return 0.0, 0.0, nil, getLoudnormStats(), 0, fmt.Errorf("failed to rename output: %w", err)
+		return 0.0, 0.0, nil, stats, 0, fmt.Errorf("failed to rename output: %w", err)
 	}
 
 	// Free filter graph before getting stats — loudnorm outputs JSON on graph destruction
-	loudnormAVFilterGraphFree(&filterGraph)
-
-	// Capture loudnorm stats (JSON output captured during filter graph free)
-	stats := getLoudnormStats()
+	stats := captureGraphStats()
 
 	// Build complete OutputMeasurements from accumulators
 	finalMeasurements := finalizeOutputMeasurements(&acc)
