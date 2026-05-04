@@ -305,6 +305,270 @@ func (b *BaseMeasurements) fromJSON(decoded baseMeasurementsJSON) {
 	b.SamplePeak = decoded.SamplePeak
 }
 
+// MarshalJSON preserves the flat spectral_* JSON contract from BaseMeasurements
+// while retaining all input-specific analysis fields.
+func (m AudioMeasurements) MarshalJSON() ([]byte, error) {
+	object, err := baseMeasurementObject(m.BaseMeasurements)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := setJSONField(object, "input_i", m.InputI); err != nil {
+		return nil, err
+	}
+	if err := setJSONField(object, "input_tp", m.InputTP); err != nil {
+		return nil, err
+	}
+	if err := setJSONField(object, "input_lra", m.InputLRA); err != nil {
+		return nil, err
+	}
+	if err := setJSONField(object, "input_thresh", m.InputThresh); err != nil {
+		return nil, err
+	}
+	if err := setJSONField(object, "target_offset", m.TargetOffset); err != nil {
+		return nil, err
+	}
+	if err := setJSONField(object, "noise_floor", m.NoiseFloor); err != nil {
+		return nil, err
+	}
+	if err := setJSONField(object, "noise_floor_source", m.NoiseFloorSource); err != nil {
+		return nil, err
+	}
+	if err := setJSONField(object, "prescan_noise_floor", m.PreScanNoiseFloor); err != nil {
+		return nil, err
+	}
+	if err := setJSONField(object, "silence_detect_level", m.SilenceDetectLevel); err != nil {
+		return nil, err
+	}
+	if err := setJSONFieldOmitEmptySlice(object, "silence_regions", m.SilenceRegions); err != nil {
+		return nil, err
+	}
+	if err := setJSONFieldOmitEmptySlice(object, "interval_samples", m.IntervalSamples); err != nil {
+		return nil, err
+	}
+	if err := setJSONFieldOmitEmptySlice(object, "silence_candidates", m.SilenceCandidates); err != nil {
+		return nil, err
+	}
+	if err := setJSONFieldOmitEmptySlice(object, "speech_regions", m.SpeechRegions); err != nil {
+		return nil, err
+	}
+	if err := setJSONFieldOmitEmptySlice(object, "speech_candidates", m.SpeechCandidates); err != nil {
+		return nil, err
+	}
+	if err := setJSONFieldOmitEmptyPtr(object, "speech_profile", m.SpeechProfile); err != nil {
+		return nil, err
+	}
+	if err := setJSONField(object, "voice_activated", m.VoiceActivated); err != nil {
+		return nil, err
+	}
+	if err := setJSONFieldOmitEmptyPtr(object, "noise_profile", m.NoiseProfile); err != nil {
+		return nil, err
+	}
+	if err := setJSONField(object, "suggested_gate_threshold", m.SuggestedGateThreshold); err != nil {
+		return nil, err
+	}
+	if err := setJSONField(object, "noise_reduction_headroom", m.NoiseReductionHeadroom); err != nil {
+		return nil, err
+	}
+
+	return json.Marshal(object)
+}
+
+// UnmarshalJSON accepts the legacy flat spectral_* JSON contract and all
+// input-specific analysis fields.
+func (m *AudioMeasurements) UnmarshalJSON(data []byte) error {
+	if err := m.BaseMeasurements.UnmarshalJSON(data); err != nil {
+		return err
+	}
+
+	var decoded audioMeasurementsJSON
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+
+	m.InputI = decoded.InputI
+	m.InputTP = decoded.InputTP
+	m.InputLRA = decoded.InputLRA
+	m.InputThresh = decoded.InputThresh
+	m.TargetOffset = decoded.TargetOffset
+	m.NoiseFloor = decoded.NoiseFloor
+	m.NoiseFloorSource = decoded.NoiseFloorSource
+	m.PreScanNoiseFloor = decoded.PreScanNoiseFloor
+	m.SilenceDetectLevel = decoded.SilenceDetectLevel
+	m.SilenceRegions = decoded.SilenceRegions
+	m.IntervalSamples = decoded.IntervalSamples
+	m.SilenceCandidates = decoded.SilenceCandidates
+	m.SpeechRegions = decoded.SpeechRegions
+	m.SpeechCandidates = decoded.SpeechCandidates
+	m.SpeechProfile = decoded.SpeechProfile
+	m.VoiceActivated = decoded.VoiceActivated
+	m.NoiseProfile = decoded.NoiseProfile
+	m.SuggestedGateThreshold = decoded.SuggestedGateThreshold
+	m.NoiseReductionHeadroom = decoded.NoiseReductionHeadroom
+
+	return nil
+}
+
+type audioMeasurementsJSON struct {
+	InputI           float64 `json:"input_i"`
+	InputTP          float64 `json:"input_tp"`
+	InputLRA         float64 `json:"input_lra"`
+	InputThresh      float64 `json:"input_thresh"`
+	TargetOffset     float64 `json:"target_offset"`
+	NoiseFloor       float64 `json:"noise_floor"`
+	NoiseFloorSource string  `json:"noise_floor_source"`
+
+	PreScanNoiseFloor  float64 `json:"prescan_noise_floor"`
+	SilenceDetectLevel float64 `json:"silence_detect_level"`
+
+	SilenceRegions    []SilenceRegion           `json:"silence_regions,omitempty"`
+	IntervalSamples   []IntervalSample          `json:"interval_samples,omitempty"`
+	SilenceCandidates []SilenceCandidateMetrics `json:"silence_candidates,omitempty"`
+	SpeechRegions     []SpeechRegion            `json:"speech_regions,omitempty"`
+	SpeechCandidates  []SpeechCandidateMetrics  `json:"speech_candidates,omitempty"`
+	SpeechProfile     *SpeechCandidateMetrics   `json:"speech_profile,omitempty"`
+
+	VoiceActivated bool          `json:"voice_activated"`
+	NoiseProfile   *NoiseProfile `json:"noise_profile,omitempty"`
+
+	SuggestedGateThreshold float64 `json:"suggested_gate_threshold"`
+	NoiseReductionHeadroom float64 `json:"noise_reduction_headroom"`
+}
+
+// MarshalJSON preserves the flat spectral_* JSON contract from BaseMeasurements
+// while retaining all output-specific measurement fields.
+func (m OutputMeasurements) MarshalJSON() ([]byte, error) {
+	object, err := baseMeasurementObject(m.BaseMeasurements)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := setJSONField(object, "output_i", m.OutputI); err != nil {
+		return nil, err
+	}
+	if err := setJSONField(object, "output_tp", m.OutputTP); err != nil {
+		return nil, err
+	}
+	if err := setJSONField(object, "output_lra", m.OutputLRA); err != nil {
+		return nil, err
+	}
+	if err := setJSONField(object, "output_thresh", m.OutputThresh); err != nil {
+		return nil, err
+	}
+	if err := setJSONField(object, "target_offset", m.TargetOffset); err != nil {
+		return nil, err
+	}
+	if err := setJSONField(object, "loudnorm_input_i", m.LoudnormInputI); err != nil {
+		return nil, err
+	}
+	if err := setJSONField(object, "loudnorm_input_tp", m.LoudnormInputTP); err != nil {
+		return nil, err
+	}
+	if err := setJSONField(object, "loudnorm_input_lra", m.LoudnormInputLRA); err != nil {
+		return nil, err
+	}
+	if err := setJSONField(object, "loudnorm_input_thresh", m.LoudnormInputThresh); err != nil {
+		return nil, err
+	}
+	if err := setJSONField(object, "loudnorm_target_offset", m.LoudnormTargetOffset); err != nil {
+		return nil, err
+	}
+	if err := setJSONField(object, "loudnorm_measured", m.LoudnormMeasured); err != nil {
+		return nil, err
+	}
+	if err := setJSONFieldOmitEmptyPtr(object, "silence_sample", m.SilenceSample); err != nil {
+		return nil, err
+	}
+	if err := setJSONFieldOmitEmptyPtr(object, "speech_sample", m.SpeechSample); err != nil {
+		return nil, err
+	}
+
+	return json.Marshal(object)
+}
+
+// UnmarshalJSON accepts the legacy flat spectral_* JSON contract and all
+// output-specific measurement fields.
+func (m *OutputMeasurements) UnmarshalJSON(data []byte) error {
+	if err := m.BaseMeasurements.UnmarshalJSON(data); err != nil {
+		return err
+	}
+
+	var decoded outputMeasurementsJSON
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+
+	m.OutputI = decoded.OutputI
+	m.OutputTP = decoded.OutputTP
+	m.OutputLRA = decoded.OutputLRA
+	m.OutputThresh = decoded.OutputThresh
+	m.TargetOffset = decoded.TargetOffset
+	m.LoudnormInputI = decoded.LoudnormInputI
+	m.LoudnormInputTP = decoded.LoudnormInputTP
+	m.LoudnormInputLRA = decoded.LoudnormInputLRA
+	m.LoudnormInputThresh = decoded.LoudnormInputThresh
+	m.LoudnormTargetOffset = decoded.LoudnormTargetOffset
+	m.LoudnormMeasured = decoded.LoudnormMeasured
+	m.SilenceSample = decoded.SilenceSample
+	m.SpeechSample = decoded.SpeechSample
+
+	return nil
+}
+
+type outputMeasurementsJSON struct {
+	OutputI      float64 `json:"output_i"`
+	OutputTP     float64 `json:"output_tp"`
+	OutputLRA    float64 `json:"output_lra"`
+	OutputThresh float64 `json:"output_thresh"`
+	TargetOffset float64 `json:"target_offset"`
+
+	LoudnormInputI       float64 `json:"loudnorm_input_i"`
+	LoudnormInputTP      float64 `json:"loudnorm_input_tp"`
+	LoudnormInputLRA     float64 `json:"loudnorm_input_lra"`
+	LoudnormInputThresh  float64 `json:"loudnorm_input_thresh"`
+	LoudnormTargetOffset float64 `json:"loudnorm_target_offset"`
+	LoudnormMeasured     bool    `json:"loudnorm_measured"`
+
+	SilenceSample *SilenceCandidateMetrics `json:"silence_sample,omitempty"`
+	SpeechSample  *SpeechCandidateMetrics  `json:"speech_sample,omitempty"`
+}
+
+func baseMeasurementObject(base BaseMeasurements) (map[string]json.RawMessage, error) {
+	data, err := base.MarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(data, &object); err != nil {
+		return nil, err
+	}
+	return object, nil
+}
+
+func setJSONField(object map[string]json.RawMessage, name string, value any) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	object[name] = data
+	return nil
+}
+
+func setJSONFieldOmitEmptySlice[T any](object map[string]json.RawMessage, name string, value []T) error {
+	if len(value) == 0 {
+		return nil
+	}
+	return setJSONField(object, name, value)
+}
+
+func setJSONFieldOmitEmptyPtr[T any](object map[string]json.RawMessage, name string, value *T) error {
+	if value == nil {
+		return nil
+	}
+	return setJSONField(object, name, value)
+}
+
 func flatJSONHasSpectral(raw map[string]json.RawMessage) bool {
 	for _, key := range []string{
 		"spectral_mean",

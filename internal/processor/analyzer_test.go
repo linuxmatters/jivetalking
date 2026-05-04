@@ -61,6 +61,68 @@ func TestAudioMeasurementsJSON_PreservesFlatSpectralFields(t *testing.T) {
 	assertSpectralValues(t, decoded.Spectral)
 }
 
+func TestAudioMeasurementsJSON_PreservesInputFields(t *testing.T) {
+	measurements := AudioMeasurements{
+		BaseMeasurements: BaseMeasurements{
+			DynamicRange: 14.5,
+			Spectral:     flatSpectralMetricsFixture(),
+		},
+		InputI:                 -23.4,
+		InputTP:                -1.2,
+		InputLRA:               5.6,
+		InputThresh:            -34.0,
+		TargetOffset:           1.1,
+		NoiseFloor:             -62.0,
+		NoiseFloorSource:       "astats",
+		PreScanNoiseFloor:      -63.0,
+		SilenceDetectLevel:     -55.0,
+		SilenceRegions:         []SilenceRegion{{Start: time.Second, End: 2 * time.Second, Duration: time.Second}},
+		IntervalSamples:        []IntervalSample{{Timestamp: 250 * time.Millisecond, RMSLevel: -48.0, Spectral: flatSpectralMetricsFixture()}},
+		SpeechRegions:          []SpeechRegion{{Start: 3 * time.Second, End: 4 * time.Second, Duration: time.Second}},
+		SpeechProfile:          &SpeechCandidateMetrics{RMSLevel: -24.0, Spectral: flatSpectralMetricsFixture()},
+		VoiceActivated:         true,
+		NoiseProfile:           &NoiseProfile{Start: time.Second, Duration: time.Second, MeasuredNoiseFloor: -62.0},
+		SuggestedGateThreshold: 0.025,
+		NoiseReductionHeadroom: 12.5,
+	}
+
+	data, err := json.Marshal(measurements)
+	if err != nil {
+		t.Fatalf("Marshal() failed: %v", err)
+	}
+	assertJSONField(t, data, "input_i")
+	assertJSONField(t, data, "noise_floor_source")
+	assertJSONField(t, data, "interval_samples")
+	assertJSONField(t, data, "speech_profile")
+	assertJSONField(t, data, "noise_profile")
+
+	var decoded AudioMeasurements
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal() failed: %v", err)
+	}
+	if decoded.InputI != measurements.InputI {
+		t.Errorf("InputI = %v, want %v", decoded.InputI, measurements.InputI)
+	}
+	if decoded.NoiseFloorSource != measurements.NoiseFloorSource {
+		t.Errorf("NoiseFloorSource = %q, want %q", decoded.NoiseFloorSource, measurements.NoiseFloorSource)
+	}
+	if len(decoded.IntervalSamples) != 1 {
+		t.Fatalf("IntervalSamples length = %d, want 1", len(decoded.IntervalSamples))
+	}
+	if !decoded.IntervalSamples[0].Spectral.Found {
+		t.Fatal("expected interval sample spectral metrics to preserve Found")
+	}
+	if decoded.SpeechProfile == nil {
+		t.Fatal("expected SpeechProfile to round-trip")
+	}
+	if decoded.NoiseProfile == nil {
+		t.Fatal("expected NoiseProfile to round-trip")
+	}
+	if !decoded.VoiceActivated {
+		t.Fatal("expected VoiceActivated to round-trip")
+	}
+}
+
 func TestOutputMeasurementsJSON_PreservesFlatSpectralFields(t *testing.T) {
 	measurements := OutputMeasurements{}
 	measurements.Spectral = flatSpectralMetricsFixture()
@@ -76,6 +138,58 @@ func TestOutputMeasurementsJSON_PreservesFlatSpectralFields(t *testing.T) {
 		t.Fatalf("Unmarshal() failed: %v", err)
 	}
 	assertSpectralValues(t, decoded.Spectral)
+}
+
+func TestOutputMeasurementsJSON_PreservesOutputFields(t *testing.T) {
+	measurements := OutputMeasurements{
+		BaseMeasurements: BaseMeasurements{
+			DynamicRange: 10.5,
+			Spectral:     flatSpectralMetricsFixture(),
+		},
+		OutputI:              -16.0,
+		OutputTP:             -1.0,
+		OutputLRA:            4.0,
+		OutputThresh:         -26.0,
+		TargetOffset:         0.3,
+		LoudnormInputI:       -18.0,
+		LoudnormInputTP:      -1.5,
+		LoudnormInputLRA:     5.0,
+		LoudnormInputThresh:  -28.0,
+		LoudnormTargetOffset: 1.2,
+		LoudnormMeasured:     true,
+		SilenceSample:        &SilenceCandidateMetrics{RMSLevel: -58.0, Spectral: flatSpectralMetricsFixture()},
+		SpeechSample:         &SpeechCandidateMetrics{RMSLevel: -22.0, Spectral: flatSpectralMetricsFixture()},
+	}
+
+	data, err := json.Marshal(measurements)
+	if err != nil {
+		t.Fatalf("Marshal() failed: %v", err)
+	}
+	assertJSONField(t, data, "output_i")
+	assertJSONField(t, data, "loudnorm_input_i")
+	assertJSONField(t, data, "loudnorm_measured")
+	assertJSONField(t, data, "silence_sample")
+	assertJSONField(t, data, "speech_sample")
+
+	var decoded OutputMeasurements
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal() failed: %v", err)
+	}
+	if decoded.OutputI != measurements.OutputI {
+		t.Errorf("OutputI = %v, want %v", decoded.OutputI, measurements.OutputI)
+	}
+	if decoded.LoudnormInputI != measurements.LoudnormInputI {
+		t.Errorf("LoudnormInputI = %v, want %v", decoded.LoudnormInputI, measurements.LoudnormInputI)
+	}
+	if !decoded.LoudnormMeasured {
+		t.Fatal("expected LoudnormMeasured to round-trip")
+	}
+	if decoded.SilenceSample == nil {
+		t.Fatal("expected SilenceSample to round-trip")
+	}
+	if decoded.SpeechSample == nil {
+		t.Fatal("expected SpeechSample to round-trip")
+	}
 }
 
 func TestBaseMeasurements_HasNoFlatSpectralPrimitiveFields(t *testing.T) {
@@ -97,6 +211,18 @@ func assertFlatSpectralJSONKeys(t *testing.T, data []byte) {
 	}
 	if _, ok := object["spectral"]; ok {
 		t.Errorf("unexpected nested spectral JSON field in %s", string(data))
+	}
+}
+
+func assertJSONField(t *testing.T, data []byte, field string) {
+	t.Helper()
+
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(data, &object); err != nil {
+		t.Fatalf("Unmarshal() failed: %v", err)
+	}
+	if _, ok := object[field]; !ok {
+		t.Errorf("missing JSON field %q in %s", field, string(data))
 	}
 }
 
