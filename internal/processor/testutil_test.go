@@ -231,4 +231,53 @@ func cleanupTestAudio(tb testing.TB, path string) {
 			os.Remove(match)
 		}
 	}
+
+	tempPatterns := []string{
+		filepath.Join(filepath.Dir(path), ".processing-*.tmp.flac"),
+		filepath.Join(filepath.Dir(path), ".loudnorm-*.tmp.flac"),
+	}
+	for _, pattern := range tempPatterns {
+		matches, _ := filepath.Glob(pattern)
+		for _, match := range matches {
+			os.Remove(match)
+		}
+	}
+}
+
+func assertNoProcessingTempFiles(tb testing.TB, dir string) {
+	tb.Helper()
+
+	matches, err := filepath.Glob(filepath.Join(dir, ".processing-*.tmp.flac"))
+	if err != nil {
+		tb.Fatalf("failed to glob processing temp files in %s: %v", dir, err)
+	}
+	if len(matches) > 0 {
+		tb.Fatalf("processing temp files remain in %s: %v", dir, matches)
+	}
+}
+
+func TestCleanupTestAudioRemovesProcessorTempSiblings(t *testing.T) {
+	dir := t.TempDir()
+	testFile := generateTestAudio(t, TestAudioOptions{
+		DurationSecs: 0.1,
+		Dir:          dir,
+	})
+
+	tempPaths := []string{
+		filepath.Join(dir, ".processing-leftover.tmp.flac"),
+		filepath.Join(dir, ".loudnorm-leftover.tmp.flac"),
+	}
+	for _, tempPath := range tempPaths {
+		if err := os.WriteFile(tempPath, []byte("temporary audio"), 0o600); err != nil {
+			t.Fatalf("failed to create temp sibling %s: %v", tempPath, err)
+		}
+	}
+
+	cleanupTestAudio(t, testFile)
+
+	for _, tempPath := range tempPaths {
+		if _, err := os.Stat(tempPath); !os.IsNotExist(err) {
+			t.Fatalf("temp sibling stat error for %s = %v, want not exist", tempPath, err)
+		}
+	}
 }

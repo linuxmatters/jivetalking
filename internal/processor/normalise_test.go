@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -516,6 +517,40 @@ func generateLoudnormApplicationTestAudio(t *testing.T) string {
 	return testFile
 }
 
+func oldFixedLoudnormTempPath(inputPath string) string {
+	return strings.TrimSuffix(inputPath, filepath.Ext(inputPath)) + ".loudnorm.tmp.flac"
+}
+
+func requireLoudnormTempPath(t *testing.T, inputPath, tempPath string) {
+	t.Helper()
+
+	if filepath.Dir(tempPath) != filepath.Dir(inputPath) {
+		t.Fatalf("temp file dir = %q, want %q", filepath.Dir(tempPath), filepath.Dir(inputPath))
+	}
+	base := filepath.Base(tempPath)
+	if !strings.HasPrefix(base, ".loudnorm-") || !strings.HasSuffix(base, ".tmp.flac") {
+		t.Fatalf("temp file basename = %q, want .loudnorm-*.tmp.flac", base)
+	}
+	if tempPath == oldFixedLoudnormTempPath(inputPath) {
+		t.Fatalf("temp file path = %q, want non-fixed loudnorm temp path", tempPath)
+	}
+}
+
+func requireNoLoudnormTempFiles(t *testing.T, inputPath string) {
+	t.Helper()
+
+	matches, err := filepath.Glob(filepath.Join(filepath.Dir(inputPath), ".loudnorm-*.tmp.flac"))
+	if err != nil {
+		t.Fatalf("failed to glob loudnorm temp files: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("loudnorm temp files remain: %v", matches)
+	}
+	if _, err := os.Stat(oldFixedLoudnormTempPath(inputPath)); !os.IsNotExist(err) {
+		t.Fatalf("old fixed loudnorm temp stat error = %v, want not exist", err)
+	}
+}
+
 func applyLoudnormTest(
 	t *testing.T,
 	inputPath string,
@@ -575,6 +610,7 @@ func TestApplyLoudnormAndMeasureSetupErrorStopsCaptureWithoutFree(t *testing.T) 
 		t.Fatalf("graph free count = %d, want 0", recorder.freeCount())
 	}
 	requireLoudnormCaptureStoppedOnce(t, recorder)
+	requireNoLoudnormTempFiles(t, testFile)
 }
 
 func TestApplyLoudnormAndMeasureEncoderCreationErrorFreesGraphBeforeStoppingCapture(t *testing.T) {
@@ -583,11 +619,14 @@ func TestApplyLoudnormAndMeasureEncoderCreationErrorFreesGraphBeforeStoppingCapt
 	replaceApplyLoudnormGraphFree(t, recorder, true)
 
 	createErr := errors.New("injected encoder creation failure")
+	var tempPath string
 	replaceApplyLoudnormCreateEncoder(t, func(
-		string,
-		*audio.Metadata,
-		*ffmpeg.AVFilterContext,
+		outputPath string,
+		_ *audio.Metadata,
+		_ *ffmpeg.AVFilterContext,
 	) (loudnormOutputEncoder, error) {
+		tempPath = outputPath
+		requireLoudnormTempPath(t, testFile, outputPath)
 		return nil, createErr
 	})
 
@@ -602,6 +641,13 @@ func TestApplyLoudnormAndMeasureEncoderCreationErrorFreesGraphBeforeStoppingCapt
 		t.Fatalf("cleanup order = %s, want free,stop", gotOrder)
 	}
 	requireLoudnormCaptureStoppedOnce(t, recorder)
+	if tempPath == "" {
+		t.Fatal("encoder was not given a temp output path")
+	}
+	if _, err := os.Stat(tempPath); !os.IsNotExist(err) {
+		t.Fatalf("temp file stat error = %v, want not exist after encoder creation failure", err)
+	}
+	requireNoLoudnormTempFiles(t, testFile)
 }
 
 func TestApplyLoudnormAndMeasureLoopErrorFreesGraphBeforeStoppingCapture(t *testing.T) {
@@ -609,11 +655,14 @@ func TestApplyLoudnormAndMeasureLoopErrorFreesGraphBeforeStoppingCapture(t *test
 	recorder := installLoudnormCleanupRecorder(t)
 	replaceApplyLoudnormGraphFree(t, recorder, true)
 	encoder := &loudnormTestEncoder{}
+	var tempPath string
 	replaceApplyLoudnormCreateEncoder(t, func(
-		string,
-		*audio.Metadata,
-		*ffmpeg.AVFilterContext,
+		outputPath string,
+		_ *audio.Metadata,
+		_ *ffmpeg.AVFilterContext,
 	) (loudnormOutputEncoder, error) {
+		tempPath = outputPath
+		requireLoudnormTempPath(t, testFile, outputPath)
 		return encoder, nil
 	})
 
@@ -641,6 +690,13 @@ func TestApplyLoudnormAndMeasureLoopErrorFreesGraphBeforeStoppingCapture(t *test
 		t.Fatalf("encoder close calls = %d, want 1", encoder.closeN)
 	}
 	requireLoudnormCaptureStoppedOnce(t, recorder)
+	if tempPath == "" {
+		t.Fatal("encoder was not given a temp output path")
+	}
+	if _, err := os.Stat(tempPath); !os.IsNotExist(err) {
+		t.Fatalf("temp file stat error = %v, want not exist after loop failure", err)
+	}
+	requireNoLoudnormTempFiles(t, testFile)
 }
 
 func TestApplyLoudnormAndMeasureFlushErrorFreesGraphBeforeStoppingCapture(t *testing.T) {
@@ -650,11 +706,14 @@ func TestApplyLoudnormAndMeasureFlushErrorFreesGraphBeforeStoppingCapture(t *tes
 
 	flushErr := errors.New("injected flush failure")
 	encoder := &loudnormTestEncoder{flushErr: flushErr}
+	var tempPath string
 	replaceApplyLoudnormCreateEncoder(t, func(
-		string,
-		*audio.Metadata,
-		*ffmpeg.AVFilterContext,
+		outputPath string,
+		_ *audio.Metadata,
+		_ *ffmpeg.AVFilterContext,
 	) (loudnormOutputEncoder, error) {
+		tempPath = outputPath
+		requireLoudnormTempPath(t, testFile, outputPath)
 		return encoder, nil
 	})
 
@@ -684,6 +743,13 @@ func TestApplyLoudnormAndMeasureFlushErrorFreesGraphBeforeStoppingCapture(t *tes
 		t.Fatalf("encoder close calls = %d, want 1", encoder.closeN)
 	}
 	requireLoudnormCaptureStoppedOnce(t, recorder)
+	if tempPath == "" {
+		t.Fatal("encoder was not given a temp output path")
+	}
+	if _, err := os.Stat(tempPath); !os.IsNotExist(err) {
+		t.Fatalf("temp file stat error = %v, want not exist after flush failure", err)
+	}
+	requireNoLoudnormTempFiles(t, testFile)
 }
 
 func TestApplyLoudnormAndMeasureCloseErrorFreesGraphBeforeStoppingCapture(t *testing.T) {
@@ -693,11 +759,14 @@ func TestApplyLoudnormAndMeasureCloseErrorFreesGraphBeforeStoppingCapture(t *tes
 
 	closeErr := errors.New("injected close failure")
 	encoder := &loudnormTestEncoder{closeErr: closeErr}
+	var tempPath string
 	replaceApplyLoudnormCreateEncoder(t, func(
-		string,
-		*audio.Metadata,
-		*ffmpeg.AVFilterContext,
+		outputPath string,
+		_ *audio.Metadata,
+		_ *ffmpeg.AVFilterContext,
 	) (loudnormOutputEncoder, error) {
+		tempPath = outputPath
+		requireLoudnormTempPath(t, testFile, outputPath)
 		return encoder, nil
 	})
 
@@ -727,6 +796,13 @@ func TestApplyLoudnormAndMeasureCloseErrorFreesGraphBeforeStoppingCapture(t *tes
 		t.Fatalf("encoder close calls = %d, want 1", encoder.closeN)
 	}
 	requireLoudnormCaptureStoppedOnce(t, recorder)
+	if tempPath == "" {
+		t.Fatal("encoder was not given a temp output path")
+	}
+	if _, err := os.Stat(tempPath); !os.IsNotExist(err) {
+		t.Fatalf("temp file stat error = %v, want not exist after close failure", err)
+	}
+	requireNoLoudnormTempFiles(t, testFile)
 }
 
 func TestApplyLoudnormAndMeasureRenameErrorFreesGraphBeforeStoppingCapture(t *testing.T) {
@@ -755,13 +831,10 @@ func TestApplyLoudnormAndMeasureRenameErrorFreesGraphBeforeStoppingCapture(t *te
 	})
 
 	renameErr := errors.New("injected rename failure")
+	var tempPath string
 	replaceApplyLoudnormRename(t, func(oldPath, newPath string) error {
-		if filepath.Dir(oldPath) != filepath.Dir(testFile) {
-			t.Fatalf("temp file dir = %q, want %q", filepath.Dir(oldPath), filepath.Dir(testFile))
-		}
-		if !strings.HasSuffix(oldPath, ".loudnorm.tmp.flac") {
-			t.Fatalf("temp file path = %q, want .loudnorm.tmp.flac suffix", oldPath)
-		}
+		tempPath = oldPath
+		requireLoudnormTempPath(t, testFile, oldPath)
 		if newPath != testFile {
 			t.Fatalf("rename target = %q, want %q", newPath, testFile)
 		}
@@ -782,12 +855,25 @@ func TestApplyLoudnormAndMeasureRenameErrorFreesGraphBeforeStoppingCapture(t *te
 		t.Fatalf("encoder close calls = %d, want 1", encoder.closeN)
 	}
 	requireLoudnormCaptureStoppedOnce(t, recorder)
+	if tempPath == "" {
+		t.Fatal("rename was not given a temp output path")
+	}
+	if _, err := os.Stat(tempPath); !os.IsNotExist(err) {
+		t.Fatalf("temp file stat error = %v, want not exist after rename failure", err)
+	}
+	requireNoLoudnormTempFiles(t, testFile)
 }
 
 func TestApplyLoudnormAndMeasureSuccessFreesGraphBeforeStoppingCapture(t *testing.T) {
 	testFile := generateLoudnormApplicationTestAudio(t)
 	recorder := installLoudnormCleanupRecorder(t)
 	replaceApplyLoudnormGraphFree(t, recorder, true)
+	var tempPath string
+	replaceApplyLoudnormRename(t, func(oldPath, newPath string) error {
+		tempPath = oldPath
+		requireLoudnormTempPath(t, testFile, oldPath)
+		return os.Rename(oldPath, newPath)
+	})
 
 	finalLUFS, _, finalMeasurements, stats, _, err := applyLoudnormTest(t, testFile)
 	if err != nil {
@@ -809,6 +895,13 @@ func TestApplyLoudnormAndMeasureSuccessFreesGraphBeforeStoppingCapture(t *testin
 		t.Fatalf("cleanup order = %s, want free,stop", gotOrder)
 	}
 	requireLoudnormCaptureStoppedOnce(t, recorder)
+	if tempPath == "" {
+		t.Fatal("rename was not given a temp output path")
+	}
+	if _, err := os.Stat(tempPath); !os.IsNotExist(err) {
+		t.Fatalf("temp file stat error = %v, want not exist after successful rename", err)
+	}
+	requireNoLoudnormTempFiles(t, testFile)
 }
 
 func TestCalculateLinearModeTarget(t *testing.T) {

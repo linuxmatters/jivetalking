@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -653,7 +652,13 @@ func applyLoudnormAndMeasure(
 	defer reader.Close()
 
 	// Create temporary output file - always FLAC since output is pinned to FLAC
-	tempPath := strings.TrimSuffix(inputPath, filepath.Ext(inputPath)) + ".loudnorm.tmp.flac"
+	tempPath, err := createSiblingTempPath(inputPath, "loudnorm")
+	if err != nil {
+		return 0.0, 0.0, nil, getLoudnormStats(), 0, fmt.Errorf("failed to create loudnorm temp output: %w", err)
+	}
+	removeTemp := func() {
+		_ = os.Remove(tempPath)
+	}
 
 	// Build Pass 4 filter graph: loudnorm (second pass with linear=true) → ebur128 (validation)
 	filterSpec := buildLoudnormFilterSpec(config, measurement, preGainDB, ceiling, needsLimiting)
@@ -664,6 +669,7 @@ func applyLoudnormAndMeasure(
 		filterSpec,
 	)
 	if err != nil {
+		removeTemp()
 		return 0.0, 0.0, nil, getLoudnormStats(), 0, fmt.Errorf("failed to create filter graph: %w", err)
 	}
 	// Note: We free the filter graph explicitly before getting stats, not via defer.
@@ -673,6 +679,7 @@ func applyLoudnormAndMeasure(
 	encoder, err := loudnormCreateEncoder(tempPath, metadata, bufferSinkCtx)
 	if err != nil {
 		loudnormAVFilterGraphFree(&filterGraph)
+		removeTemp()
 		return 0.0, 0.0, nil, getLoudnormStats(), 0, fmt.Errorf("failed to create encoder: %w", err)
 	}
 	encoderClosed := false
@@ -720,12 +727,18 @@ func applyLoudnormAndMeasure(
 	})
 	if loopErr != nil {
 		loudnormAVFilterGraphFree(&filterGraph)
+		encoderClosed = true
+		_ = encoder.Close()
+		removeTemp()
 		return 0.0, 0.0, nil, getLoudnormStats(), 0, loopErr
 	}
 
 	// Flush encoder
 	if err := encoder.Flush(); err != nil {
 		loudnormAVFilterGraphFree(&filterGraph)
+		encoderClosed = true
+		_ = encoder.Close()
+		removeTemp()
 		return 0.0, 0.0, nil, getLoudnormStats(), 0, fmt.Errorf("failed to flush encoder: %w", err)
 	}
 
@@ -733,12 +746,14 @@ func applyLoudnormAndMeasure(
 	encoderClosed = true
 	if err := encoder.Close(); err != nil {
 		loudnormAVFilterGraphFree(&filterGraph)
+		removeTemp()
 		return 0.0, 0.0, nil, getLoudnormStats(), 0, fmt.Errorf("failed to close encoder: %w", err)
 	}
 
 	// Atomic rename: temp file → original file (in-place update)
 	if err := loudnormRename(tempPath, inputPath); err != nil {
 		loudnormAVFilterGraphFree(&filterGraph)
+		removeTemp()
 		return 0.0, 0.0, nil, getLoudnormStats(), 0, fmt.Errorf("failed to rename output: %w", err)
 	}
 

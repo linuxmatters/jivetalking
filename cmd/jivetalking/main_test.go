@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"io"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -12,6 +14,85 @@ import (
 	"github.com/linuxmatters/jivetalking/internal/logging"
 	"github.com/linuxmatters/jivetalking/internal/processor"
 )
+
+func TestOpenDebugLog_DisabledReturnsNilWithoutCreatingFile(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	originalCreate := createDebugLogFile
+	t.Cleanup(func() {
+		createDebugLogFile = originalCreate
+	})
+
+	createDebugLogFile = func(string) (*os.File, error) {
+		t.Fatal("createDebugLogFile should not be called when debug logging is disabled")
+		return nil, nil
+	}
+
+	logFile, err := openDebugLog(false)
+	if err != nil {
+		t.Fatalf("openDebugLog(false) error = %v, want nil", err)
+	}
+	if logFile != nil {
+		t.Fatalf("openDebugLog(false) file = %v, want nil", logFile)
+	}
+	if _, err := os.Stat(debugLogPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("debug log stat error = %v, want os.ErrNotExist", err)
+	}
+}
+
+func TestOpenDebugLog_EnabledCreatesLogFile(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	logFile, err := openDebugLog(true)
+	if err != nil {
+		t.Fatalf("openDebugLog(true) error = %v, want nil", err)
+	}
+	if logFile == nil {
+		t.Fatal("openDebugLog(true) file = nil, want open file")
+	}
+	if _, err := logFile.WriteString("debug line\n"); err != nil {
+		t.Fatalf("write debug log: %v", err)
+	}
+	if err := logFile.Close(); err != nil {
+		t.Fatalf("close debug log: %v", err)
+	}
+
+	contents, err := os.ReadFile(debugLogPath)
+	if err != nil {
+		t.Fatalf("read debug log: %v", err)
+	}
+	if string(contents) != "debug line\n" {
+		t.Fatalf("debug log contents = %q, want %q", contents, "debug line\n")
+	}
+}
+
+func TestOpenDebugLog_CreateFailureIncludesPath(t *testing.T) {
+	sentinel := errors.New("create failed")
+	originalCreate := createDebugLogFile
+	t.Cleanup(func() {
+		createDebugLogFile = originalCreate
+	})
+
+	var gotPath string
+	createDebugLogFile = func(path string) (*os.File, error) {
+		gotPath = path
+		return nil, sentinel
+	}
+
+	logFile, err := openDebugLog(true)
+	if logFile != nil {
+		t.Fatalf("openDebugLog(true) file = %v, want nil", logFile)
+	}
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("openDebugLog(true) error = %v, want sentinel wrapped", err)
+	}
+	if gotPath != debugLogPath {
+		t.Fatalf("createDebugLogFile path = %q, want %q", gotPath, debugLogPath)
+	}
+	if !strings.Contains(err.Error(), debugLogPath) {
+		t.Fatalf("openDebugLog(true) error = %q, want path %q", err, debugLogPath)
+	}
+}
 
 func TestRunAnalysisOnlyWithDeps_NonTTYOmitsBenchPath(t *testing.T) {
 	inputPath := ".bench/analysis/input/sample.wav"

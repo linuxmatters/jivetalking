@@ -13,6 +13,8 @@ import (
 	"github.com/linuxmatters/jivetalking/internal/audio"
 )
 
+var processorCreateSiblingTempPath = createSiblingTempPath
+
 // AnalysisResult contains analysis-only measurements and stage timings.
 type AnalysisResult struct {
 	Measurements       *AudioMeasurements
@@ -89,8 +91,16 @@ func ProcessAudio(inputPath string, config *BaseFilterConfig, progressCallback f
 		progressCallback(PassProcessing, "Processing", 0.0, 0.0, measurements)
 	}
 
-	// Generate output filename: input.flac → input-processed.flac
-	outputPath := generateOutputPath(inputPath)
+	outputPath, err := processorCreateSiblingTempPath(inputPath, "processing")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create pass 2 temp output: %w", err)
+	}
+	cleanupTempOutput := true
+	defer func() {
+		if cleanupTempOutput {
+			_ = os.Remove(outputPath)
+		}
+	}()
 
 	// Set Pass 2 filter chain order
 	effectiveConfig.FilterOrder = append([]FilterID(nil), Pass2FilterOrder...)
@@ -156,9 +166,10 @@ func ProcessAudio(inputPath string, config *BaseFilterConfig, progressCallback f
 	// Rename output file to include LUFS value: <name>-processed.<ext> → <name>-LUFS-NN-processed.<ext>
 	lufsValue := int(math.Abs(result.OutputLUFS))
 	finalPath := generateLUFSOutputPath(inputPath, lufsValue)
-	if err := os.Rename(outputPath, finalPath); err != nil {
-		return nil, fmt.Errorf("failed to rename output: %w", err)
+	if err := renameNoClobber(outputPath, finalPath); err != nil {
+		return nil, fmt.Errorf("failed to publish output: %w", err)
 	}
+	cleanupTempOutput = false
 	result.OutputPath = finalPath
 
 	return result, nil
@@ -314,19 +325,6 @@ func processWithFilters(inputPath, outputPath string, config *EffectiveFilterCon
 	}
 
 	return inputMetadata, nil
-}
-
-// generateOutputPath creates the intermediate output filename from the input filename.
-// This path is used during processing; the file is later renamed by generateLUFSOutputPath
-// to include the measured LUFS value. Output is always FLAC regardless of input extension.
-// Example: /path/to/audio.flac → /path/to/audio-processed.flac
-// Example: /path/to/audio.wav  → /path/to/audio-processed.flac
-func generateOutputPath(inputPath string) string {
-	dir := filepath.Dir(inputPath)
-	filename := filepath.Base(inputPath)
-	nameWithoutExt := strings.TrimSuffix(filename, filepath.Ext(filename))
-
-	return filepath.Join(dir, nameWithoutExt+"-processed.flac")
 }
 
 // generateLUFSOutputPath creates the final output filename with the measured LUFS value.

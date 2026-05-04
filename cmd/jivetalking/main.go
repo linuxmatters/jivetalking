@@ -25,6 +25,10 @@ var version = "dev"
 
 var errCancelledByUser = errors.New("cancelled by user")
 
+const debugLogPath = "jivetalking-debug.log"
+
+var createDebugLogFile = os.Create
+
 // CLI defines the command-line interface
 type CLI struct {
 	Version             bool          `short:"v" help:"Show version information"`
@@ -73,9 +77,12 @@ func main() {
 	config.SilenceScanDuration = cliArgs.SilenceScanDuration
 
 	// Open debug log file if --debug flag is set
-	var debugLog *os.File
-	if cliArgs.Debug {
-		debugLog, _ = os.Create("jivetalking-debug.log")
+	debugLog, err := openDebugLog(cliArgs.Debug)
+	if err != nil {
+		cli.PrintError(err.Error())
+		os.Exit(1)
+	}
+	if debugLog != nil {
 		defer debugLog.Close()
 	}
 	log := func(format string, args ...any) {
@@ -171,6 +178,18 @@ func main() {
 			return
 		}
 	}
+}
+
+func openDebugLog(enabled bool) (*os.File, error) {
+	if !enabled {
+		return nil, nil
+	}
+
+	logFile, err := createDebugLogFile(debugLogPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open debug log %s: %w", debugLogPath, err)
+	}
+	return logFile, nil
 }
 
 func buildProcessingReportData(inputPath string, fileStartTime time.Time, timings logging.ProcessingTimings, result *processor.ProcessingResult) logging.ReportData {

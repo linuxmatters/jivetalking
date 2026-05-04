@@ -2,38 +2,16 @@ package processor
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/linuxmatters/jivetalking/internal/audio"
 )
-
-// TestGenerateOutputPath verifies the intermediate output path is always FLAC.
-func TestGenerateOutputPath(t *testing.T) {
-	cases := []struct {
-		name  string
-		input string
-		want  string
-	}{
-		{"lowercase wav", "/tmp/foo.wav", "/tmp/foo-processed.flac"},
-		{"uppercase WAV", "/tmp/foo.WAV", "/tmp/foo-processed.flac"},
-		{"flac input", "/tmp/foo.flac", "/tmp/foo-processed.flac"},
-		{"mp3 input", "/tmp/foo.mp3", "/tmp/foo-processed.flac"},
-		{"no extension", "/tmp/foo", "/tmp/foo-processed.flac"},
-		{"multi-dot", "/tmp/foo.bar.wav", "/tmp/foo.bar-processed.flac"},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := generateOutputPath(tc.input)
-			if got != tc.want {
-				t.Errorf("generateOutputPath(%q) = %q, want %q", tc.input, got, tc.want)
-			}
-		})
-	}
-}
 
 // TestGenerateLUFSOutputPath verifies the final LUFS-tagged output path is always FLAC.
 func TestGenerateLUFSOutputPath(t *testing.T) {
@@ -57,6 +35,359 @@ func TestGenerateLUFSOutputPath(t *testing.T) {
 				t.Errorf("generateLUFSOutputPath(%q, 16) = %q, want %q", tc.input, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestCreateSiblingTempPath(t *testing.T) {
+	dir := t.TempDir()
+	targetPath := filepath.Join(dir, "presenter.wav")
+
+	first, err := createSiblingTempPath(targetPath, "processing")
+	if err != nil {
+		t.Fatalf("createSiblingTempPath() first call failed: %v", err)
+	}
+	defer os.Remove(first)
+
+	second, err := createSiblingTempPath(targetPath, "processing")
+	if err != nil {
+		t.Fatalf("createSiblingTempPath() second call failed: %v", err)
+	}
+	defer os.Remove(second)
+
+	if first == second {
+		t.Fatalf("createSiblingTempPath() returned duplicate path %q", first)
+	}
+
+	for _, tempPath := range []string{first, second} {
+		if filepath.Dir(tempPath) != dir {
+			t.Errorf("temp dir = %q, want %q", filepath.Dir(tempPath), dir)
+		}
+		if base := filepath.Base(tempPath); !strings.Contains(base, "processing") {
+			t.Errorf("temp basename = %q, want marker %q", base, "processing")
+		}
+		if ext := filepath.Ext(tempPath); ext != ".flac" {
+			t.Errorf("temp extension = %q, want .flac", ext)
+		}
+		if !strings.HasSuffix(tempPath, ".tmp.flac") {
+			t.Errorf("temp path = %q, want .tmp.flac suffix", tempPath)
+		}
+
+		info, err := os.Stat(tempPath)
+		if err != nil {
+			t.Fatalf("temp path %q was not reserved: %v", tempPath, err)
+		}
+		if info.Size() != 0 {
+			t.Errorf("temp path %q size = %d, want 0", tempPath, info.Size())
+		}
+	}
+}
+
+func TestRenameNoClobberPublishesSource(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "source.flac")
+	dst := filepath.Join(dir, "output.flac")
+	want := []byte("published audio")
+
+	if err := os.WriteFile(src, want, 0o600); err != nil {
+		t.Fatalf("failed to write source: %v", err)
+	}
+
+	if err := renameNoClobber(src, dst); err != nil {
+		t.Fatalf("renameNoClobber() failed: %v", err)
+	}
+
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("failed to read destination: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("destination bytes = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(src); !os.IsNotExist(err) {
+		t.Errorf("source stat error = %v, want not exist", err)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("failed to read publish directory: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("publish directory entries = %d, want only destination", len(entries))
+	}
+	if entries[0].Name() != filepath.Base(dst) {
+		t.Fatalf("publish directory entry = %q, want %q", entries[0].Name(), filepath.Base(dst))
+	}
+	info, err := entries[0].Info()
+	if err != nil {
+		t.Fatalf("failed to stat published destination: %v", err)
+	}
+	if info.Size() == 0 {
+		t.Fatal("published destination is zero bytes, want source bytes without reservation file")
+	}
+}
+
+func TestRenameNoClobberRefusesExistingDestination(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "source.flac")
+	dst := filepath.Join(dir, "output.flac")
+	sourceBytes := []byte("new audio")
+	existingBytes := []byte("existing audio")
+
+	if err := os.WriteFile(src, sourceBytes, 0o600); err != nil {
+		t.Fatalf("failed to write source: %v", err)
+	}
+	if err := os.WriteFile(dst, existingBytes, 0o600); err != nil {
+		t.Fatalf("failed to write destination: %v", err)
+	}
+
+	err := renameNoClobber(src, dst)
+	if err == nil {
+		t.Fatal("renameNoClobber() succeeded, want destination-exists error")
+	}
+	if !errors.Is(err, ErrOutputExists) {
+		t.Fatalf("renameNoClobber() error = %v, want ErrOutputExists", err)
+	}
+
+	var existsErr *DestinationExistsError
+	if !errors.As(err, &existsErr) {
+		t.Fatalf("renameNoClobber() error = %T, want DestinationExistsError", err)
+	}
+	if existsErr.Path != dst {
+		t.Errorf("DestinationExistsError.Path = %q, want %q", existsErr.Path, dst)
+	}
+
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("failed to read destination: %v", err)
+	}
+	if !bytes.Equal(got, existingBytes) {
+		t.Errorf("destination bytes = %q, want preserved %q", got, existingBytes)
+	}
+
+	got, err = os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("failed to read source after failed publish: %v", err)
+	}
+	if !bytes.Equal(got, sourceBytes) {
+		t.Errorf("source bytes = %q, want preserved %q", got, sourceBytes)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("failed to read publish directory: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("publish directory entries = %d, want source and destination only", len(entries))
+	}
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			t.Fatalf("failed to stat %q: %v", entry.Name(), err)
+		}
+		if info.Size() == 0 {
+			t.Fatalf("publish directory contains zero-byte entry %q", entry.Name())
+		}
+	}
+}
+
+func TestRenameNoClobberConcurrentPublishRace(t *testing.T) {
+	dir := t.TempDir()
+	dst := filepath.Join(dir, "output.flac")
+
+	const publisherCount = 12
+	sources := make([]string, publisherCount)
+	sourceBytes := make([][]byte, publisherCount)
+	for i := range publisherCount {
+		sources[i] = filepath.Join(dir, "source-"+string(rune('a'+i))+".flac")
+		sourceBytes[i] = []byte(strings.Repeat(string(rune('A'+i)), 64))
+		if err := os.WriteFile(sources[i], sourceBytes[i], 0o600); err != nil {
+			t.Fatalf("failed to write source %d: %v", i, err)
+		}
+	}
+
+	start := make(chan struct{})
+	errs := make([]error, publisherCount)
+	var wg sync.WaitGroup
+	wg.Add(publisherCount)
+	for i := range publisherCount {
+		go func(index int) {
+			defer wg.Done()
+			<-start
+			errs[index] = renameNoClobber(sources[index], dst)
+		}(i)
+	}
+
+	close(start)
+	wg.Wait()
+
+	successIndex := -1
+	var successBytes []byte
+	for i, err := range errs {
+		if err == nil {
+			if successIndex != -1 {
+				t.Fatalf("publishers %d and %d both succeeded, want exactly one success", successIndex, i)
+			}
+			successIndex = i
+			successBytes = sourceBytes[i]
+			continue
+		}
+		if !errors.Is(err, ErrOutputExists) {
+			t.Fatalf("publisher %d error = %v, want ErrOutputExists", i, err)
+		}
+	}
+	if successIndex == -1 {
+		t.Fatal("no publisher succeeded, want exactly one success")
+	}
+
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("failed to read destination: %v", err)
+	}
+	if len(got) == 0 {
+		t.Fatal("destination is zero bytes after concurrent publish")
+	}
+	if !bytes.Equal(got, successBytes) {
+		t.Fatalf("destination bytes = %q, want complete source bytes from publisher %d", got, successIndex)
+	}
+
+	for i, source := range sources {
+		got, err := os.ReadFile(source)
+		if i == successIndex {
+			if !os.IsNotExist(err) {
+				t.Fatalf("winning source stat/read error = %v, want not exist", err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("failed to read losing source %d: %v", i, err)
+		}
+		if !bytes.Equal(got, sourceBytes[i]) {
+			t.Fatalf("losing source %d bytes = %q, want preserved %q", i, got, sourceBytes[i])
+		}
+	}
+}
+
+func TestRenameNoClobberRefusesStaleZeroByteDestination(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "source.flac")
+	dst := filepath.Join(dir, "output.flac")
+	sourceBytes := []byte("new audio")
+
+	if err := os.WriteFile(src, sourceBytes, 0o600); err != nil {
+		t.Fatalf("failed to write source: %v", err)
+	}
+	if err := os.WriteFile(dst, nil, 0o600); err != nil {
+		t.Fatalf("failed to write stale destination: %v", err)
+	}
+
+	err := renameNoClobber(src, dst)
+	if err == nil {
+		t.Fatal("renameNoClobber() succeeded, want destination-exists error")
+	}
+	if !errors.Is(err, ErrOutputExists) {
+		t.Fatalf("renameNoClobber() error = %v, want ErrOutputExists", err)
+	}
+
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("failed to read stale destination: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("stale destination bytes = %q, want unchanged zero-byte file", got)
+	}
+
+	got, err = os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("failed to read source after stale destination collision: %v", err)
+	}
+	if !bytes.Equal(got, sourceBytes) {
+		t.Fatalf("source bytes = %q, want preserved %q", got, sourceBytes)
+	}
+}
+
+func TestRenameNoClobberPreservesSourceAfterLinkFailure(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "source.flac")
+	dst := filepath.Join(dir, "output.flac")
+	linkErr := errors.New("injected link failure")
+
+	if err := os.WriteFile(src, []byte("new audio"), 0o600); err != nil {
+		t.Fatalf("failed to write source: %v", err)
+	}
+
+	oldLink := processorLink
+	processorLink = func(_, _ string) error {
+		return linkErr
+	}
+	t.Cleanup(func() {
+		processorLink = oldLink
+	})
+
+	err := renameNoClobber(src, dst)
+	if err == nil {
+		t.Fatal("renameNoClobber() succeeded, want injected link error")
+	}
+	if !errors.Is(err, linkErr) {
+		t.Fatalf("renameNoClobber() error = %v, want injected link error", err)
+	}
+	if _, err := os.Stat(dst); !os.IsNotExist(err) {
+		t.Fatalf("destination stat error = %v, want not exist", err)
+	}
+	if _, err := os.Stat(src); err != nil {
+		t.Fatalf("source was not preserved after failed publish: %v", err)
+	}
+}
+
+func TestRenameNoClobberReportsSourceCleanupFailureAfterPublish(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "source.flac")
+	dst := filepath.Join(dir, "output.flac")
+	want := []byte("published audio")
+	removeErr := errors.New("injected remove failure")
+
+	if err := os.WriteFile(src, want, 0o600); err != nil {
+		t.Fatalf("failed to write source: %v", err)
+	}
+
+	oldRemove := processorRemove
+	processorRemove = func(path string) error {
+		if path != src {
+			t.Fatalf("processorRemove(%q), want %q", path, src)
+		}
+		return removeErr
+	}
+	t.Cleanup(func() {
+		processorRemove = oldRemove
+	})
+
+	err := renameNoClobber(src, dst)
+	if err == nil {
+		t.Fatal("renameNoClobber() succeeded, want source cleanup error")
+	}
+	if !errors.Is(err, removeErr) {
+		t.Fatalf("renameNoClobber() error = %v, want injected remove error", err)
+	}
+	if errors.Is(err, ErrOutputExists) {
+		t.Fatalf("renameNoClobber() error = %v, want non-collision cleanup error", err)
+	}
+	if !strings.Contains(err.Error(), src) {
+		t.Fatalf("renameNoClobber() error = %v, want source path %q", err, src)
+	}
+
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("failed to read destination: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("destination bytes = %q, want %q", got, want)
+	}
+
+	got, err = os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("failed to read source after cleanup failure: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("source bytes = %q, want preserved %q", got, want)
 	}
 }
 
@@ -355,6 +686,97 @@ func TestProcessAudio(t *testing.T) {
 	t.Logf("Output LUFS: %.2f", result.OutputLUFS)
 	t.Logf("Noise Floor: %.2f", result.NoiseFloor)
 	t.Logf("Output: %s", result.OutputPath)
+}
+
+func TestProcessAudioFinalCollisionPreservesOutputAndCleansTemp(t *testing.T) {
+	dir := t.TempDir()
+	testFile := generateTestAudio(t, TestAudioOptions{
+		DurationSecs: 1.5,
+		SampleRate:   44100,
+		ToneFreq:     440.0,
+		ToneLevel:    -18.0,
+		NoiseLevel:   -55.0,
+		Dir:          dir,
+	})
+	defer cleanupTestAudio(t, testFile)
+
+	config := newTestBaseConfig()
+	config.DownmixEnabled = true
+	config.AnalysisEnabled = true
+	config.ResampleEnabled = true
+	config.LoudnormEnabled = false
+	config.AdeclickEnabled = false
+
+	var tempPaths []string
+	oldCreateSiblingTempPath := processorCreateSiblingTempPath
+	processorCreateSiblingTempPath = func(targetPath, marker string) (string, error) {
+		tempPath, err := oldCreateSiblingTempPath(targetPath, marker)
+		if err == nil && marker == "processing" {
+			tempPaths = append(tempPaths, tempPath)
+		}
+		return tempPath, err
+	}
+	t.Cleanup(func() {
+		processorCreateSiblingTempPath = oldCreateSiblingTempPath
+	})
+
+	firstResult, err := ProcessAudio(testFile, config, nil)
+	if err != nil {
+		t.Fatalf("first ProcessAudio() failed: %v", err)
+	}
+	if firstResult.OutputPath == "" {
+		t.Fatal("first ProcessAudio() returned empty output path")
+	}
+
+	existingBytes, err := os.ReadFile(firstResult.OutputPath)
+	if err != nil {
+		t.Fatalf("failed to read first output: %v", err)
+	}
+
+	secondResult, err := ProcessAudio(testFile, config, nil)
+	if err == nil {
+		if secondResult != nil && secondResult.OutputPath != "" {
+			_ = os.Remove(secondResult.OutputPath)
+		}
+		t.Fatal("second ProcessAudio() succeeded, want final output collision")
+	}
+	if !errors.Is(err, ErrOutputExists) {
+		t.Fatalf("second ProcessAudio() error = %v, want ErrOutputExists", err)
+	}
+	if !strings.Contains(err.Error(), firstResult.OutputPath) {
+		t.Fatalf("second ProcessAudio() error = %v, want final path %q", err, firstResult.OutputPath)
+	}
+	if count := strings.Count(err.Error(), firstResult.OutputPath); count != 1 {
+		t.Fatalf("second ProcessAudio() error contains final path %d times, want 1: %v", count, err)
+	}
+
+	gotBytes, err := os.ReadFile(firstResult.OutputPath)
+	if err != nil {
+		t.Fatalf("failed to read preserved output: %v", err)
+	}
+	if !bytes.Equal(gotBytes, existingBytes) {
+		t.Fatal("existing final output bytes changed after collision")
+	}
+
+	assertNoProcessingTempFiles(t, dir)
+
+	if len(tempPaths) != 2 {
+		t.Fatalf("recorded processing temp paths = %d, want 2: %v", len(tempPaths), tempPaths)
+	}
+	if tempPaths[0] == tempPaths[1] {
+		t.Fatalf("ProcessAudio() reused processing temp path %q", tempPaths[0])
+	}
+	for _, tempPath := range tempPaths {
+		if filepath.Dir(tempPath) != dir {
+			t.Errorf("processing temp dir = %q, want %q", filepath.Dir(tempPath), dir)
+		}
+		if base := filepath.Base(tempPath); !strings.HasPrefix(base, ".processing-") || !strings.HasSuffix(base, ".tmp.flac") {
+			t.Errorf("processing temp basename = %q, want .processing-*.tmp.flac", base)
+		}
+		if _, err := os.Stat(tempPath); !os.IsNotExist(err) {
+			t.Errorf("processing temp stat error = %v, want not exist after publish/collision", err)
+		}
+	}
 }
 
 func TestAnalyzeOnlyDetailedTimings(t *testing.T) {
