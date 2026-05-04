@@ -59,8 +59,8 @@ func tuneDS201LowPass(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagno
 	diagnostics.DS201LPContentType = contentType
 
 	// Calculate rolloff/centroid ratio for logging
-	rolloff := m.SpectralRolloff
-	centroid := m.SpectralCentroid
+	rolloff := m.Spectral.Rolloff
+	centroid := m.Spectral.Centroid
 	if m.SpeechProfile != nil {
 		rolloff = preferSpeechMetric(rolloff, m.SpeechProfile.Spectral.Rolloff)
 		centroid = preferSpeechMetric(centroid, m.SpeechProfile.Spectral.Centroid)
@@ -110,8 +110,8 @@ func tuneDS201LowPassForSpeech(config *EffectiveFilterConfig, diagnostics *Adapt
 
 	// Prefer speech-specific spectral metrics when available.
 	// Full-file averages are diluted by silence in multi-track recordings.
-	rolloff := m.SpectralRolloff
-	centroid := m.SpectralCentroid
+	rolloff := m.Spectral.Rolloff
+	centroid := m.Spectral.Centroid
 	if m.SpeechProfile != nil {
 		rolloff = preferSpeechMetric(rolloff, m.SpeechProfile.Spectral.Rolloff)
 		centroid = preferSpeechMetric(centroid, m.SpeechProfile.Spectral.Centroid)

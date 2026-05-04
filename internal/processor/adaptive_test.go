@@ -9,13 +9,9 @@ import (
 func TestAdaptConfigReturnsEffectiveConfig(t *testing.T) {
 	measurements := &AudioMeasurements{
 		BaseMeasurements: BaseMeasurements{
-			SpectralCentroid: 5000,
-			SpectralDecrease: -0.12,
-			SpectralSkewness: 1.2,
-			DynamicRange:     32.0,
-			SpectralKurtosis: 4.0,
-			SpectralFlux:     0.01,
-			PeakLevel:        -8.0,
+			Spectral: SpectralMetrics{Centroid: 5000, Decrease: -0.12, Skewness: 1.2, Kurtosis: 4.0, Flux: 0.01}, DynamicRange: 32.0,
+
+			PeakLevel: -8.0,
 		},
 		InputI:     -28.0,
 		InputTP:    -4.0,
@@ -178,16 +174,8 @@ func newOrderIndependenceSeed() *BaseFilterConfig {
 func orderIndependenceWarmNoProfileMeasurements() *AudioMeasurements {
 	return &AudioMeasurements{
 		BaseMeasurements: BaseMeasurements{
-			SpectralCentroid: 6500,
-			SpectralDecrease: -0.12,
-			SpectralSkewness: 1.6,
-			SpectralKurtosis: 4.0,
-			SpectralFlatness: 0.62,
-			SpectralFlux:     0.008,
-			SpectralCrest:    20.0,
-			SpectralRolloff:  18000,
-			DynamicRange:     90.0,
-			PeakLevel:        -10.0,
+			Spectral: SpectralMetrics{Centroid: 6500, Decrease: -0.12, Skewness: 1.6, Kurtosis: 4.0, Flatness: 0.62, Flux: 0.008, Crest: 20.0, Rolloff: 18000}, DynamicRange: 90.0,
+			PeakLevel: -10.0,
 		},
 		InputI:     -42.1,
 		InputTP:    -4.9,
@@ -199,15 +187,7 @@ func orderIndependenceWarmNoProfileMeasurements() *AudioMeasurements {
 func orderIndependenceBrightSpeechMeasurements() *AudioMeasurements {
 	return &AudioMeasurements{
 		BaseMeasurements: BaseMeasurements{
-			SpectralCentroid:  5000,
-			SpectralDecrease:  0.0,
-			SpectralSkewness:  0.0,
-			SpectralKurtosis:  9.0,
-			SpectralFlatness:  0.38,
-			SpectralFlux:      0.002,
-			SpectralCrest:     45.0,
-			SpectralRolloff:   15000,
-			DynamicRange:      32.0,
+			Spectral: SpectralMetrics{Centroid: 5000, Decrease: 0.0, Skewness: 0.0, Kurtosis: 9.0, Flatness: 0.38, Flux: 0.002, Crest: 45.0, Rolloff: 15000}, DynamicRange: 32.0,
 			PeakLevel:         -6.0,
 			ZeroCrossingsRate: 0.05,
 		},
@@ -550,12 +530,8 @@ func TestTuneDS201HighPass(t *testing.T) {
 			// Start with highpass enabled to test tuning behavior
 			config.DS201HPEnabled = true
 			measurements := &AudioMeasurements{
-				BaseMeasurements: BaseMeasurements{
-					SpectralCentroid: tt.centroid,
-					SpectralDecrease: tt.spectralDecrease,
-					SpectralSkewness: tt.spectralSkewness,
-				},
-				NoiseProfile: tt.noiseProfile,
+				BaseMeasurements: BaseMeasurements{Spectral: SpectralMetrics{Centroid: tt.centroid, Decrease: tt.spectralDecrease, Skewness: tt.spectralSkewness}},
+				NoiseProfile:     tt.noiseProfile,
 			}
 
 			// Execute
@@ -602,11 +578,8 @@ func TestTuneDS201HighPass(t *testing.T) {
 		config.DS201HPEnabled = true
 
 		tuneDS201HighPass(config, &AudioMeasurements{
-			BaseMeasurements: BaseMeasurements{
-				SpectralCentroid: 5000,
-				SpectralDecrease: -0.12,
-			},
-			NoiseProfile: makeNoiseProfile(-50.0, 0.8),
+			BaseMeasurements: BaseMeasurements{Spectral: SpectralMetrics{Centroid: 5000, Decrease: -0.12}},
+			NoiseProfile:     makeNoiseProfile(-50.0, 0.8),
 		})
 
 		if config.DS201HPPoles != 1 || config.DS201HPWidth != ds201HPVeryWarmWidth || config.DS201HPMix != ds201HPVeryWarmMix {
@@ -615,9 +588,7 @@ func TestTuneDS201HighPass(t *testing.T) {
 		}
 
 		tuneDS201HighPass(config, &AudioMeasurements{
-			BaseMeasurements: BaseMeasurements{
-				SpectralCentroid: 5000,
-			},
+			BaseMeasurements: BaseMeasurements{Spectral: SpectralMetrics{Centroid: 5000}},
 		})
 
 		if config.DS201HPFreq != ds201HPBrightFreq {
@@ -709,12 +680,7 @@ func TestDetectContentType(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := &AudioMeasurements{
-				BaseMeasurements: BaseMeasurements{
-					SpectralKurtosis: tt.kurtosis,
-					SpectralFlatness: tt.flatness,
-					SpectralFlux:     tt.flux,
-					SpectralCrest:    tt.crest,
-				},
+				BaseMeasurements: BaseMeasurements{Spectral: SpectralMetrics{Kurtosis: tt.kurtosis, Flatness: tt.flatness, Flux: tt.flux, Crest: tt.crest}},
 			}
 
 			got := detectContentType(m)
@@ -899,16 +865,7 @@ func TestTuneDS201LowPass(t *testing.T) {
 			config := newTestConfig()
 			diagnostics := &AdaptiveDiagnostics{}
 			m := &AudioMeasurements{
-				BaseMeasurements: BaseMeasurements{
-					SpectralKurtosis:  tt.kurtosis,
-					SpectralFlatness:  tt.flatness,
-					SpectralFlux:      tt.flux,
-					SpectralCrest:     tt.crest,
-					SpectralRolloff:   tt.rolloff,
-					SpectralCentroid:  tt.centroid,
-					SpectralSlope:     tt.slope,
-					ZeroCrossingsRate: tt.zcr,
-				},
+				BaseMeasurements: BaseMeasurements{Spectral: SpectralMetrics{Kurtosis: tt.kurtosis, Flatness: tt.flatness, Flux: tt.flux, Crest: tt.crest, Rolloff: tt.rolloff, Centroid: tt.centroid, Slope: tt.slope}, ZeroCrossingsRate: tt.zcr},
 			}
 
 			tuneDS201LowPass(config, diagnostics, m)
@@ -1157,11 +1114,8 @@ func TestTuneDeesser(t *testing.T) {
 			// Start with deesser disabled - tuneDeesser should set intensity based on spectral data
 			config.DeessIntensity = 0.0
 			measurements := &AudioMeasurements{
-				BaseMeasurements: BaseMeasurements{
-					SpectralCentroid: tt.centroid,
-					SpectralRolloff:  tt.rolloff,
-				},
-				SpeechProfile: tt.speechProfile,
+				BaseMeasurements: BaseMeasurements{Spectral: SpectralMetrics{Centroid: tt.centroid, Rolloff: tt.rolloff}},
+				SpeechProfile:    tt.speechProfile,
 			}
 
 			// Execute
@@ -1340,11 +1294,8 @@ func TestTuneDS201Gate(t *testing.T) {
 			t.Run(tt.name, func(t *testing.T) {
 				config := newTestConfig()
 				measurements := &AudioMeasurements{
-					BaseMeasurements: BaseMeasurements{
-						MaxDifference: tt.maxDiff,
-						SpectralFlux:  tt.spectralFlux,
-					},
-					NoiseFloor: -55.0,
+					BaseMeasurements: BaseMeasurements{Spectral: SpectralMetrics{Flux: tt.spectralFlux}, MaxDifference: tt.maxDiff},
+					NoiseFloor:       -55.0,
 				}
 
 				tuneDS201GateForTest(config, measurements)
@@ -1530,9 +1481,8 @@ func TestTuneDS201Gate(t *testing.T) {
 			t.Run(tt.name, func(t *testing.T) {
 				config := newTestConfig()
 				measurements := &AudioMeasurements{
-					BaseMeasurements: BaseMeasurements{
-						SpectralFlux: 0.02, // Moderate flux (uses ds201GateReleaseMod)
-					},
+					BaseMeasurements: BaseMeasurements{Spectral: SpectralMetrics{Flux: 0.02}}, // Moderate flux (uses ds201GateReleaseMod)
+
 					NoiseFloor: -55.0,
 					InputLRA:   15.0, // Above LRA threshold (10 LU) to avoid LRA-based extension
 					NoiseProfile: &NoiseProfile{
@@ -1604,9 +1554,8 @@ func TestTuneDS201Gate(t *testing.T) {
 			t.Run(tt.name, func(t *testing.T) {
 				config := newTestConfig()
 				measurements := &AudioMeasurements{
-					BaseMeasurements: BaseMeasurements{
-						SpectralFlux: 0.02, // Moderate flux
-					},
+					BaseMeasurements: BaseMeasurements{Spectral: SpectralMetrics{Flux: 0.02}}, // Moderate flux
+
 					NoiseFloor: -55.0,
 					InputLRA:   tt.lra,
 					NoiseProfile: &NoiseProfile{
@@ -1629,13 +1578,10 @@ func TestTuneDS201Gate(t *testing.T) {
 	t.Run("populates diagnostics with speech metrics", func(t *testing.T) {
 		config := newTestConfig()
 		diagnostics := tuneDS201GateForTest(config, &AudioMeasurements{
-			BaseMeasurements: BaseMeasurements{
-				SpectralFlux:  0.02,
-				SpectralCrest: 20.0,
-			},
-			InputI:     -48.0,
-			InputLRA:   6.0,
-			NoiseFloor: -70.0,
+			BaseMeasurements: BaseMeasurements{Spectral: SpectralMetrics{Flux: 0.02, Crest: 20.0}},
+			InputI:           -48.0,
+			InputLRA:         6.0,
+			NoiseFloor:       -70.0,
 			NoiseProfile: &NoiseProfile{
 				PeakLevel:   -65.0,
 				CrestFactor: 12.0,
@@ -1668,12 +1614,10 @@ func TestTuneDS201Gate(t *testing.T) {
 	t.Run("fresh diagnostics without speech metrics", func(t *testing.T) {
 		config := newTestConfig()
 		diagnostics := tuneDS201GateForTest(config, &AudioMeasurements{
-			BaseMeasurements: BaseMeasurements{
-				SpectralFlux: 0.02,
-			},
-			InputI:     -20.0,
-			InputLRA:   16.0,
-			NoiseFloor: -55.0,
+			BaseMeasurements: BaseMeasurements{Spectral: SpectralMetrics{Flux: 0.02}},
+			InputI:           -20.0,
+			InputLRA:         16.0,
+			NoiseFloor:       -55.0,
 		})
 
 		if diagnostics.DS201GateGentleMode {
@@ -2880,12 +2824,9 @@ func TestTuneLA2ACompressorHighCrest(t *testing.T) {
 		diagnostics := &AdaptiveDiagnostics{}
 		measurements := &AudioMeasurements{
 			BaseMeasurements: BaseMeasurements{
-				DynamicRange:     86.3,
-				SpectralKurtosis: 5.4,
-				SpectralFlux:     0.0003,
-				PeakLevel:        -10.1,
-				SpectralCentroid: 968,
-				SpectralSkewness: 1.50,
+				Spectral: SpectralMetrics{Kurtosis: 5.4, Flux: 0.0003, Centroid: 968, Skewness: 1.50}, DynamicRange: 86.3,
+
+				PeakLevel: -10.1,
 			},
 			InputI:        -39.1,
 			InputTP:       -4.9,
@@ -2933,12 +2874,9 @@ func TestTuneLA2ACompressorHighCrest(t *testing.T) {
 		diagnostics := &AdaptiveDiagnostics{}
 		measurements := &AudioMeasurements{
 			BaseMeasurements: BaseMeasurements{
-				DynamicRange:     88.9,
-				SpectralKurtosis: 12.7,
-				SpectralFlux:     0.0018,
-				PeakLevel:        -7.4,
-				SpectralCentroid: 1555,
-				SpectralSkewness: 2.32,
+				Spectral: SpectralMetrics{Kurtosis: 12.7, Flux: 0.0018, Centroid: 1555, Skewness: 2.32}, DynamicRange: 88.9,
+
+				PeakLevel: -7.4,
 			},
 			InputI:        -20.2,
 			InputTP:       -2.5,
@@ -2997,12 +2935,9 @@ func TestTuneLA2ACompressorHighCrest(t *testing.T) {
 				diagnostics := &AdaptiveDiagnostics{}
 				measurements := &AudioMeasurements{
 					BaseMeasurements: BaseMeasurements{
-						DynamicRange:     60.0,
-						SpectralKurtosis: 10.0,
-						SpectralFlux:     0.001,
-						PeakLevel:        tt.inputTP,
-						SpectralCentroid: 2500,
-						SpectralSkewness: 1.0,
+						Spectral: SpectralMetrics{Kurtosis: 10.0, Flux: 0.001, Centroid: 2500, Skewness: 1.0}, DynamicRange: 60.0,
+
+						PeakLevel: tt.inputTP,
 					},
 					InputI:        tt.inputI,
 					InputTP:       tt.inputTP,
@@ -3029,12 +2964,9 @@ func TestTuneLA2ACompressorHighCrest(t *testing.T) {
 		diagnostics := &AdaptiveDiagnostics{}
 		measurements := &AudioMeasurements{
 			BaseMeasurements: BaseMeasurements{
-				DynamicRange:     90.0,
-				SpectralKurtosis: 5.0,
-				SpectralFlux:     0.0003,
-				PeakLevel:        -5.0,
-				SpectralCentroid: 2000,
-				SpectralSkewness: 1.0,
+				Spectral: SpectralMetrics{Kurtosis: 5.0, Flux: 0.0003, Centroid: 2000, Skewness: 1.0}, DynamicRange: 90.0,
+
+				PeakLevel: -5.0,
 			},
 			InputI:        -44.5,
 			InputTP:       -5.0,

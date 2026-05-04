@@ -310,8 +310,8 @@ func tipTooFarFromMic(m *processor.AudioMeasurements, _ *processor.EffectiveFilt
 // spectralDecreaseWarm = -0.05. Skewness > 2.5 is tip-specific (stricter
 // than adaptive.go's spectralSkewnessLFEmphasis = 1.0).
 func tipProximityEffect(m *processor.AudioMeasurements, _ *processor.EffectiveFilterConfig) *RecordingTip {
-	decrease := m.SpectralDecrease
-	skewness := m.SpectralSkewness
+	decrease := m.Spectral.Decrease
+	skewness := m.Spectral.Skewness
 	if m.SpeechProfile != nil {
 		decrease = m.SpeechProfile.Spectral.Decrease
 		skewness = m.SpeechProfile.Spectral.Skewness
@@ -340,8 +340,8 @@ func tipSibilance(m *processor.AudioMeasurements, config *processor.EffectiveFil
 		return nil
 	}
 
-	centroid := m.SpectralCentroid
-	rolloff := m.SpectralRolloff
+	centroid := m.Spectral.Centroid
+	rolloff := m.Spectral.Rolloff
 	if m.SpeechProfile != nil {
 		if m.SpeechProfile.Spectral.Centroid > 0 {
 			centroid = m.SpeechProfile.Spectral.Centroid

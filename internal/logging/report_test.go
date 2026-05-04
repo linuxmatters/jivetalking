@@ -70,11 +70,7 @@ func makeInputMeasurements() *processor.AudioMeasurements {
 
 	return &processor.AudioMeasurements{
 		BaseMeasurements: processor.BaseMeasurements{
-			SpectralCentroid:  2200,
-			SpectralKurtosis:  7.2,
-			SpectralFlatness:  0.18,
-			SpectralFlux:      0.004,
-			DynamicRange:      22.0,
+			Spectral: processor.SpectralMetrics{Centroid: 2200, Kurtosis: 7.2, Flatness: 0.18, Flux: 0.004}, DynamicRange: 22.0,
 			MomentaryLoudness: -25.0,
 			ShortTermLoudness: -24.5,
 			SamplePeak:        -4.0,
@@ -236,6 +232,34 @@ func TestGenerateReport_AudioMetricTables(t *testing.T) {
 	}
 }
 
+func TestGenerateReport_SpectralRowCounts(t *testing.T) {
+	output := generateReportText(t, makeReportData(t))
+
+	sections := []struct {
+		name      string
+		title     string
+		nextTitle string
+	}{
+		{"noise_floor", "Noise Floor Analysis", "Speech Region Analysis"},
+		{"speech", "Speech Region Analysis", ""},
+	}
+
+	if got := len(spectralMetricDescriptors); got != 13 {
+		t.Fatalf("spectral metric descriptor count = %d, want 13", got)
+	}
+
+	for _, section := range sections {
+		t.Run(section.name, func(t *testing.T) {
+			text := reportSection(t, output, section.title, section.nextTitle)
+			for _, descriptor := range spectralMetricDescriptors {
+				if count := strings.Count(text, descriptor.label); count != 1 {
+					t.Errorf("%s row count in %s section = %d, want 1", descriptor.label, section.title, count)
+				}
+			}
+		})
+	}
+}
+
 func TestGenerateReport_FilterChainUsesProcessingDiagnostics(t *testing.T) {
 	data := makeReportData(t)
 	data.Result.Diagnostics = &processor.AdaptiveDiagnostics{
@@ -375,6 +399,27 @@ func generateReportText(t *testing.T, data ReportData) string {
 		t.Fatalf("failed to read report: %v", err)
 	}
 	return string(text)
+}
+
+func reportSection(t *testing.T, output, title, nextTitle string) string {
+	t.Helper()
+
+	header := title + "\n" + strings.Repeat("-", len(title)) + "\n"
+	_, text, ok := strings.Cut(output, header)
+	if !ok {
+		t.Fatalf("report missing section %q", title)
+	}
+
+	if nextTitle == "" {
+		return text
+	}
+
+	nextHeader := nextTitle + "\n" + strings.Repeat("-", len(nextTitle)) + "\n"
+	text, _, ok = strings.Cut(text, nextHeader)
+	if !ok {
+		t.Fatalf("report section %q missing following section %q", title, nextTitle)
+	}
+	return text
 }
 
 func TestGenerateReport_ProcessingTimingLabels(t *testing.T) {

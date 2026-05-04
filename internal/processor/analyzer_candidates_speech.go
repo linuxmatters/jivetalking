@@ -245,18 +245,18 @@ func speechScore(interval IntervalSample, rmsP50 float64, speechRMSMin float64) 
 
 	// Centroid score: voice range (200-4500 Hz) = good
 	centroidScore := 0.0
-	if interval.SpectralCentroid >= speechCentroidMin && interval.SpectralCentroid <= speechCentroidMax {
+	if interval.Spectral.Centroid >= speechCentroidMin && interval.Spectral.Centroid <= speechCentroidMax {
 		// In voice range - score based on how central
 		voiceMid := (speechCentroidMin + speechCentroidMax) / 2
 		voiceHalfWidth := (speechCentroidMax - speechCentroidMin) / 2
-		distFromMid := math.Abs(interval.SpectralCentroid - voiceMid)
+		distFromMid := math.Abs(interval.Spectral.Centroid - voiceMid)
 		centroidScore = 1.0 - (distFromMid / voiceHalfWidth * 0.5)
 	}
 
 	// Entropy score: lower entropy = more structured = more speech-like
 	entropyScore := 0.0
-	if interval.SpectralEntropy < speechEntropyMax {
-		entropyScore = 1.0 - (interval.SpectralEntropy / speechEntropyMax)
+	if interval.Spectral.Entropy < speechEntropyMax {
+		entropyScore = 1.0 - (interval.Spectral.Entropy / speechEntropyMax)
 	}
 
 	// Weighted combination: amplitude most important, then centroid, then entropy

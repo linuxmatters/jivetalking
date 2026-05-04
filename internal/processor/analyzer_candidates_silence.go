@@ -73,9 +73,9 @@ func roomToneScore(interval IntervalSample, rmsP50, fluxP50 float64) float64 {
 	// Flux component: room tone is stable (low flux)
 	// Score 1.0 if at or below median, decreasing above
 	fluxScore := 1.0
-	if fluxP50 > 0 && interval.SpectralFlux > fluxP50 {
+	if fluxP50 > 0 && interval.Spectral.Flux > fluxP50 {
 		// Exponential decay based on ratio above median
-		ratio := interval.SpectralFlux / fluxP50
+		ratio := interval.Spectral.Flux / fluxP50
 		if ratio > 1 {
 			// ratio 1 = 1.0, ratio 2 = 0.5, ratio 4 = 0.25
 			fluxScore = 1.0 / ratio
@@ -104,7 +104,7 @@ func computeSilenceMedians(searchIntervals []IntervalSample) silenceMedians {
 	fluxValues := make([]float64, len(searchIntervals))
 	for i, interval := range searchIntervals {
 		rmsLevels[i] = interval.RMSLevel
-		fluxValues[i] = interval.SpectralFlux
+		fluxValues[i] = interval.Spectral.Flux
 	}
 	sort.Float64s(rmsLevels)
 	sort.Float64s(fluxValues)
@@ -349,10 +349,10 @@ func extractNoiseProfileFromIntervals(region *SilenceRegion, intervals []Interva
 		if interval.PeakLevel > peakMax {
 			peakMax = interval.PeakLevel
 		}
-		entropySum += interval.SpectralEntropy
-		centroidSum += interval.SpectralCentroid
-		flatnessSum += interval.SpectralFlatness
-		kurtosisSum += interval.SpectralKurtosis
+		entropySum += interval.Spectral.Entropy
+		centroidSum += interval.Spectral.Centroid
+		flatnessSum += interval.Spectral.Flatness
+		kurtosisSum += interval.Spectral.Kurtosis
 	}
 
 	n := float64(len(regionIntervals))

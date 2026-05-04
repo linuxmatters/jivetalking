@@ -210,7 +210,7 @@ func tuneLA2AAttack(config *EffectiveFilterConfig, measurements *AudioMeasuremen
 // - Warm voices (high skewness) get extra release to preserve body
 func tuneLA2ARelease(config *EffectiveFilterConfig, measurements *AudioMeasurements, overrides la2aOverrides) {
 	// Prefer speech-specific flux for timing decisions
-	flux := measurements.SpectralFlux
+	flux := measurements.Spectral.Flux
 	if measurements.SpeechProfile != nil {
 		flux = preferSpeechMetric(flux, measurements.SpeechProfile.Spectral.Flux)
 	}
@@ -220,7 +220,7 @@ func tuneLA2ARelease(config *EffectiveFilterConfig, measurements *AudioMeasureme
 	if measurements.SpeechProfile != nil {
 		speechSkewness = measurements.SpeechProfile.Spectral.Skewness
 	}
-	skewness := preferSpeechMetricSigned(measurements.SpectralSkewness, speechSkewness, measurements.SpeechProfile != nil)
+	skewness := preferSpeechMetricSigned(measurements.Spectral.Skewness, speechSkewness, measurements.SpeechProfile != nil)
 
 	// Start with standard LA-2A-style release
 	release := la2aReleaseStandard
@@ -280,7 +280,7 @@ func tuneLA2ARelease(config *EffectiveFilterConfig, measurements *AudioMeasureme
 // Speech typically ranges 5-10 (leptokurtic, clear harmonics).
 func tuneLA2ARatio(config *EffectiveFilterConfig, measurements *AudioMeasurements, overrides la2aOverrides) {
 	// Prefer speech-specific kurtosis for harmonic structure
-	kurtosis := measurements.SpectralKurtosis
+	kurtosis := measurements.Spectral.Kurtosis
 	if measurements.SpeechProfile != nil {
 		kurtosis = preferSpeechMetric(kurtosis, measurements.SpeechProfile.Spectral.Kurtosis)
 	}
@@ -389,7 +389,7 @@ func tuneLA2AKnee(config *EffectiveFilterConfig, measurements *AudioMeasurements
 	// Prefer speech-specific spectral metrics when available.
 	// Full-file averages are diluted by silence in multi-track recordings.
 	hasSpeech := measurements.SpeechProfile != nil
-	centroid := measurements.SpectralCentroid
+	centroid := measurements.Spectral.Centroid
 	if hasSpeech {
 		centroid = preferSpeechMetric(centroid, measurements.SpeechProfile.Spectral.Centroid)
 	}
@@ -397,7 +397,7 @@ func tuneLA2AKnee(config *EffectiveFilterConfig, measurements *AudioMeasurements
 	if hasSpeech {
 		speechSkewness = measurements.SpeechProfile.Spectral.Skewness
 	}
-	skewness := preferSpeechMetricSigned(measurements.SpectralSkewness, speechSkewness, hasSpeech)
+	skewness := preferSpeechMetricSigned(measurements.Spectral.Skewness, speechSkewness, hasSpeech)
 
 	// Adjust based on spectral centroid (voice brightness)
 	if centroid > 0 {

@@ -145,19 +145,7 @@ type SpeechCandidateMetrics struct {
 // Embedded in both AudioMeasurements and OutputMeasurements to avoid duplication.
 type BaseMeasurements struct {
 	// Spectral analysis from aspectralstats (all measurements averaged across frames)
-	SpectralMean     float64 `json:"spectral_mean"`     // Mean spectral magnitude
-	SpectralVariance float64 `json:"spectral_variance"` // Spectral magnitude variance
-	SpectralCentroid float64 `json:"spectral_centroid"` // Spectral centroid (Hz) - where energy is concentrated
-	SpectralSpread   float64 `json:"spectral_spread"`   // Spectral spread (Hz) - bandwidth/fullness indicator
-	SpectralSkewness float64 `json:"spectral_skewness"` // Spectral asymmetry - positive=bright, negative=dark
-	SpectralKurtosis float64 `json:"spectral_kurtosis"` // Spectral peakiness - tonal vs broadband content
-	SpectralEntropy  float64 `json:"spectral_entropy"`  // Spectral randomness (0-1) - noise classification
-	SpectralFlatness float64 `json:"spectral_flatness"` // Noise vs tonal ratio (0-1) - low=tonal, high=noisy
-	SpectralCrest    float64 `json:"spectral_crest"`    // Spectral peak-to-RMS - transient indicator
-	SpectralFlux     float64 `json:"spectral_flux"`     // Frame-to-frame spectral change
-	SpectralSlope    float64 `json:"spectral_slope"`    // Spectral tilt - negative=more bass
-	SpectralDecrease float64 `json:"spectral_decrease"` // Average spectral decrease
-	SpectralRolloff  float64 `json:"spectral_rolloff"`  // Spectral rolloff (Hz) - HF energy dropoff point
+	Spectral SpectralMetrics `json:"-"` // Kept flat in JSON by custom marshal helpers
 
 	// Time-domain statistics from astats
 	DynamicRange float64 `json:"dynamic_range"` // Measured dynamic range (dB)
@@ -400,7 +388,7 @@ func buildInputMeasurements(filename string, collection *analysisFrameCollection
 	measurements.ShortTermLoudness = acc.ebur128InputS
 	measurements.SamplePeak = acc.ebur128InputSP
 
-	acc.finalizeSpectral().writeSpectralTo(&measurements.BaseMeasurements)
+	measurements.Spectral = acc.finalizeSpectral()
 	assignAstatsMeasurements(measurements, acc)
 	assignInputNoiseFloor(measurements, acc)
 

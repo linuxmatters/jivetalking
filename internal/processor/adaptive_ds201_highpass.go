@@ -69,7 +69,7 @@ func tuneDS201HighPass(config *EffectiveFilterConfig, measurements *AudioMeasure
 	config.DS201HPMix = ds201HPDefaultMix
 	config.DS201HPTransform = ds201HPDefaultTransform
 
-	if measurements.SpectralCentroid <= 0 {
+	if measurements.Spectral.Centroid <= 0 {
 		// No spectral analysis available - keep default
 		return
 	}
@@ -77,7 +77,7 @@ func tuneDS201HighPass(config *EffectiveFilterConfig, measurements *AudioMeasure
 	// Prefer speech-specific spectral metrics when available.
 	// Full-file averages are diluted by silence in multi-track recordings.
 	hasSpeech := measurements.SpeechProfile != nil
-	centroid := measurements.SpectralCentroid
+	centroid := measurements.Spectral.Centroid
 	if hasSpeech {
 		centroid = preferSpeechMetric(centroid, measurements.SpeechProfile.Spectral.Centroid)
 	}
@@ -86,8 +86,8 @@ func tuneDS201HighPass(config *EffectiveFilterConfig, measurements *AudioMeasure
 		speechDecrease = measurements.SpeechProfile.Spectral.Decrease
 		speechSkewness = measurements.SpeechProfile.Spectral.Skewness
 	}
-	decrease := preferSpeechMetricSigned(measurements.SpectralDecrease, speechDecrease, hasSpeech)
-	skewness := preferSpeechMetricSigned(measurements.SpectralSkewness, speechSkewness, hasSpeech)
+	decrease := preferSpeechMetricSigned(measurements.Spectral.Decrease, speechDecrease, hasSpeech)
+	skewness := preferSpeechMetricSigned(measurements.Spectral.Skewness, speechSkewness, hasSpeech)
 
 	// Determine base frequency from spectral centroid
 	var baseFreq float64

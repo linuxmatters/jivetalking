@@ -322,7 +322,7 @@ func calculateStabilityScore(intervals []IntervalSample) float64 {
 
 	var fluxSum float64
 	for _, iv := range intervals {
-		fluxSum += iv.SpectralFlux
+		fluxSum += iv.Spectral.Flux
 	}
 	avgFlux := fluxSum / n
 

@@ -1,6 +1,7 @@
 package processor
 
 import (
+	"encoding/json"
 	"math"
 	"strconv"
 	"time"
@@ -20,25 +21,311 @@ type IntervalSample struct {
 	PeakLevel float64 `json:"peak_level"` // dBFS, peak level (max tracked per interval)
 
 	// ─── aspectralstats spectral metrics (valid per-window from FFmpeg) ─────────
-	SpectralMean     float64 `json:"spectral_mean"`     // Average magnitude
-	SpectralVariance float64 `json:"spectral_variance"` // Magnitude spread
-	SpectralCentroid float64 `json:"spectral_centroid"` // Hz - "brightness", speech 300-3000 Hz
-	SpectralSpread   float64 `json:"spectral_spread"`   // Hz - frequency bandwidth
-	SpectralSkewness float64 `json:"spectral_skewness"` // Distribution asymmetry
-	SpectralKurtosis float64 `json:"spectral_kurtosis"` // Distribution peakedness
-	SpectralEntropy  float64 `json:"spectral_entropy"`  // 0-1 - speech has lower entropy than noise
-	SpectralFlatness float64 `json:"spectral_flatness"` // 0-1 - high = noise-like, low = tonal
-	SpectralCrest    float64 `json:"spectral_crest"`    // Spectral peakiness
-	SpectralFlux     float64 `json:"spectral_flux"`     // Rate of spectral change (transitions)
-	SpectralSlope    float64 `json:"spectral_slope"`    // High-frequency roll-off rate
-	SpectralDecrease float64 `json:"spectral_decrease"` // High-frequency energy decay
-	SpectralRolloff  float64 `json:"spectral_rolloff"`  // Hz - frequency below which 85% energy lies
+	Spectral SpectralMetrics `json:"-"` // Kept flat in JSON by custom marshal helpers
 
 	// ─── ebur128 loudness metrics (windowed measurements) ───────────────────────
 	MomentaryLUFS float64 `json:"momentary_lufs"`  // LUFS - 400ms window loudness
 	ShortTermLUFS float64 `json:"short_term_lufs"` // LUFS - 3s window loudness
 	TruePeak      float64 `json:"true_peak"`       // dBTP - true peak level (max tracked)
 	SamplePeak    float64 `json:"sample_peak"`     // dBFS - sample peak level (max tracked)
+}
+
+type intervalSampleJSON struct {
+	Timestamp time.Duration `json:"timestamp"`
+
+	RMSLevel  float64 `json:"rms_level"`
+	PeakLevel float64 `json:"peak_level"`
+
+	SpectralMean     float64 `json:"spectral_mean"`
+	SpectralVariance float64 `json:"spectral_variance"`
+	SpectralCentroid float64 `json:"spectral_centroid"`
+	SpectralSpread   float64 `json:"spectral_spread"`
+	SpectralSkewness float64 `json:"spectral_skewness"`
+	SpectralKurtosis float64 `json:"spectral_kurtosis"`
+	SpectralEntropy  float64 `json:"spectral_entropy"`
+	SpectralFlatness float64 `json:"spectral_flatness"`
+	SpectralCrest    float64 `json:"spectral_crest"`
+	SpectralFlux     float64 `json:"spectral_flux"`
+	SpectralSlope    float64 `json:"spectral_slope"`
+	SpectralDecrease float64 `json:"spectral_decrease"`
+	SpectralRolloff  float64 `json:"spectral_rolloff"`
+
+	MomentaryLUFS float64 `json:"momentary_lufs"`
+	ShortTermLUFS float64 `json:"short_term_lufs"`
+	TruePeak      float64 `json:"true_peak"`
+	SamplePeak    float64 `json:"sample_peak"`
+}
+
+// MarshalJSON preserves the flat spectral_* JSON contract while the Go model
+// carries interval spectral data as a SpectralMetrics value.
+func (s IntervalSample) MarshalJSON() ([]byte, error) {
+	return json.Marshal(intervalSampleJSON{
+		Timestamp: s.Timestamp,
+
+		RMSLevel:  s.RMSLevel,
+		PeakLevel: s.PeakLevel,
+
+		SpectralMean:     s.Spectral.Mean,
+		SpectralVariance: s.Spectral.Variance,
+		SpectralCentroid: s.Spectral.Centroid,
+		SpectralSpread:   s.Spectral.Spread,
+		SpectralSkewness: s.Spectral.Skewness,
+		SpectralKurtosis: s.Spectral.Kurtosis,
+		SpectralEntropy:  s.Spectral.Entropy,
+		SpectralFlatness: s.Spectral.Flatness,
+		SpectralCrest:    s.Spectral.Crest,
+		SpectralFlux:     s.Spectral.Flux,
+		SpectralSlope:    s.Spectral.Slope,
+		SpectralDecrease: s.Spectral.Decrease,
+		SpectralRolloff:  s.Spectral.Rolloff,
+
+		MomentaryLUFS: s.MomentaryLUFS,
+		ShortTermLUFS: s.ShortTermLUFS,
+		TruePeak:      s.TruePeak,
+		SamplePeak:    s.SamplePeak,
+	})
+}
+
+// UnmarshalJSON accepts the legacy flat spectral_* JSON contract.
+func (s *IntervalSample) UnmarshalJSON(data []byte) error {
+	var decoded intervalSampleJSON
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+
+	s.Timestamp = decoded.Timestamp
+	s.RMSLevel = decoded.RMSLevel
+	s.PeakLevel = decoded.PeakLevel
+	s.Spectral = SpectralMetrics{
+		Mean:     decoded.SpectralMean,
+		Variance: decoded.SpectralVariance,
+		Centroid: decoded.SpectralCentroid,
+		Spread:   decoded.SpectralSpread,
+		Skewness: decoded.SpectralSkewness,
+		Kurtosis: decoded.SpectralKurtosis,
+		Entropy:  decoded.SpectralEntropy,
+		Flatness: decoded.SpectralFlatness,
+		Crest:    decoded.SpectralCrest,
+		Flux:     decoded.SpectralFlux,
+		Slope:    decoded.SpectralSlope,
+		Decrease: decoded.SpectralDecrease,
+		Rolloff:  decoded.SpectralRolloff,
+	}
+	s.MomentaryLUFS = decoded.MomentaryLUFS
+	s.ShortTermLUFS = decoded.ShortTermLUFS
+	s.TruePeak = decoded.TruePeak
+	s.SamplePeak = decoded.SamplePeak
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	s.Spectral.Found = intervalJSONHasSpectral(raw)
+
+	return nil
+}
+
+func intervalJSONHasSpectral(raw map[string]json.RawMessage) bool {
+	for _, key := range []string{
+		"spectral_mean",
+		"spectral_variance",
+		"spectral_centroid",
+		"spectral_spread",
+		"spectral_skewness",
+		"spectral_kurtosis",
+		"spectral_entropy",
+		"spectral_flatness",
+		"spectral_crest",
+		"spectral_flux",
+		"spectral_slope",
+		"spectral_decrease",
+		"spectral_rolloff",
+	} {
+		if _, ok := raw[key]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+type baseMeasurementsJSON struct {
+	SpectralMean     float64 `json:"spectral_mean"`
+	SpectralVariance float64 `json:"spectral_variance"`
+	SpectralCentroid float64 `json:"spectral_centroid"`
+	SpectralSpread   float64 `json:"spectral_spread"`
+	SpectralSkewness float64 `json:"spectral_skewness"`
+	SpectralKurtosis float64 `json:"spectral_kurtosis"`
+	SpectralEntropy  float64 `json:"spectral_entropy"`
+	SpectralFlatness float64 `json:"spectral_flatness"`
+	SpectralCrest    float64 `json:"spectral_crest"`
+	SpectralFlux     float64 `json:"spectral_flux"`
+	SpectralSlope    float64 `json:"spectral_slope"`
+	SpectralDecrease float64 `json:"spectral_decrease"`
+	SpectralRolloff  float64 `json:"spectral_rolloff"`
+
+	DynamicRange float64 `json:"dynamic_range"`
+	RMSLevel     float64 `json:"rms_level"`
+	PeakLevel    float64 `json:"peak_level"`
+	RMSTrough    float64 `json:"rms_trough"`
+	RMSPeak      float64 `json:"rms_peak"`
+
+	DCOffset          float64 `json:"dc_offset"`
+	FlatFactor        float64 `json:"flat_factor"`
+	CrestFactor       float64 `json:"crest_factor"`
+	ZeroCrossingsRate float64 `json:"zero_crossings_rate"`
+	ZeroCrossings     float64 `json:"zero_crossings"`
+	MaxDifference     float64 `json:"max_difference"`
+	MinDifference     float64 `json:"min_difference"`
+	MeanDifference    float64 `json:"mean_difference"`
+	RMSDifference     float64 `json:"rms_difference"`
+	Entropy           float64 `json:"entropy"`
+	MinLevel          float64 `json:"min_level"`
+	MaxLevel          float64 `json:"max_level"`
+	AstatsNoiseFloor  float64 `json:"astats_noise_floor"`
+	NoiseFloorCount   float64 `json:"noise_floor_count"`
+	BitDepth          float64 `json:"bit_depth"`
+	NumberOfSamples   float64 `json:"number_of_samples"`
+
+	MomentaryLoudness float64 `json:"momentary_loudness"`
+	ShortTermLoudness float64 `json:"short_term_loudness"`
+	SamplePeak        float64 `json:"sample_peak"`
+}
+
+// MarshalJSON preserves the flat spectral_* JSON contract while the Go model
+// carries shared spectral data as a SpectralMetrics value.
+func (b BaseMeasurements) MarshalJSON() ([]byte, error) {
+	return json.Marshal(b.toJSON())
+}
+
+// UnmarshalJSON accepts the legacy flat spectral_* JSON contract.
+func (b *BaseMeasurements) UnmarshalJSON(data []byte) error {
+	var decoded baseMeasurementsJSON
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+
+	b.fromJSON(decoded)
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	b.Spectral.Found = flatJSONHasSpectral(raw)
+
+	return nil
+}
+
+func (b BaseMeasurements) toJSON() baseMeasurementsJSON {
+	return baseMeasurementsJSON{
+		SpectralMean:     b.Spectral.Mean,
+		SpectralVariance: b.Spectral.Variance,
+		SpectralCentroid: b.Spectral.Centroid,
+		SpectralSpread:   b.Spectral.Spread,
+		SpectralSkewness: b.Spectral.Skewness,
+		SpectralKurtosis: b.Spectral.Kurtosis,
+		SpectralEntropy:  b.Spectral.Entropy,
+		SpectralFlatness: b.Spectral.Flatness,
+		SpectralCrest:    b.Spectral.Crest,
+		SpectralFlux:     b.Spectral.Flux,
+		SpectralSlope:    b.Spectral.Slope,
+		SpectralDecrease: b.Spectral.Decrease,
+		SpectralRolloff:  b.Spectral.Rolloff,
+
+		DynamicRange: b.DynamicRange,
+		RMSLevel:     b.RMSLevel,
+		PeakLevel:    b.PeakLevel,
+		RMSTrough:    b.RMSTrough,
+		RMSPeak:      b.RMSPeak,
+
+		DCOffset:          b.DCOffset,
+		FlatFactor:        b.FlatFactor,
+		CrestFactor:       b.CrestFactor,
+		ZeroCrossingsRate: b.ZeroCrossingsRate,
+		ZeroCrossings:     b.ZeroCrossings,
+		MaxDifference:     b.MaxDifference,
+		MinDifference:     b.MinDifference,
+		MeanDifference:    b.MeanDifference,
+		RMSDifference:     b.RMSDifference,
+		Entropy:           b.Entropy,
+		MinLevel:          b.MinLevel,
+		MaxLevel:          b.MaxLevel,
+		AstatsNoiseFloor:  b.AstatsNoiseFloor,
+		NoiseFloorCount:   b.NoiseFloorCount,
+		BitDepth:          b.BitDepth,
+		NumberOfSamples:   b.NumberOfSamples,
+
+		MomentaryLoudness: b.MomentaryLoudness,
+		ShortTermLoudness: b.ShortTermLoudness,
+		SamplePeak:        b.SamplePeak,
+	}
+}
+
+func (b *BaseMeasurements) fromJSON(decoded baseMeasurementsJSON) {
+	b.Spectral = SpectralMetrics{
+		Mean:     decoded.SpectralMean,
+		Variance: decoded.SpectralVariance,
+		Centroid: decoded.SpectralCentroid,
+		Spread:   decoded.SpectralSpread,
+		Skewness: decoded.SpectralSkewness,
+		Kurtosis: decoded.SpectralKurtosis,
+		Entropy:  decoded.SpectralEntropy,
+		Flatness: decoded.SpectralFlatness,
+		Crest:    decoded.SpectralCrest,
+		Flux:     decoded.SpectralFlux,
+		Slope:    decoded.SpectralSlope,
+		Decrease: decoded.SpectralDecrease,
+		Rolloff:  decoded.SpectralRolloff,
+	}
+
+	b.DynamicRange = decoded.DynamicRange
+	b.RMSLevel = decoded.RMSLevel
+	b.PeakLevel = decoded.PeakLevel
+	b.RMSTrough = decoded.RMSTrough
+	b.RMSPeak = decoded.RMSPeak
+
+	b.DCOffset = decoded.DCOffset
+	b.FlatFactor = decoded.FlatFactor
+	b.CrestFactor = decoded.CrestFactor
+	b.ZeroCrossingsRate = decoded.ZeroCrossingsRate
+	b.ZeroCrossings = decoded.ZeroCrossings
+	b.MaxDifference = decoded.MaxDifference
+	b.MinDifference = decoded.MinDifference
+	b.MeanDifference = decoded.MeanDifference
+	b.RMSDifference = decoded.RMSDifference
+	b.Entropy = decoded.Entropy
+	b.MinLevel = decoded.MinLevel
+	b.MaxLevel = decoded.MaxLevel
+	b.AstatsNoiseFloor = decoded.AstatsNoiseFloor
+	b.NoiseFloorCount = decoded.NoiseFloorCount
+	b.BitDepth = decoded.BitDepth
+	b.NumberOfSamples = decoded.NumberOfSamples
+
+	b.MomentaryLoudness = decoded.MomentaryLoudness
+	b.ShortTermLoudness = decoded.ShortTermLoudness
+	b.SamplePeak = decoded.SamplePeak
+}
+
+func flatJSONHasSpectral(raw map[string]json.RawMessage) bool {
+	for _, key := range []string{
+		"spectral_mean",
+		"spectral_variance",
+		"spectral_centroid",
+		"spectral_spread",
+		"spectral_skewness",
+		"spectral_kurtosis",
+		"spectral_entropy",
+		"spectral_flatness",
+		"spectral_crest",
+		"spectral_flux",
+		"spectral_slope",
+		"spectral_decrease",
+		"spectral_rolloff",
+	} {
+		if _, ok := raw[key]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // intervalAccumulator holds accumulated values for a 250ms interval window.
@@ -54,19 +341,8 @@ type intervalAccumulator struct {
 	rawPeakAbs     float64 // Maximum absolute sample value (linear, 0.0-1.0) for this interval
 
 	// ─── aspectralstats accumulators (valid per-window from FFmpeg) ─────────────
-	spectralMeanSum     float64
-	spectralVarianceSum float64
-	spectralCentroidSum float64
-	spectralSpreadSum   float64
-	spectralSkewnessSum float64
-	spectralKurtosisSum float64
-	spectralEntropySum  float64
-	spectralFlatnessSum float64
-	spectralCrestSum    float64
-	spectralFluxSum     float64
-	spectralSlopeSum    float64
-	spectralDecreaseSum float64
-	spectralRolloffSum  float64
+	spectralSum   SpectralMetrics
+	spectralFound bool
 
 	// ─── ebur128 accumulators (windowed measurements) ───────────────────────────
 	momentaryLUFSSum float64
@@ -82,19 +358,7 @@ type intervalFrameMetrics struct {
 	PeakLevel float64
 
 	// aspectralstats (valid per-window)
-	SpectralMean     float64
-	SpectralVariance float64
-	SpectralCentroid float64
-	SpectralSpread   float64
-	SpectralSkewness float64
-	SpectralKurtosis float64
-	SpectralEntropy  float64
-	SpectralFlatness float64
-	SpectralCrest    float64
-	SpectralFlux     float64
-	SpectralSlope    float64
-	SpectralDecrease float64
-	SpectralRolloff  float64
+	Spectral SpectralMetrics
 
 	// ebur128 (windowed measurements)
 	MomentaryLUFS float64
@@ -114,19 +378,10 @@ func (a *intervalAccumulator) add(m intervalFrameMetrics) {
 	}
 
 	// aspectralstats sums for averaging (valid per-window measurements)
-	a.spectralMeanSum += m.SpectralMean
-	a.spectralVarianceSum += m.SpectralVariance
-	a.spectralCentroidSum += m.SpectralCentroid
-	a.spectralSpreadSum += m.SpectralSpread
-	a.spectralSkewnessSum += m.SpectralSkewness
-	a.spectralKurtosisSum += m.SpectralKurtosis
-	a.spectralEntropySum += m.SpectralEntropy
-	a.spectralFlatnessSum += m.SpectralFlatness
-	a.spectralCrestSum += m.SpectralCrest
-	a.spectralFluxSum += m.SpectralFlux
-	a.spectralSlopeSum += m.SpectralSlope
-	a.spectralDecreaseSum += m.SpectralDecrease
-	a.spectralRolloffSum += m.SpectralRolloff
+	a.spectralSum.add(m.Spectral)
+	if m.Spectral.Found {
+		a.spectralFound = true
+	}
 
 	// ebur128 sums for averaging (windowed measurements)
 	a.momentaryLUFSSum += m.MomentaryLUFS
@@ -277,19 +532,8 @@ func (a *intervalAccumulator) finalize(timestamp time.Duration) IntervalSample {
 		n := float64(a.frameCount)
 
 		// aspectralstats averages (valid per-window measurements)
-		sample.SpectralMean = a.spectralMeanSum / n
-		sample.SpectralVariance = a.spectralVarianceSum / n
-		sample.SpectralCentroid = a.spectralCentroidSum / n
-		sample.SpectralSpread = a.spectralSpreadSum / n
-		sample.SpectralSkewness = a.spectralSkewnessSum / n
-		sample.SpectralKurtosis = a.spectralKurtosisSum / n
-		sample.SpectralEntropy = a.spectralEntropySum / n
-		sample.SpectralFlatness = a.spectralFlatnessSum / n
-		sample.SpectralCrest = a.spectralCrestSum / n
-		sample.SpectralFlux = a.spectralFluxSum / n
-		sample.SpectralSlope = a.spectralSlopeSum / n
-		sample.SpectralDecrease = a.spectralDecreaseSum / n
-		sample.SpectralRolloff = a.spectralRolloffSum / n
+		sample.Spectral = a.spectralSum.average(n)
+		sample.Spectral.Found = a.spectralFound
 
 		// ebur128 averages (windowed measurements)
 		sample.MomentaryLUFS = a.momentaryLUFSSum / n
@@ -369,20 +613,7 @@ var (
 // Embedded in both metadataAccumulators and outputMetadataAccumulators to avoid duplication.
 type baseMetadataAccumulators struct {
 	// Spectral statistics from aspectralstats (averaged across frames)
-	spectralMeanSum     float64
-	spectralVarianceSum float64
-	spectralCentroidSum float64
-	spectralSpreadSum   float64
-	spectralSkewnessSum float64
-	spectralKurtosisSum float64
-	spectralEntropySum  float64
-	spectralFlatnessSum float64
-	spectralCrestSum    float64
-	spectralFluxSum     float64
-	spectralSlopeSum    float64
-	spectralDecreaseSum float64
-	spectralRolloffSum  float64
-	spectralFrameCount  int
+	spectral SpectralAccumulator
 
 	// astats measurements (cumulative - we keep latest values)
 	astatsDynamicRange      float64
@@ -411,46 +642,13 @@ type baseMetadataAccumulators struct {
 
 // accumulateSpectral adds the given spectral measurements to the running sums.
 func (b *baseMetadataAccumulators) accumulateSpectral(spectral SpectralMetrics) {
-	if !spectral.Found {
-		return
-	}
-	b.spectralMeanSum += spectral.Mean
-	b.spectralVarianceSum += spectral.Variance
-	b.spectralCentroidSum += spectral.Centroid
-	b.spectralSpreadSum += spectral.Spread
-	b.spectralSkewnessSum += spectral.Skewness
-	b.spectralKurtosisSum += spectral.Kurtosis
-	b.spectralEntropySum += spectral.Entropy
-	b.spectralFlatnessSum += spectral.Flatness
-	b.spectralCrestSum += spectral.Crest
-	b.spectralFluxSum += spectral.Flux
-	b.spectralSlopeSum += spectral.Slope
-	b.spectralDecreaseSum += spectral.Decrease
-	b.spectralRolloffSum += spectral.Rolloff
-	b.spectralFrameCount++
+	b.spectral.Add(spectral)
 }
 
 // finalizeSpectral returns averaged spectral metrics from the accumulated sums.
 // Returns zero-value SpectralMetrics when no spectral frames were accumulated.
 func (b *baseMetadataAccumulators) finalizeSpectral() SpectralMetrics {
-	if b.spectralFrameCount == 0 {
-		return SpectralMetrics{}
-	}
-	return SpectralMetrics{
-		Mean:     b.spectralMeanSum,
-		Variance: b.spectralVarianceSum,
-		Centroid: b.spectralCentroidSum,
-		Spread:   b.spectralSpreadSum,
-		Skewness: b.spectralSkewnessSum,
-		Kurtosis: b.spectralKurtosisSum,
-		Entropy:  b.spectralEntropySum,
-		Flatness: b.spectralFlatnessSum,
-		Crest:    b.spectralCrestSum,
-		Flux:     b.spectralFluxSum,
-		Slope:    b.spectralSlopeSum,
-		Decrease: b.spectralDecreaseSum,
-		Rolloff:  b.spectralRolloffSum,
-	}.average(float64(b.spectralFrameCount))
+	return b.spectral.Average()
 }
 
 // extractAstatsMetadata extracts all astats measurements from FFmpeg metadata.
@@ -601,25 +799,42 @@ type SpectralMetrics struct {
 	Found    bool    `json:"-"`        // True if any spectral metric was extracted
 }
 
-// spectralFields returns the 13 spectral measurements from this interval as a SpectralMetrics value.
-// This enables struct-level accumulation instead of 13 individual variables.
-func (s *IntervalSample) spectralFields() SpectralMetrics {
-	return SpectralMetrics{
-		Mean:     s.SpectralMean,
-		Variance: s.SpectralVariance,
-		Centroid: s.SpectralCentroid,
-		Spread:   s.SpectralSpread,
-		Skewness: s.SpectralSkewness,
-		Kurtosis: s.SpectralKurtosis,
-		Entropy:  s.SpectralEntropy,
-		Flatness: s.SpectralFlatness,
-		Crest:    s.SpectralCrest,
-		Flux:     s.SpectralFlux,
-		Slope:    s.SpectralSlope,
-		Decrease: s.SpectralDecrease,
-		Rolloff:  s.SpectralRolloff,
-		Found:    true,
+// SpectralAccumulator accumulates spectral measurements across frames and
+// averages only frames where aspectralstats metadata was found.
+type SpectralAccumulator struct {
+	sum   SpectralMetrics
+	count int
+}
+
+// Add accumulates a found spectral measurement and ignores frames without
+// aspectralstats metadata.
+func (a *SpectralAccumulator) Add(spectral SpectralMetrics) {
+	if !spectral.Found {
+		return
 	}
+	a.sum.add(spectral)
+	a.count++
+}
+
+// Average returns averaged spectral measurements, or the zero value when no
+// spectral metadata was accumulated.
+func (a SpectralAccumulator) Average() SpectralMetrics {
+	if !a.Found() {
+		return SpectralMetrics{}
+	}
+	average := a.sum.average(float64(a.count))
+	average.Found = true
+	return average
+}
+
+// Count returns the number of found spectral frames accumulated.
+func (a SpectralAccumulator) Count() int {
+	return a.count
+}
+
+// Found reports whether at least one spectral frame was accumulated.
+func (a SpectralAccumulator) Found() bool {
+	return a.count > 0
 }
 
 // add accumulates another SpectralMetrics into this one (element-wise sum).
@@ -656,23 +871,6 @@ func (m SpectralMetrics) average(n float64) SpectralMetrics {
 		Decrease: m.Decrease / n,
 		Rolloff:  m.Rolloff / n,
 	}
-}
-
-// writeSpectralTo maps all 13 spectral fields to the corresponding BaseMeasurements fields.
-func (m SpectralMetrics) writeSpectralTo(b *BaseMeasurements) {
-	b.SpectralMean = m.Mean
-	b.SpectralVariance = m.Variance
-	b.SpectralCentroid = m.Centroid
-	b.SpectralSpread = m.Spread
-	b.SpectralSkewness = m.Skewness
-	b.SpectralKurtosis = m.Kurtosis
-	b.SpectralEntropy = m.Entropy
-	b.SpectralFlatness = m.Flatness
-	b.SpectralCrest = m.Crest
-	b.SpectralFlux = m.Flux
-	b.SpectralSlope = m.Slope
-	b.SpectralDecrease = m.Decrease
-	b.SpectralRolloff = m.Rolloff
 }
 
 // extractSpectralMetrics extracts all 13 aspectralstats measurements from FFmpeg metadata.
@@ -746,19 +944,7 @@ func extractIntervalFrameMetrics(metadata *ffmpeg.AVDictionary, spectral Spectra
 	m.PeakLevel, _ = getFloatMetadata(metadata, metaKeyPeakLevel)
 
 	// aspectralstats metrics (valid per-window measurements, pre-extracted by caller)
-	m.SpectralMean = spectral.Mean
-	m.SpectralVariance = spectral.Variance
-	m.SpectralCentroid = spectral.Centroid
-	m.SpectralSpread = spectral.Spread
-	m.SpectralSkewness = spectral.Skewness
-	m.SpectralKurtosis = spectral.Kurtosis
-	m.SpectralEntropy = spectral.Entropy
-	m.SpectralFlatness = spectral.Flatness
-	m.SpectralCrest = spectral.Crest
-	m.SpectralFlux = spectral.Flux
-	m.SpectralSlope = spectral.Slope
-	m.SpectralDecrease = spectral.Decrease
-	m.SpectralRolloff = spectral.Rolloff
+	m.Spectral = spectral
 
 	// ebur128 windowed measurements
 	m.MomentaryLUFS, _ = getFloatMetadata(metadata, metaKeyEbur128M)
@@ -884,12 +1070,14 @@ func extractOutputFrameMetadata(metadata *ffmpeg.AVDictionary, acc *outputMetada
 // finalizeOutputMeasurements converts accumulated values to OutputMeasurements struct.
 // Returns nil if no measurements were captured.
 func finalizeOutputMeasurements(acc *outputMetadataAccumulators) *OutputMeasurements {
-	if !acc.ebur128Found && !acc.astatsFound && acc.spectralFrameCount == 0 {
+	if !acc.ebur128Found && !acc.astatsFound && !acc.spectral.Found() {
 		return nil // No measurements captured
 	}
 
 	m := &OutputMeasurements{
 		BaseMeasurements: BaseMeasurements{
+			Spectral: acc.finalizeSpectral(),
+
 			// ebur128 momentary/short-term loudness
 			MomentaryLoudness: acc.ebur128OutputM,
 			ShortTermLoudness: acc.ebur128OutputS,
@@ -931,9 +1119,6 @@ func finalizeOutputMeasurements(acc *outputMetadataAccumulators) *OutputMeasurem
 	if m.OutputThresh == 0.0 && m.OutputI != 0.0 {
 		m.OutputThresh = m.OutputI - 10.0
 	}
-
-	// Calculate average spectral statistics from aspectralstats
-	acc.finalizeSpectral().writeSpectralTo(&m.BaseMeasurements)
 
 	return m
 }

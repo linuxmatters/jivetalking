@@ -1,6 +1,7 @@
 package processor
 
 import (
+	"encoding/json"
 	"math"
 	"testing"
 	"time"
@@ -8,6 +9,163 @@ import (
 	ffmpeg "github.com/linuxmatters/ffmpeg-statigo"
 	"github.com/linuxmatters/jivetalking/internal/audio"
 )
+
+var flatSpectralJSONFields = []string{
+	"spectral_mean",
+	"spectral_variance",
+	"spectral_centroid",
+	"spectral_spread",
+	"spectral_skewness",
+	"spectral_kurtosis",
+	"spectral_entropy",
+	"spectral_flatness",
+	"spectral_crest",
+	"spectral_flux",
+	"spectral_slope",
+	"spectral_decrease",
+	"spectral_rolloff",
+}
+
+func TestIntervalSampleJSON_PreservesFlatSpectralFields(t *testing.T) {
+	sample := IntervalSample{
+		Spectral: flatSpectralMetricsFixture(),
+	}
+
+	data, err := json.Marshal(sample)
+	if err != nil {
+		t.Fatalf("Marshal() failed: %v", err)
+	}
+	assertFlatSpectralJSONKeys(t, data)
+
+	var decoded IntervalSample
+	if err := json.Unmarshal(flatSpectralJSONFixture(), &decoded); err != nil {
+		t.Fatalf("Unmarshal() failed: %v", err)
+	}
+	assertSpectralValues(t, decoded.Spectral)
+}
+
+func TestAudioMeasurementsJSON_PreservesFlatSpectralFields(t *testing.T) {
+	measurements := AudioMeasurements{}
+	measurements.Spectral = flatSpectralMetricsFixture()
+
+	data, err := json.Marshal(measurements)
+	if err != nil {
+		t.Fatalf("Marshal() failed: %v", err)
+	}
+	assertFlatSpectralJSONKeys(t, data)
+
+	var decoded AudioMeasurements
+	if err := json.Unmarshal(flatSpectralJSONFixture(), &decoded); err != nil {
+		t.Fatalf("Unmarshal() failed: %v", err)
+	}
+	assertSpectralValues(t, decoded.Spectral)
+}
+
+func TestOutputMeasurementsJSON_PreservesFlatSpectralFields(t *testing.T) {
+	measurements := OutputMeasurements{}
+	measurements.Spectral = flatSpectralMetricsFixture()
+
+	data, err := json.Marshal(measurements)
+	if err != nil {
+		t.Fatalf("Marshal() failed: %v", err)
+	}
+	assertFlatSpectralJSONKeys(t, data)
+
+	var decoded OutputMeasurements
+	if err := json.Unmarshal(flatSpectralJSONFixture(), &decoded); err != nil {
+		t.Fatalf("Unmarshal() failed: %v", err)
+	}
+	assertSpectralValues(t, decoded.Spectral)
+}
+
+func TestBaseMeasurements_HasNoFlatSpectralPrimitiveFields(t *testing.T) {
+	assertNoStaleSpectralPrimitiveFields[BaseMeasurements](t)
+}
+
+func assertFlatSpectralJSONKeys(t *testing.T, data []byte) {
+	t.Helper()
+
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(data, &object); err != nil {
+		t.Fatalf("Unmarshal() failed: %v", err)
+	}
+
+	for _, field := range flatSpectralJSONFields {
+		if _, ok := object[field]; !ok {
+			t.Errorf("missing flat spectral JSON field %q in %s", field, string(data))
+		}
+	}
+	if _, ok := object["spectral"]; ok {
+		t.Errorf("unexpected nested spectral JSON field in %s", string(data))
+	}
+}
+
+func flatSpectralJSONFixture() []byte {
+	return []byte(`{
+		"spectral_mean": 1,
+		"spectral_variance": 2,
+		"spectral_centroid": 3,
+		"spectral_spread": 4,
+		"spectral_skewness": 5,
+		"spectral_kurtosis": 6,
+		"spectral_entropy": 7,
+		"spectral_flatness": 8,
+		"spectral_crest": 9,
+		"spectral_flux": 10,
+		"spectral_slope": 11,
+		"spectral_decrease": 12,
+		"spectral_rolloff": 13
+	}`)
+}
+
+func flatSpectralMetricsFixture() SpectralMetrics {
+	return SpectralMetrics{
+		Mean:     1,
+		Variance: 2,
+		Centroid: 3,
+		Spread:   4,
+		Skewness: 5,
+		Kurtosis: 6,
+		Entropy:  7,
+		Flatness: 8,
+		Crest:    9,
+		Flux:     10,
+		Slope:    11,
+		Decrease: 12,
+		Rolloff:  13,
+		Found:    true,
+	}
+}
+
+func assertSpectralValues(t *testing.T, got SpectralMetrics) {
+	t.Helper()
+
+	want := flatSpectralMetricsFixture()
+	checks := []struct {
+		name string
+		got  float64
+		want float64
+	}{
+		{"Mean", got.Mean, want.Mean},
+		{"Variance", got.Variance, want.Variance},
+		{"Centroid", got.Centroid, want.Centroid},
+		{"Spread", got.Spread, want.Spread},
+		{"Skewness", got.Skewness, want.Skewness},
+		{"Kurtosis", got.Kurtosis, want.Kurtosis},
+		{"Entropy", got.Entropy, want.Entropy},
+		{"Flatness", got.Flatness, want.Flatness},
+		{"Crest", got.Crest, want.Crest},
+		{"Flux", got.Flux, want.Flux},
+		{"Slope", got.Slope, want.Slope},
+		{"Decrease", got.Decrease, want.Decrease},
+		{"Rolloff", got.Rolloff, want.Rolloff},
+	}
+	for _, c := range checks {
+		if c.got != c.want {
+			t.Errorf("%s = %v, want %v", c.name, c.got, c.want)
+		}
+	}
+}
 
 func TestAnalyzeAudio(t *testing.T) {
 	// Generate synthetic test audio: 5-second 440Hz tone at -23 LUFS with a 0.5s silence gap
@@ -517,13 +675,15 @@ func makeSilenceTestIntervals(start time.Duration, duration time.Duration, rms, 
 	intervals := make([]IntervalSample, count)
 	for i := range intervals {
 		intervals[i] = IntervalSample{
-			Timestamp:        start + time.Duration(i)*250*time.Millisecond,
-			RMSLevel:         rms,
-			PeakLevel:        peak,
-			SpectralCentroid: centroid,
-			SpectralFlatness: flatness,
-			SpectralKurtosis: kurtosis,
-			SpectralFlux:     flux,
+			Timestamp: start + time.Duration(i)*250*time.Millisecond,
+			RMSLevel:  rms,
+			PeakLevel: peak,
+			Spectral: SpectralMetrics{
+				Centroid: centroid,
+				Flatness: flatness,
+				Kurtosis: kurtosis,
+				Flux:     flux,
+			},
 		}
 	}
 	return intervals
@@ -787,10 +947,12 @@ func makeSpeechTestIntervals(count int, rms float64) []IntervalSample {
 	intervals := make([]IntervalSample, count)
 	for i := range intervals {
 		intervals[i] = IntervalSample{
-			Timestamp:        time.Duration(i) * 250 * time.Millisecond,
-			RMSLevel:         rms,
-			SpectralCentroid: defaultCentroid,
-			SpectralEntropy:  entropy,
+			Timestamp: time.Duration(i) * 250 * time.Millisecond,
+			RMSLevel:  rms,
+			Spectral: SpectralMetrics{
+				Centroid: defaultCentroid,
+				Entropy:  entropy,
+			},
 		}
 	}
 	return intervals
@@ -808,9 +970,11 @@ func TestSpeechScore(t *testing.T) {
 		{
 			name: "typical speech",
 			interval: IntervalSample{
-				RMSLevel:         -18.0,
-				SpectralCentroid: 1500.0, // Voice range
-				SpectralEntropy:  0.5,
+				RMSLevel: -18.0,
+				Spectral: SpectralMetrics{
+					Centroid: 1500.0, // Voice range
+					Entropy:  0.5,
+				},
 			},
 			rmsP50:       -20.0,
 			speechRMSMin: -40.0,
@@ -820,9 +984,11 @@ func TestSpeechScore(t *testing.T) {
 		{
 			name: "silence (too quiet)",
 			interval: IntervalSample{
-				RMSLevel:         -50.0,
-				SpectralCentroid: 1500.0,
-				SpectralEntropy:  0.5,
+				RMSLevel: -50.0,
+				Spectral: SpectralMetrics{
+					Centroid: 1500.0,
+					Entropy:  0.5,
+				},
 			},
 			rmsP50:       -20.0,
 			speechRMSMin: -40.0,
@@ -832,9 +998,11 @@ func TestSpeechScore(t *testing.T) {
 		{
 			name: "noise (wrong centroid)",
 			interval: IntervalSample{
-				RMSLevel:         -18.0,
-				SpectralCentroid: 8000.0, // Outside voice range
-				SpectralEntropy:  0.9,    // High entropy
+				RMSLevel: -18.0,
+				Spectral: SpectralMetrics{
+					Centroid: 8000.0, // Outside voice range
+					Entropy:  0.9,    // High entropy
+				},
 			},
 			rmsP50:       -20.0,
 			speechRMSMin: -40.0,
@@ -844,9 +1012,11 @@ func TestSpeechScore(t *testing.T) {
 		{
 			name: "at RMS minimum threshold",
 			interval: IntervalSample{
-				RMSLevel:         -40.0, // Exactly at speechRMSMinimum
-				SpectralCentroid: 1500.0,
-				SpectralEntropy:  0.5,
+				RMSLevel: -40.0, // Exactly at speechRMSMinimum
+				Spectral: SpectralMetrics{
+					Centroid: 1500.0,
+					Entropy:  0.5,
+				},
 			},
 			rmsP50:       -45.0,
 			speechRMSMin: -40.0,
@@ -856,9 +1026,11 @@ func TestSpeechScore(t *testing.T) {
 		{
 			name: "just below RMS minimum",
 			interval: IntervalSample{
-				RMSLevel:         -40.1, // Just below threshold
-				SpectralCentroid: 1500.0,
-				SpectralEntropy:  0.5,
+				RMSLevel: -40.1, // Just below threshold
+				Spectral: SpectralMetrics{
+					Centroid: 1500.0,
+					Entropy:  0.5,
+				},
 			},
 			rmsP50:       -45.0,
 			speechRMSMin: -40.0,
@@ -868,9 +1040,11 @@ func TestSpeechScore(t *testing.T) {
 		{
 			name: "low entropy structured speech",
 			interval: IntervalSample{
-				RMSLevel:         -18.0,
-				SpectralCentroid: 2000.0,
-				SpectralEntropy:  0.2, // Very structured
+				RMSLevel: -18.0,
+				Spectral: SpectralMetrics{
+					Centroid: 2000.0,
+					Entropy:  0.2, // Very structured
+				},
 			},
 			rmsP50:       -20.0,
 			speechRMSMin: -40.0,
@@ -880,9 +1054,11 @@ func TestSpeechScore(t *testing.T) {
 		{
 			name: "adaptive threshold rejects quiet interval",
 			interval: IntervalSample{
-				RMSLevel:         -35.0,
-				SpectralCentroid: 1500.0,
-				SpectralEntropy:  0.5,
+				RMSLevel: -35.0,
+				Spectral: SpectralMetrics{
+					Centroid: 1500.0,
+					Entropy:  0.5,
+				},
 			},
 			rmsP50:       -20.0,
 			speechRMSMin: -32.0, // Adaptive threshold above interval RMS
@@ -892,9 +1068,11 @@ func TestSpeechScore(t *testing.T) {
 		{
 			name: "default threshold admits same interval",
 			interval: IntervalSample{
-				RMSLevel:         -35.0,
-				SpectralCentroid: 1500.0,
-				SpectralEntropy:  0.5,
+				RMSLevel: -35.0,
+				Spectral: SpectralMetrics{
+					Centroid: 1500.0,
+					Entropy:  0.5,
+				},
 			},
 			rmsP50:       -40.0,
 			speechRMSMin: -40.0, // Default threshold below interval RMS
@@ -991,10 +1169,12 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 				}
 			}
 			intervals[i] = IntervalSample{
-				Timestamp:        startTime + time.Duration(i)*250*time.Millisecond,
-				RMSLevel:         rms,
-				SpectralCentroid: 1500.0,
-				SpectralEntropy:  0.3, // Low entropy for better scores (~0.65 entropyScore)
+				Timestamp: startTime + time.Duration(i)*250*time.Millisecond,
+				RMSLevel:  rms,
+				Spectral: SpectralMetrics{
+					Centroid: 1500.0,
+					Entropy:  0.3, // Low entropy for better scores (~0.65 entropyScore)
+				},
 			}
 		}
 		return intervals
@@ -1149,13 +1329,15 @@ func TestMeasureSpeechCandidateFromIntervals(t *testing.T) {
 		intervals := make([]IntervalSample, 40) // 10s of intervals
 		for i := range intervals {
 			intervals[i] = IntervalSample{
-				Timestamp:        time.Duration(i) * 250 * time.Millisecond,
-				RMSLevel:         -20.0,
-				PeakLevel:        -8.0,
-				SpectralCentroid: 1500.0,
-				SpectralFlatness: 0.3,
-				SpectralKurtosis: 5.0,
-				SpectralEntropy:  0.5,
+				Timestamp: time.Duration(i) * 250 * time.Millisecond,
+				RMSLevel:  -20.0,
+				PeakLevel: -8.0,
+				Spectral: SpectralMetrics{
+					Centroid: 1500.0,
+					Flatness: 0.3,
+					Kurtosis: 5.0,
+					Entropy:  0.5,
+				},
 			}
 		}
 		// Set one interval with higher peak
@@ -1262,13 +1444,15 @@ func TestFindBestSpeechRegion_AllBelowMinAcceptableScoreFallsBack(t *testing.T) 
 		intervals := make([]IntervalSample, count)
 		for i := range intervals {
 			intervals[i] = IntervalSample{
-				Timestamp:        start + time.Duration(i)*250*time.Millisecond,
-				RMSLevel:         -35.0,
-				PeakLevel:        -10.0,
-				SpectralKurtosis: 2.0,
-				SpectralCentroid: 8000.0,
-				SpectralRolloff:  rolloff,
-				SpectralFlux:     0.05,
+				Timestamp: start + time.Duration(i)*250*time.Millisecond,
+				RMSLevel:  -35.0,
+				PeakLevel: -10.0,
+				Spectral: SpectralMetrics{
+					Kurtosis: 2.0,
+					Centroid: 8000.0,
+					Rolloff:  rolloff,
+					Flux:     0.05,
+				},
 			}
 		}
 		return intervals
@@ -1375,13 +1559,15 @@ func makeSpeechIntervalsScorable(startTime time.Duration, count int, kurtosis, f
 	intervals := make([]IntervalSample, count)
 	for i := range intervals {
 		intervals[i] = IntervalSample{
-			Timestamp:        startTime + time.Duration(i)*250*time.Millisecond,
-			RMSLevel:         rms,
-			SpectralKurtosis: kurtosis,
-			SpectralFlatness: flatness,
-			SpectralCentroid: centroid,
-			SpectralRolloff:  6000.0, // Ideal range (4000-8000 Hz)
-			SpectralFlux:     0.003,  // Below stable threshold (0.004)
+			Timestamp: startTime + time.Duration(i)*250*time.Millisecond,
+			RMSLevel:  rms,
+			Spectral: SpectralMetrics{
+				Kurtosis: kurtosis,
+				Flatness: flatness,
+				Centroid: centroid,
+				Rolloff:  6000.0, // Ideal range (4000-8000 Hz)
+				Flux:     0.003,  // Below stable threshold (0.004)
+			},
 		}
 	}
 	return intervals
@@ -1415,23 +1601,27 @@ func TestScoreSpeechIntervalWindow(t *testing.T) {
 				for i := range intervals {
 					if i%2 == 0 {
 						intervals[i] = IntervalSample{
-							Timestamp:        time.Duration(i) * 250 * time.Millisecond,
-							RMSLevel:         -35.0,   // Quiet
-							SpectralKurtosis: 15.0,    // High
-							SpectralFlatness: 0.8,     // Noise-like
-							SpectralCentroid: 6000.0,  // Outside voice range
-							SpectralRolloff:  12000.0, // Above acceptable range (max 10000)
-							SpectralFlux:     0.05,    // High variation (transients)
+							Timestamp: time.Duration(i) * 250 * time.Millisecond,
+							RMSLevel:  -35.0, // Quiet
+							Spectral: SpectralMetrics{
+								Kurtosis: 15.0,    // High
+								Flatness: 0.8,     // Noise-like
+								Centroid: 6000.0,  // Outside voice range
+								Rolloff:  12000.0, // Above acceptable range (max 10000)
+								Flux:     0.05,    // High variation (transients)
+							},
 						}
 					} else {
 						intervals[i] = IntervalSample{
-							Timestamp:        time.Duration(i) * 250 * time.Millisecond,
-							RMSLevel:         -35.0,   // Quiet
-							SpectralKurtosis: 1.0,     // Low
-							SpectralFlatness: 0.8,     // Noise-like
-							SpectralCentroid: 6000.0,  // Outside voice range
-							SpectralRolloff:  12000.0, // Above acceptable range (max 10000)
-							SpectralFlux:     0.05,    // High variation (transients)
+							Timestamp: time.Duration(i) * 250 * time.Millisecond,
+							RMSLevel:  -35.0, // Quiet
+							Spectral: SpectralMetrics{
+								Kurtosis: 1.0,     // Low
+								Flatness: 0.8,     // Noise-like
+								Centroid: 6000.0,  // Outside voice range
+								Rolloff:  12000.0, // Above acceptable range (max 10000)
+								Flux:     0.05,    // High variation (transients)
+							},
 						}
 					}
 				}
@@ -2107,7 +2297,7 @@ func TestCalculateStabilityScore(t *testing.T) {
 		{
 			name: "single interval returns neutral",
 			intervals: []IntervalSample{
-				{RMSLevel: -50.0, SpectralFlux: 0.0},
+				{RMSLevel: -50.0, Spectral: SpectralMetrics{Flux: 0.0}},
 			},
 			wantMin: 0.5,
 			wantMax: 0.5,
@@ -2116,10 +2306,10 @@ func TestCalculateStabilityScore(t *testing.T) {
 		{
 			name: "uniform intervals - perfect stability",
 			intervals: []IntervalSample{
-				{RMSLevel: -50.0, SpectralFlux: 0.0},
-				{RMSLevel: -50.0, SpectralFlux: 0.0},
-				{RMSLevel: -50.0, SpectralFlux: 0.0},
-				{RMSLevel: -50.0, SpectralFlux: 0.0},
+				{RMSLevel: -50.0, Spectral: SpectralMetrics{Flux: 0.0}},
+				{RMSLevel: -50.0, Spectral: SpectralMetrics{Flux: 0.0}},
+				{RMSLevel: -50.0, Spectral: SpectralMetrics{Flux: 0.0}},
+				{RMSLevel: -50.0, Spectral: SpectralMetrics{Flux: 0.0}},
 			},
 			wantMin: 0.99,
 			wantMax: 1.0,
@@ -2128,10 +2318,10 @@ func TestCalculateStabilityScore(t *testing.T) {
 		{
 			name: "uniform RMS with low flux - high stability",
 			intervals: []IntervalSample{
-				{RMSLevel: -60.0, SpectralFlux: 0.001},
-				{RMSLevel: -60.0, SpectralFlux: 0.002},
-				{RMSLevel: -60.0, SpectralFlux: 0.001},
-				{RMSLevel: -60.0, SpectralFlux: 0.002},
+				{RMSLevel: -60.0, Spectral: SpectralMetrics{Flux: 0.001}},
+				{RMSLevel: -60.0, Spectral: SpectralMetrics{Flux: 0.002}},
+				{RMSLevel: -60.0, Spectral: SpectralMetrics{Flux: 0.001}},
+				{RMSLevel: -60.0, Spectral: SpectralMetrics{Flux: 0.002}},
 			},
 			wantMin: 0.90,
 			wantMax: 1.0,
@@ -2140,10 +2330,10 @@ func TestCalculateStabilityScore(t *testing.T) {
 		{
 			name: "variable RMS - lower stability",
 			intervals: []IntervalSample{
-				{RMSLevel: -45.0, SpectralFlux: 0.0},
-				{RMSLevel: -55.0, SpectralFlux: 0.0},
-				{RMSLevel: -48.0, SpectralFlux: 0.0},
-				{RMSLevel: -52.0, SpectralFlux: 0.0},
+				{RMSLevel: -45.0, Spectral: SpectralMetrics{Flux: 0.0}},
+				{RMSLevel: -55.0, Spectral: SpectralMetrics{Flux: 0.0}},
+				{RMSLevel: -48.0, Spectral: SpectralMetrics{Flux: 0.0}},
+				{RMSLevel: -52.0, Spectral: SpectralMetrics{Flux: 0.0}},
 			},
 			wantMin: 0.35,
 			wantMax: 0.45,
@@ -2152,10 +2342,10 @@ func TestCalculateStabilityScore(t *testing.T) {
 		{
 			name: "high spectral flux - lower stability",
 			intervals: []IntervalSample{
-				{RMSLevel: -50.0, SpectralFlux: 0.03},
-				{RMSLevel: -50.0, SpectralFlux: 0.04},
-				{RMSLevel: -50.0, SpectralFlux: 0.025},
-				{RMSLevel: -50.0, SpectralFlux: 0.035},
+				{RMSLevel: -50.0, Spectral: SpectralMetrics{Flux: 0.03}},
+				{RMSLevel: -50.0, Spectral: SpectralMetrics{Flux: 0.04}},
+				{RMSLevel: -50.0, Spectral: SpectralMetrics{Flux: 0.025}},
+				{RMSLevel: -50.0, Spectral: SpectralMetrics{Flux: 0.035}},
 			},
 			wantMin: 0.0,
 			wantMax: 0.65,
@@ -2164,10 +2354,10 @@ func TestCalculateStabilityScore(t *testing.T) {
 		{
 			name: "variable RMS and high flux - poor stability",
 			intervals: []IntervalSample{
-				{RMSLevel: -45.0, SpectralFlux: 0.03},
-				{RMSLevel: -55.0, SpectralFlux: 0.04},
-				{RMSLevel: -48.0, SpectralFlux: 0.025},
-				{RMSLevel: -52.0, SpectralFlux: 0.035},
+				{RMSLevel: -45.0, Spectral: SpectralMetrics{Flux: 0.03}},
+				{RMSLevel: -55.0, Spectral: SpectralMetrics{Flux: 0.04}},
+				{RMSLevel: -48.0, Spectral: SpectralMetrics{Flux: 0.025}},
+				{RMSLevel: -52.0, Spectral: SpectralMetrics{Flux: 0.035}},
 			},
 			wantMin: 0.0,
 			wantMax: 0.5,
@@ -2176,10 +2366,10 @@ func TestCalculateStabilityScore(t *testing.T) {
 		{
 			name: "extreme variance - near-zero stability",
 			intervals: []IntervalSample{
-				{RMSLevel: -30.0, SpectralFlux: 0.05},
-				{RMSLevel: -70.0, SpectralFlux: 0.08},
-				{RMSLevel: -35.0, SpectralFlux: 0.06},
-				{RMSLevel: -65.0, SpectralFlux: 0.07},
+				{RMSLevel: -30.0, Spectral: SpectralMetrics{Flux: 0.05}},
+				{RMSLevel: -70.0, Spectral: SpectralMetrics{Flux: 0.08}},
+				{RMSLevel: -35.0, Spectral: SpectralMetrics{Flux: 0.06}},
+				{RMSLevel: -65.0, Spectral: SpectralMetrics{Flux: 0.07}},
 			},
 			wantMin: 0.0,
 			wantMax: 0.2,
@@ -2188,8 +2378,8 @@ func TestCalculateStabilityScore(t *testing.T) {
 		{
 			name: "two intervals - minimum valid input",
 			intervals: []IntervalSample{
-				{RMSLevel: -50.0, SpectralFlux: 0.005},
-				{RMSLevel: -50.0, SpectralFlux: 0.005},
+				{RMSLevel: -50.0, Spectral: SpectralMetrics{Flux: 0.005}},
+				{RMSLevel: -50.0, Spectral: SpectralMetrics{Flux: 0.005}},
 			},
 			wantMin: 0.85,
 			wantMax: 1.0,

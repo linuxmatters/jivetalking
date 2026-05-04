@@ -50,17 +50,17 @@ func makeFullAnalysisMeasurements() *processor.AudioMeasurements {
 	m.NoiseFloorSource = "silence_profile"
 	m.SuggestedGateThreshold = processor.DbToLinear(-52.4)
 	m.NoiseReductionHeadroom = 24.6
-	m.SpectralCentroid = 2450
-	m.SpectralSpread = 1800
-	m.SpectralRolloff = 7200
-	m.SpectralFlatness = 0.210
-	m.SpectralKurtosis = 9.7
-	m.SpectralSkewness = 0.82
-	m.SpectralCrest = 12.6
-	m.SpectralSlope = -1.20e-03
-	m.SpectralDecrease = -0.0123
-	m.SpectralEntropy = 0.365
-	m.SpectralFlux = 0.0820
+	m.Spectral.Centroid = 2450
+	m.Spectral.Spread = 1800
+	m.Spectral.Rolloff = 7200
+	m.Spectral.Flatness = 0.210
+	m.Spectral.Kurtosis = 9.7
+	m.Spectral.Skewness = 0.82
+	m.Spectral.Crest = 12.6
+	m.Spectral.Slope = -1.20e-03
+	m.Spectral.Decrease = -0.0123
+	m.Spectral.Entropy = 0.365
+	m.Spectral.Flux = 0.0820
 	m.NoiseProfile = &processor.NoiseProfile{
 		Start:              6 * time.Second,
 		Duration:           4 * time.Second,
