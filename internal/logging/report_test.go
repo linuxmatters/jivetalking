@@ -317,10 +317,10 @@ func TestGenerateReport_FilterChainUsesProcessingDiagnostics(t *testing.T) {
 
 func TestGenerateReport_FilterChainReportsDeesser(t *testing.T) {
 	data := makeReportData(t)
-	data.Result.Config.DeessEnabled = true
-	data.Result.Config.DeessIntensity = 0.42
-	data.Result.Config.DeessAmount = 0.55
-	data.Result.Config.DeessFreq = 0.65
+	data.Result.Config.Deesser.Enabled = true
+	data.Result.Config.Deesser.Intensity = 0.42
+	data.Result.Config.Deesser.Amount = 0.55
+	data.Result.Config.Deesser.Frequency = 0.65
 
 	output := generateReportText(t, data)
 
@@ -333,6 +333,10 @@ func TestGenerateReport_FilterChainReportsDeesser(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Errorf("report missing %q", want)
 		}
+	}
+
+	if strings.Contains(output, "99%") {
+		t.Error("report used stale flat deesser fields")
 	}
 }
 

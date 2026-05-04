@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/linuxmatters/jivetalking/internal/audio"
 )
@@ -394,6 +395,7 @@ func TestRenameNoClobberReportsSourceCleanupFailureAfterPublish(t *testing.T) {
 func TestEffectiveConfigFilterOrderIsolation(t *testing.T) {
 	base := newTestBaseConfig()
 	base.FilterOrder = []FilterID{FilterAnalysis, FilterDeesser}
+	base.Analysis.SilenceScanDuration = 1500 * time.Millisecond
 
 	first, firstDiagnostics := AdaptConfig(base, &AudioMeasurements{
 		BaseMeasurements: BaseMeasurements{Spectral: SpectralMetrics{Centroid: 5000}},
@@ -409,6 +411,7 @@ func TestEffectiveConfigFilterOrderIsolation(t *testing.T) {
 	}
 
 	first.FilterOrder[0] = FilterDownmix
+	first.Analysis.SilenceScanDuration = 250 * time.Millisecond
 
 	if reflect.DeepEqual(first.FilterOrder, base.FilterOrder) {
 		t.Fatal("test setup failed: first effective FilterOrder did not change")
@@ -418,6 +421,14 @@ func TestEffectiveConfigFilterOrderIsolation(t *testing.T) {
 	}
 	if !reflect.DeepEqual(second.FilterOrder, []FilterID{FilterAnalysis, FilterDeesser}) {
 		t.Errorf("second effective FilterOrder = %v, want independent copy", second.FilterOrder)
+	}
+	if base.Analysis.SilenceScanDuration != 1500*time.Millisecond {
+		t.Errorf("base Analysis.SilenceScanDuration = %v, want unchanged 1.5s",
+			base.Analysis.SilenceScanDuration)
+	}
+	if second.Analysis.SilenceScanDuration != 1500*time.Millisecond {
+		t.Errorf("second effective Analysis.SilenceScanDuration = %v, want independent copy",
+			second.Analysis.SilenceScanDuration)
 	}
 }
 
@@ -517,11 +528,11 @@ func TestProcessAudio(t *testing.T) {
 	// Create isolated test config with minimal filters for integration test
 	// This ensures the test doesn't break when application defaults change
 	config := newTestBaseConfig()
-	config.DownmixEnabled = true
-	config.AnalysisEnabled = true
-	config.ResampleEnabled = true
-	config.DS201HPEnabled = true // Basic processing
-	config.DS201HPFreq = 95.0
+	config.Downmix.Enabled = true
+	config.Analysis.Enabled = true
+	config.Resample.Enabled = true
+	config.DS201HighPass.Enabled = true // Basic processing
+	config.DS201HighPass.Frequency = 95.0
 	baseFilterOrder := append([]FilterID(nil), config.FilterOrder...)
 
 	// Process the audio with a no-op progress callback
@@ -555,8 +566,8 @@ func TestProcessAudio(t *testing.T) {
 		t.Fatalf("Failed to reopen output file: %v", err)
 	}
 	defer reader.Close()
-	if outputMetadata.SampleRate != config.ResampleSampleRate {
-		t.Errorf("Output sample rate = %d, want %d", outputMetadata.SampleRate, config.ResampleSampleRate)
+	if outputMetadata.SampleRate != config.Resample.SampleRate {
+		t.Errorf("Output sample rate = %d, want %d", outputMetadata.SampleRate, config.Resample.SampleRate)
 	}
 	if outputMetadata.Channels != 1 {
 		t.Errorf("Output channels = %d, want 1", outputMetadata.Channels)
@@ -578,8 +589,8 @@ func TestProcessAudio(t *testing.T) {
 	if !reflect.DeepEqual(config.FilterOrder, baseFilterOrder) {
 		t.Errorf("base FilterOrder = %v, want %v", config.FilterOrder, baseFilterOrder)
 	}
-	if config.DS201HPFreq != 95.0 {
-		t.Errorf("base DS201HPFreq = %.1f, want unchanged 95.0", config.DS201HPFreq)
+	if config.DS201HighPass.Frequency != 95.0 {
+		t.Errorf("base DS201HighPass.Frequency = %.1f, want unchanged 95.0", config.DS201HighPass.Frequency)
 	}
 	if result.Config == nil {
 		t.Fatal("ProcessAudio returned nil config")
@@ -591,8 +602,8 @@ func TestProcessAudio(t *testing.T) {
 	if !reflect.DeepEqual(result.Config.FilterOrder, Pass2FilterOrder) {
 		t.Errorf("result config FilterOrder = %v, want %v", result.Config.FilterOrder, Pass2FilterOrder)
 	}
-	if result.Config.DS201HPFreq == 95.0 {
-		t.Fatal("result config DS201HPFreq did not adapt from base seed value")
+	if result.Config.DS201HighPass.Frequency == 95.0 {
+		t.Fatal("result config DS201HighPass.Frequency did not adapt from base seed value")
 	}
 	result.Config.FilterOrder[0] = FilterDeesser
 	if config.FilterOrder[0] == FilterDeesser {
@@ -697,11 +708,11 @@ func TestProcessAudioFinalCollisionPreservesOutputAndCleansTemp(t *testing.T) {
 	defer cleanupTestAudio(t, testFile)
 
 	config := newTestBaseConfig()
-	config.DownmixEnabled = true
-	config.AnalysisEnabled = true
-	config.ResampleEnabled = true
-	config.LoudnormEnabled = false
-	config.AdeclickEnabled = false
+	config.Downmix.Enabled = true
+	config.Analysis.Enabled = true
+	config.Resample.Enabled = true
+	config.Loudnorm.Enabled = false
+	config.Adeclick.Enabled = false
 
 	var tempPaths []string
 	oldCreateSiblingTempPath := processorCreateSiblingTempPath
@@ -793,10 +804,10 @@ func TestAnalyzeOnlyDetailedTimings(t *testing.T) {
 	defer cleanupTestAudio(t, testFile)
 
 	config := newTestBaseConfig()
-	config.DownmixEnabled = true
-	config.AnalysisEnabled = true
-	config.DS201HPEnabled = true
-	config.DS201HPFreq = 95.0
+	config.Downmix.Enabled = true
+	config.Analysis.Enabled = true
+	config.DS201HighPass.Enabled = true
+	config.DS201HighPass.Frequency = 95.0
 	baseFilterOrder := append([]FilterID(nil), config.FilterOrder...)
 
 	result, err := AnalyzeOnlyDetailed(testFile, config, nil)
@@ -817,8 +828,8 @@ func TestAnalyzeOnlyDetailedTimings(t *testing.T) {
 	if !reflect.DeepEqual(config.FilterOrder, baseFilterOrder) {
 		t.Errorf("base FilterOrder = %v, want %v", config.FilterOrder, baseFilterOrder)
 	}
-	if config.DS201HPFreq != 95.0 {
-		t.Errorf("base DS201HPFreq = %.1f, want unchanged 95.0", config.DS201HPFreq)
+	if config.DS201HighPass.Frequency != 95.0 {
+		t.Errorf("base DS201HighPass.Frequency = %.1f, want unchanged 95.0", config.DS201HighPass.Frequency)
 	}
 	if result.AnalysisDuration <= 0 {
 		t.Errorf("AnalysisDuration = %s, want > 0", result.AnalysisDuration)
@@ -832,9 +843,9 @@ func TestAnalyzeOnlyDetailedTimings(t *testing.T) {
 func TestFilterChainBuilder(t *testing.T) {
 	// Use isolated test config to avoid coupling to application defaults
 	config := newTestConfig()
-	config.DownmixEnabled = true
-	config.AnalysisEnabled = true
-	config.ResampleEnabled = true
+	config.Downmix.Enabled = true
+	config.Analysis.Enabled = true
+	config.Resample.Enabled = true
 
 	// Test Pass 1 (analysis) filter spec
 	filterSpec := config.BuildFilterSpec()
@@ -846,7 +857,7 @@ func TestFilterChainBuilder(t *testing.T) {
 	}
 
 	// Enable additional filters for Pass 2 test
-	config.DS201HPEnabled = true
+	config.DS201HighPass.Enabled = true
 
 	filterSpec = config.BuildFilterSpec()
 	t.Logf("Pass 2 filter spec: %s", filterSpec)

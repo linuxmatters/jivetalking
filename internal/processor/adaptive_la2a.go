@@ -146,7 +146,7 @@ func applyHighCrestOverrides(config *EffectiveFilterConfig, diagnostics *Adaptiv
 	// Deficit calculation
 	gainRequired := NormTargetLUFS - measurements.InputI
 	projectedTP := measurements.InputTP + gainRequired
-	idealCeiling := config.LoudnormTargetTP - gainRequired - safetyMarginDB
+	idealCeiling := config.Loudnorm.TargetTP - gainRequired - safetyMarginDB
 	deficit := minLimiterCeilingDB - idealCeiling
 
 	if diagnostics != nil {
@@ -197,7 +197,7 @@ func tuneLA2AAttack(config *EffectiveFilterConfig, measurements *AudioMeasuremen
 		}
 	}
 
-	config.LA2AAttack = attack
+	config.LA2A.Attack = attack
 }
 
 // tuneLA2ARelease sets release time to approximate LA-2A's two-stage behaviour.
@@ -267,7 +267,7 @@ func tuneLA2ARelease(config *EffectiveFilterConfig, measurements *AudioMeasureme
 		release = math.Max(release, overrides.ReleaseFloor)
 	}
 
-	config.LA2ARelease = release
+	config.LA2A.Release = release
 }
 
 // tuneLA2ARatio sets compression ratio to emulate T4 optical cell behaviour.
@@ -325,7 +325,7 @@ func tuneLA2ARatio(config *EffectiveFilterConfig, measurements *AudioMeasurement
 		ratio = clamp(ratio, 2.0, 5.0)
 	}
 
-	config.LA2ARatio = ratio
+	config.LA2A.Ratio = ratio
 }
 
 // tuneLA2AThreshold sets threshold relative to RMS level.
@@ -333,7 +333,7 @@ func tuneLA2ARatio(config *EffectiveFilterConfig, measurements *AudioMeasurement
 // We calculate threshold as peak level minus headroom, where headroom determines depth.
 func tuneLA2AThreshold(config *EffectiveFilterConfig, measurements *AudioMeasurements, overrides la2aOverrides) {
 	if math.IsNaN(measurements.PeakLevel) || math.IsInf(measurements.PeakLevel, 0) {
-		config.LA2AThreshold = defaultLA2AThreshold
+		config.LA2A.Threshold = defaultLA2AThreshold
 		return
 	}
 
@@ -376,7 +376,7 @@ func tuneLA2AThreshold(config *EffectiveFilterConfig, measurements *AudioMeasure
 		threshold = math.Min(threshold, overrides.ThresholdFloor)
 	}
 
-	config.LA2AThreshold = threshold
+	config.LA2A.Threshold = threshold
 }
 
 // tuneLA2AKnee sets knee softness to emulate T4 optical cell.
@@ -425,7 +425,7 @@ func tuneLA2AKnee(config *EffectiveFilterConfig, measurements *AudioMeasurements
 		knee = clamp(knee, 1.0, 8.0)
 	}
 
-	config.LA2AKnee = knee
+	config.LA2A.Knee = knee
 }
 
 // tuneLA2AMix sets wet/dry mix.
@@ -445,5 +445,5 @@ func tuneLA2AMix(config *EffectiveFilterConfig, measurements *AudioMeasurements)
 		mix = la2aMixModerate
 	}
 
-	config.LA2AMix = mix
+	config.LA2A.Mix = mix
 }

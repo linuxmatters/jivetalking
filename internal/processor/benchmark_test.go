@@ -16,7 +16,7 @@ func BenchmarkAnalyzeAudioSynthetic5m(b *testing.B) {
 	b.ResetTimer()
 	for range b.N {
 		config := newTestBaseConfig()
-		config.AnalysisEnabled = true
+		config.Analysis.Enabled = true
 		if _, err := AnalyzeAudio(inputPath, config, nil); err != nil {
 			b.Fatalf("AnalyzeAudio failed: %v", err)
 		}

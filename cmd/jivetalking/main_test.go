@@ -168,8 +168,8 @@ func TestRunAnalysisOnlyWithDeps_UsesPerFileResultConfig(t *testing.T) {
 		firstEffective,
 		secondEffective,
 	}
-	resultConfigs[0].DS201HPFreq = 60.0
-	resultConfigs[1].DS201HPFreq = 100.0
+	resultConfigs[0].DS201HighPass.Frequency = 60.0
+	resultConfigs[1].DS201HighPass.Frequency = 100.0
 	secondFilterOrder := append([]processor.FilterID(nil), resultConfigs[1].FilterOrder...)
 	resultDiagnostics := []*processor.AdaptiveDiagnostics{
 		{DS201LPReason: "first"},
@@ -243,7 +243,8 @@ func TestRunAnalysisOnlyWithDeps_UsesPerFileResultConfig(t *testing.T) {
 	if !reflect.DeepEqual(resultConfigs[1].FilterOrder, secondFilterOrder) {
 		t.Fatalf("second result config FilterOrder = %v, want unaffected %v", resultConfigs[1].FilterOrder, secondFilterOrder)
 	}
-	if baseConfig.DS201HPFreq == resultConfigs[0].DS201HPFreq || baseConfig.DS201HPFreq == resultConfigs[1].DS201HPFreq {
+	if baseConfig.DS201HighPass.Frequency == resultConfigs[0].DS201HighPass.Frequency ||
+		baseConfig.DS201HighPass.Frequency == resultConfigs[1].DS201HighPass.Frequency {
 		t.Fatal("test setup failed: result configs should differ from the shared base seed")
 	}
 }

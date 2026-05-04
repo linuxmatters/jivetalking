@@ -157,14 +157,14 @@ func tuneDS201Gate(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagnosti
 	}
 
 	// Calculate LUFS gap for threshold decision
-	lufsGap := config.TargetI - measurements.InputI
+	lufsGap := config.Loudnorm.TargetI - measurements.InputI
 	if lufsGap < 0 {
 		lufsGap = 0
 	}
 
 	// 2. Ratio: based on LRA (loudness range) - soft expander approach
 	// Calculate ratio FIRST since threshold depends on it
-	config.DS201GateRatio = calculateDS201GateRatio(measurements.InputLRA)
+	config.DS201Gate.Ratio = calculateDS201GateRatio(measurements.InputLRA)
 
 	// Extract speech measurements (zero values if no profile)
 	var speechRMS, speechCrest float64
@@ -175,11 +175,11 @@ func tuneDS201Gate(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagnosti
 
 	// 1. Threshold: sits above noise/bleed peaks, below quiet speech
 	// Gap is derived from ratio to achieve target reduction
-	config.DS201GateThreshold = calculateDS201GateThreshold(
+	config.DS201Gate.Threshold = calculateDS201GateThreshold(
 		measurements.NoiseFloor,
 		silencePeak,
 		silenceCrest,
-		config.DS201GateRatio,
+		config.DS201Gate.Ratio,
 		lufsGap,
 		measurements.InputLRA,
 		speechRMS,
@@ -201,7 +201,7 @@ func tuneDS201Gate(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagnosti
 		// Determine clamp reason
 		noiseFloorLimit := measurements.NoiseFloor + ds201GateThresholdNoiseMargin
 		speechRMSLimit := measurements.SpeechProfile.RMSLevel - ds201GateThresholdSpeechMargin
-		actualThreshold := LinearToDb(config.DS201GateThreshold)
+		actualThreshold := LinearAmplitude(config.DS201Gate.Threshold).Decibels().Float64()
 
 		var clampReason string
 		switch {
@@ -224,7 +224,7 @@ func tuneDS201Gate(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagnosti
 
 	// 3. Attack: based on MaxDifference, SpectralFlux, and SpectralCrest
 	// DS201-inspired: supports sub-millisecond attack for transient preservation
-	config.DS201GateAttack = calculateDS201GateAttack(
+	config.DS201Gate.Attack = calculateDS201GateAttack(
 		measurements.MaxDifference,
 		measurements.Spectral.Flux,
 		measurements.Spectral.Crest,
@@ -234,7 +234,7 @@ func tuneDS201Gate(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagnosti
 	// Includes +50ms compensation for lack of Hold parameter
 	// Higher entropy = more broadband noise = faster release to cut noise quickly
 	// Low LRA = narrow dynamics = extend release to prevent pumping
-	config.DS201GateRelease = calculateDS201GateRelease(
+	config.DS201Gate.Release = calculateDS201GateRelease(
 		measurements.Spectral.Flux,
 		measurements.ZeroCrossingsRate,
 		silenceEntropy,
@@ -246,13 +246,13 @@ func tuneDS201Gate(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagnosti
 
 	// Clamp range and convert to linear
 	rangeDB = clamp(rangeDB, float64(ds201GateRangeMinDB), float64(ds201GateRangeMaxDB))
-	config.DS201GateRange = DbToLinear(rangeDB)
+	config.DS201Gate.Range = Decibels(rangeDB).LinearAmplitude().Float64()
 
 	// 6. Knee: based on spectral crest - soft knee for natural transitions
-	config.DS201GateKnee = calculateDS201GateKnee(measurements.Spectral.Crest)
+	config.DS201Gate.Knee = calculateDS201GateKnee(measurements.Spectral.Crest)
 
 	// 7. Detection: RMS for bleed, peak for clean
-	config.DS201GateDetection = calculateDS201GateDetection(silenceEntropy, silenceCrest)
+	config.DS201Gate.Detection = calculateDS201GateDetection(silenceEntropy, silenceCrest)
 
 	// Note: Makeup gain left at default (1.0 unity) - loudnorm handles all level adjustment
 
@@ -261,8 +261,8 @@ func tuneDS201Gate(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagnosti
 	// to apply varying gain reduction across similar speech levels, creating
 	// volume modulation ("hunting"). Override to gentler parameters.
 	if lufsGap >= lufsGapExtreme && measurements.InputLRA < ds201GateGentleLRAThreshold {
-		config.DS201GateRatio = ds201GateGentleRatio
-		config.DS201GateKnee = ds201GateGentleKnee
+		config.DS201Gate.Ratio = ds201GateGentleRatio
+		config.DS201Gate.Knee = ds201GateGentleKnee
 		if diagnostics != nil {
 			diagnostics.DS201GateGentleMode = true
 		}
@@ -329,7 +329,7 @@ func calculateDS201GateThresholdLegacy(
 
 	thresholdDB = clamp(thresholdDB, ds201GateThresholdMinDB, ds201GateThresholdMaxDB)
 
-	return DbToLinear(thresholdDB)
+	return Decibels(thresholdDB).LinearAmplitude().Float64()
 }
 
 // calculateDS201GateThreshold determines threshold ensuring sufficient gap above noise
@@ -381,7 +381,7 @@ func calculateDS201GateThreshold(
 		// Additional safety: respect global limits
 		thresholdDB = clamp(thresholdDB, ds201GateThresholdMinDB, ds201GateThresholdMaxDB)
 
-		return DbToLinear(thresholdDB)
+		return Decibels(thresholdDB).LinearAmplitude().Float64()
 	}
 
 	// Fallback: legacy noise-floor-based approach (no SpeechProfile)

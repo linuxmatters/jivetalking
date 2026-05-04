@@ -224,12 +224,13 @@ func measureWithLoudnorm(inputPath string, config *EffectiveFilterConfig, filter
 	// Build measurement filter: loudnorm (without linear=true) + null sink
 	// loudnorm in single-pass mode outputs its measurements to JSON when freed
 	// We use print_format=json to get input_i, input_tp, input_lra, input_thresh, target_offset
+	loudnorm := config.Loudnorm
 	filterSpec := fmt.Sprintf(
 		"loudnorm=I=%.1f:TP=%.1f:LRA=%.1f:dual_mono=%s:print_format=json",
-		config.LoudnormTargetI,
-		config.LoudnormTargetTP,
-		config.LoudnormTargetLRA,
-		boolToString(config.LoudnormDualMono),
+		loudnorm.TargetI,
+		loudnorm.TargetTP,
+		loudnorm.TargetLRA,
+		boolToString(loudnorm.DualMono),
 	)
 
 	if filterPrefix != "" {
@@ -404,7 +405,7 @@ func buildPreLimiterPrefix(preGainDB, ceiling float64, needsLimiting bool) strin
 		parts = append(parts, fmt.Sprintf("volume=%.1fdB", preGainDB))
 	}
 
-	limiterCeilingLinear := math.Pow(10, ceiling/20.0)
+	limiterCeilingLinear := Decibels(ceiling).LinearAmplitude().Float64()
 	limiterFilter := fmt.Sprintf(
 		"alimiter=limit=%.6f:attack=5:release=100:level_in=1:level_out=1:level=0:latency=1:asc=1:asc_level=0.8",
 		limiterCeilingLinear,
@@ -520,7 +521,8 @@ func ApplyNormalisation(
 	inputMeasurements *AudioMeasurements,
 	progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements),
 ) (*NormalisationResult, error) {
-	if !config.LoudnormEnabled {
+	loudnorm := config.Loudnorm
+	if !loudnorm.Enabled {
 		return &NormalisationResult{Skipped: true}, nil
 	}
 
@@ -534,15 +536,15 @@ func ApplyNormalisation(
 	// that Pass 4 will apply, closing the measurement mismatch.
 	limiterCeiling, limiterNeeded, limiterClamped := calculateLimiterCeiling(
 		outputMeasurements.OutputI, outputMeasurements.OutputTP,
-		config.LoudnormTargetI, config.LoudnormTargetTP,
+		loudnorm.TargetI, loudnorm.TargetTP,
 	)
 	preGainDB, reDerivedCeiling := calculatePreGain(
-		outputMeasurements.OutputI, config.LoudnormTargetI, config.LoudnormTargetTP,
+		outputMeasurements.OutputI, loudnorm.TargetI, loudnorm.TargetTP,
 	)
 	if limiterClamped {
 		limiterCeiling = reDerivedCeiling
 	}
-	limiterGain := config.LoudnormTargetI - outputMeasurements.OutputI
+	limiterGain := loudnorm.TargetI - outputMeasurements.OutputI
 
 	// Build filter prefix for Pass 3 measurement
 	filterPrefix := buildPreLimiterPrefix(preGainDB, limiterCeiling, limiterNeeded)
@@ -573,8 +575,8 @@ func ApplyNormalisation(
 	effectiveTargetI, _, linearPossible := calculateLinearModeTarget(
 		measurement.InputI,
 		measurement.InputTP,
-		config.LoudnormTargetI,
-		config.LoudnormTargetTP,
+		loudnorm.TargetI,
+		loudnorm.TargetTP,
 	)
 
 	// Use loudnorm's own target_offset from the measurement pass
@@ -582,7 +584,7 @@ func ApplyNormalisation(
 
 	// Store the effective target in config for loudnorm filter construction
 	effectiveConfig := *config
-	effectiveConfig.LoudnormTargetI = effectiveTargetI
+	effectiveConfig.Loudnorm.TargetI = effectiveTargetI
 
 	// Pass 4: Apply loudnorm with linear=true and the measurements
 	finalLUFS, finalTP, finalMeasurements, loudnormStats, regionMeasurementTime, err := applyLoudnormAndMeasure(inputPath, &effectiveConfig, measurement, inputMeasurements, preGainDB, limiterCeiling, limiterNeeded, progressCallback)
@@ -608,7 +610,7 @@ func ApplyNormalisation(
 		WithinTarget:          withinTarget,
 		Skipped:               false,
 		LoudnormStats:         loudnormStats,
-		RequestedTargetI:      config.LoudnormTargetI,
+		RequestedTargetI:      loudnorm.TargetI,
 		EffectiveTargetI:      effectiveTargetI,
 		LinearModeForced:      !linearPossible,
 		LimiterEnabled:        limiterNeeded,
@@ -810,6 +812,7 @@ func applyLoudnormAndMeasure(
 // first pass measurement, not from external calculations.
 func buildLoudnormFilterSpec(config *EffectiveFilterConfig, measurement *LoudnormMeasurement, preGainDB float64, ceiling float64, needsLimiting bool) string {
 	var filters []string
+	loudnorm := config.Loudnorm
 
 	// 1. Build pre-limiter prefix (volume + alimiter) from pre-computed values
 	prefix := buildPreLimiterPrefix(preGainDB, ceiling, needsLimiting)
@@ -829,16 +832,16 @@ func buildLoudnormFilterSpec(config *EffectiveFilterConfig, measurement *Loudnor
 	// effectiveMeasuredI/effectiveMeasuredTP adjustment needed.
 	loudnormFilter := fmt.Sprintf(
 		"loudnorm=I=%.2f:TP=%.2f:LRA=%.1f:measured_I=%.2f:measured_TP=%.2f:measured_LRA=%.2f:measured_thresh=%.2f:offset=%.2f:dual_mono=%s:linear=%s:print_format=json",
-		config.LoudnormTargetI,  // Using %.2f for precision on adjusted targets
-		config.LoudnormTargetTP, // Also %.2f for consistency
-		config.LoudnormTargetLRA,
+		loudnorm.TargetI,  // Using %.2f for precision on adjusted targets
+		loudnorm.TargetTP, // Also %.2f for consistency
+		loudnorm.TargetLRA,
 		measurement.InputI,
 		measurement.InputTP,
 		measurement.InputLRA,
 		measurement.InputThresh,
 		measurement.TargetOffset, // From first pass - critical for linear mode
-		boolToString(config.LoudnormDualMono),
-		boolToString(config.LoudnormLinear),
+		boolToString(loudnorm.DualMono),
+		boolToString(loudnorm.Linear),
 	)
 	filters = append(filters, loudnormFilter)
 

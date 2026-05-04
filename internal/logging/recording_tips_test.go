@@ -593,21 +593,21 @@ func TestTipSibilance(t *testing.T) {
 	}{
 		{
 			name:     "high de-esser bright speech",
-			config:   &processor.EffectiveFilterConfig{DeessIntensity: 0.6},
+			config:   &processor.EffectiveFilterConfig{Deesser: processor.DeesserConfig{Intensity: 0.6}},
 			centroid: 4500.0,
 			rolloff:  11000.0,
 			wantTip:  true,
 		},
 		{
 			name:     "low de-esser",
-			config:   &processor.EffectiveFilterConfig{DeessIntensity: 0.3},
+			config:   &processor.EffectiveFilterConfig{Deesser: processor.DeesserConfig{Intensity: 0.3}},
 			centroid: 4500.0,
 			rolloff:  11000.0,
 			wantTip:  false,
 		},
 		{
 			name:     "de-esser at boundary no tip",
-			config:   &processor.EffectiveFilterConfig{DeessIntensity: 0.5},
+			config:   &processor.EffectiveFilterConfig{Deesser: processor.DeesserConfig{Intensity: 0.5}},
 			centroid: 4500.0,
 			rolloff:  11000.0,
 			wantTip:  false,
@@ -621,21 +621,21 @@ func TestTipSibilance(t *testing.T) {
 		},
 		{
 			name:     "dark voice no sibilance",
-			config:   &processor.EffectiveFilterConfig{DeessIntensity: 0.6},
+			config:   &processor.EffectiveFilterConfig{Deesser: processor.DeesserConfig{Intensity: 0.6}},
 			centroid: 3000.0,
 			rolloff:  11000.0,
 			wantTip:  false,
 		},
 		{
 			name:     "low rolloff no sibilance",
-			config:   &processor.EffectiveFilterConfig{DeessIntensity: 0.6},
+			config:   &processor.EffectiveFilterConfig{Deesser: processor.DeesserConfig{Intensity: 0.6}},
 			centroid: 4500.0,
 			rolloff:  9000.0,
 			wantTip:  false,
 		},
 		{
 			name:     "speech profile overrides full-file",
-			config:   &processor.EffectiveFilterConfig{DeessIntensity: 0.6},
+			config:   &processor.EffectiveFilterConfig{Deesser: processor.DeesserConfig{Intensity: 0.6}},
 			centroid: 3000.0,
 			rolloff:  9000.0,
 			speechProfile: &processor.SpeechCandidateMetrics{
@@ -645,7 +645,7 @@ func TestTipSibilance(t *testing.T) {
 		},
 		{
 			name:     "speech profile zero values use full-file",
-			config:   &processor.EffectiveFilterConfig{DeessIntensity: 0.6},
+			config:   &processor.EffectiveFilterConfig{Deesser: processor.DeesserConfig{Intensity: 0.6}},
 			centroid: 4500.0,
 			rolloff:  11000.0,
 			speechProfile: &processor.SpeechCandidateMetrics{
@@ -932,7 +932,7 @@ func TestGenerateRecordingTips(t *testing.T) {
 				m.Spectral.Rolloff = 11000.0
 				return m
 			}(),
-			config:      &processor.EffectiveFilterConfig{DeessIntensity: 0.6},
+			config:      &processor.EffectiveFilterConfig{Deesser: processor.DeesserConfig{Intensity: 0.6}},
 			wantRuleIDs: []string{"sibilance"},
 		},
 		{

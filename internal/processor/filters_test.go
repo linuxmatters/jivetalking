@@ -13,84 +13,150 @@ import (
 // All filters are disabled by default - enable only what you need for each test.
 // This isolates tests from application default configuration changes.
 func newTestBaseConfig() *BaseFilterConfig {
-	return &BaseFilterConfig{filterConfigDefaults: filterConfigDefaults{
-		// Infrastructure filters (disabled by default for isolated tests)
-		DownmixEnabled:     false,
-		AnalysisEnabled:    false,
-		ResampleEnabled:    false,
-		ResampleSampleRate: 44100,
-		ResampleFormat:     "s16",
-		ResampleFrameSize:  4096,
-
-		// Processing filters (all disabled by default)
-		DS201HPEnabled:     false,
-		NoiseRemoveEnabled: false,
-		DS201GateEnabled:   false,
-		LA2AEnabled:        false,
-		DeessEnabled:       false,
-
-		// Sensible defaults for parameters (used when filter is enabled)
-		DS201HPFreq:        80.0,
-		DS201HPPoles:       2,     // 12dB/oct standard Butterworth
-		DS201HPWidth:       0.707, // Butterworth
-		DS201HPMix:         1.0,   // Full wet
-		DS201HPTransform:   "tdii",
-		DS201GateThreshold: 0.01,
-		DS201GateRatio:     2.0,
-		DS201GateAttack:    20,
-		DS201GateRelease:   250,
-		DS201GateRange:     0.0625,
-		DS201GateKnee:      2.828,
-		DS201GateMakeup:    1.0,
-		LA2AThreshold:      -20,
-		LA2ARatio:          2.5,
-		LA2AAttack:         15,
-		LA2ARelease:        80,
-		LA2AMakeup:         0, // Unity gain - loudnorm handles all level adjustment
-		LA2AKnee:           2.5,
-		LA2AMix:            1.0,
-		DeessIntensity:     0.5,
-		DeessAmount:        0.5,
-		DeessFreq:          0.5,
-		TargetI:            -16.0,
-		TargetTP:           -0.3,
-		TargetLRA:          7.0,
-
-		// NoiseRemove defaults (anlmdn + compand)
-		NoiseRemoveCompandEnabled:   true,
-		NoiseRemoveStrength:         0.00001,
-		NoiseRemovePatchSec:         0.006,
-		NoiseRemoveResearchSec:      0.0058,
-		NoiseRemoveSmooth:           11.0,
-		NoiseRemoveCompandThreshold: -50.0,
-		NoiseRemoveCompandExpansion: 10.0,
-		NoiseRemoveCompandAttack:    0.005,
-		NoiseRemoveCompandDecay:     0.100,
-		NoiseRemoveCompandKnee:      6.0,
-
-		// Loudnorm defaults (Pass 3)
-		LoudnormEnabled:   true,
-		LoudnormTargetI:   -16.0,
-		LoudnormTargetTP:  -1.5,
-		LoudnormTargetLRA: 11.0,
-		LoudnormDualMono:  true,
-		LoudnormLinear:    true,
-
-		// Adeclick defaults (Pass 4)
-		AdeclickEnabled:   true,
-		AdeclickThreshold: 2.0,
-		AdeclickWindow:    55.0,
-		AdeclickOverlap:   50.0,
-		AdeclickMethod:    "s",
-
-		FilterOrder: Pass2FilterOrder,
-	}}
+	defaults := assembleFilterDefaults(
+		DownmixConfig{Enabled: false},
+		AnalysisConfig{Enabled: false},
+		ResampleConfig{Enabled: false, SampleRate: 44100, Format: "s16", FrameSize: 4096},
+		DS201HighPassConfig{
+			Enabled:   false,
+			Frequency: 80.0,
+			Poles:     2,
+			Width:     0.707,
+			Mix:       1.0,
+			Transform: "tdii",
+		},
+		DS201LowPassConfig{
+			Enabled:   false,
+			Frequency: 16000.0,
+			Poles:     2,
+			Width:     0.707,
+			Mix:       1.0,
+		},
+		NoiseRemoveConfig{
+			Enabled:          false,
+			CompandEnabled:   true,
+			Strength:         0.00001,
+			PatchSec:         0.006,
+			ResearchSec:      0.0058,
+			Smooth:           11.0,
+			CompandThreshold: -50.0,
+			CompandExpansion: 10.0,
+			CompandAttack:    0.005,
+			CompandDecay:     0.100,
+			CompandKnee:      6.0,
+		},
+		DS201GateConfig{
+			Enabled:   false,
+			Threshold: 0.01,
+			Ratio:     2.0,
+			Attack:    20,
+			Release:   250,
+			Range:     0.0625,
+			Knee:      2.828,
+			Makeup:    1.0,
+			Detection: "rms",
+		},
+		LA2AConfig{
+			Enabled:   false,
+			Threshold: -20,
+			Ratio:     2.5,
+			Attack:    15,
+			Release:   80,
+			Makeup:    0,
+			Knee:      2.5,
+			Mix:       1.0,
+		},
+		DeesserConfig{Enabled: false, Intensity: 0.5, Amount: 0.5, Frequency: 0.5},
+		AdeclickConfig{Enabled: true, Threshold: 2.0, Window: 55.0, Overlap: 50.0, Method: "s"},
+		LoudnormConfig{Enabled: true, TargetI: -16.0, TargetTP: -1.5, TargetLRA: 11.0, DualMono: true, Linear: true},
+	)
+	defaults.FilterOrder = Pass2FilterOrder
+	return &BaseFilterConfig{filterConfigDefaults: defaults}
 }
 
 // newTestConfig creates a minimal effective config for builder and tuner tests
 // that operate after seed assembly.
 func newTestConfig() *EffectiveFilterConfig {
 	return deriveEffectiveFilterConfig(newTestBaseConfig())
+}
+
+func TestFilterFamilyConfigTypesExist(t *testing.T) {
+	configType := reflect.TypeFor[filterConfigDefaults]()
+	tests := []struct {
+		field string
+		typ   reflect.Type
+	}{
+		{"Downmix", reflect.TypeFor[DownmixConfig]()},
+		{"Analysis", reflect.TypeFor[AnalysisConfig]()},
+		{"Resample", reflect.TypeFor[ResampleConfig]()},
+		{"DS201HighPass", reflect.TypeFor[DS201HighPassConfig]()},
+		{"DS201LowPass", reflect.TypeFor[DS201LowPassConfig]()},
+		{"NoiseRemove", reflect.TypeFor[NoiseRemoveConfig]()},
+		{"DS201Gate", reflect.TypeFor[DS201GateConfig]()},
+		{"LA2A", reflect.TypeFor[LA2AConfig]()},
+		{"Deesser", reflect.TypeFor[DeesserConfig]()},
+		{"Adeclick", reflect.TypeFor[AdeclickConfig]()},
+		{"Loudnorm", reflect.TypeFor[LoudnormConfig]()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.field, func(t *testing.T) {
+			field, ok := configType.FieldByName(tt.field)
+			if !ok {
+				t.Fatalf("filterConfigDefaults missing %s", tt.field)
+			}
+			if field.Type != tt.typ {
+				t.Fatalf("%s type = %s, want %s", tt.field, field.Type, tt.typ)
+			}
+		})
+	}
+
+	analysisField, ok := reflect.TypeFor[AnalysisConfig]().FieldByName("SilenceScanDuration")
+	if !ok {
+		t.Fatal("AnalysisConfig missing SilenceScanDuration")
+	}
+	if analysisField.Type != reflect.TypeFor[time.Duration]() {
+		t.Fatalf("AnalysisConfig.SilenceScanDuration type = %s, want %s",
+			analysisField.Type, reflect.TypeFor[time.Duration]())
+	}
+}
+
+func TestDefaultFilterConfigComposesTypedDefaults(t *testing.T) {
+	config := DefaultFilterConfig()
+
+	if config.Downmix != defaultDownmixConfig() {
+		t.Errorf("Downmix = %+v, want %+v", config.Downmix, defaultDownmixConfig())
+	}
+	if config.Analysis != defaultAnalysisConfig() {
+		t.Errorf("Analysis = %+v, want %+v", config.Analysis, defaultAnalysisConfig())
+	}
+	if config.Resample != defaultResampleConfig() {
+		t.Errorf("Resample = %+v, want %+v", config.Resample, defaultResampleConfig())
+	}
+	if config.DS201HighPass != defaultDS201HighPassConfig() {
+		t.Errorf("DS201HighPass = %+v, want %+v", config.DS201HighPass, defaultDS201HighPassConfig())
+	}
+	if config.DS201LowPass != defaultDS201LowPassConfig() {
+		t.Errorf("DS201LowPass = %+v, want %+v", config.DS201LowPass, defaultDS201LowPassConfig())
+	}
+	if config.NoiseRemove != defaultNoiseRemoveConfig() {
+		t.Errorf("NoiseRemove = %+v, want %+v", config.NoiseRemove, defaultNoiseRemoveConfig())
+	}
+	if config.DS201Gate != defaultDS201GateConfig() {
+		t.Errorf("DS201Gate = %+v, want %+v", config.DS201Gate, defaultDS201GateConfig())
+	}
+	if config.LA2A != defaultLA2AConfig() {
+		t.Errorf("LA2A = %+v, want %+v", config.LA2A, defaultLA2AConfig())
+	}
+	if config.Deesser != defaultDeesserConfig() {
+		t.Errorf("Deesser = %+v, want %+v", config.Deesser, defaultDeesserConfig())
+	}
+	if config.Adeclick != defaultAdeclickConfig() {
+		t.Errorf("Adeclick = %+v, want %+v", config.Adeclick, defaultAdeclickConfig())
+	}
+	if config.Loudnorm != defaultLoudnormConfig() {
+		t.Errorf("Loudnorm = %+v, want %+v", config.Loudnorm, defaultLoudnormConfig())
+	}
 }
 
 func TestBuildFilterSpec(t *testing.T) {
@@ -106,11 +172,11 @@ func TestBuildFilterSpec(t *testing.T) {
 
 	t.Run("resample enabled produces output format filters", func(t *testing.T) {
 		config := newTestConfig()
-		config.ResampleEnabled = true
+		config.Resample.Enabled = true
 
 		spec := config.BuildFilterSpec()
 
-		// Output format filters should be present when ResampleEnabled
+		// Output format filters should be present when Resample.Enabled
 		if !strings.Contains(spec, "aformat=sample_rates=44100") {
 			t.Error("Missing aformat output filter")
 		}
@@ -140,11 +206,11 @@ func TestBuildFilterSpec(t *testing.T) {
 	t.Run("enabled filters appear in spec", func(t *testing.T) {
 		config := newTestConfig()
 		// Enable specific filters for this test
-		config.DS201HPEnabled = true
-		config.DS201GateEnabled = true
-		config.LA2AEnabled = true
-		config.DeessEnabled = true
-		config.ResampleEnabled = true // Required for output format filters
+		config.DS201HighPass.Enabled = true
+		config.DS201Gate.Enabled = true
+		config.LA2A.Enabled = true
+		config.Deesser.Enabled = true
+		config.Resample.Enabled = true // Required for output format filters
 
 		spec := config.BuildFilterSpec()
 
@@ -170,10 +236,10 @@ func TestBuildFilterSpec(t *testing.T) {
 	t.Run("no NaN values in filter spec", func(t *testing.T) {
 		config := newTestConfig()
 		// Enable all filters to maximize coverage
-		config.DS201HPEnabled = true
-		config.DS201GateEnabled = true
-		config.LA2AEnabled = true
-		config.DeessEnabled = true
+		config.DS201HighPass.Enabled = true
+		config.DS201Gate.Enabled = true
+		config.LA2A.Enabled = true
+		config.Deesser.Enabled = true
 
 		spec := config.BuildFilterSpec()
 
@@ -185,10 +251,10 @@ func TestBuildFilterSpec(t *testing.T) {
 	t.Run("no Inf values in filter spec", func(t *testing.T) {
 		config := newTestConfig()
 		// Enable all filters to maximize coverage
-		config.DS201HPEnabled = true
-		config.DS201GateEnabled = true
-		config.LA2AEnabled = true
-		config.DeessEnabled = true
+		config.DS201HighPass.Enabled = true
+		config.DS201Gate.Enabled = true
+		config.LA2A.Enabled = true
+		config.Deesser.Enabled = true
 
 		spec := config.BuildFilterSpec()
 
@@ -220,17 +286,17 @@ func TestBuildFilterSpec(t *testing.T) {
 			t.Error("Disabled alimiter filter present in spec")
 		}
 
-		// With ResampleEnabled=false (from newTestConfig), no aformat should be present
+		// With Resample.Enabled=false (from newTestConfig), no aformat should be present
 		// This is intentional - infrastructure filters are now controlled by flags
 		if strings.Contains(spec, "aformat=sample_rates=44100") {
-			t.Error("aformat should not appear when ResampleEnabled=false")
+			t.Error("aformat should not appear when Resample.Enabled=false")
 		}
 	})
 
 	t.Run("de-esser excluded when intensity is zero", func(t *testing.T) {
 		config := newTestConfig()
-		config.DeessEnabled = true
-		config.DeessIntensity = 0.0 // Disabled by intensity
+		config.Deesser.Enabled = true
+		config.Deesser.Intensity = 0.0 // Disabled by intensity
 
 		spec := config.BuildFilterSpec()
 
@@ -241,8 +307,8 @@ func TestBuildFilterSpec(t *testing.T) {
 
 	t.Run("aformat appears after analysis filters when both enabled", func(t *testing.T) {
 		config := newTestConfig()
-		config.AnalysisEnabled = true
-		config.ResampleEnabled = true
+		config.Analysis.Enabled = true
+		config.Resample.Enabled = true
 		// Use Pass2FilterOrder which has Analysis before Resample
 		config.FilterOrder = Pass2FilterOrder
 
@@ -250,7 +316,7 @@ func TestBuildFilterSpec(t *testing.T) {
 
 		// Should contain ebur128 analysis filter
 		if !strings.Contains(spec, "ebur128=") {
-			t.Fatal("Missing ebur128 filter when AnalysisEnabled=true")
+			t.Fatal("Missing ebur128 filter when Analysis.Enabled=true")
 		}
 
 		// ebur128 converts to f64 internally - aformat must come after to convert back to s16
@@ -293,7 +359,7 @@ func TestBuildFilterSpecBehaviourBaseline(t *testing.T) {
 			name: "low-pass disabled",
 			config: func() *EffectiveFilterConfig {
 				config := newTestConfig()
-				config.DS201LPEnabled = false
+				config.DS201LowPass.Enabled = false
 				config.FilterOrder = []FilterID{FilterDS201LowPass}
 				return config
 			}(),
@@ -303,12 +369,12 @@ func TestBuildFilterSpecBehaviourBaseline(t *testing.T) {
 			name: "low-pass enabled",
 			config: func() *EffectiveFilterConfig {
 				config := newTestConfig()
-				config.DS201LPEnabled = true
-				config.DS201LPFreq = 14500.0
-				config.DS201LPPoles = 1
-				config.DS201LPWidth = 0.5
-				config.DS201LPMix = 0.75
-				config.DS201LPTransform = "zdf"
+				config.DS201LowPass.Enabled = true
+				config.DS201LowPass.Frequency = 14500.0
+				config.DS201LowPass.Poles = 1
+				config.DS201LowPass.Width = 0.5
+				config.DS201LowPass.Mix = 0.75
+				config.DS201LowPass.Transform = "zdf"
 				config.FilterOrder = []FilterID{FilterDS201LowPass}
 				return config
 			}(),
@@ -318,15 +384,15 @@ func TestBuildFilterSpecBehaviourBaseline(t *testing.T) {
 			name: "gate tuned",
 			config: func() *EffectiveFilterConfig {
 				config := newTestConfig()
-				config.DS201GateEnabled = true
-				config.DS201GateThreshold = 0.003162
-				config.DS201GateRatio = 3.5
-				config.DS201GateAttack = 10.5
-				config.DS201GateRelease = 425
-				config.DS201GateRange = 0.0316
-				config.DS201GateKnee = 4.5
-				config.DS201GateDetection = "peak"
-				config.DS201GateMakeup = 1.2
+				config.DS201Gate.Enabled = true
+				config.DS201Gate.Threshold = 0.003162
+				config.DS201Gate.Ratio = 3.5
+				config.DS201Gate.Attack = 10.5
+				config.DS201Gate.Release = 425
+				config.DS201Gate.Range = 0.0316
+				config.DS201Gate.Knee = 4.5
+				config.DS201Gate.Detection = "peak"
+				config.DS201Gate.Makeup = 1.2
 				config.FilterOrder = []FilterID{FilterDS201Gate}
 				return config
 			}(),
@@ -336,14 +402,14 @@ func TestBuildFilterSpecBehaviourBaseline(t *testing.T) {
 			name: "LA-2A high-crest tuned values",
 			config: func() *EffectiveFilterConfig {
 				config := newTestConfig()
-				config.LA2AEnabled = true
-				config.LA2AThreshold = -30.0
-				config.LA2ARatio = 4.0
-				config.LA2AAttack = 10
-				config.LA2ARelease = 60
-				config.LA2AMakeup = 0
-				config.LA2AKnee = 6.0
-				config.LA2AMix = 0.85
+				config.LA2A.Enabled = true
+				config.LA2A.Threshold = -30.0
+				config.LA2A.Ratio = 4.0
+				config.LA2A.Attack = 10
+				config.LA2A.Release = 60
+				config.LA2A.Makeup = 0
+				config.LA2A.Knee = 6.0
+				config.LA2A.Mix = 0.85
 				config.FilterOrder = []FilterID{FilterLA2ACompressor}
 				return config
 			}(),
@@ -353,8 +419,8 @@ func TestBuildFilterSpecBehaviourBaseline(t *testing.T) {
 			name: "noise-remove compand disabled",
 			config: func() *EffectiveFilterConfig {
 				config := newTestConfig()
-				config.NoiseRemoveEnabled = true
-				config.NoiseRemoveCompandEnabled = false
+				config.NoiseRemove.Enabled = true
+				config.NoiseRemove.CompandEnabled = false
 				config.FilterOrder = []FilterID{FilterNoiseRemove}
 				return config
 			}(),
@@ -364,10 +430,10 @@ func TestBuildFilterSpecBehaviourBaseline(t *testing.T) {
 			name: "noise-remove compand enabled",
 			config: func() *EffectiveFilterConfig {
 				config := newTestConfig()
-				config.NoiseRemoveEnabled = true
-				config.NoiseRemoveCompandEnabled = true
-				config.NoiseRemoveCompandThreshold = -48.0
-				config.NoiseRemoveCompandExpansion = 12.0
+				config.NoiseRemove.Enabled = true
+				config.NoiseRemove.CompandEnabled = true
+				config.NoiseRemove.CompandThreshold = -48.0
+				config.NoiseRemove.CompandExpansion = 12.0
 				config.FilterOrder = []FilterID{FilterNoiseRemove}
 				return config
 			}(),
@@ -378,8 +444,8 @@ func TestBuildFilterSpecBehaviourBaseline(t *testing.T) {
 			name: "de-esser disabled",
 			config: func() *EffectiveFilterConfig {
 				config := newTestConfig()
-				config.DeessEnabled = true
-				config.DeessIntensity = 0
+				config.Deesser.Enabled = true
+				config.Deesser.Intensity = 0
 				config.FilterOrder = []FilterID{FilterDeesser}
 				return config
 			}(),
@@ -389,10 +455,10 @@ func TestBuildFilterSpecBehaviourBaseline(t *testing.T) {
 			name: "de-esser enabled",
 			config: func() *EffectiveFilterConfig {
 				config := newTestConfig()
-				config.DeessEnabled = true
-				config.DeessIntensity = 0.6
-				config.DeessAmount = 0.4
-				config.DeessFreq = 0.7
+				config.Deesser.Enabled = true
+				config.Deesser.Intensity = 0.6
+				config.Deesser.Amount = 0.4
+				config.Deesser.Frequency = 0.7
 				config.FilterOrder = []FilterID{FilterDeesser}
 				return config
 			}(),
@@ -490,8 +556,8 @@ func TestBuildDS201HighpassFilter(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			config := newTestConfig()
-			config.DS201HPEnabled = tt.enabled
-			config.DS201HPFreq = tt.freq
+			config.DS201HighPass.Enabled = tt.enabled
+			config.DS201HighPass.Frequency = tt.freq
 
 			spec := config.buildDS201HighpassFilter()
 
@@ -539,8 +605,8 @@ func TestBuildDS201GateFilter(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			config := newTestConfig()
-			config.DS201GateEnabled = tt.enabled
-			config.DS201GateThreshold = tt.threshold
+			config.DS201Gate.Enabled = tt.enabled
+			config.DS201Gate.Threshold = tt.threshold
 
 			spec := config.buildDS201GateFilter()
 
@@ -557,7 +623,7 @@ func TestBuildDS201GateFilter(t *testing.T) {
 
 	t.Run("disabled returns empty", func(t *testing.T) {
 		config := newTestConfig()
-		config.DS201GateEnabled = false
+		config.DS201Gate.Enabled = false
 
 		spec := config.buildDS201GateFilter()
 		if spec != "" {
@@ -602,8 +668,8 @@ func TestBuildDS201LowPassFilter(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			config := newTestConfig()
-			config.DS201LPEnabled = tt.enabled
-			config.DS201LPFreq = tt.freq
+			config.DS201LowPass.Enabled = tt.enabled
+			config.DS201LowPass.Frequency = tt.freq
 
 			spec := config.buildDS201LowPassFilter()
 
@@ -624,9 +690,9 @@ func TestBuildDS201LowPassFilter(t *testing.T) {
 func TestBuildLA2ACompressorFilter(t *testing.T) {
 	t.Run("typical podcast compression", func(t *testing.T) {
 		config := newTestConfig()
-		config.LA2AEnabled = true
-		config.LA2AThreshold = -20.0
-		config.LA2ARatio = 2.5
+		config.LA2A.Enabled = true
+		config.LA2A.Threshold = -20.0
+		config.LA2A.Ratio = 2.5
 
 		spec := config.buildLA2ACompressorFilter()
 
@@ -651,7 +717,7 @@ func TestBuildLA2ACompressorFilter(t *testing.T) {
 
 	t.Run("disabled returns empty", func(t *testing.T) {
 		config := newTestConfig()
-		config.LA2AEnabled = false
+		config.LA2A.Enabled = false
 
 		spec := config.buildLA2ACompressorFilter()
 		if spec != "" {
@@ -703,8 +769,8 @@ func TestBuildDeesserFilter(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			config := newTestConfig()
-			config.DeessEnabled = tt.enabled
-			config.DeessIntensity = tt.intensity
+			config.Deesser.Enabled = tt.enabled
+			config.Deesser.Intensity = tt.intensity
 
 			spec := config.buildDeesserFilter()
 
@@ -725,7 +791,7 @@ func TestBuildDeesserFilter(t *testing.T) {
 func TestBuildNoiseRemoveFilter(t *testing.T) {
 	t.Run("disabled returns empty", func(t *testing.T) {
 		config := newTestConfig()
-		config.NoiseRemoveEnabled = false
+		config.NoiseRemove.Enabled = false
 
 		spec := config.buildNoiseRemoveFilter()
 		if spec != "" {
@@ -735,7 +801,7 @@ func TestBuildNoiseRemoveFilter(t *testing.T) {
 
 	t.Run("enabled produces anlmdn+compand chain", func(t *testing.T) {
 		config := newTestConfig()
-		config.NoiseRemoveEnabled = true
+		config.NoiseRemove.Enabled = true
 
 		spec := config.buildNoiseRemoveFilter()
 
@@ -759,11 +825,11 @@ func TestBuildNoiseRemoveFilter(t *testing.T) {
 
 	t.Run("anlmdn parameters formatted correctly", func(t *testing.T) {
 		config := newTestConfig()
-		config.NoiseRemoveEnabled = true
-		config.NoiseRemoveStrength = 0.00001
-		config.NoiseRemovePatchSec = 0.006
-		config.NoiseRemoveResearchSec = 0.0058
-		config.NoiseRemoveSmooth = 11.0
+		config.NoiseRemove.Enabled = true
+		config.NoiseRemove.Strength = 0.00001
+		config.NoiseRemove.PatchSec = 0.006
+		config.NoiseRemove.ResearchSec = 0.0058
+		config.NoiseRemove.Smooth = 11.0
 
 		spec := config.buildNoiseRemoveFilter()
 
@@ -783,12 +849,12 @@ func TestBuildNoiseRemoveFilter(t *testing.T) {
 
 	t.Run("compand parameters include threshold and expansion", func(t *testing.T) {
 		config := newTestConfig()
-		config.NoiseRemoveEnabled = true
-		config.NoiseRemoveCompandThreshold = -50.0
-		config.NoiseRemoveCompandExpansion = 10.0
-		config.NoiseRemoveCompandAttack = 0.005
-		config.NoiseRemoveCompandDecay = 0.100
-		config.NoiseRemoveCompandKnee = 6.0
+		config.NoiseRemove.Enabled = true
+		config.NoiseRemove.CompandThreshold = -50.0
+		config.NoiseRemove.CompandExpansion = 10.0
+		config.NoiseRemove.CompandAttack = 0.005
+		config.NoiseRemove.CompandDecay = 0.100
+		config.NoiseRemove.CompandKnee = 6.0
 
 		spec := config.buildNoiseRemoveFilter()
 
@@ -816,8 +882,8 @@ func TestBuildNoiseRemoveFilter(t *testing.T) {
 
 	t.Run("compand enabled produces anlmdn+compand chain", func(t *testing.T) {
 		config := newTestConfig()
-		config.NoiseRemoveEnabled = true
-		config.NoiseRemoveCompandEnabled = true
+		config.NoiseRemove.Enabled = true
+		config.NoiseRemove.CompandEnabled = true
 
 		spec := config.buildNoiseRemoveFilter()
 
@@ -831,8 +897,8 @@ func TestBuildNoiseRemoveFilter(t *testing.T) {
 
 	t.Run("compand disabled produces anlmdn-only spec", func(t *testing.T) {
 		config := newTestConfig()
-		config.NoiseRemoveEnabled = true
-		config.NoiseRemoveCompandEnabled = false
+		config.NoiseRemove.Enabled = true
+		config.NoiseRemove.CompandEnabled = false
 
 		spec := config.buildNoiseRemoveFilter()
 
@@ -846,8 +912,8 @@ func TestBuildNoiseRemoveFilter(t *testing.T) {
 
 	t.Run("anlmdn appears before compand", func(t *testing.T) {
 		config := newTestConfig()
-		config.NoiseRemoveEnabled = true
-		config.NoiseRemoveCompandEnabled = true
+		config.NoiseRemove.Enabled = true
+		config.NoiseRemove.CompandEnabled = true
 
 		spec := config.buildNoiseRemoveFilter()
 
@@ -862,9 +928,9 @@ func TestBuildNoiseRemoveFilter(t *testing.T) {
 		expansions := []float64{6.0, 15.0, 40.0}
 		for _, exp := range expansions {
 			config := newTestConfig()
-			config.NoiseRemoveEnabled = true
-			config.NoiseRemoveCompandThreshold = -55.0
-			config.NoiseRemoveCompandExpansion = exp
+			config.NoiseRemove.Enabled = true
+			config.NoiseRemove.CompandThreshold = -55.0
+			config.NoiseRemove.CompandExpansion = exp
 
 			spec := config.buildNoiseRemoveFilter()
 
@@ -892,11 +958,11 @@ func TestBuildAdeclickFilter(t *testing.T) {
 
 	t.Run("custom parameters", func(t *testing.T) {
 		config := newTestConfig()
-		config.AdeclickEnabled = true
-		config.AdeclickThreshold = 2.0
-		config.AdeclickWindow = 100.0
-		config.AdeclickOverlap = 50.0
-		config.AdeclickMethod = "s"
+		config.Adeclick.Enabled = true
+		config.Adeclick.Threshold = 2.0
+		config.Adeclick.Window = 100.0
+		config.Adeclick.Overlap = 50.0
+		config.Adeclick.Method = "s"
 
 		spec := config.buildAdeclickFilter()
 
@@ -916,11 +982,11 @@ func TestBuildAdeclickFilter(t *testing.T) {
 
 	t.Run("empty method omits m segment", func(t *testing.T) {
 		config := newTestConfig()
-		config.AdeclickEnabled = true
-		config.AdeclickThreshold = 2.0
-		config.AdeclickWindow = 55.0
-		config.AdeclickOverlap = 50.0
-		config.AdeclickMethod = ""
+		config.Adeclick.Enabled = true
+		config.Adeclick.Threshold = 2.0
+		config.Adeclick.Window = 55.0
+		config.Adeclick.Overlap = 50.0
+		config.Adeclick.Method = ""
 
 		spec := config.buildAdeclickFilter()
 
@@ -935,7 +1001,7 @@ func TestBuildAdeclickFilter(t *testing.T) {
 
 	t.Run("disabled returns empty", func(t *testing.T) {
 		config := newTestConfig()
-		config.AdeclickEnabled = false
+		config.Adeclick.Enabled = false
 
 		spec := config.buildAdeclickFilter()
 		if spec != "" {
@@ -947,11 +1013,11 @@ func TestBuildAdeclickFilter(t *testing.T) {
 func TestFilterOrderRespected(t *testing.T) {
 	config := newTestConfig()
 	// Enable filters that appear at start and end
-	config.DS201HPEnabled = true
-	config.DS201GateEnabled = true
-	config.DeessEnabled = true
-	config.DeessIntensity = 0.5
-	config.ResampleEnabled = true // Required for aformat output filter
+	config.DS201HighPass.Enabled = true
+	config.DS201Gate.Enabled = true
+	config.Deesser.Enabled = true
+	config.Deesser.Intensity = 0.5
+	config.Resample.Enabled = true // Required for aformat output filter
 	config.FilterOrder = Pass2FilterOrder
 
 	spec := config.BuildFilterSpec()
@@ -977,6 +1043,8 @@ func TestFilterOrderRespected(t *testing.T) {
 func TestDeriveAdaptiveFilterResultDeepCopiesFilterOrder(t *testing.T) {
 	base := DefaultFilterConfig()
 	base.FilterOrder = []FilterID{FilterDeesser, FilterAnalysis}
+	base.Analysis.SilenceScanDuration = 2 * time.Second
+	base.Resample.SampleRate = 48000
 
 	adaptive := deriveAdaptiveFilterResult(base)
 	if adaptive == nil {
@@ -990,35 +1058,73 @@ func TestDeriveAdaptiveFilterResultDeepCopiesFilterOrder(t *testing.T) {
 	if base.FilterOrder[0] == FilterDownmix {
 		t.Fatal("adaptive FilterOrder mutation changed base FilterOrder")
 	}
+	if adaptive.Analysis.SilenceScanDuration != base.Analysis.SilenceScanDuration {
+		t.Errorf("Analysis.SilenceScanDuration = %s, want %s",
+			adaptive.Analysis.SilenceScanDuration, base.Analysis.SilenceScanDuration)
+	}
+	if adaptive.Resample.SampleRate != base.Resample.SampleRate {
+		t.Errorf("Resample.SampleRate = %d, want %d",
+			adaptive.Resample.SampleRate, base.Resample.SampleRate)
+	}
+	adaptive.Resample.SampleRate = 32000
+	if base.Resample.SampleRate == 32000 {
+		t.Fatal("adaptive typed Resample mutation changed base Resample")
+	}
+}
+
+func TestCloneFilterDefaultsCopiesTypedFamilies(t *testing.T) {
+	base := DefaultFilterConfig()
+	base.Analysis.SilenceScanDuration = 3 * time.Second
+	base.NoiseRemove.CompandEnabled = false
+	base.FilterOrder = []FilterID{FilterAnalysis, FilterDeesser}
+
+	clone := cloneFilterDefaults(&base.filterConfigDefaults)
+	if clone.Analysis.SilenceScanDuration != base.Analysis.SilenceScanDuration {
+		t.Errorf("Analysis.SilenceScanDuration = %s, want %s",
+			clone.Analysis.SilenceScanDuration, base.Analysis.SilenceScanDuration)
+	}
+	if clone.NoiseRemove.CompandEnabled != base.NoiseRemove.CompandEnabled {
+		t.Errorf("NoiseRemove.CompandEnabled = %v, want %v",
+			clone.NoiseRemove.CompandEnabled, base.NoiseRemove.CompandEnabled)
+	}
+	if !reflect.DeepEqual(clone.FilterOrder, base.FilterOrder) {
+		t.Errorf("FilterOrder = %v, want %v", clone.FilterOrder, base.FilterOrder)
+	}
+
+	clone.FilterOrder[0] = FilterDownmix
+	if base.FilterOrder[0] == FilterDownmix {
+		t.Fatal("clone FilterOrder mutation changed base FilterOrder")
+	}
 }
 
 func TestAssembleEffectiveFilterConfig(t *testing.T) {
 	base := DefaultFilterConfig()
 	base.FilterOrder = []FilterID{FilterDeesser, FilterAnalysis}
-	base.TargetI = -18.0
-	base.SilenceScanDuration = 2 * time.Second
+	base.Loudnorm.TargetI = -18.0
+	base.Analysis.SilenceScanDuration = 2 * time.Second
 
 	adaptive := deriveAdaptiveFilterResult(base)
-	adaptive.DS201HPFreq = 65.0
-	adaptive.NoiseRemoveCompandEnabled = false
+	adaptive.DS201HighPass.Frequency = 65.0
+	adaptive.NoiseRemove.CompandEnabled = false
 	adaptive.FilterOrder = []FilterID{FilterDownmix}
 
 	effective := assembleEffectiveFilterConfig(base, adaptive)
 	if effective == nil {
 		t.Fatal("assembleEffectiveFilterConfig returned nil")
 	}
-	if effective.DS201HPFreq != adaptive.DS201HPFreq {
-		t.Errorf("DS201HPFreq = %.1f, want adaptive %.1f", effective.DS201HPFreq, adaptive.DS201HPFreq)
+	if effective.DS201HighPass.Frequency != adaptive.DS201HighPass.Frequency {
+		t.Errorf("DS201HighPass.Frequency = %.1f, want adaptive %.1f",
+			effective.DS201HighPass.Frequency, adaptive.DS201HighPass.Frequency)
 	}
-	if effective.NoiseRemoveCompandEnabled {
-		t.Error("NoiseRemoveCompandEnabled = true, want adaptive false")
+	if effective.NoiseRemove.CompandEnabled {
+		t.Error("NoiseRemove.CompandEnabled = true, want adaptive false")
 	}
-	if effective.TargetI != base.TargetI {
-		t.Errorf("TargetI = %.1f, want base %.1f", effective.TargetI, base.TargetI)
+	if effective.Loudnorm.TargetI != base.Loudnorm.TargetI {
+		t.Errorf("Loudnorm.TargetI = %.1f, want base %.1f", effective.Loudnorm.TargetI, base.Loudnorm.TargetI)
 	}
-	if effective.SilenceScanDuration != base.SilenceScanDuration {
-		t.Errorf("SilenceScanDuration = %s, want base %s",
-			effective.SilenceScanDuration, base.SilenceScanDuration)
+	if effective.Analysis.SilenceScanDuration != base.Analysis.SilenceScanDuration {
+		t.Errorf("Analysis.SilenceScanDuration = %s, want base %s",
+			effective.Analysis.SilenceScanDuration, base.Analysis.SilenceScanDuration)
 	}
 	if !reflect.DeepEqual(effective.FilterOrder, base.FilterOrder) {
 		t.Errorf("FilterOrder = %v, want base order %v", effective.FilterOrder, base.FilterOrder)
@@ -1038,9 +1144,9 @@ func TestAssembleEffectiveFilterConfig(t *testing.T) {
 func TestDeriveEffectiveFilterConfig(t *testing.T) {
 	base := DefaultFilterConfig()
 	base.FilterOrder = []FilterID{FilterDeesser, FilterAnalysis}
-	base.TargetI = -18.0
-	base.SilenceScanDuration = 2 * time.Second
-	base.NoiseRemoveCompandThreshold = -48.0
+	base.Loudnorm.TargetI = -18.0
+	base.Analysis.SilenceScanDuration = 2 * time.Second
+	base.NoiseRemove.CompandThreshold = -48.0
 
 	derived := deriveEffectiveFilterConfig(base)
 	if derived == nil {
@@ -1055,21 +1161,22 @@ func TestDeriveEffectiveFilterConfig(t *testing.T) {
 		t.Error("derived FilterOrder mutation changed base FilterOrder")
 	}
 
-	if derived.TargetI != base.TargetI {
-		t.Errorf("TargetI = %.1f, want %.1f", derived.TargetI, base.TargetI)
+	if derived.Loudnorm.TargetI != base.Loudnorm.TargetI {
+		t.Errorf("Loudnorm.TargetI = %.1f, want %.1f", derived.Loudnorm.TargetI, base.Loudnorm.TargetI)
 	}
-	if derived.SilenceScanDuration != base.SilenceScanDuration {
-		t.Errorf("SilenceScanDuration = %s, want %s", derived.SilenceScanDuration, base.SilenceScanDuration)
+	if derived.Analysis.SilenceScanDuration != base.Analysis.SilenceScanDuration {
+		t.Errorf("Analysis.SilenceScanDuration = %s, want %s",
+			derived.Analysis.SilenceScanDuration, base.Analysis.SilenceScanDuration)
 	}
-	if derived.NoiseRemoveCompandThreshold != base.NoiseRemoveCompandThreshold {
-		t.Errorf("NoiseRemoveCompandThreshold = %.1f, want %.1f",
-			derived.NoiseRemoveCompandThreshold, base.NoiseRemoveCompandThreshold)
+	if derived.NoiseRemove.CompandThreshold != base.NoiseRemove.CompandThreshold {
+		t.Errorf("NoiseRemove.CompandThreshold = %.1f, want %.1f",
+			derived.NoiseRemove.CompandThreshold, base.NoiseRemove.CompandThreshold)
 	}
 
 	if !reflect.DeepEqual(base.FilterOrder, []FilterID{FilterDeesser, FilterAnalysis}) ||
-		base.TargetI != -18.0 ||
-		base.SilenceScanDuration != 2*time.Second ||
-		base.NoiseRemoveCompandThreshold != -48.0 {
+		base.Loudnorm.TargetI != -18.0 ||
+		base.Analysis.SilenceScanDuration != 2*time.Second ||
+		base.NoiseRemove.CompandThreshold != -48.0 {
 		t.Error("deriveEffectiveFilterConfig mutated caller-owned defaults")
 	}
 }
@@ -1077,21 +1184,100 @@ func TestDeriveEffectiveFilterConfig(t *testing.T) {
 func assertNoStaleEffectiveConfigFields(t *testing.T) {
 	t.Helper()
 
-	configType := reflect.TypeFor[EffectiveFilterConfig]()
-	for _, field := range []string{
+	for _, typ := range []reflect.Type{
+		reflect.TypeFor[filterConfigDefaults](),
+		reflect.TypeFor[EffectiveFilterConfig](),
+	} {
+		assertNoStaleConfigFields(t, typ)
+	}
+}
+
+func assertNoStaleConfigFields(t *testing.T, configType reflect.Type) {
+	t.Helper()
+
+	for _, field := range staleFlatConfigFieldNames() {
+		if _, ok := configType.FieldByName(field); ok {
+			t.Errorf("%s contains stale field %s", configType.Name(), field)
+		}
+	}
+}
+
+func staleFlatConfigFieldNames() []string {
+	return []string{
 		"Pass",
 		"Measurements",
 		"OutputAnalysisEnabled",
+		"DownmixEnabled",
+		"AnalysisEnabled",
+		"SilenceScanDuration",
+		"ResampleEnabled",
+		"ResampleSampleRate",
+		"ResampleFormat",
+		"ResampleFrameSize",
+		"DS201HPEnabled",
+		"DS201HPFreq",
+		"DS201HPPoles",
+		"DS201HPWidth",
+		"DS201HPMix",
+		"DS201HPTransform",
+		"DS201LPEnabled",
+		"DS201LPFreq",
+		"DS201LPPoles",
+		"DS201LPWidth",
+		"DS201LPMix",
+		"DS201LPTransform",
+		"NoiseRemoveEnabled",
+		"NoiseRemoveCompandEnabled",
+		"NoiseRemoveStrength",
+		"NoiseRemovePatchSec",
+		"NoiseRemoveResearchSec",
+		"NoiseRemoveSmooth",
+		"NoiseRemoveCompandThreshold",
+		"NoiseRemoveCompandExpansion",
+		"NoiseRemoveCompandAttack",
+		"NoiseRemoveCompandDecay",
+		"NoiseRemoveCompandKnee",
+		"DS201GateEnabled",
+		"DS201GateThreshold",
+		"DS201GateRatio",
+		"DS201GateAttack",
+		"DS201GateRelease",
+		"DS201GateRange",
+		"DS201GateKnee",
+		"DS201GateMakeup",
+		"DS201GateDetection",
+		"LA2AEnabled",
+		"LA2AThreshold",
+		"LA2ARatio",
+		"LA2AAttack",
+		"LA2ARelease",
+		"LA2AMakeup",
+		"LA2AKnee",
+		"LA2AMix",
+		"DeessEnabled",
+		"DeessIntensity",
+		"DeessAmount",
+		"DeessFreq",
+		"AdeclickEnabled",
+		"AdeclickThreshold",
+		"AdeclickWindow",
+		"AdeclickOverlap",
+		"AdeclickMethod",
+		"TargetI",
+		"TargetTP",
+		"TargetLRA",
+		"LoudnormEnabled",
+		"LoudnormTargetI",
+		"LoudnormTargetTP",
+		"LoudnormTargetLRA",
+		"LoudnormDualMono",
+		"LoudnormLinear",
 		"DS201LPReason",
 		"DS201GateClampReason",
 		"LA2AHighCrestActive",
 		"LA2AHighCrestDeficit",
 		"LA2AHighCrestSeverity",
 		"LA2AHighCrestProjectedTP",
-	} {
-		if _, ok := configType.FieldByName(field); ok {
-			t.Errorf("EffectiveFilterConfig contains stale field %s", field)
-		}
 	}
 }
 
@@ -1140,12 +1326,58 @@ func TestDbToLinearFormula(t *testing.T) {
 	}
 }
 
+func TestDecibelLinearAmplitudeWrappers(t *testing.T) {
+	t.Run("dB to linear delegates to DbToLinear", func(t *testing.T) {
+		testCases := []struct {
+			name string
+			db   float64
+		}{
+			{"LA-2A threshold", -20.0},
+			{"LA-2A makeup", 3.0},
+			{"DS201 gate threshold", -40.0},
+			{"DS201 gate range", -27.0},
+			{"limiter ceiling", -12.4},
+		}
+
+		for _, tt := range testCases {
+			t.Run(tt.name, func(t *testing.T) {
+				got := Decibels(tt.db).LinearAmplitude().Float64()
+				want := DbToLinear(tt.db)
+				if math.Abs(got-want) > 0.0000001 {
+					t.Errorf("Decibels(%.1f).LinearAmplitude() = %.10f, want %.10f", tt.db, got, want)
+				}
+			})
+		}
+	})
+
+	t.Run("linear to dB delegates to LinearToDb", func(t *testing.T) {
+		testCases := []struct {
+			name   string
+			linear float64
+		}{
+			{"DS201 diagnostics threshold", 0.01},
+			{"DS201 diagnostics range", 0.044668},
+			{"silent floor", 0.0},
+		}
+
+		for _, tt := range testCases {
+			t.Run(tt.name, func(t *testing.T) {
+				got := LinearAmplitude(tt.linear).Decibels().Float64()
+				want := LinearToDb(tt.linear)
+				if math.Abs(got-want) > 0.0000001 {
+					t.Errorf("LinearAmplitude(%.6f).Decibels() = %.10f, want %.10f", tt.linear, got, want)
+				}
+			})
+		}
+	})
+}
+
 // Tests for infrastructure filters (Downmix, Analysis, Resample)
 
 func TestBuildDownmixFilter(t *testing.T) {
 	t.Run("enabled returns aformat mono", func(t *testing.T) {
 		config := newTestConfig()
-		config.DownmixEnabled = true
+		config.Downmix.Enabled = true
 
 		result := config.buildDownmixFilter()
 
@@ -1156,7 +1388,7 @@ func TestBuildDownmixFilter(t *testing.T) {
 
 	t.Run("disabled returns empty string", func(t *testing.T) {
 		config := newTestConfig()
-		config.DownmixEnabled = false
+		config.Downmix.Enabled = false
 
 		result := config.buildDownmixFilter()
 
@@ -1169,8 +1401,8 @@ func TestBuildDownmixFilter(t *testing.T) {
 func TestBuildAnalysisFilter(t *testing.T) {
 	t.Run("enabled returns astats+aspectralstats+ebur128 chain", func(t *testing.T) {
 		config := newTestConfig()
-		config.AnalysisEnabled = true
-		config.TargetI = -16.0
+		config.Analysis.Enabled = true
+		config.Loudnorm.TargetI = -16.0
 
 		result := config.buildAnalysisFilter()
 
@@ -1195,21 +1427,21 @@ func TestBuildAnalysisFilter(t *testing.T) {
 		}
 	})
 
-	t.Run("uses configured TargetI", func(t *testing.T) {
+	t.Run("uses configured Loudnorm.TargetI", func(t *testing.T) {
 		config := newTestConfig()
-		config.AnalysisEnabled = true
-		config.TargetI = -14.0
+		config.Analysis.Enabled = true
+		config.Loudnorm.TargetI = -14.0
 
 		result := config.buildAnalysisFilter()
 
 		if !strings.Contains(result, "target=-14") {
-			t.Errorf("buildAnalysisFilter() should use TargetI=-14, got %q", result)
+			t.Errorf("buildAnalysisFilter() should use Loudnorm.TargetI=-14, got %q", result)
 		}
 	})
 
 	t.Run("disabled returns empty string", func(t *testing.T) {
 		config := newTestConfig()
-		config.AnalysisEnabled = false
+		config.Analysis.Enabled = false
 
 		result := config.buildAnalysisFilter()
 
@@ -1222,10 +1454,10 @@ func TestBuildAnalysisFilter(t *testing.T) {
 func TestBuildResampleFilter(t *testing.T) {
 	t.Run("enabled returns aformat+asetnsamples with default params", func(t *testing.T) {
 		config := newTestConfig()
-		config.ResampleEnabled = true
-		config.ResampleSampleRate = 44100
-		config.ResampleFormat = "s16"
-		config.ResampleFrameSize = 4096
+		config.Resample.Enabled = true
+		config.Resample.SampleRate = 44100
+		config.Resample.Format = "s16"
+		config.Resample.FrameSize = 4096
 
 		result := config.buildResampleFilter()
 
@@ -1237,10 +1469,10 @@ func TestBuildResampleFilter(t *testing.T) {
 
 	t.Run("uses configured parameters", func(t *testing.T) {
 		config := newTestConfig()
-		config.ResampleEnabled = true
-		config.ResampleSampleRate = 48000
-		config.ResampleFormat = "s32"
-		config.ResampleFrameSize = 2048
+		config.Resample.Enabled = true
+		config.Resample.SampleRate = 48000
+		config.Resample.Format = "s32"
+		config.Resample.FrameSize = 2048
 
 		result := config.buildResampleFilter()
 
@@ -1252,7 +1484,7 @@ func TestBuildResampleFilter(t *testing.T) {
 
 	t.Run("disabled returns empty string", func(t *testing.T) {
 		config := newTestConfig()
-		config.ResampleEnabled = false
+		config.Resample.Enabled = false
 
 		result := config.buildResampleFilter()
 
@@ -1264,10 +1496,10 @@ func TestBuildResampleFilter(t *testing.T) {
 
 func TestBuildRequiredOutputFormatFilter(t *testing.T) {
 	config := newTestConfig()
-	config.ResampleEnabled = false
-	config.ResampleSampleRate = 48000
-	config.ResampleFormat = "s32"
-	config.ResampleFrameSize = 2048
+	config.Resample.Enabled = false
+	config.Resample.SampleRate = 48000
+	config.Resample.Format = "s32"
+	config.Resample.FrameSize = 2048
 
 	result := config.buildRequiredOutputFormatFilter()
 

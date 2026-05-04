@@ -34,7 +34,7 @@ func tuneDeesser(config *EffectiveFilterConfig, measurements *AudioMeasurements)
 	// Full-file spectral metrics are diluted by silence/noise regions
 	// and produce false positives for sibilance in speech-sparse recordings.
 	if measurements.SpeechProfile == nil {
-		config.DeessIntensity = 0.0
+		config.Deesser.Intensity = 0.0
 		return
 	}
 
@@ -78,22 +78,22 @@ func tuneDeesserFull(config *EffectiveFilterConfig, measurements *AudioMeasureme
 	switch {
 	case rolloff < rolloffNoSibilance:
 		// Very limited HF content - no sibilance expected
-		config.DeessIntensity = 0.0
+		config.Deesser.Intensity = 0.0
 
 	case rolloff < rolloffLimited:
 		// Limited HF extension - reduce intensity
-		config.DeessIntensity = baseIntensity * 0.7
-		if config.DeessIntensity < deessIntensityMin {
-			config.DeessIntensity = 0.0 // Skip if too low
+		config.Deesser.Intensity = baseIntensity * 0.7
+		if config.Deesser.Intensity < deessIntensityMin {
+			config.Deesser.Intensity = 0.0 // Skip if too low
 		}
 
 	case rolloff > rolloffExtensive:
 		// Extensive HF content - likely sibilance
-		config.DeessIntensity = math.Min(baseIntensity*1.2, deessIntensityMax)
+		config.Deesser.Intensity = math.Min(baseIntensity*1.2, deessIntensityMax)
 
 	default:
 		// Normal HF extension (8-12 kHz)
-		config.DeessIntensity = baseIntensity
+		config.Deesser.Intensity = baseIntensity
 	}
 }
 
@@ -108,10 +108,10 @@ func tuneDeesserCentroidOnly(config *EffectiveFilterConfig, measurements *AudioM
 
 	switch {
 	case centroid > centroidVeryBright:
-		config.DeessIntensity = deessIntensityBright
+		config.Deesser.Intensity = deessIntensityBright
 	case centroid > centroidBright:
-		config.DeessIntensity = deessIntensityNormal
+		config.Deesser.Intensity = deessIntensityNormal
 	default:
-		config.DeessIntensity = deessIntensityDark
+		config.Deesser.Intensity = deessIntensityDark
 	}
 }

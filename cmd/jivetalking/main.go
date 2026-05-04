@@ -74,7 +74,7 @@ func main() {
 
 	// Create default filter configuration
 	config := processor.DefaultFilterConfig()
-	config.SilenceScanDuration = cliArgs.SilenceScanDuration
+	config.Analysis.SilenceScanDuration = cliArgs.SilenceScanDuration
 
 	// Open debug log file if --debug flag is set
 	debugLog, err := openDebugLog(cliArgs.Debug)

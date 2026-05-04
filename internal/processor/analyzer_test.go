@@ -314,7 +314,7 @@ func TestAnalyzeAudio(t *testing.T) {
 
 	// Use test config with podcast standard targets
 	config := newTestBaseConfig()
-	config.AnalysisEnabled = true
+	config.Analysis.Enabled = true
 
 	t.Run("synthetic_tone_with_silence", func(t *testing.T) {
 		// Progress callback to show analysis progress
@@ -368,9 +368,9 @@ func TestAnalyzeAudio(t *testing.T) {
 
 		// The offset should bring us close to target (-16 LUFS)
 		expectedOutput := measurements.InputI + measurements.TargetOffset
-		if expectedOutput < config.TargetI-2 || expectedOutput > config.TargetI+2 {
+		if expectedOutput < config.Loudnorm.TargetI-2 || expectedOutput > config.Loudnorm.TargetI+2 {
 			t.Logf("Warning: Target offset might not achieve target (expected ~%.1f, got %.2f)",
-				config.TargetI, expectedOutput)
+				config.Loudnorm.TargetI, expectedOutput)
 		}
 	})
 }
@@ -387,10 +387,10 @@ func TestAnalyzeAudioDoesNotMutateCallerConfig(t *testing.T) {
 
 	config := DefaultFilterConfig()
 	config.FilterOrder = []FilterID{FilterNoiseRemove, FilterAnalysis}
-	config.SilenceScanDuration = 250 * time.Millisecond
+	config.Analysis.SilenceScanDuration = 250 * time.Millisecond
 
 	originalOrder := append([]FilterID(nil), config.FilterOrder...)
-	originalSilenceScanDuration := config.SilenceScanDuration
+	originalSilenceScanDuration := config.Analysis.SilenceScanDuration
 
 	if _, err := AnalyzeAudio(testFile, config, nil); err != nil {
 		t.Fatalf("AnalyzeAudio failed: %v", err)
@@ -404,8 +404,8 @@ func TestAnalyzeAudioDoesNotMutateCallerConfig(t *testing.T) {
 			t.Errorf("FilterOrder[%d] = %q, want %q", i, config.FilterOrder[i], originalOrder[i])
 		}
 	}
-	if config.SilenceScanDuration != originalSilenceScanDuration {
-		t.Errorf("SilenceScanDuration = %v, want %v", config.SilenceScanDuration, originalSilenceScanDuration)
+	if config.Analysis.SilenceScanDuration != originalSilenceScanDuration {
+		t.Errorf("Analysis.SilenceScanDuration = %v, want %v", config.Analysis.SilenceScanDuration, originalSilenceScanDuration)
 	}
 }
 
@@ -2859,7 +2859,7 @@ func TestAnalyzeAudio_SilenceScanDuration(t *testing.T) {
 	const loudnessTolerance = 0.01
 
 	baselineConfig := newTestBaseConfig()
-	baselineConfig.AnalysisEnabled = true
+	baselineConfig.Analysis.Enabled = true
 
 	baseline, err := AnalyzeAudio(testFile, baselineConfig, nil)
 	if err != nil {
@@ -2900,8 +2900,8 @@ func TestAnalyzeAudio_SilenceScanDuration(t *testing.T) {
 	t.Run("zero_matches_baseline", func(t *testing.T) {
 		// AC1 / AC5: explicit zero is identical to flag absent (no cap).
 		config := newTestBaseConfig()
-		config.AnalysisEnabled = true
-		config.SilenceScanDuration = 0
+		config.Analysis.Enabled = true
+		config.Analysis.SilenceScanDuration = 0
 
 		got, err := AnalyzeAudio(testFile, config, nil)
 		if err != nil {
@@ -2929,8 +2929,8 @@ func TestAnalyzeAudio_SilenceScanDuration(t *testing.T) {
 		// pipeline's view, so no candidates are formed and no profile is extracted.
 		// 2 s lands cleanly between the 1.75 s and 2.0 s interval start times.
 		config := newTestBaseConfig()
-		config.AnalysisEnabled = true
-		config.SilenceScanDuration = 2 * time.Second
+		config.Analysis.Enabled = true
+		config.Analysis.SilenceScanDuration = 2 * time.Second
 
 		got, err := AnalyzeAudio(testFile, config, nil)
 		if err != nil {
@@ -2951,8 +2951,8 @@ func TestAnalyzeAudio_SilenceScanDuration(t *testing.T) {
 		// silence pipeline elects the same region as the uncapped run and
 		// produces the same NoiseProfile placement.
 		config := newTestBaseConfig()
-		config.AnalysisEnabled = true
-		config.SilenceScanDuration = 60 * time.Second
+		config.Analysis.Enabled = true
+		config.Analysis.SilenceScanDuration = 60 * time.Second
 
 		got, err := AnalyzeAudio(testFile, config, nil)
 		if err != nil {
@@ -2979,8 +2979,8 @@ func TestAnalyzeAudio_SilenceScanDuration(t *testing.T) {
 		// LRA, speech regions, interval samples) match the uncapped run because
 		// only the silence pipeline reads the capped slice.
 		config := newTestBaseConfig()
-		config.AnalysisEnabled = true
-		config.SilenceScanDuration = 60 * time.Second
+		config.Analysis.Enabled = true
+		config.Analysis.SilenceScanDuration = 60 * time.Second
 
 		got, err := AnalyzeAudio(testFile, config, nil)
 		if err != nil {

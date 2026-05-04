@@ -933,7 +933,7 @@ func defaultNormalisationTestConfig() *EffectiveFilterConfig {
 
 func loudnormApplicationTestConfig() *EffectiveFilterConfig {
 	config := defaultNormalisationTestConfig()
-	config.AdeclickEnabled = false
+	config.Adeclick.Enabled = false
 	return config
 }
 
@@ -1981,10 +1981,10 @@ func TestBuildLoudnormFilterSpec_PreGain(t *testing.T) {
 
 			// Pre-compute values (caller's responsibility after Task 2.2)
 			ceiling, needsLimiting, clamped := calculateLimiterCeiling(
-				tt.inputI, tt.inputTP, config.LoudnormTargetI, config.LoudnormTargetTP,
+				tt.inputI, tt.inputTP, config.Loudnorm.TargetI, config.Loudnorm.TargetTP,
 			)
 			preGainDB, reDerivedCeiling := calculatePreGain(
-				tt.inputI, config.LoudnormTargetI, config.LoudnormTargetTP,
+				tt.inputI, config.Loudnorm.TargetI, config.Loudnorm.TargetTP,
 			)
 			if clamped {
 				ceiling = reDerivedCeiling
@@ -2053,10 +2053,10 @@ func TestBuildLoudnormFilterSpec_PreGain(t *testing.T) {
 
 func TestBuildLoudnormFilterSpec_DoesNotMutateConfig(t *testing.T) {
 	config := defaultNormalisationTestConfig()
-	config.ResampleEnabled = false
-	config.ResampleSampleRate = 48000
-	config.ResampleFormat = "s32"
-	config.ResampleFrameSize = 2048
+	config.Resample.Enabled = false
+	config.Resample.SampleRate = 48000
+	config.Resample.Format = "s32"
+	config.Resample.FrameSize = 2048
 
 	measurement := &LoudnormMeasurement{
 		InputI:       -24.0,
@@ -2068,8 +2068,8 @@ func TestBuildLoudnormFilterSpec_DoesNotMutateConfig(t *testing.T) {
 
 	filterSpec := buildLoudnormFilterSpec(config, measurement, 0, -1.0, false)
 
-	if config.ResampleEnabled {
-		t.Error("buildLoudnormFilterSpec mutated config.ResampleEnabled")
+	if config.Resample.Enabled {
+		t.Error("buildLoudnormFilterSpec mutated config.Resample.Enabled")
 	}
 
 	want := "aformat=sample_rates=48000:channel_layouts=mono:sample_fmts=s32,asetnsamples=n=2048"
@@ -2100,7 +2100,7 @@ func TestBuildLoudnormFilterSpec_Adeclick(t *testing.T) {
 
 	t.Run("omits disabled adeclick", func(t *testing.T) {
 		config := defaultNormalisationTestConfig()
-		config.AdeclickEnabled = false
+		config.Adeclick.Enabled = false
 
 		filterSpec := buildLoudnormFilterSpec(config, measurement, 0, -1.0, false)
 
@@ -2125,9 +2125,9 @@ func TestBuildLoudnormFilterSpecIgnoresNonNormalisationFields(t *testing.T) {
 
 	withUnrelatedFilterFields := *base
 	withUnrelatedFilterFields.FilterOrder = []FilterID{FilterAnalysis}
-	withUnrelatedFilterFields.DS201LPFreq = 12000
-	withUnrelatedFilterFields.DS201GateRatio = 4.0
-	withUnrelatedFilterFields.LA2AThreshold = -30.0
+	withUnrelatedFilterFields.DS201LowPass.Frequency = 12000
+	withUnrelatedFilterFields.DS201Gate.Ratio = 4.0
+	withUnrelatedFilterFields.LA2A.Threshold = -30.0
 
 	gotSpec := buildLoudnormFilterSpec(&withUnrelatedFilterFields, measurement, 0, -1.0, false)
 	if gotSpec != controlSpec {
@@ -2314,7 +2314,7 @@ func TestClampedTargetPropagation_Arithmetic(t *testing.T) {
 
 			// Step 4: verify buildLoudnormFilterSpec receives the full target
 			config := defaultNormalisationTestConfig()
-			config.LoudnormTargetI = effectiveTargetI
+			config.Loudnorm.TargetI = effectiveTargetI
 			measurement := &LoudnormMeasurement{
 				InputI:       tt.measuredI,
 				InputTP:      tt.measuredTP,
@@ -2325,10 +2325,10 @@ func TestClampedTargetPropagation_Arithmetic(t *testing.T) {
 
 			// Pre-compute values (caller's responsibility after Task 2.2)
 			bCeiling, bNeeded, bClamped := calculateLimiterCeiling(
-				tt.measuredI, tt.measuredTP, config.LoudnormTargetI, config.LoudnormTargetTP,
+				tt.measuredI, tt.measuredTP, config.Loudnorm.TargetI, config.Loudnorm.TargetTP,
 			)
 			preGainDB, bReDerived := calculatePreGain(
-				tt.measuredI, config.LoudnormTargetI, config.LoudnormTargetTP,
+				tt.measuredI, config.Loudnorm.TargetI, config.Loudnorm.TargetTP,
 			)
 			if bClamped {
 				bCeiling = bReDerived

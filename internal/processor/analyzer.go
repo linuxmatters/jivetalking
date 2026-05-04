@@ -383,7 +383,7 @@ func buildInputMeasurements(filename string, collection *analysisFrameCollection
 	measurements.InputTP = acc.ebur128InputTP
 	measurements.InputLRA = acc.ebur128InputLRA
 	measurements.InputThresh = acc.ebur128InputI - 10.0
-	measurements.TargetOffset = config.TargetI - acc.ebur128InputI
+	measurements.TargetOffset = config.Loudnorm.TargetI - acc.ebur128InputI
 	measurements.MomentaryLoudness = acc.ebur128InputM
 	measurements.ShortTermLoudness = acc.ebur128InputS
 	measurements.SamplePeak = acc.ebur128InputSP
@@ -547,7 +547,7 @@ func collectAnalysisFrames(filename string, config *BaseFilterConfig, context *P
 			if inputFrameTime-intervalStartTime >= intervalDuration {
 				finalised := intervalAcc.finalize(intervalStartTime)
 				intervals = append(intervals, finalised)
-				if config.SilenceScanDuration > 0 && intervalStartTime < config.SilenceScanDuration {
+				if config.Analysis.SilenceScanDuration > 0 && intervalStartTime < config.Analysis.SilenceScanDuration {
 					silenceIntervals = append(silenceIntervals, finalised)
 				}
 				intervalStartTime = inputFrameTime
@@ -579,12 +579,12 @@ func collectAnalysisFrames(filename string, config *BaseFilterConfig, context *P
 	if intervalAcc.rawSampleCount > 0 {
 		finalised := intervalAcc.finalize(intervalStartTime)
 		intervals = append(intervals, finalised)
-		if config.SilenceScanDuration > 0 && intervalStartTime < config.SilenceScanDuration {
+		if config.Analysis.SilenceScanDuration > 0 && intervalStartTime < config.Analysis.SilenceScanDuration {
 			silenceIntervals = append(silenceIntervals, finalised)
 		}
 	}
 
-	if config.SilenceScanDuration == 0 {
+	if config.Analysis.SilenceScanDuration == 0 {
 		silenceIntervals = intervals
 	}
 

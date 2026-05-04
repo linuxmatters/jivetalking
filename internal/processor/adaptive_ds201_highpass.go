@@ -64,10 +64,10 @@ const (
 // - High entropy indicates broadband noise → skip notch filter
 // - Voice-aware: reduces harmonics for warm voices to protect vocal fundamentals
 func tuneDS201HighPass(config *EffectiveFilterConfig, measurements *AudioMeasurements) {
-	config.DS201HPPoles = ds201HPDefaultPoles
-	config.DS201HPWidth = ds201HPDefaultWidth
-	config.DS201HPMix = ds201HPDefaultMix
-	config.DS201HPTransform = ds201HPDefaultTransform
+	config.DS201HighPass.Poles = ds201HPDefaultPoles
+	config.DS201HighPass.Width = ds201HPDefaultWidth
+	config.DS201HighPass.Mix = ds201HPDefaultMix
+	config.DS201HighPass.Transform = ds201HPDefaultTransform
 
 	if measurements.Spectral.Centroid <= 0 {
 		// No spectral analysis available - keep default
@@ -134,13 +134,13 @@ func tuneDS201HighPass(config *EffectiveFilterConfig, measurements *AudioMeasure
 
 	// Apply boost if warranted by noise characteristics (only for non-warm voices)
 	if shouldBoost {
-		config.DS201HPFreq = baseFreq + boostAmount
+		config.DS201HighPass.Frequency = baseFreq + boostAmount
 	} else {
-		config.DS201HPFreq = baseFreq
+		config.DS201HighPass.Frequency = baseFreq
 	}
 
 	// Set TDII transform for all highpass (best floating-point accuracy)
-	config.DS201HPTransform = ds201HPDefaultTransform
+	config.DS201HighPass.Transform = ds201HPDefaultTransform
 
 	// Protect warm voices with significant LF body
 	// Instead of disabling highpass, we use gentler settings:
@@ -153,27 +153,27 @@ func tuneDS201HighPass(config *EffectiveFilterConfig, measurements *AudioMeasure
 	case decrease < spectralDecreaseVeryWarm:
 		// Very warm voice
 		// Use minimal settings: 60Hz cutoff, gentle Q, 80% mix
-		config.DS201HPFreq = ds201HPVeryWarmFreq
-		config.DS201HPWidth = ds201HPVeryWarmWidth
-		config.DS201HPMix = ds201HPVeryWarmMix
-		config.DS201HPPoles = 1 // Gentle 6dB/oct slope
+		config.DS201HighPass.Frequency = ds201HPVeryWarmFreq
+		config.DS201HighPass.Width = ds201HPVeryWarmWidth
+		config.DS201HighPass.Mix = ds201HPVeryWarmMix
+		config.DS201HighPass.Poles = 1 // Gentle 6dB/oct slope
 	case skewness > spectralSkewnessLFEmphasis:
 		// Significant LF emphasis
 		// Use warm settings: 70Hz cutoff, gentle Q, 90% mix
-		config.DS201HPFreq = ds201HPWarmFreq
-		config.DS201HPWidth = ds201HPWarmWidth
-		config.DS201HPMix = ds201HPWarmMix
-		config.DS201HPPoles = 1 // Gentle 6dB/oct slope
+		config.DS201HighPass.Frequency = ds201HPWarmFreq
+		config.DS201HighPass.Width = ds201HPWarmWidth
+		config.DS201HighPass.Mix = ds201HPWarmMix
+		config.DS201HighPass.Poles = 1 // Gentle 6dB/oct slope
 	case decrease < spectralDecreaseWarm:
 		// Warm voice - cap at default with gentle slope to preserve body
-		if config.DS201HPFreq > ds201HPDefaultFreq {
-			config.DS201HPFreq = ds201HPDefaultFreq
+		if config.DS201HighPass.Frequency > ds201HPDefaultFreq {
+			config.DS201HighPass.Frequency = ds201HPDefaultFreq
 		}
-		config.DS201HPPoles = 1 // Gentle 6dB/oct slope
+		config.DS201HighPass.Poles = 1 // Gentle 6dB/oct slope
 	}
 
 	// Final cap at maximum to avoid affecting voice fundamentals
-	if config.DS201HPFreq > ds201HPMaxFreq {
-		config.DS201HPFreq = ds201HPMaxFreq
+	if config.DS201HighPass.Frequency > ds201HPMaxFreq {
+		config.DS201HighPass.Frequency = ds201HPMaxFreq
 	}
 }

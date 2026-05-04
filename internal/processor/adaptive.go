@@ -121,28 +121,68 @@ func AdaptConfig(config *BaseFilterConfig, measurements *AudioMeasurements) (*Ef
 	return effectiveConfig, diagnostics
 }
 
-// sanitizeConfig ensures no NaN or Inf values remain after adaptive tuning
+// sanitizeConfig ensures no NaN or Inf values remain after adaptive tuning.
 func sanitizeConfig(config *EffectiveFilterConfig) {
-	// DS201-inspired highpass filter
-	config.DS201HPFreq = sanitizeFloat(config.DS201HPFreq, ds201DefaultHPFreq)
-	config.DS201HPWidth = sanitizeFloat(config.DS201HPWidth, 0.707) // Butterworth default
-	config.DS201HPMix = sanitizeFloat(config.DS201HPMix, 1.0)       // Full wet default
+	sanitizeDS201HighPassConfig(&config.DS201HighPass)
+	sanitizeDS201LowPassConfig(&config.DS201LowPass)
+	sanitizeNoiseRemoveConfig(&config.NoiseRemove)
+	sanitizeDS201GateConfig(&config.DS201Gate)
+	sanitizeLA2AConfig(&config.LA2A)
+	sanitizeDeesserConfig(&config.Deesser)
+}
 
-	// DS201-inspired lowpass filter
-	config.DS201LPFreq = sanitizeFloat(config.DS201LPFreq, ds201LPDefaultFreq)
-	config.DS201LPWidth = sanitizeFloat(config.DS201LPWidth, 0.707) // Butterworth default
-	config.DS201LPMix = sanitizeFloat(config.DS201LPMix, 1.0)       // Full wet default
+func sanitizeDS201HighPassConfig(config *DS201HighPassConfig) {
+	config.Frequency = sanitizeFloat(config.Frequency, ds201DefaultHPFreq)
+	config.Width = sanitizeFloat(config.Width, 0.707)
+	config.Mix = sanitizeFloat(config.Mix, 1.0)
+}
 
-	// De-esser intensity
-	config.DeessIntensity = sanitizeFloat(config.DeessIntensity, defaultDeessIntensity)
+func sanitizeDS201LowPassConfig(config *DS201LowPassConfig) {
+	config.Frequency = sanitizeFloat(config.Frequency, ds201LPDefaultFreq)
+	config.Width = sanitizeFloat(config.Width, 0.707)
+	config.Mix = sanitizeFloat(config.Mix, 1.0)
+}
 
-	// LA-2A compressor
-	config.LA2ARatio = sanitizeFloat(config.LA2ARatio, defaultLA2ARatio)
-	config.LA2AThreshold = sanitizeFloat(config.LA2AThreshold, defaultLA2AThreshold)
-	// Note: LA2AMakeup not sanitised - always 0 (set in DefaultFilterConfig)
+func sanitizeNoiseRemoveConfig(config *NoiseRemoveConfig) {
+	defaults := defaultNoiseRemoveConfig()
+	config.Strength = sanitizeFloat(config.Strength, defaults.Strength)
+	config.PatchSec = sanitizeFloat(config.PatchSec, defaults.PatchSec)
+	config.ResearchSec = sanitizeFloat(config.ResearchSec, defaults.ResearchSec)
+	config.Smooth = sanitizeFloat(config.Smooth, defaults.Smooth)
+	config.CompandThreshold = sanitizeFloat(config.CompandThreshold, defaults.CompandThreshold)
+	config.CompandExpansion = sanitizeFloat(config.CompandExpansion, defaults.CompandExpansion)
+	config.CompandAttack = sanitizeFloat(config.CompandAttack, defaults.CompandAttack)
+	config.CompandDecay = sanitizeFloat(config.CompandDecay, defaults.CompandDecay)
+	config.CompandKnee = sanitizeFloat(config.CompandKnee, defaults.CompandKnee)
+}
 
-	// DS201-inspired gate threshold needs additional check for zero/negative
-	if math.IsNaN(config.DS201GateThreshold) || math.IsInf(config.DS201GateThreshold, 0) || config.DS201GateThreshold <= 0 {
-		config.DS201GateThreshold = ds201DefaultGateThreshold
+func sanitizeDS201GateConfig(config *DS201GateConfig) {
+	defaults := defaultDS201GateConfig()
+	if math.IsNaN(config.Threshold) || math.IsInf(config.Threshold, 0) || config.Threshold <= 0 {
+		config.Threshold = ds201DefaultGateThreshold
 	}
+	config.Ratio = sanitizeFloat(config.Ratio, defaults.Ratio)
+	config.Attack = sanitizeFloat(config.Attack, defaults.Attack)
+	config.Release = sanitizeFloat(config.Release, defaults.Release)
+	config.Range = sanitizeFloat(config.Range, defaults.Range)
+	config.Knee = sanitizeFloat(config.Knee, defaults.Knee)
+	config.Makeup = sanitizeFloat(config.Makeup, defaults.Makeup)
+}
+
+func sanitizeLA2AConfig(config *LA2AConfig) {
+	defaults := defaultLA2AConfig()
+	config.Ratio = sanitizeFloat(config.Ratio, defaultLA2ARatio)
+	config.Threshold = sanitizeFloat(config.Threshold, defaultLA2AThreshold)
+	config.Attack = sanitizeFloat(config.Attack, defaults.Attack)
+	config.Release = sanitizeFloat(config.Release, defaults.Release)
+	config.Makeup = sanitizeFloat(config.Makeup, defaults.Makeup)
+	config.Knee = sanitizeFloat(config.Knee, defaults.Knee)
+	config.Mix = sanitizeFloat(config.Mix, defaults.Mix)
+}
+
+func sanitizeDeesserConfig(config *DeesserConfig) {
+	defaults := defaultDeesserConfig()
+	config.Intensity = sanitizeFloat(config.Intensity, defaultDeessIntensity)
+	config.Amount = sanitizeFloat(config.Amount, defaults.Amount)
+	config.Frequency = sanitizeFloat(config.Frequency, defaults.Frequency)
 }

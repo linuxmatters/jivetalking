@@ -155,15 +155,15 @@ func TestDisplayAnalysisResults_VoiceActivated_NoElectedCandidate(t *testing.T) 
 func TestDisplayAnalysisResults_FullOutputFixture(t *testing.T) {
 	m := makeFullAnalysisMeasurements()
 	config := processor.DefaultEffectiveFilterConfig()
-	config.NoiseRemoveCompandEnabled = true
-	config.NoiseRemoveCompandThreshold = -53
-	config.NoiseRemoveCompandExpansion = 7
-	config.DeessIntensity = 0.35
-	config.LA2AThreshold = -21
-	config.LA2ARatio = 2.5
-	config.DS201HPFreq = 85
-	config.DS201GateThreshold = processor.DbToLinear(-51.2)
-	config.DS201GateRatio = 3.0
+	config.NoiseRemove.CompandEnabled = true
+	config.NoiseRemove.CompandThreshold = -53
+	config.NoiseRemove.CompandExpansion = 7
+	config.Deesser.Intensity = 0.35
+	config.LA2A.Threshold = -21
+	config.LA2A.Ratio = 2.5
+	config.DS201HighPass.Frequency = 85
+	config.DS201Gate.Threshold = processor.DbToLinear(-51.2)
+	config.DS201Gate.Ratio = 3.0
 	timings := AnalysisTimings{
 		Analysis:     2*time.Minute + 3*time.Second,
 		Adaptation:   1500 * time.Millisecond,
@@ -277,12 +277,12 @@ ANALYSIS TIMINGS
 func TestDisplayAnalysisResultsWithDiagnostics_UsesEffectiveConfigAndDiagnostics(t *testing.T) {
 	m := makeFullAnalysisMeasurements()
 	config := processor.DefaultEffectiveFilterConfig()
-	config.DS201LPEnabled = false
-	config.DeessIntensity = 0.62
-	config.DS201GateThreshold = processor.DbToLinear(-48.2)
-	config.DS201GateRatio = 3.5
-	config.LA2AThreshold = -26
-	config.LA2ARatio = 4.2
+	config.DS201LowPass.Enabled = false
+	config.Deesser.Intensity = 0.62
+	config.DS201Gate.Threshold = processor.DbToLinear(-48.2)
+	config.DS201Gate.Ratio = 3.5
+	config.LA2A.Threshold = -26
+	config.LA2A.Ratio = 4.2
 	effective := config
 	diagnostics := &processor.AdaptiveDiagnostics{
 		DS201LPReason:               "rolloff/centroid gap",
@@ -368,7 +368,7 @@ func TestDisplayAnalysisResults_Normal_NoVoiceActivated(t *testing.T) {
 func TestDisplayAnalysisResults_CompanderDisabled(t *testing.T) {
 	m := makeMinimalMeasurements()
 	config := processor.DefaultEffectiveFilterConfig()
-	config.NoiseRemoveCompandEnabled = false
+	config.NoiseRemove.CompandEnabled = false
 
 	var buf bytes.Buffer
 	DisplayAnalysisResults(&buf, "/tmp/test.wav", makeMinimalMetadata(), m, config)
@@ -388,9 +388,9 @@ func TestDisplayAnalysisResults_CompanderDisabled(t *testing.T) {
 func TestDisplayAnalysisResults_CompanderEnabled(t *testing.T) {
 	m := makeMinimalMeasurements()
 	config := processor.DefaultEffectiveFilterConfig()
-	config.NoiseRemoveCompandEnabled = true
-	config.NoiseRemoveCompandThreshold = -55
-	config.NoiseRemoveCompandExpansion = 6
+	config.NoiseRemove.CompandEnabled = true
+	config.NoiseRemove.CompandThreshold = -55
+	config.NoiseRemove.CompandExpansion = 6
 
 	var buf bytes.Buffer
 	DisplayAnalysisResults(&buf, "/tmp/test.wav", makeMinimalMetadata(), m, config)

@@ -57,30 +57,31 @@ func formatFilter(f *os.File, filterID processor.FilterID, cfg *processor.Effect
 
 // formatDS201HighpassFilter outputs DS201-inspired highpass filter details
 func formatDS201HighpassFilter(f *os.File, cfg *processor.EffectiveFilterConfig, m *processor.AudioMeasurements, prefix string) {
-	if !cfg.DS201HPEnabled {
+	highpass := cfg.DS201HighPass
+	if !highpass.Enabled {
 		fmt.Fprintf(f, "%sDS201 highpass: DISABLED\n", prefix)
 		return
 	}
 
 	// Show slope (6dB/oct for gentle, 12dB/oct for standard)
 	slope := "12dB/oct"
-	if cfg.DS201HPPoles == 1 {
+	if highpass.Poles == 1 {
 		slope = "6dB/oct"
 	}
 
 	// Build header with all relevant parameters
-	header := fmt.Sprintf("%sDS201 highpass: %.0f Hz cutoff (%s", prefix, cfg.DS201HPFreq, slope)
+	header := fmt.Sprintf("%sDS201 highpass: %.0f Hz cutoff (%s", prefix, highpass.Frequency, slope)
 
 	// Show Q if not default Butterworth
-	if cfg.DS201HPWidth > 0 && cfg.DS201HPWidth != 0.707 {
-		header += fmt.Sprintf(", Q=%.2f", cfg.DS201HPWidth)
+	if highpass.Width > 0 && highpass.Width != 0.707 {
+		header += fmt.Sprintf(", Q=%.2f", highpass.Width)
 	}
 
 	// Show transform if specified
-	if cfg.DS201HPTransform == "tdii" {
+	if highpass.Transform == "tdii" {
 		header += ", tdii"
-	} else if cfg.DS201HPTransform != "" {
-		header += ", " + cfg.DS201HPTransform
+	} else if highpass.Transform != "" {
+		header += ", " + highpass.Transform
 	}
 
 	header += ")"
@@ -97,23 +98,23 @@ func formatDS201HighpassFilter(f *os.File, cfg *processor.EffectiveFilterConfig,
 		fmt.Fprintf(f, "        Rationale: %s voice (centroid %.0f Hz)\n", voiceType, m.Spectral.Centroid)
 
 		// Show warm voice protection if applicable (using mix)
-		if cfg.DS201HPMix > 0 && cfg.DS201HPMix < 1.0 {
+		if highpass.Mix > 0 && highpass.Mix < 1.0 {
 			reason := "warm voice"
 			if m.Spectral.Decrease < -0.08 {
 				reason = "very warm voice"
 			} else if m.Spectral.Skewness > 1.0 {
 				reason = "LF emphasis"
 			}
-			fmt.Fprintf(f, "        Mix: %.0f%% (%s — blending filtered with dry signal)\n", cfg.DS201HPMix*100, reason)
+			fmt.Fprintf(f, "        Mix: %.0f%% (%s — blending filtered with dry signal)\n", highpass.Mix*100, reason)
 		}
 
 		// Show why low frequency was chosen for warm voices
-		if cfg.DS201HPFreq <= 40 {
-			fmt.Fprintf(f, "        Frequency: %.0f Hz (subsonic only — protecting bass foundation)\n", cfg.DS201HPFreq)
+		if highpass.Frequency <= 40 {
+			fmt.Fprintf(f, "        Frequency: %.0f Hz (subsonic only — protecting bass foundation)\n", highpass.Frequency)
 		}
 
 		// Show gentle slope explanation
-		if cfg.DS201HPPoles == 1 {
+		if highpass.Poles == 1 {
 			fmt.Fprintf(f, "        Slope: 6dB/oct (gentle rolloff — preserving warmth)\n")
 		}
 	}
@@ -121,7 +122,8 @@ func formatDS201HighpassFilter(f *os.File, cfg *processor.EffectiveFilterConfig,
 
 // formatDS201LowPassFilter outputs DS201-inspired low-pass filter details
 func formatDS201LowPassFilter(f *os.File, cfg *processor.EffectiveFilterConfig, diagnostics *processor.AdaptiveDiagnostics, m *processor.AudioMeasurements, prefix string) {
-	if !cfg.DS201LPEnabled {
+	lowpass := cfg.DS201LowPass
+	if !lowpass.Enabled {
 		// Show reason for being disabled (pass-through mode)
 		if diagnostics != nil && diagnostics.DS201LPReason != "" {
 			fmt.Fprintf(f, "%sDS201 lowpass: DISABLED (%s)\n", prefix, diagnostics.DS201LPReason)
@@ -133,28 +135,28 @@ func formatDS201LowPassFilter(f *os.File, cfg *processor.EffectiveFilterConfig, 
 
 	// Show slope (6dB/oct for gentle, 12dB/oct for standard)
 	slope := "12dB/oct"
-	if cfg.DS201LPPoles == 1 {
+	if lowpass.Poles == 1 {
 		slope = "6dB/oct"
 	}
 
 	// Build header with all relevant parameters
-	header := fmt.Sprintf("%sDS201 lowpass: %.0f Hz cutoff (%s", prefix, cfg.DS201LPFreq, slope)
+	header := fmt.Sprintf("%sDS201 lowpass: %.0f Hz cutoff (%s", prefix, lowpass.Frequency, slope)
 
 	// Show Q if not default Butterworth
-	if cfg.DS201LPWidth > 0 && cfg.DS201LPWidth != 0.707 {
-		header += fmt.Sprintf(", Q=%.2f", cfg.DS201LPWidth)
+	if lowpass.Width > 0 && lowpass.Width != 0.707 {
+		header += fmt.Sprintf(", Q=%.2f", lowpass.Width)
 	}
 
 	// Show transform if specified
-	if cfg.DS201LPTransform == "tdii" {
+	if lowpass.Transform == "tdii" {
 		header += ", tdii"
-	} else if cfg.DS201LPTransform != "" {
-		header += ", " + cfg.DS201LPTransform
+	} else if lowpass.Transform != "" {
+		header += ", " + lowpass.Transform
 	}
 
 	// Show mix if not full wet
-	if cfg.DS201LPMix > 0 && cfg.DS201LPMix < 1.0 {
-		header += fmt.Sprintf(", mix %.0f%%", cfg.DS201LPMix*100)
+	if lowpass.Mix > 0 && lowpass.Mix < 1.0 {
+		header += fmt.Sprintf(", mix %.0f%%", lowpass.Mix*100)
 	}
 
 	header += ")"
@@ -197,7 +199,8 @@ func formatDS201LowPassFilter(f *os.File, cfg *processor.EffectiveFilterConfig, 
 // formatNoiseRemoveFilter outputs NoiseRemove (anlmdn + compand) filter details
 // Uses Non-Local Means denoiser followed by compand for residual suppression
 func formatNoiseRemoveFilter(f *os.File, cfg *processor.EffectiveFilterConfig, m *processor.AudioMeasurements, prefix string) {
-	if !cfg.NoiseRemoveEnabled {
+	noiseRemove := cfg.NoiseRemove
+	if !noiseRemove.Enabled {
 		fmt.Fprintf(f, "%snoiseremove: DISABLED\n", prefix)
 		return
 	}
@@ -207,40 +210,41 @@ func formatNoiseRemoveFilter(f *os.File, cfg *processor.EffectiveFilterConfig, m
 
 	// anlmdn parameters (matrix spike defaults: r_min + m_strict at source rate)
 	fmt.Fprintf(f, "        anlmdn: s=%.5f, p=%.4fs, r=%.4fs, m=%.0f\n",
-		cfg.NoiseRemoveStrength,
-		cfg.NoiseRemovePatchSec,
-		cfg.NoiseRemoveResearchSec,
-		cfg.NoiseRemoveSmooth)
+		noiseRemove.Strength,
+		noiseRemove.PatchSec,
+		noiseRemove.ResearchSec,
+		noiseRemove.Smooth)
 
 	// compand parameters and rationale - show noise floor source
 	if m != nil && m.NoiseProfile != nil && m.NoiseProfile.MeasuredNoiseFloor < 0 {
 		fmt.Fprintf(f, "        noise floor: %.1f dBFS (from silence regions)\n",
 			m.NoiseProfile.MeasuredNoiseFloor)
 		fmt.Fprintf(f, "        compand: threshold %.0f dB (floor + 5dB), expansion %.0f dB\n",
-			cfg.NoiseRemoveCompandThreshold,
-			cfg.NoiseRemoveCompandExpansion)
+			noiseRemove.CompandThreshold,
+			noiseRemove.CompandExpansion)
 	} else {
 		fmt.Fprintf(f, "        compand: threshold %.0f dB, expansion %.0f dB (defaults - no noise profile)\n",
-			cfg.NoiseRemoveCompandThreshold,
-			cfg.NoiseRemoveCompandExpansion)
+			noiseRemove.CompandThreshold,
+			noiseRemove.CompandExpansion)
 	}
 	fmt.Fprintf(f, "        timing: attack %.0fms, decay %.0fms, knee %.0f dB\n",
-		cfg.NoiseRemoveCompandAttack*1000,
-		cfg.NoiseRemoveCompandDecay*1000,
-		cfg.NoiseRemoveCompandKnee)
+		noiseRemove.CompandAttack*1000,
+		noiseRemove.CompandDecay*1000,
+		noiseRemove.CompandKnee)
 }
 
 // formatDS201GateFilter outputs DS201-inspired gate filter details
 func formatDS201GateFilter(f *os.File, cfg *processor.EffectiveFilterConfig, diagnostics *processor.AdaptiveDiagnostics, m *processor.AudioMeasurements, prefix string) {
-	if !cfg.DS201GateEnabled {
+	gate := cfg.DS201Gate
+	if !gate.Enabled {
 		fmt.Fprintf(f, "%sDS201 gate: DISABLED\n", prefix)
 		return
 	}
 
-	thresholdDB := processor.LinearToDb(cfg.DS201GateThreshold)
-	rangeDB := processor.LinearToDb(cfg.DS201GateRange)
+	thresholdDB := processor.LinearToDb(gate.Threshold)
+	rangeDB := processor.LinearToDb(gate.Range)
 
-	detection := cfg.DS201GateDetection
+	detection := gate.Detection
 	if detection == "" {
 		detection = "rms"
 	}
@@ -251,9 +255,9 @@ func formatDS201GateFilter(f *os.File, cfg *processor.EffectiveFilterConfig, dia
 		modeNote = " [gentle mode]"
 	}
 
-	fmt.Fprintf(f, "%sDS201 gate: threshold %.1f dB, ratio %.1f:1, detection %s%s\n", prefix, thresholdDB, cfg.DS201GateRatio, detection, modeNote)
-	fmt.Fprintf(f, "        Timing: attack %.2fms, release %.0fms (soft expander)\n", cfg.DS201GateAttack, cfg.DS201GateRelease)
-	fmt.Fprintf(f, "        Range: %.1f dB reduction, knee %.1f\n", rangeDB, cfg.DS201GateKnee)
+	fmt.Fprintf(f, "%sDS201 gate: threshold %.1f dB, ratio %.1f:1, detection %s%s\n", prefix, thresholdDB, gate.Ratio, detection, modeNote)
+	fmt.Fprintf(f, "        Timing: attack %.2fms, release %.0fms (soft expander)\n", gate.Attack, gate.Release)
+	fmt.Fprintf(f, "        Range: %.1f dB reduction, knee %.1f\n", rangeDB, gate.Knee)
 
 	// Show rationale based on measurements
 	if m != nil {
@@ -261,7 +265,7 @@ func formatDS201GateFilter(f *os.File, cfg *processor.EffectiveFilterConfig, dia
 
 		// Threshold rationale - must match logic in calculateDS201GateThreshold
 		// Peak reference is used when: crest > 20 AND peak != 0 AND lufsGap < 25
-		lufsGap := cfg.TargetI - m.InputI
+		lufsGap := cfg.Loudnorm.TargetI - m.InputI
 		if lufsGap < 0 {
 			lufsGap = 0
 		}
@@ -333,14 +337,15 @@ func formatDS201GateFilter(f *os.File, cfg *processor.EffectiveFilterConfig, dia
 
 // formatLA2ACompressorFilter outputs LA-2A Compressor filter details
 func formatLA2ACompressorFilter(f *os.File, cfg *processor.EffectiveFilterConfig, diagnostics *processor.AdaptiveDiagnostics, m *processor.AudioMeasurements, prefix string) {
-	if !cfg.LA2AEnabled {
+	la2a := cfg.LA2A
+	if !la2a.Enabled {
 		fmt.Fprintf(f, "%sLA-2A Compressor: DISABLED\n", prefix)
 		return
 	}
 
-	fmt.Fprintf(f, "%sLA-2A Compressor: threshold %.0f dB, ratio %.1f:1\n", prefix, cfg.LA2AThreshold, cfg.LA2ARatio)
-	fmt.Fprintf(f, "        Timing: attack %.0fms, release %.0fms\n", cfg.LA2AAttack, cfg.LA2ARelease)
-	fmt.Fprintf(f, "        Mix: %.0f%%, knee %.1f\n", cfg.LA2AMix*100, cfg.LA2AKnee)
+	fmt.Fprintf(f, "%sLA-2A Compressor: threshold %.0f dB, ratio %.1f:1\n", prefix, la2a.Threshold, la2a.Ratio)
+	fmt.Fprintf(f, "        Timing: attack %.0fms, release %.0fms\n", la2a.Attack, la2a.Release)
+	fmt.Fprintf(f, "        Mix: %.0f%%, knee %.1f\n", la2a.Mix*100, la2a.Knee)
 
 	// Show rationale with measurement sources
 	if m != nil && m.DynamicRange > 0 {
@@ -378,10 +383,10 @@ func formatLA2ACompressorFilter(f *os.File, cfg *processor.EffectiveFilterConfig
 		gainRequired := processor.NormTargetLUFS - m.InputI
 		fmt.Fprintf(f, "        Projected TP: %.1f dBTP (gain %.1f dB applied to %.1f dBTP peaks)\n",
 			diagnostics.LA2AHighCrestProjectedTP, gainRequired, m.InputTP)
-		idealCeiling := cfg.LoudnormTargetTP - gainRequired - 1.5
+		idealCeiling := cfg.Loudnorm.TargetTP - gainRequired - 1.5
 		fmt.Fprintf(f, "        Ideal ceiling: %.1f dBTP, alimiter minimum: -24.0 dBTP\n", idealCeiling)
 		fmt.Fprintf(f, "        Override targets: threshold <= %.0f dB, ratio >= %.1f:1\n",
-			cfg.LA2AThreshold, cfg.LA2ARatio)
+			la2a.Threshold, la2a.Ratio)
 	} else {
 		highCrestDeficit := 0.0
 		if diagnostics != nil {
@@ -394,11 +399,12 @@ func formatLA2ACompressorFilter(f *os.File, cfg *processor.EffectiveFilterConfig
 
 // formatDeesserFilter outputs deesser filter details
 func formatDeesserFilter(f *os.File, cfg *processor.EffectiveFilterConfig, m *processor.AudioMeasurements, prefix string) {
-	if !cfg.DeessEnabled {
+	deesser := cfg.Deesser
+	if !deesser.Enabled {
 		fmt.Fprintf(f, "%sdeesser: DISABLED\n", prefix)
 		return
 	}
-	if cfg.DeessIntensity == 0 {
+	if deesser.Intensity == 0 {
 		if m == nil || m.SpeechProfile == nil {
 			fmt.Fprintf(f, "%sdeesser: inactive: no speech profile (full-file metrics unreliable)\n", prefix)
 		} else {
@@ -408,7 +414,7 @@ func formatDeesserFilter(f *os.File, cfg *processor.EffectiveFilterConfig, m *pr
 	}
 
 	fmt.Fprintf(f, "%sdeesser: intensity %.0f%%, amount %.0f%%, freq %.0f%%\n",
-		prefix, cfg.DeessIntensity*100, cfg.DeessAmount*100, cfg.DeessFreq*100)
+		prefix, deesser.Intensity*100, deesser.Amount*100, deesser.Frequency*100)
 
 	// Show rationale with measurement source
 	if m != nil && m.Spectral.Centroid > 0 {
@@ -442,7 +448,7 @@ func formatDeesserFilter(f *os.File, cfg *processor.EffectiveFilterConfig, m *pr
 
 // formatDownmixFilter outputs downmix filter details
 func formatDownmixFilter(f *os.File, cfg *processor.EffectiveFilterConfig, prefix string) {
-	if !cfg.DownmixEnabled {
+	if !cfg.Downmix.Enabled {
 		fmt.Fprintf(f, "%sdownmix: DISABLED\n", prefix)
 		return
 	}
@@ -451,7 +457,7 @@ func formatDownmixFilter(f *os.File, cfg *processor.EffectiveFilterConfig, prefi
 
 // formatAnalysisFilter outputs analysis filter details
 func formatAnalysisFilter(f *os.File, cfg *processor.EffectiveFilterConfig, prefix string) {
-	if !cfg.AnalysisEnabled {
+	if !cfg.Analysis.Enabled {
 		fmt.Fprintf(f, "%sanalysis: DISABLED\n", prefix)
 		return
 	}
@@ -460,10 +466,11 @@ func formatAnalysisFilter(f *os.File, cfg *processor.EffectiveFilterConfig, pref
 
 // formatResampleFilter outputs resample filter details
 func formatResampleFilter(f *os.File, cfg *processor.EffectiveFilterConfig, prefix string) {
-	if !cfg.ResampleEnabled {
+	resample := cfg.Resample
+	if !resample.Enabled {
 		fmt.Fprintf(f, "%sresample: DISABLED\n", prefix)
 		return
 	}
 	fmt.Fprintf(f, "%sresample: %d Hz %s mono, %d samples/frame\n",
-		prefix, cfg.ResampleSampleRate, cfg.ResampleFormat, cfg.ResampleFrameSize)
+		prefix, resample.SampleRate, resample.Format, resample.FrameSize)
 }

@@ -257,7 +257,7 @@ func fullbenchPass2AblationVariants() []fullbenchPass2AblationVariant {
 			ExtractMeasurements: false,
 			BuildSpec: func(config *EffectiveFilterConfig) string {
 				ablated := *config
-				ablated.AnalysisEnabled = false
+				ablated.Analysis.Enabled = false
 				return ablated.BuildFilterSpec()
 			},
 		},
@@ -271,7 +271,7 @@ func fullbenchPass2AblationVariants() []fullbenchPass2AblationVariant {
 			ExtractMeasurements: true,
 			BuildSpec: func(config *EffectiveFilterConfig) string {
 				ablated := *config
-				ablated.NoiseRemoveCompandEnabled = false
+				ablated.NoiseRemove.CompandEnabled = false
 				return ablated.BuildFilterSpec()
 			},
 		},
@@ -280,8 +280,8 @@ func fullbenchPass2AblationVariants() []fullbenchPass2AblationVariant {
 			ExtractMeasurements: true,
 			BuildSpec: func(config *EffectiveFilterConfig) string {
 				ablated := *config
-				ablated.DS201GateEnabled = false
-				ablated.LA2AEnabled = false
+				ablated.DS201Gate.Enabled = false
+				ablated.LA2A.Enabled = false
 				return ablated.BuildFilterSpec()
 			},
 		},
@@ -298,7 +298,7 @@ func buildFullbenchPass2WithoutAnlmdnSpec(config *EffectiveFilterConfig) string 
 	filters := make([]string, 0, len(order))
 	for _, id := range order {
 		if id == FilterNoiseRemove {
-			if ablated.NoiseRemoveEnabled && ablated.NoiseRemoveCompandEnabled {
+			if ablated.NoiseRemove.Enabled && ablated.NoiseRemove.CompandEnabled {
 				filters = append(filters, ablated.buildNoiseRemoveCompandFilter())
 			}
 			continue
@@ -392,13 +392,13 @@ func buildFullbenchPass4OutputAnalysisFilters(config *EffectiveFilterConfig, mea
 
 func buildFullbenchPass4ResampleFilter(config *EffectiveFilterConfig) string {
 	resampleConfig := *config
-	resampleConfig.ResampleEnabled = true
+	resampleConfig.Resample.Enabled = true
 	return resampleConfig.buildResampleFilter()
 }
 
 func buildFullbenchProductionPass4SpecWithoutAdeclick(config *EffectiveFilterConfig, measurement *LoudnormMeasurement) string {
 	pass4Config := *config
-	pass4Config.AdeclickEnabled = false
+	pass4Config.Adeclick.Enabled = false
 	return buildLoudnormFilterSpec(&pass4Config, measurement, 0, 0, false)
 }
 
@@ -414,17 +414,17 @@ func extractFullbenchFilterClause(spec, prefix string) string {
 
 func TestFullbenchPass2AblationSpecs(t *testing.T) {
 	config := newFullbenchEffectiveTestConfig()
-	config.DownmixEnabled = true
-	config.DS201HPEnabled = true
-	config.DS201LPEnabled = true
-	config.NoiseRemoveEnabled = true
-	config.NoiseRemoveCompandEnabled = true
-	config.DS201GateEnabled = true
-	config.LA2AEnabled = true
-	config.DeessEnabled = true
-	config.DeessIntensity = 0.5
-	config.AnalysisEnabled = true
-	config.ResampleEnabled = true
+	config.Downmix.Enabled = true
+	config.DS201HighPass.Enabled = true
+	config.DS201LowPass.Enabled = true
+	config.NoiseRemove.Enabled = true
+	config.NoiseRemove.CompandEnabled = true
+	config.DS201Gate.Enabled = true
+	config.LA2A.Enabled = true
+	config.Deesser.Enabled = true
+	config.Deesser.Intensity = 0.5
+	config.Analysis.Enabled = true
+	config.Resample.Enabled = true
 	config.FilterOrder = Pass2FilterOrder
 
 	variantByName := make(map[string]fullbenchPass2AblationVariant)
@@ -503,17 +503,17 @@ func TestFullbenchPass2AblationSpecs(t *testing.T) {
 
 func TestFullbenchPass2WithoutAnlmdnPreservesOrder(t *testing.T) {
 	config := newFullbenchEffectiveTestConfig()
-	config.DownmixEnabled = true
-	config.DS201HPEnabled = true
-	config.DS201LPEnabled = true
-	config.NoiseRemoveEnabled = true
-	config.NoiseRemoveCompandEnabled = true
-	config.DS201GateEnabled = true
-	config.LA2AEnabled = true
-	config.DeessEnabled = true
-	config.DeessIntensity = 0.5
-	config.AnalysisEnabled = true
-	config.ResampleEnabled = true
+	config.Downmix.Enabled = true
+	config.DS201HighPass.Enabled = true
+	config.DS201LowPass.Enabled = true
+	config.NoiseRemove.Enabled = true
+	config.NoiseRemove.CompandEnabled = true
+	config.DS201Gate.Enabled = true
+	config.LA2A.Enabled = true
+	config.Deesser.Enabled = true
+	config.Deesser.Intensity = 0.5
+	config.Analysis.Enabled = true
+	config.Resample.Enabled = true
 	config.FilterOrder = Pass2FilterOrder
 
 	spec := buildFullbenchPass2WithoutAnlmdnSpec(config)
@@ -538,10 +538,10 @@ func TestFullbenchPass2WithoutAnlmdnPreservesOrder(t *testing.T) {
 
 func TestFullbenchLoudnormClauseMatchesProduction(t *testing.T) {
 	config := newFullbenchEffectiveTestConfig()
-	config.AdeclickEnabled = true
-	config.LoudnormTargetI = -17.25
-	config.LoudnormTargetTP = -2.25
-	config.LoudnormTargetLRA = 9.0
+	config.Adeclick.Enabled = true
+	config.Loudnorm.TargetI = -17.25
+	config.Loudnorm.TargetTP = -2.25
+	config.Loudnorm.TargetLRA = 9.0
 
 	measurement := &LoudnormMeasurement{
 		InputI:       -23.25,
@@ -552,7 +552,7 @@ func TestFullbenchLoudnormClauseMatchesProduction(t *testing.T) {
 	}
 
 	productionConfig := *config
-	productionConfig.AdeclickEnabled = false
+	productionConfig.Adeclick.Enabled = false
 	productionClause := extractFullbenchFilterClause(
 		buildLoudnormFilterSpec(&productionConfig, measurement, 0, 0, false),
 		"loudnorm=",
@@ -582,8 +582,8 @@ func TestFullbenchLoudnormClauseMatchesProduction(t *testing.T) {
 
 func TestFullbenchPass4AblationSpecs(t *testing.T) {
 	config := newFullbenchEffectiveTestConfig()
-	config.AdeclickEnabled = true
-	config.ResampleEnabled = false
+	config.Adeclick.Enabled = true
+	config.Resample.Enabled = false
 	measurement := &LoudnormMeasurement{
 		InputI:       -24.0,
 		InputTP:      -6.0,
@@ -751,8 +751,8 @@ func TestRunFullbenchFilterSpecSyntheticSmoke(t *testing.T) {
 	defer cleanupTestAudio(t, inputPath)
 
 	config := newFullbenchEffectiveTestConfig()
-	config.AnalysisEnabled = true
-	config.ResampleEnabled = true
+	config.Analysis.Enabled = true
+	config.Resample.Enabled = true
 	config.FilterOrder = Pass2FilterOrder
 	filterSpec := config.BuildFilterSpec()
 
@@ -935,7 +935,7 @@ func setupFullbenchPass2Seed(tb testing.TB, inputPath string, adapted *fullbench
 
 	config := *adapted.Config
 	config.FilterOrder = append([]FilterID(nil), Pass2FilterOrder...)
-	config.AnalysisEnabled = true
+	config.Analysis.Enabled = true
 
 	outputPath := filepath.Join(tb.TempDir(), "fullbench-pass2-seed.flac")
 	inputMetadata, outputMeasurements := runFullbenchFilterSpec(
@@ -969,13 +969,13 @@ func setupFullbenchLoudnormMeasurement(tb testing.TB, seed *fullbenchPass2Seed) 
 	limiterCeiling, limiterNeeded, limiterClamped := calculateLimiterCeiling(
 		seed.OutputMeasurements.OutputI,
 		seed.OutputMeasurements.OutputTP,
-		config.LoudnormTargetI,
-		config.LoudnormTargetTP,
+		config.Loudnorm.TargetI,
+		config.Loudnorm.TargetTP,
 	)
 	preGainDB, reDerivedCeiling := calculatePreGain(
 		seed.OutputMeasurements.OutputI,
-		config.LoudnormTargetI,
-		config.LoudnormTargetTP,
+		config.Loudnorm.TargetI,
+		config.Loudnorm.TargetTP,
 	)
 	if limiterClamped {
 		limiterCeiling = reDerivedCeiling
@@ -997,11 +997,11 @@ func setupFullbenchLoudnormMeasurement(tb testing.TB, seed *fullbenchPass2Seed) 
 	effectiveTargetI, _, linearPossible := calculateLinearModeTarget(
 		measurement.InputI,
 		measurement.InputTP,
-		config.LoudnormTargetI,
-		config.LoudnormTargetTP,
+		config.Loudnorm.TargetI,
+		config.Loudnorm.TargetTP,
 	)
 	effectiveConfig := config
-	effectiveConfig.LoudnormTargetI = effectiveTargetI
+	effectiveConfig.Loudnorm.TargetI = effectiveTargetI
 
 	return &fullbenchLoudnormSetup{
 		Measurement:       measurement,
@@ -1070,11 +1070,11 @@ func TestFullbenchSetupHelpersSyntheticSmoke(t *testing.T) {
 	effectiveTargetI, _, linearPossible := calculateLinearModeTarget(
 		loudnorm.Measurement.InputI,
 		loudnorm.Measurement.InputTP,
-		pass2Seed.Config.LoudnormTargetI,
-		pass2Seed.Config.LoudnormTargetTP,
+		pass2Seed.Config.Loudnorm.TargetI,
+		pass2Seed.Config.Loudnorm.TargetTP,
 	)
-	if math.Abs(loudnorm.EffectiveConfig.LoudnormTargetI-effectiveTargetI) > 0.01 {
-		t.Fatalf("effective target mismatch: got %.2f, want %.2f", loudnorm.EffectiveConfig.LoudnormTargetI, effectiveTargetI)
+	if math.Abs(loudnorm.EffectiveConfig.Loudnorm.TargetI-effectiveTargetI) > 0.01 {
+		t.Fatalf("effective target mismatch: got %.2f, want %.2f", loudnorm.EffectiveConfig.Loudnorm.TargetI, effectiveTargetI)
 	}
 	if loudnorm.LinearModeForced != !linearPossible {
 		t.Fatalf("linear mode forced mismatch: got %v, want %v", loudnorm.LinearModeForced, !linearPossible)

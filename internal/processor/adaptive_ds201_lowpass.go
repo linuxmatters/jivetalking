@@ -48,8 +48,8 @@ const (
 // to avoid audible HF loss.
 func tuneDS201LowPass(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagnostics, m *AudioMeasurements) {
 	// Start disabled - only enable when we detect clear benefit
-	config.DS201LPEnabled = false
-	config.DS201LPFreq = ds201LPDefaultFreq
+	config.DS201LowPass.Enabled = false
+	config.DS201LowPass.Frequency = ds201LPDefaultFreq
 	if diagnostics == nil {
 		diagnostics = &AdaptiveDiagnostics{}
 	}
@@ -102,10 +102,10 @@ func tuneDS201LowPass(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagno
 //   - Conservative approach — preserves natural voice character
 func tuneDS201LowPassForSpeech(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagnostics, m *AudioMeasurements) {
 	// Default: DISABLED per spec — only activate when measurements indicate benefit
-	config.DS201LPEnabled = false
-	config.DS201LPFreq = ds201LPDefaultFreq
-	config.DS201LPPoles = 1 // 6dB/oct - gentle
-	config.DS201LPMix = 1.0
+	config.DS201LowPass.Enabled = false
+	config.DS201LowPass.Frequency = ds201LPDefaultFreq
+	config.DS201LowPass.Poles = 1 // 6dB/oct - gentle
+	config.DS201LowPass.Mix = 1.0
 	diagnostics.DS201LPReason = "no HF issues detected"
 
 	// Prefer speech-specific spectral metrics when available.
@@ -132,10 +132,10 @@ func tuneDS201LowPassForSpeech(config *EffectiveFilterConfig, diagnostics *Adapt
 		if cutoff > 20000 {
 			cutoff = 20000
 		}
-		config.DS201LPEnabled = true
-		config.DS201LPFreq = cutoff
-		config.DS201LPPoles = 1 // 6dB/oct - very gentle for ultrasonic cleanup
-		config.DS201LPMix = 1.0
+		config.DS201LowPass.Enabled = true
+		config.DS201LowPass.Frequency = cutoff
+		config.DS201LowPass.Poles = 1 // 6dB/oct - very gentle for ultrasonic cleanup
+		config.DS201LowPass.Mix = 1.0
 		diagnostics.DS201LPReason = "ultrasonic cleanup (rolloff > 14kHz)"
 		return
 	}
@@ -143,10 +143,10 @@ func tuneDS201LowPassForSpeech(config *EffectiveFilterConfig, diagnostics *Adapt
 	// Condition 3: High ZCR with low centroid (HF noise, not sibilance)
 	// Sibilance has high ZCR AND high centroid; noise has high ZCR with low centroid
 	if m.ZeroCrossingsRate > lpZCRHigh && centroid < lpZCRCentroidThreshold {
-		config.DS201LPEnabled = true
-		config.DS201LPFreq = lpZCRCutoff
-		config.DS201LPPoles = 1 // 6dB/oct - gentle
-		config.DS201LPMix = 0.8 // Blend with dry for transparency
+		config.DS201LowPass.Enabled = true
+		config.DS201LowPass.Frequency = lpZCRCutoff
+		config.DS201LowPass.Poles = 1 // 6dB/oct - gentle
+		config.DS201LowPass.Mix = 0.8 // Blend with dry for transparency
 		diagnostics.DS201LPReason = "high ZCR with low centroid (HF noise)"
 		return
 	}

@@ -332,11 +332,11 @@ func tipProximityEffect(m *processor.AudioMeasurements, _ *processor.EffectiveFi
 
 // tipSibilance fires when the adaptive de-esser was set to high intensity,
 // confirmed by bright speech spectral characteristics.
-// Checks EffectiveFilterConfig.DeessIntensity > 0.5 (deessIntensityNormal in adaptive.go),
+// Checks EffectiveFilterConfig.Deesser.Intensity > 0.5 (deessIntensityNormal in adaptive.go),
 // speech centroid > 4000 Hz (centroidBright), and speech rolloff > 10000 Hz.
 // Prefers SpeechProfile metrics when available, falling back to full-file metrics.
 func tipSibilance(m *processor.AudioMeasurements, config *processor.EffectiveFilterConfig) *RecordingTip {
-	if config == nil || config.DeessIntensity <= 0.5 {
+	if config == nil || config.Deesser.Intensity <= 0.5 {
 		return nil
 	}
 

@@ -172,8 +172,8 @@ func writeDiagnosticPeakLimiter(f *os.File, result *processor.NormalisationResul
 		projectedTP := result.InputTP + result.LimiterGain
 		fmt.Fprintf(f, "Projected TP:    %.1f dBTP (gain %.1f dB applied to %.1f dBTP peaks)\n",
 			projectedTP, result.LimiterGain, result.InputTP)
-		fmt.Fprintf(f, "Target TP:       %.1f dBTP\n", config.LoudnormTargetTP)
-		fmt.Fprintf(f, "Headroom:        %.1f dB\n", config.LoudnormTargetTP-projectedTP)
+		fmt.Fprintf(f, "Target TP:       %.1f dBTP\n", config.Loudnorm.TargetTP)
+		fmt.Fprintf(f, "Headroom:        %.1f dB\n", config.Loudnorm.TargetTP-projectedTP)
 		fmt.Fprintln(f, "")
 		return
 	}
@@ -190,10 +190,10 @@ func writeDiagnosticPeakLimiter(f *os.File, result *processor.NormalisationResul
 	fmt.Fprintln(f, "Problem:")
 	fmt.Fprintf(f, "  Input TP:          %.1f dBTP (peaks from Pass 2 filtered audio)\n", result.InputTP)
 	fmt.Fprintf(f, "  Gain Required:     %+.1f dB (to reach %.1f LUFS from %.1f LUFS)\n",
-		result.LimiterGain, config.LoudnormTargetI, result.InputLUFS)
+		result.LimiterGain, config.Loudnorm.TargetI, result.InputLUFS)
 	fmt.Fprintf(f, "  Projected TP:      %.1f dBTP (would exceed %.1f dBTP target by %.1f dB)\n",
-		projectedTPWithoutLimiter, config.LoudnormTargetTP,
-		projectedTPWithoutLimiter-config.LoudnormTargetTP)
+		projectedTPWithoutLimiter, config.Loudnorm.TargetTP,
+		projectedTPWithoutLimiter-config.Loudnorm.TargetTP)
 	fmt.Fprintln(f, "")
 
 	fmt.Fprintln(f, "Solution (CBS Volumax-inspired peak limiting):")
@@ -241,7 +241,7 @@ func writeDiagnosticPeakLimiter(f *os.File, result *processor.NormalisationResul
 
 // writeDiagnosticLoudnorm outputs detailed loudnorm normalisation diagnostics.
 func writeDiagnosticLoudnorm(f *os.File, result *processor.NormalisationResult, config *processor.EffectiveFilterConfig) {
-	if result == nil || !config.LoudnormEnabled {
+	if result == nil || !config.Loudnorm.Enabled {
 		return
 	}
 
@@ -258,12 +258,12 @@ func writeDiagnosticLoudnorm(f *os.File, result *processor.NormalisationResult, 
 		fmt.Fprintf(f, "  Target I:   %.1f LUFS (adjusted from %.1f to preserve linear mode)\n",
 			result.EffectiveTargetI, result.RequestedTargetI)
 	} else {
-		fmt.Fprintf(f, "  Target I:   %.1f LUFS\n", config.LoudnormTargetI)
+		fmt.Fprintf(f, "  Target I:   %.1f LUFS\n", config.Loudnorm.TargetI)
 	}
-	fmt.Fprintf(f, "  Target TP:  %.1f dBTP\n", config.LoudnormTargetTP)
-	fmt.Fprintf(f, "  Target LRA: %.1f LU\n", config.LoudnormTargetLRA)
-	fmt.Fprintf(f, "  Mode:       %s\n", loudnormModeString(config.LoudnormLinear))
-	fmt.Fprintf(f, "  Dual mono:  %v\n", config.LoudnormDualMono)
+	fmt.Fprintf(f, "  Target TP:  %.1f dBTP\n", config.Loudnorm.TargetTP)
+	fmt.Fprintf(f, "  Target LRA: %.1f LU\n", config.Loudnorm.TargetLRA)
+	fmt.Fprintf(f, "  Mode:       %s\n", loudnormModeString(config.Loudnorm.Linear))
+	fmt.Fprintf(f, "  Dual mono:  %v\n", config.Loudnorm.DualMono)
 	fmt.Fprintf(f, "  Gain:       %+.2f dB\n", result.GainApplied)
 
 	// Display loudnorm filter's unique diagnostic info (I/TP/LRA values are in Loudness table)

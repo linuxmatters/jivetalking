@@ -129,10 +129,10 @@ func writeAnalysisFilterAdaptation(w io.Writer, measurements *processor.AudioMea
 	writeAnalysisSection(w, "FILTER ADAPTATION")
 	if config != nil {
 		writeAnalysisMetricRows(w, "  ", 15, []analysisMetricSpec{
-			{"Highpass", fmt.Sprintf("%.0f Hz (from spectral analysis)", config.DS201HPFreq)},
+			{"Highpass", fmt.Sprintf("%.0f Hz (from spectral analysis)", config.DS201HighPass.Frequency)},
 		})
-		if config.DS201LPEnabled {
-			lowpassValue := fmt.Sprintf("%.0f Hz", config.DS201LPFreq)
+		if config.DS201LowPass.Enabled {
+			lowpassValue := fmt.Sprintf("%.0f Hz", config.DS201LowPass.Frequency)
 			if diagnostics != nil && diagnostics.DS201LPReason != "" {
 				lowpassValue += fmt.Sprintf(" (%s)", diagnostics.DS201LPReason)
 			}
@@ -145,14 +145,14 @@ func writeAnalysisFilterAdaptation(w io.Writer, measurements *processor.AudioMea
 			})
 		}
 		if measurements.NoiseProfile != nil {
-			gateThresholdDB := processor.LinearToDb(config.DS201GateThreshold)
+			gateThresholdDB := processor.LinearToDb(config.DS201Gate.Threshold)
 			gateDesc := "(from noise floor)"
 			if measurements.SpeechProfile != nil {
 				gateDesc = "(with breath reduction)"
 			}
 			writeAnalysisMetricRows(w, "  ", 15, []analysisMetricSpec{
 				{"Gate Threshold", fmt.Sprintf("%.1f dB %s", gateThresholdDB, gateDesc)},
-				{"Gate Ratio", fmt.Sprintf("%.1f:1", config.DS201GateRatio)},
+				{"Gate Ratio", fmt.Sprintf("%.1f:1", config.DS201Gate.Ratio)},
 			})
 			if diagnostics != nil && diagnostics.DS201GateClampReason != "" && diagnostics.DS201GateClampReason != "none" {
 				writeAnalysisMetricRows(w, "  ", 15, []analysisMetricSpec{
@@ -160,19 +160,19 @@ func writeAnalysisFilterAdaptation(w io.Writer, measurements *processor.AudioMea
 				})
 			}
 		}
-		if config.NoiseRemoveCompandEnabled {
+		if config.NoiseRemove.CompandEnabled {
 			writeAnalysisMetricRows(w, "  ", 15, []analysisMetricSpec{
-				{"NR Threshold", fmt.Sprintf("%.0f dB", config.NoiseRemoveCompandThreshold)},
-				{"NR Expansion", fmt.Sprintf("%.0f dB", config.NoiseRemoveCompandExpansion)},
+				{"NR Threshold", fmt.Sprintf("%.0f dB", config.NoiseRemove.CompandThreshold)},
+				{"NR Expansion", fmt.Sprintf("%.0f dB", config.NoiseRemove.CompandExpansion)},
 			})
 		} else {
 			writeAnalysisMetricRows(w, "  ", 15, []analysisMetricSpec{
 				{"NR Compander", "disabled"},
 			})
 		}
-		if config.DeessIntensity > 0 {
+		if config.Deesser.Intensity > 0 {
 			writeAnalysisMetricRows(w, "  ", 15, []analysisMetricSpec{
-				{"De-esser", fmt.Sprintf("%.0f%% intensity", config.DeessIntensity*100)},
+				{"De-esser", fmt.Sprintf("%.0f%% intensity", config.Deesser.Intensity*100)},
 			})
 		} else {
 			writeAnalysisMetricRows(w, "  ", 15, []analysisMetricSpec{
@@ -180,8 +180,8 @@ func writeAnalysisFilterAdaptation(w io.Writer, measurements *processor.AudioMea
 			})
 		}
 		writeAnalysisMetricRows(w, "  ", 15, []analysisMetricSpec{
-			{"LA-2A Thresh", fmt.Sprintf("%.0f dB", config.LA2AThreshold)},
-			{"LA-2A Ratio", fmt.Sprintf("%.1f:1", config.LA2ARatio)},
+			{"LA-2A Thresh", fmt.Sprintf("%.0f dB", config.LA2A.Threshold)},
+			{"LA-2A Ratio", fmt.Sprintf("%.1f:1", config.LA2A.Ratio)},
 		})
 		if diagnostics != nil && diagnostics.LA2AHighCrestActive {
 			writeAnalysisMetricRows(w, "  ", 15, []analysisMetricSpec{

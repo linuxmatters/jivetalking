@@ -14,7 +14,7 @@ package processor
 // - research: production default (search window)
 // - smooth: 11 (weight smoothing)
 func tuneNoiseRemove(config *EffectiveFilterConfig, m *AudioMeasurements) {
-	if !config.NoiseRemoveEnabled {
+	if !config.NoiseRemove.Enabled {
 		return
 	}
 
@@ -23,12 +23,12 @@ func tuneNoiseRemove(config *EffectiveFilterConfig, m *AudioMeasurements) {
 	// without a reference profile. Disable the compand to avoid the
 	// blind fallback risking attenuation of quiet speech.
 	if m.NoiseProfile == nil || m.NoiseProfile.MeasuredNoiseFloor >= 0 {
-		config.NoiseRemoveCompandEnabled = false
+		config.NoiseRemove.CompandEnabled = false
 		return
 	}
 
 	// Re-enable compand (may have been disabled by a previous file in the same run)
-	config.NoiseRemoveCompandEnabled = true
+	config.NoiseRemove.CompandEnabled = true
 
 	noiseFloor := m.NoiseProfile.MeasuredNoiseFloor
 
@@ -40,8 +40,8 @@ func tuneNoiseRemove(config *EffectiveFilterConfig, m *AudioMeasurements) {
 	// Expansion: scale with noise severity
 	expansion := scaleExpansion(noiseFloor)
 
-	config.NoiseRemoveCompandThreshold = threshold
-	config.NoiseRemoveCompandExpansion = expansion
+	config.NoiseRemove.CompandThreshold = threshold
+	config.NoiseRemove.CompandExpansion = expansion
 
 	// attack, decay, knee stay constant (validated in spike testing)
 }

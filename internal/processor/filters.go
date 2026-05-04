@@ -104,121 +104,136 @@ const (
 )
 
 type filterConfigDefaults struct {
-	// Downmix (pan) - stereo to mono conversion
-	// Applied first to ensure all downstream filters work with mono
-	DownmixEnabled bool
-
-	// Analysis (ebur128 + astats + aspectralstats) - audio measurement collection
-	// Captures loudness, dynamics, spectral characteristics
-	AnalysisEnabled bool
-
-	// SilenceScanDuration caps how much of the input is examined when collecting
-	// silence candidates for room-tone election. Zero is the sentinel meaning
-	// "scan whole file" (current behaviour); a positive value restricts silence
-	// candidate collection to intervals before this input time. Loudness, true
-	// peak, LRA, spectral statistics, and speech detection always remain
-	// whole-file regardless of this cap.
-	SilenceScanDuration time.Duration
-
-	// Resample (aformat) - output format standardisation
-	// Pass 2 only - ensures consistent output format
-	ResampleEnabled    bool
-	ResampleSampleRate int    // Output sample rate (default: 44100)
-	ResampleFormat     string // Output sample format (default: s16)
-	ResampleFrameSize  int    // Samples per frame (default: 4096)
-
-	// DS201-Inspired High-Pass Filter (highpass) - removes subsonic rumble
-	// Part of the DS201 side-chain composite: removes rumble before gate detection
-	DS201HPEnabled   bool    // Enable DS201 high-pass filter
-	DS201HPFreq      float64 // Hz, cutoff frequency (removes frequencies below this)
-	DS201HPPoles     int     // Filter poles: 1=6dB/oct (gentle), 2=12dB/oct (standard)
-	DS201HPWidth     float64 // Q factor: 0.707=Butterworth (default), lower=gentler rolloff
-	DS201HPMix       float64 // Wet/dry mix (0-1, 1=full filter, 0.7=subtle for warm voices)
-	DS201HPTransform string  // Filter transform: "tdii" (best accuracy), "zdf", etc.
-
-	// DS201-Inspired Low-Pass Filter (lowpass) - removes ultrasonic noise
-	// Part of the DS201 side-chain composite: prevents HF noise from triggering gate
-	// Enabled adaptively based on content type and HF noise indicators
-	DS201LPEnabled   bool    // Enable DS201 low-pass filter
-	DS201LPFreq      float64 // Hz, cutoff frequency (removes frequencies above this)
-	DS201LPPoles     int     // Filter poles: 1=6dB/oct (gentle), 2=12dB/oct (standard)
-	DS201LPWidth     float64 // Q factor: 0.707=Butterworth (default)
-	DS201LPMix       float64 // Wet/dry mix (0-1, 1=full filter)
-	DS201LPTransform string  // Filter transform: "tdii" (best accuracy), "zdf", etc.
-
-	// NoiseRemove - anlmdn + compand noise reduction
-	// Non-Local Means denoiser (anlmdn) with a compand for residual suppression.
-	// Production runs anlmdn at the source sample rate with r=0.0020 and m=3,
-	// validated by the matrix spike at .bench/anlmdn-matrix-spike.
-	NoiseRemoveEnabled          bool    // Enable anlmdn+compand noise reduction
-	NoiseRemoveCompandEnabled   bool    // Enable compand residual suppression (false = anlmdn-only)
-	NoiseRemoveStrength         float64 // anlmdn strength (0.00001 = minimum, kept constant)
-	NoiseRemovePatchSec         float64 // Patch size in seconds (context window for similarity)
-	NoiseRemoveResearchSec      float64 // Research radius in seconds (search window for matching)
-	NoiseRemoveSmooth           float64 // Smoothing factor for weights (1-1000)
-	NoiseRemoveCompandThreshold float64 // Expansion threshold (dB) - set to measured noise floor
-	NoiseRemoveCompandExpansion float64 // Expansion depth (dB) - gap between input floor and target floor
-	NoiseRemoveCompandAttack    float64 // Attack time (seconds) - fixed at 5ms for speech
-	NoiseRemoveCompandDecay     float64 // Decay time (seconds) - fixed at 100ms for speech
-	NoiseRemoveCompandKnee      float64 // Soft knee (dB) - fixed at 6dB for transparency
-
-	// DS201-Inspired Gate (agate) - Drawmer DS201 style soft expander
-	// Uses gentle ratio (2:1-4:1) rather than DS201's hard gate for natural speech transitions.
-	// Minimum 10ms attack prevents click artifacts from rapid gain changes.
-	DS201GateEnabled   bool    // Enable DS201-style gate
-	DS201GateThreshold float64 // Activation threshold (0.0-1.0, linear)
-	DS201GateRatio     float64 // Reduction ratio - soft expander (2:1-4:1), not hard gate
-	DS201GateAttack    float64 // Attack time (ms) - minimum 10ms to avoid click artifacts
-	DS201GateRelease   float64 // Release time (ms) - includes +50ms to compensate for no Hold param
-	DS201GateRange     float64 // Level of gain reduction below threshold (0.0-1.0)
-	DS201GateKnee      float64 // Knee curve softness (1.0-8.0) - soft knee for natural transitions
-	DS201GateMakeup    float64 // Makeup gain after gating (1.0-64.0)
-	DS201GateDetection string  // Level detection mode: "rms" (default, smoother) or "peak" (tighter)
-
-	// LA-2A Compressor - Teletronix LA-2A style optical compression
-	// The LA-2A is legendary for its gentle, program-dependent character from the T4 optical cell.
-	LA2AEnabled   bool    // Enable LA-2A compressor
-	LA2AThreshold float64 // dB, compression threshold (stored in dB, converted to linear)
-	LA2ARatio     float64 // Compression ratio (1.0-20.0)
-	LA2AAttack    float64 // Attack time (ms) - LA-2A has fixed ~10ms attack
-	LA2ARelease   float64 // Release time (ms) - LA-2A has program-dependent two-stage release
-	LA2AMakeup    float64 // dB, makeup gain (stored in dB, converted to linear)
-	LA2AKnee      float64 // Knee curve softness (1.0-8.0) - T4 cell provides inherent soft knee
-	LA2AMix       float64 // Wet/dry mix (0.0-1.0, 1.0 = 100% compressed)
-
-	// De-esser (deesser) - removes harsh sibilance automatically
-	DeessEnabled   bool    // Enable deesser filter
-	DeessIntensity float64 // 0.0-1.0, intensity for triggering de-essing (0=off, 1=max)
-	DeessAmount    float64 // 0.0-1.0, amount of ducking on treble (how much to reduce)
-	DeessFreq      float64 // 0.0-1.0, how much original frequency content to keep
-
-	// Target values (for reference only)
-	TargetI   float64 // LUFS target reference (podcast standard: -16)
-	TargetTP  float64 // dBTP, true peak ceiling reference
-	TargetLRA float64 // LU, loudness range reference
+	Downmix       DownmixConfig
+	Analysis      AnalysisConfig
+	Resample      ResampleConfig
+	DS201HighPass DS201HighPassConfig
+	DS201LowPass  DS201LowPassConfig
+	NoiseRemove   NoiseRemoveConfig
+	DS201Gate     DS201GateConfig
+	LA2A          LA2AConfig
+	Deesser       DeesserConfig
+	Adeclick      AdeclickConfig
+	Loudnorm      LoudnormConfig
 
 	// Filter chain order - controls the sequence of filters in the processing chain
 	// Use Pass2FilterOrder or customise for experimentation
 	FilterOrder []FilterID
+}
 
-	// Adeclick - Click/pop repair filter (Pass 4)
-	// Detects and repairs waveform discontinuities through interpolation
-	// Applied after loudnorm to catch clicks from limiter and gain changes
-	AdeclickEnabled   bool    // Enable adeclick filter (default: true in Pass 4)
-	AdeclickThreshold float64 // Detection sensitivity (0.1-8.0, lower=more sensitive)
-	AdeclickWindow    float64 // Analysis window in ms (10-100)
-	AdeclickOverlap   float64 // Window overlap percentage (50-95)
-	AdeclickMethod    string  // Interpolation method ("" = default "a" = average; "s" = spline)
+type DownmixConfig struct {
+	Enabled bool
+}
 
-	// Loudnorm (Pass 3) - EBU R128 dynamic loudness normalisation
-	// Replaces simple volume gain + limiting with integrated dynamic normalisation
-	// Uses two-pass mode with measurements from Pass 2 for optimal transparency
-	LoudnormEnabled   bool    // Enable loudnorm in Pass 3 (default: true)
-	LoudnormTargetI   float64 // Target integrated loudness (LUFS), default: -16.0
-	LoudnormTargetTP  float64 // Target true peak (dBTP), default: -1.5
-	LoudnormTargetLRA float64 // Target loudness range (LU), default: 11.0
-	LoudnormDualMono  bool    // Treat mono as dual-mono (CRITICAL for mono files)
-	LoudnormLinear    bool    // Prefer linear mode (falls back to dynamic if needed)
+type AnalysisConfig struct {
+	Enabled             bool
+	SilenceScanDuration time.Duration
+}
+
+type ResampleConfig struct {
+	Enabled    bool
+	SampleRate int
+	Format     string
+	FrameSize  int
+}
+
+type DS201HighPassConfig struct {
+	Enabled   bool
+	Frequency float64
+	Poles     int
+	Width     float64
+	Mix       float64
+	Transform string
+}
+
+type DS201LowPassConfig struct {
+	Enabled   bool
+	Frequency float64
+	Poles     int
+	Width     float64
+	Mix       float64
+	Transform string
+}
+
+type NoiseRemoveConfig struct {
+	Enabled          bool
+	CompandEnabled   bool
+	Strength         float64
+	PatchSec         float64
+	ResearchSec      float64
+	Smooth           float64
+	CompandThreshold float64
+	CompandExpansion float64
+	CompandAttack    float64
+	CompandDecay     float64
+	CompandKnee      float64
+}
+
+type DS201GateConfig struct {
+	Enabled   bool
+	Threshold float64
+	Ratio     float64
+	Attack    float64
+	Release   float64
+	Range     float64
+	Knee      float64
+	Makeup    float64
+	Detection string
+}
+
+type LA2AConfig struct {
+	Enabled   bool
+	Threshold float64
+	Ratio     float64
+	Attack    float64
+	Release   float64
+	Makeup    float64
+	Knee      float64
+	Mix       float64
+}
+
+type DeesserConfig struct {
+	Enabled   bool
+	Intensity float64
+	Amount    float64
+	Frequency float64
+}
+
+type AdeclickConfig struct {
+	Enabled   bool
+	Threshold float64
+	Window    float64
+	Overlap   float64
+	Method    string
+}
+
+type LoudnormConfig struct {
+	Enabled   bool
+	TargetI   float64
+	TargetTP  float64
+	TargetLRA float64
+	DualMono  bool
+	Linear    bool
+}
+
+type Decibels float64
+
+func (db Decibels) LinearAmplitude() LinearAmplitude {
+	return LinearAmplitude(DbToLinear(float64(db)))
+}
+
+func (db Decibels) Float64() float64 {
+	return float64(db)
+}
+
+type LinearAmplitude float64
+
+func (linear LinearAmplitude) Decibels() Decibels {
+	return Decibels(LinearToDb(float64(linear)))
+}
+
+func (linear LinearAmplitude) Float64() float64 {
+	return float64(linear)
 }
 
 // BaseFilterConfig holds caller-owned defaults and user-facing options only.
@@ -294,106 +309,165 @@ type EffectiveFilterConfig filterConfigDefaults
 // DefaultFilterConfig returns the scientifically-tuned caller-owned defaults for
 // podcast spoken word audio processing.
 func DefaultFilterConfig() *BaseFilterConfig {
-	return &BaseFilterConfig{filterConfigDefaults: filterConfigDefaults{
-		// Downmix - always enabled to ensure mono processing
-		DownmixEnabled: true,
+	return &BaseFilterConfig{filterConfigDefaults: defaultFilterConfigDefaults()}
+}
 
-		// Analysis - always enabled to collect measurements
-		AnalysisEnabled: true,
+func defaultFilterConfigDefaults() filterConfigDefaults {
+	return assembleFilterDefaults(
+		defaultDownmixConfig(),
+		defaultAnalysisConfig(),
+		defaultResampleConfig(),
+		defaultDS201HighPassConfig(),
+		defaultDS201LowPassConfig(),
+		defaultNoiseRemoveConfig(),
+		defaultDS201GateConfig(),
+		defaultLA2AConfig(),
+		defaultDeesserConfig(),
+		defaultAdeclickConfig(),
+		defaultLoudnormConfig(),
+	)
+}
 
-		// Resample - enabled by default (Pass 2 only via filter order)
-		ResampleEnabled:    true,
-		ResampleSampleRate: 44100,
-		ResampleFormat:     "s16",
-		ResampleFrameSize:  4096,
+func assembleFilterDefaults(
+	downmix DownmixConfig,
+	analysis AnalysisConfig,
+	resample ResampleConfig,
+	ds201HighPass DS201HighPassConfig,
+	ds201LowPass DS201LowPassConfig,
+	noiseRemove NoiseRemoveConfig,
+	ds201Gate DS201GateConfig,
+	la2a LA2AConfig,
+	deesser DeesserConfig,
+	adeclick AdeclickConfig,
+	loudnorm LoudnormConfig,
+) filterConfigDefaults {
+	return filterConfigDefaults{
+		Downmix:       downmix,
+		Analysis:      analysis,
+		Resample:      resample,
+		DS201HighPass: ds201HighPass,
+		DS201LowPass:  ds201LowPass,
+		NoiseRemove:   noiseRemove,
+		DS201Gate:     ds201Gate,
+		LA2A:          la2a,
+		Deesser:       deesser,
+		Adeclick:      adeclick,
+		Loudnorm:      loudnorm,
 
-		// DS201-Inspired High-pass - remove subsonic rumble (part of DS201 side-chain)
-		DS201HPEnabled:   true,
-		DS201HPFreq:      80.0,                    // 80Hz cutoff
-		DS201HPPoles:     ds201HPDefaultPoles,     // 12dB/oct standard slope (1=gentle 6dB/oct for warm voices)
-		DS201HPWidth:     ds201HPDefaultWidth,     // Butterworth Q (maximally flat passband)
-		DS201HPMix:       ds201HPDefaultMix,       // Full wet signal (reduce for warm voice protection)
-		DS201HPTransform: ds201HPDefaultTransform, // Transposed Direct Form II - best floating-point accuracy
-
-		// DS201-Inspired Low-pass Filter - removes ultrasonic noise (part of DS201 side-chain)
-		DS201LPEnabled:   true,
-		DS201LPFreq:      16000.0, // 16kHz cutoff (conservative default, preserves all audible content)
-		DS201LPPoles:     2,       // 12dB/oct standard slope
-		DS201LPWidth:     0.707,   // Butterworth Q (maximally flat passband)
-		DS201LPMix:       1.0,     // Full wet signal
-		DS201LPTransform: "tdii",  // Transposed Direct Form II - best floating-point accuracy
-
-		// NoiseRemove - anlmdn + compand at source sample rate (matrix spike defaults)
-		NoiseRemoveEnabled:          true,                             // Primary noise reduction filter
-		NoiseRemoveCompandEnabled:   true,                             // Compand enabled when noise profile available
-		NoiseRemoveStrength:         noiseRemoveProductionStrength,    // Minimum strength (fixed from spike validation)
-		NoiseRemovePatchSec:         noiseRemoveProductionPatchSec,    // 6ms patch
-		NoiseRemoveResearchSec:      noiseRemoveProductionResearchSec, // 2.0ms research (r_min)
-		NoiseRemoveSmooth:           noiseRemoveProductionSmooth,      // 3.0 smoothing (m_strict)
-		NoiseRemoveCompandThreshold: -55.0,                            // Overridden by adaptive tuning
-		NoiseRemoveCompandExpansion: 6.0,                              // Overridden by adaptive tuning
-		NoiseRemoveCompandAttack:    0.005,                            // 5ms - fixed, empirically validated for speech
-		NoiseRemoveCompandDecay:     0.100,                            // 100ms - fixed, empirically validated for speech
-		NoiseRemoveCompandKnee:      6.0,                              // 6dB - fixed, soft knee for transparency
-
-		// DS201-Inspired Gate - soft expander for natural speech transitions
-		// All parameters set adaptively based on Pass 1 measurements
-		DS201GateEnabled:   true,
-		DS201GateThreshold: 0.01,   // -40dBFS default (adaptive: based on silence peak + headroom)
-		DS201GateRatio:     2.0,    // 2:1 ratio - soft expander (adaptive: based on LRA)
-		DS201GateAttack:    12,     // 12ms attack (adaptive: 10-25ms based on MaxDifference/Crest)
-		DS201GateRelease:   350,    // 350ms release (adaptive: based on flux/ZCR, +50ms hold compensation)
-		DS201GateRange:     0.0625, // -24dB reduction (adaptive: based on silence entropy)
-		DS201GateKnee:      3.0,    // Soft knee (adaptive: based on spectral crest)
-		DS201GateMakeup:    1.0,    // Unity gain (loudnorm handles all level adjustment)
-		DS201GateDetection: "rms",  // RMS detection (adaptive: rms for bleed, peak for clean)
-
-		// LA-2A Compressor - Teletronix LA-2A style optical compressor emulation
-		// The Teletronix LA-2A is renowned for its gentle, program-dependent character:
-		// - Fixed 10ms attack preserves transients
-		// - Two-stage release (60ms initial, 1-15s full) - we use ~200ms approximation
-		// - Soft 3:1 ratio from T4 optical cell
-		// - Very soft knee from T4 optical cell
-		// All parameters are tuned adaptively by tuneLA2ACompressor()
-		LA2AEnabled:   true,
-		LA2AThreshold: -18, // -18dB threshold (tuned relative to RMS in adaptive)
-		LA2ARatio:     3.0, // 3:1 ratio (LA-2A Compress mode baseline)
-		LA2AAttack:    10,  // 10ms attack (LA-2A fixed attack, preserves transients)
-		LA2ARelease:   200, // 200ms release (LA-2A two-stage approximation)
-		LA2AMakeup:    0,   // Unity gain (0 dB - loudnorm handles all level adjustment)
-		LA2AKnee:      4.0, // Soft knee (LA-2A T4 optical cell characteristic)
-		LA2AMix:       1.0, // 100% wet (true LA-2A has no parallel compression)
-
-		// De-esser - automatic sibilance reduction
-		DeessEnabled:   true,
-		DeessIntensity: 0.0, // 0.0 = disabled by default, will be set adaptively if enabled
-		DeessAmount:    0.5, // 50% ducking on treble (moderate reduction)
-		DeessFreq:      0.5, // Keep 50% of original frequency content (balanced)
-
-		// Target values (for reference only)
-		TargetI:   -16.0, // Reference LUFS target (not enforced)
-		TargetTP:  -0.3,  // Reference true peak (not enforced, alimiter does real limiting at -1.5)
-		TargetLRA: 7.0,   // Reference loudness range (EBU R128 default)
-
-		// Adeclick - click/pop repair (Pass 4 only)
-		// Tuned for transparent repair at lower CPU cost
-		AdeclickEnabled:   true,
-		AdeclickThreshold: 2.0,  // Less sensitive threshold reduces CPU cost without harming repair quality
-		AdeclickWindow:    55.0, // Default window, appropriate for speech
-		AdeclickOverlap:   50.0, // Lower overlap further reduces cost while remaining within FFmpeg's valid range
-		AdeclickMethod:    "s",  // Spline interpolation preserves transient peak shapes better than the default average method
-
-		// Filter chain order - use default order
 		FilterOrder: Pass2FilterOrder,
+	}
+}
 
-		// Loudnorm - enabled by default with podcast-optimised settings
-		LoudnormEnabled:   true,
-		LoudnormTargetI:   -16.0, // Podcast standard (-16 LUFS)
-		LoudnormTargetTP:  -2.0,  // Conservative headroom (prevents limiter clipping to 0.0 dBTP)
-		LoudnormTargetLRA: 20.0,  // High value to prevent dynamic mode fallback (must be >= source LRA)
-		LoudnormDualMono:  true,  // CRITICAL for mono recordings
-		LoudnormLinear:    true,  // Prefer linear (transparent) mode
-	}}
+func defaultDownmixConfig() DownmixConfig {
+	return DownmixConfig{Enabled: true}
+}
+
+func defaultAnalysisConfig() AnalysisConfig {
+	return AnalysisConfig{Enabled: true}
+}
+
+func defaultResampleConfig() ResampleConfig {
+	return ResampleConfig{
+		Enabled:    true,
+		SampleRate: 44100,
+		Format:     "s16",
+		FrameSize:  4096,
+	}
+}
+
+func defaultDS201HighPassConfig() DS201HighPassConfig {
+	return DS201HighPassConfig{
+		Enabled:   true,
+		Frequency: 80.0,
+		Poles:     ds201HPDefaultPoles,
+		Width:     ds201HPDefaultWidth,
+		Mix:       ds201HPDefaultMix,
+		Transform: ds201HPDefaultTransform,
+	}
+}
+
+func defaultDS201LowPassConfig() DS201LowPassConfig {
+	return DS201LowPassConfig{
+		Enabled:   true,
+		Frequency: 16000.0,
+		Poles:     2,
+		Width:     0.707,
+		Mix:       1.0,
+		Transform: "tdii",
+	}
+}
+
+func defaultNoiseRemoveConfig() NoiseRemoveConfig {
+	return NoiseRemoveConfig{
+		Enabled:          true,
+		CompandEnabled:   true,
+		Strength:         noiseRemoveProductionStrength,
+		PatchSec:         noiseRemoveProductionPatchSec,
+		ResearchSec:      noiseRemoveProductionResearchSec,
+		Smooth:           noiseRemoveProductionSmooth,
+		CompandThreshold: -55.0,
+		CompandExpansion: 6.0,
+		CompandAttack:    0.005,
+		CompandDecay:     0.100,
+		CompandKnee:      6.0,
+	}
+}
+
+func defaultDS201GateConfig() DS201GateConfig {
+	return DS201GateConfig{
+		Enabled:   true,
+		Threshold: 0.01,
+		Ratio:     2.0,
+		Attack:    12,
+		Release:   350,
+		Range:     0.0625,
+		Knee:      3.0,
+		Makeup:    1.0,
+		Detection: "rms",
+	}
+}
+
+func defaultLA2AConfig() LA2AConfig {
+	return LA2AConfig{
+		Enabled:   true,
+		Threshold: -18,
+		Ratio:     3.0,
+		Attack:    10,
+		Release:   200,
+		Makeup:    0,
+		Knee:      4.0,
+		Mix:       1.0,
+	}
+}
+
+func defaultDeesserConfig() DeesserConfig {
+	return DeesserConfig{
+		Enabled:   true,
+		Intensity: 0.0,
+		Amount:    0.5,
+		Frequency: 0.5,
+	}
+}
+
+func defaultAdeclickConfig() AdeclickConfig {
+	return AdeclickConfig{
+		Enabled:   true,
+		Threshold: 2.0,
+		Window:    55.0,
+		Overlap:   50.0,
+		Method:    "s",
+	}
+}
+
+func defaultLoudnormConfig() LoudnormConfig {
+	return LoudnormConfig{
+		Enabled:   true,
+		TargetI:   -16.0,
+		TargetTP:  -2.0,
+		TargetLRA: 20.0,
+		DualMono:  true,
+		Linear:    true,
+	}
 }
 
 func DefaultEffectiveFilterConfig() *EffectiveFilterConfig {
@@ -445,6 +519,9 @@ func cloneFilterOrder(order []FilterID) []FilterID {
 }
 
 func copyFilterDefaults(dst *EffectiveFilterConfig, src *filterConfigDefaults) {
+	if dst == nil {
+		return
+	}
 	*dst = EffectiveFilterConfig(cloneFilterDefaults(src))
 }
 
@@ -467,7 +544,8 @@ func LinearToDb(linear float64) float64 {
 // Uses FFmpeg's built-in channel layout conversion which handles various input
 // configurations (stereo, mono, single-channel recordings) correctly.
 func (cfg *EffectiveFilterConfig) buildDownmixFilter() string {
-	if !cfg.DownmixEnabled {
+	downmix := cfg.Downmix
+	if !downmix.Enabled {
 		return ""
 	}
 	// aformat with channel_layouts=mono uses FFmpeg's standard downmix matrix
@@ -490,7 +568,8 @@ func (cfg *EffectiveFilterConfig) buildDownmixFilter() string {
 // separately via measureWithLoudnorm() which reads the processed file without
 // encoding output.
 func (cfg *EffectiveFilterConfig) buildAnalysisFilter() string {
-	if !cfg.AnalysisEnabled {
+	analysis := cfg.Analysis
+	if !analysis.Enabled {
 		return ""
 	}
 	// astats: provides noise floor, dynamic range, and additional measurements for adaptive processing:
@@ -530,14 +609,15 @@ func (cfg *EffectiveFilterConfig) buildAnalysisFilter() string {
 		"astats=metadata=1:measure_perchannel=all,"+
 			"aspectralstats=win_size=2048:win_func=hann:measure=all,"+
 			"ebur128=metadata=1:peak=sample+true:dualmono=true:target=%.0f",
-		cfg.TargetI)
+		cfg.Loudnorm.TargetI)
 }
 
 // buildResampleFilter builds the output format standardisation filter.
 // Ensures consistent output: 44.1kHz, 16-bit, mono, fixed frame size.
 // Pass 2 only - applied after all processing and analysis.
 func (cfg *EffectiveFilterConfig) buildResampleFilter() string {
-	if !cfg.ResampleEnabled {
+	resample := cfg.Resample
+	if !resample.Enabled {
 		return ""
 	}
 	return cfg.buildRequiredOutputFormatFilter()
@@ -545,10 +625,11 @@ func (cfg *EffectiveFilterConfig) buildResampleFilter() string {
 
 // buildRequiredOutputFormatFilter builds the mandatory output format filter.
 // Use this when a pass must restore encoder-compatible audio regardless of
-// ResampleEnabled.
+// Resample.Enabled.
 func (cfg *EffectiveFilterConfig) buildRequiredOutputFormatFilter() string {
+	resample := cfg.Resample
 	return fmt.Sprintf("aformat=sample_rates=%d:channel_layouts=mono:sample_fmts=%s,asetnsamples=n=%d",
-		cfg.ResampleSampleRate, cfg.ResampleFormat, cfg.ResampleFrameSize)
+		resample.SampleRate, resample.Format, resample.FrameSize)
 }
 
 // buildDS201HighpassFilter builds the DS201-inspired high-pass filter.
@@ -565,31 +646,32 @@ func (cfg *EffectiveFilterConfig) buildRequiredOutputFormatFilter() string {
 // - transform: filter algorithm (tdii=best floating-point accuracy)
 // - mix: wet/dry blend (1.0=full filter, 0.7=subtle for warm voices)
 func (cfg *EffectiveFilterConfig) buildDS201HighpassFilter() string {
-	if !cfg.DS201HPEnabled {
+	highpass := cfg.DS201HighPass
+	if !highpass.Enabled {
 		return ""
 	}
 
-	poles := cfg.DS201HPPoles
+	poles := highpass.Poles
 	if poles < 1 {
 		poles = 2 // Default to standard 12dB/oct
 	}
 
-	width := cfg.DS201HPWidth
+	width := highpass.Width
 	if width <= 0 {
 		width = 0.707 // Butterworth default
 	}
 
 	hpSpec := fmt.Sprintf("highpass=f=%.0f:poles=%d:width_type=q:width=%.3f:normalize=1",
-		cfg.DS201HPFreq, poles, width)
+		highpass.Frequency, poles, width)
 
 	// Add transform type if specified (tdii = best floating-point accuracy)
-	if cfg.DS201HPTransform != "" {
-		hpSpec += fmt.Sprintf(":a=%s", cfg.DS201HPTransform)
+	if highpass.Transform != "" {
+		hpSpec += fmt.Sprintf(":a=%s", highpass.Transform)
 	}
 
 	// Add mix parameter if not full wet (for warm voice protection)
-	if cfg.DS201HPMix > 0 && cfg.DS201HPMix < 1.0 {
-		hpSpec += fmt.Sprintf(":m=%.2f", cfg.DS201HPMix)
+	if highpass.Mix > 0 && highpass.Mix < 1.0 {
+		hpSpec += fmt.Sprintf(":m=%.2f", highpass.Mix)
 	}
 
 	return hpSpec
@@ -609,33 +691,34 @@ func (cfg *EffectiveFilterConfig) buildDS201HighpassFilter() string {
 // - transform: filter algorithm (tdii=best floating-point accuracy)
 // - mix: wet/dry blend (1.0=full filter)
 //
-// Returns empty string if DS201LPEnabled is false.
+// Returns empty string if DS201LowPass.Enabled is false.
 func (cfg *EffectiveFilterConfig) buildDS201LowPassFilter() string {
-	if !cfg.DS201LPEnabled {
+	lowpass := cfg.DS201LowPass
+	if !lowpass.Enabled {
 		return ""
 	}
 
-	poles := cfg.DS201LPPoles
+	poles := lowpass.Poles
 	if poles < 1 {
 		poles = 2 // Default to standard 12dB/oct
 	}
 
-	width := cfg.DS201LPWidth
+	width := lowpass.Width
 	if width <= 0 {
 		width = 0.707 // Butterworth default
 	}
 
 	lpSpec := fmt.Sprintf("lowpass=f=%.0f:poles=%d:width_type=q:width=%.3f:normalize=1",
-		cfg.DS201LPFreq, poles, width)
+		lowpass.Frequency, poles, width)
 
 	// Add transform type if specified (tdii = best floating-point accuracy)
-	if cfg.DS201LPTransform != "" {
-		lpSpec += fmt.Sprintf(":a=%s", cfg.DS201LPTransform)
+	if lowpass.Transform != "" {
+		lpSpec += fmt.Sprintf(":a=%s", lowpass.Transform)
 	}
 
 	// Add mix parameter if not full wet (for subtle application)
-	if cfg.DS201LPMix > 0 && cfg.DS201LPMix < 1.0 {
-		lpSpec += fmt.Sprintf(":m=%.2f", cfg.DS201LPMix)
+	if lowpass.Mix > 0 && lowpass.Mix < 1.0 {
+		lpSpec += fmt.Sprintf(":m=%.2f", lowpass.Mix)
 	}
 
 	return lpSpec
@@ -659,19 +742,20 @@ func (cfg *EffectiveFilterConfig) buildDS201LowPassFilter() string {
 // - decay: 100ms (fixed, empirically validated for speech)
 // - soft-knee: 6dB (fixed, transparent)
 func (cfg *EffectiveFilterConfig) buildNoiseRemoveFilter() string {
-	if !cfg.NoiseRemoveEnabled {
+	noiseRemove := cfg.NoiseRemove
+	if !noiseRemove.Enabled {
 		return ""
 	}
 
 	filters := make([]string, 0, 2)
 	filters = append(filters, fmt.Sprintf("anlmdn=s=%.5f:p=%.4f:r=%.4f:m=%.0f",
-		cfg.NoiseRemoveStrength,
-		cfg.NoiseRemovePatchSec,
-		cfg.NoiseRemoveResearchSec,
-		cfg.NoiseRemoveSmooth,
+		noiseRemove.Strength,
+		noiseRemove.PatchSec,
+		noiseRemove.ResearchSec,
+		noiseRemove.Smooth,
 	))
 
-	if cfg.NoiseRemoveCompandEnabled {
+	if noiseRemove.CompandEnabled {
 		filters = append(filters, cfg.buildNoiseRemoveCompandFilter())
 	}
 
@@ -682,11 +766,12 @@ func (cfg *EffectiveFilterConfig) buildNoiseRemoveFilter() string {
 // Compand uses FLAT reduction curve with uniform expansion below threshold.
 // Parameters are derived from Pass 1 measurements in tuneNoiseRemove (adaptive.go).
 func (cfg *EffectiveFilterConfig) buildNoiseRemoveCompandFilter() string {
+	noiseRemove := cfg.NoiseRemove
 	// Build FLAT reduction curve
 	// Every point below threshold gets the same expansion (reduction)
 	// Points: -90 → (-90 - exp), -75 → (-75 - exp), threshold → threshold, -30 → -30, 0 → 0
-	exp := cfg.NoiseRemoveCompandExpansion
-	thresh := cfg.NoiseRemoveCompandThreshold
+	exp := noiseRemove.CompandExpansion
+	thresh := noiseRemove.CompandThreshold
 
 	out90 := -90.0 - exp
 	out75 := -75.0 - exp
@@ -695,9 +780,9 @@ func (cfg *EffectiveFilterConfig) buildNoiseRemoveCompandFilter() string {
 	// Points format: in1/out1|in2/out2|...
 	return fmt.Sprintf(
 		"compand=attacks=%.3f:decays=%.3f:soft-knee=%.1f:points=-90/%.0f|-75/%.0f|%.0f/%.0f|-30/-30|0/0",
-		cfg.NoiseRemoveCompandAttack,
-		cfg.NoiseRemoveCompandDecay,
-		cfg.NoiseRemoveCompandKnee,
+		noiseRemove.CompandAttack,
+		noiseRemove.CompandDecay,
+		noiseRemove.CompandKnee,
 		out90, out75,
 		thresh, thresh,
 	)
@@ -708,10 +793,11 @@ func (cfg *EffectiveFilterConfig) buildNoiseRemoveCompandFilter() string {
 // Minimum 10ms attack prevents click artifacts from rapid gain changes.
 // Detection mode is adaptive: RMS for tonal bleed, peak for clean recordings.
 func (cfg *EffectiveFilterConfig) buildDS201GateFilter() string {
-	if !cfg.DS201GateEnabled {
+	gate := cfg.DS201Gate
+	if !gate.Enabled {
 		return ""
 	}
-	detection := cfg.DS201GateDetection
+	detection := gate.Detection
 	if detection == "" {
 		detection = "rms" // Safe default for speech
 	}
@@ -719,14 +805,14 @@ func (cfg *EffectiveFilterConfig) buildDS201GateFilter() string {
 	return fmt.Sprintf(
 		"agate=threshold=%.6f:ratio=%.1f:attack=%.2f:release=%.0f:"+
 			"range=%.4f:knee=%.1f:detection=%s:makeup=%.1f",
-		cfg.DS201GateThreshold,
-		cfg.DS201GateRatio,
-		cfg.DS201GateAttack,
-		cfg.DS201GateRelease,
-		cfg.DS201GateRange,
-		cfg.DS201GateKnee,
+		gate.Threshold,
+		gate.Ratio,
+		gate.Attack,
+		gate.Release,
+		gate.Range,
+		gate.Knee,
 		detection,
-		cfg.DS201GateMakeup,
+		gate.Makeup,
 	)
 }
 
@@ -735,19 +821,20 @@ func (cfg *EffectiveFilterConfig) buildDS201GateFilter() string {
 // optical compressor's gentle, program-dependent character.
 // Converts dB values to linear for FFmpeg's format.
 func (cfg *EffectiveFilterConfig) buildLA2ACompressorFilter() string {
-	if !cfg.LA2AEnabled {
+	la2a := cfg.LA2A
+	if !la2a.Enabled {
 		return ""
 	}
 	return fmt.Sprintf(
 		"acompressor=threshold=%.6f:ratio=%.1f:attack=%.0f:release=%.0f:"+
 			"makeup=%.2f:knee=%.1f:detection=rms:mix=%.2f",
-		DbToLinear(cfg.LA2AThreshold),
-		cfg.LA2ARatio,
-		cfg.LA2AAttack,
-		cfg.LA2ARelease,
-		DbToLinear(cfg.LA2AMakeup),
-		cfg.LA2AKnee,
-		cfg.LA2AMix,
+		Decibels(la2a.Threshold).LinearAmplitude().Float64(),
+		la2a.Ratio,
+		la2a.Attack,
+		la2a.Release,
+		Decibels(la2a.Makeup).LinearAmplitude().Float64(),
+		la2a.Knee,
+		la2a.Mix,
 	)
 }
 
@@ -755,14 +842,15 @@ func (cfg *EffectiveFilterConfig) buildLA2ACompressorFilter() string {
 // Automatically detects and reduces harsh sibilance ("s" sounds).
 // Returns empty string if disabled or intensity is 0.
 func (cfg *EffectiveFilterConfig) buildDeesserFilter() string {
-	if !cfg.DeessEnabled || cfg.DeessIntensity <= 0 {
+	deesser := cfg.Deesser
+	if !deesser.Enabled || deesser.Intensity <= 0 {
 		return ""
 	}
 	return fmt.Sprintf(
 		"deesser=i=%.2f:m=%.2f:f=%.2f",
-		cfg.DeessIntensity,
-		cfg.DeessAmount,
-		cfg.DeessFreq,
+		deesser.Intensity,
+		deesser.Amount,
+		deesser.Frequency,
 	)
 }
 
@@ -775,17 +863,18 @@ func (cfg *EffectiveFilterConfig) buildDeesserFilter() string {
 // - w (window): Analysis window in ms (10-100, default 55)
 // - o (overlap): Window overlap percentage (50-95, default 75)
 func (cfg *EffectiveFilterConfig) buildAdeclickFilter() string {
-	if !cfg.AdeclickEnabled {
+	adeclick := cfg.Adeclick
+	if !adeclick.Enabled {
 		return ""
 	}
 	spec := fmt.Sprintf(
 		"adeclick=t=%.1f:w=%.0f:o=%.0f",
-		cfg.AdeclickThreshold,
-		cfg.AdeclickWindow,
-		cfg.AdeclickOverlap,
+		adeclick.Threshold,
+		adeclick.Window,
+		adeclick.Overlap,
 	)
-	if cfg.AdeclickMethod != "" {
-		spec += ":m=" + cfg.AdeclickMethod
+	if adeclick.Method != "" {
+		spec += ":m=" + adeclick.Method
 	}
 	return spec
 }
