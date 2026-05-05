@@ -26,11 +26,14 @@ type AnalysisResult struct {
 
 // AnalyzeOnlyDetailed performs Pass 1 analysis and returns stage timing details.
 func AnalyzeOnlyDetailed(inputPath string, config *BaseFilterConfig,
-	progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements),
+	progressCallback ProgressCallback,
 ) (*AnalysisResult, error) {
 	// Pass 1: Analysis
 	if progressCallback != nil {
-		progressCallback(PassAnalysis, "Analyzing", 0.0, 0.0, nil)
+		progressCallback(ProgressUpdate{
+			Pass:     PassAnalysis,
+			PassName: "Analyzing",
+		})
 	}
 
 	analysisStart := time.Now()
@@ -41,7 +44,12 @@ func AnalyzeOnlyDetailed(inputPath string, config *BaseFilterConfig,
 	analysisDuration := time.Since(analysisStart)
 
 	if progressCallback != nil {
-		progressCallback(PassAnalysis, "Analyzing", 1.0, 0.0, measurements)
+		progressCallback(ProgressUpdate{
+			Pass:         PassAnalysis,
+			PassName:     "Analyzing",
+			Progress:     1.0,
+			Measurements: measurements,
+		})
 	}
 
 	// Adapt config to show what would be used in Pass 2
@@ -65,10 +73,13 @@ func AnalyzeOnlyDetailed(inputPath string, config *BaseFilterConfig,
 //
 // The output file will be named <basename>-LUFS-NN-processed.<ext> in the same directory as the input
 // If progressCallback is not nil, it will be called with progress updates
-func ProcessAudio(inputPath string, config *BaseFilterConfig, progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements)) (*ProcessingResult, error) {
+func ProcessAudio(inputPath string, config *BaseFilterConfig, progressCallback ProgressCallback) (*ProcessingResult, error) {
 	// Pass 1: Analysis
 	if progressCallback != nil {
-		progressCallback(PassAnalysis, "Analyzing", 0.0, 0.0, nil)
+		progressCallback(ProgressUpdate{
+			Pass:     PassAnalysis,
+			PassName: "Analyzing",
+		})
 	}
 
 	measurements, err := AnalyzeAudio(inputPath, config, progressCallback)
@@ -77,7 +88,12 @@ func ProcessAudio(inputPath string, config *BaseFilterConfig, progressCallback f
 	}
 
 	if progressCallback != nil {
-		progressCallback(PassAnalysis, "Analyzing", 1.0, 0.0, measurements)
+		progressCallback(ProgressUpdate{
+			Pass:         PassAnalysis,
+			PassName:     "Analyzing",
+			Progress:     1.0,
+			Measurements: measurements,
+		})
 	}
 
 	// Adapt filter configuration based on Pass 1 measurements
@@ -88,7 +104,11 @@ func ProcessAudio(inputPath string, config *BaseFilterConfig, progressCallback f
 
 	// Pass 2: Processing
 	if progressCallback != nil {
-		progressCallback(PassProcessing, "Processing", 0.0, 0.0, measurements)
+		progressCallback(ProgressUpdate{
+			Pass:         PassProcessing,
+			PassName:     "Processing",
+			Measurements: measurements,
+		})
 	}
 
 	outputPath, err := processorCreateSiblingTempPath(inputPath, "processing")
@@ -115,7 +135,12 @@ func ProcessAudio(inputPath string, config *BaseFilterConfig, progressCallback f
 	}
 
 	if progressCallback != nil {
-		progressCallback(PassProcessing, "Processing", 1.0, 0.0, measurements)
+		progressCallback(ProgressUpdate{
+			Pass:         PassProcessing,
+			PassName:     "Processing",
+			Progress:     1.0,
+			Measurements: measurements,
+		})
 	}
 
 	// Measure silence and speech regions in Pass 2 output (before normalisation) for comparison
@@ -214,7 +239,7 @@ type ProcessingResult struct {
 // Applies the filter chain built by BuildFilterSpec() which includes asendcmd for noise profile learning
 // when NoiseProfileStart/End timestamps are set in the config.
 // If outputMeasurements is non-nil, populates it with Pass 2 output analysis.
-func processWithFilters(inputPath, outputPath string, config *EffectiveFilterConfig, progressCallback func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements), measurements *AudioMeasurements, outputMeasurements **OutputMeasurements) (InputMetadata, error) {
+func processWithFilters(inputPath, outputPath string, config *EffectiveFilterConfig, progressCallback ProgressCallback, measurements *AudioMeasurements, outputMeasurements **OutputMeasurements) (InputMetadata, error) {
 	// Open input audio file
 	reader, metadata, err := audio.OpenAudioFile(inputPath)
 	if err != nil {
@@ -286,7 +311,13 @@ func processWithFilters(inputPath, outputPath string, config *EffectiveFilterCon
 				if progress > 1.0 {
 					progress = 1.0
 				}
-				progressCallback(PassProcessing, "Processing", progress, currentLevel, measurements)
+				progressCallback(ProgressUpdate{
+					Pass:         PassProcessing,
+					PassName:     "Processing",
+					Progress:     progress,
+					Level:        currentLevel,
+					Measurements: measurements,
+				})
 			}
 		},
 		OnFrame: func(inputFrame, filteredFrame *ffmpeg.AVFrame) error {

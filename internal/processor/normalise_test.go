@@ -776,8 +776,8 @@ func TestMeasureWithLoudnormProgressCadenceCapsAt099(t *testing.T) {
 	})
 
 	var events []loudnormProgressEvent
-	_, err := measureWithLoudnorm(testFile, defaultNormalisationTestConfig(), "", func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements) {
-		events = append(events, loudnormProgressEvent{pass: pass, passName: passName, progress: progress})
+	_, err := measureWithLoudnorm(testFile, defaultNormalisationTestConfig(), "", func(update ProgressUpdate) {
+		events = append(events, loudnormProgressEvent{pass: update.Pass, passName: update.PassName, progress: update.Progress})
 	})
 	if err != nil {
 		t.Fatalf("measureWithLoudnorm() error = %v", err)
@@ -1713,8 +1713,8 @@ func TestApplyNormalisationProgressCadenceGuard(t *testing.T) {
 		defaultNormalisationTestConfig(),
 		&OutputMeasurements{OutputI: -20.0, OutputTP: -10.0},
 		nil,
-		func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements) {
-			events = append(events, loudnormProgressEvent{pass: pass, passName: passName, progress: progress})
+		func(update ProgressUpdate) {
+			events = append(events, loudnormProgressEvent{pass: update.Pass, passName: update.PassName, progress: update.Progress})
 		},
 	)
 	if err != nil {

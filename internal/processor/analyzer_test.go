@@ -319,11 +319,11 @@ func TestAnalyzeAudio(t *testing.T) {
 	t.Run("synthetic_tone_with_silence", func(t *testing.T) {
 		// Progress callback to show analysis progress
 		lastPercent := -1
-		progressCallback := func(pass PassNumber, passName string, progress float64, level float64, m *AudioMeasurements) {
-			percent := int(progress * 100)
+		progressCallback := func(update ProgressUpdate) {
+			percent := int(update.Progress * 100)
 			// Only log at 25% intervals to avoid spam
 			if percent >= lastPercent+25 {
-				t.Logf("  %s: %d%%", passName, percent)
+				t.Logf("  %s: %d%%", update.PassName, percent)
 				lastPercent = percent
 			}
 		}

@@ -432,24 +432,57 @@ func TestEffectiveConfigFilterOrderIsolation(t *testing.T) {
 	}
 }
 
-func TestProcessorSeedParameterOwnershipBoundary(t *testing.T) {
+func TestProcessorSeedAndProgressCallbackBoundaries(t *testing.T) {
+	progressCallbackType := reflect.TypeFor[ProgressCallback]()
+
 	tests := []struct {
-		name       string
-		fn         any
-		configArg  int
-		parameters int
+		name        string
+		fn          any
+		configArg   int
+		progressArg int
+		parameters  int
 	}{
 		{
-			name:       "ProcessAudio",
-			fn:         ProcessAudio,
-			configArg:  1,
-			parameters: 3,
+			name:        "ProcessAudio",
+			fn:          ProcessAudio,
+			configArg:   1,
+			progressArg: 2,
+			parameters:  3,
 		},
 		{
-			name:       "AnalyzeOnlyDetailed",
-			fn:         AnalyzeOnlyDetailed,
-			configArg:  1,
-			parameters: 3,
+			name:        "AnalyzeOnlyDetailed",
+			fn:          AnalyzeOnlyDetailed,
+			configArg:   1,
+			progressArg: 2,
+			parameters:  3,
+		},
+		{
+			name:        "AnalyzeAudio",
+			fn:          AnalyzeAudio,
+			configArg:   1,
+			progressArg: 2,
+			parameters:  3,
+		},
+		{
+			name:        "processWithFilters",
+			fn:          processWithFilters,
+			configArg:   2,
+			progressArg: 3,
+			parameters:  6,
+		},
+		{
+			name:        "measureWithLoudnorm",
+			fn:          measureWithLoudnorm,
+			configArg:   1,
+			progressArg: 3,
+			parameters:  4,
+		},
+		{
+			name:        "ApplyNormalisation",
+			fn:          ApplyNormalisation,
+			configArg:   1,
+			progressArg: 4,
+			parameters:  5,
 		},
 	}
 
@@ -461,7 +494,71 @@ func TestProcessorSeedParameterOwnershipBoundary(t *testing.T) {
 			}
 
 			assertSeedConfigTypeCannotOwnPerFileState(t, typ.In(tt.configArg))
+
+			if typ.In(tt.progressArg) != progressCallbackType {
+				t.Fatalf("%s progress callback parameter = %s, want %s",
+					tt.name, typ.In(tt.progressArg), progressCallbackType)
+			}
 		})
+	}
+}
+
+func TestProgressUpdateTypeShape(t *testing.T) {
+	typ := reflect.TypeFor[ProgressUpdate]()
+
+	tests := []struct {
+		name string
+		want reflect.Type
+	}{
+		{name: "Pass", want: reflect.TypeFor[PassNumber]()},
+		{name: "PassName", want: reflect.TypeFor[string]()},
+		{name: "Progress", want: reflect.TypeFor[float64]()},
+		{name: "Level", want: reflect.TypeFor[float64]()},
+		{name: "Measurements", want: reflect.TypeFor[*AudioMeasurements]()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			field, ok := typ.FieldByName(tt.name)
+			if !ok {
+				t.Fatalf("ProgressUpdate has no %s field", tt.name)
+			}
+			if field.Type != tt.want {
+				t.Fatalf("ProgressUpdate.%s = %s, want %s", tt.name, field.Type, tt.want)
+			}
+		})
+	}
+}
+
+func TestProgressCallbackTypeCompiles(t *testing.T) {
+	measurements := &AudioMeasurements{}
+	var got ProgressUpdate
+
+	var callback ProgressCallback = func(update ProgressUpdate) {
+		got = update
+	}
+	callback(ProgressUpdate{
+		Pass:         PassAnalysis,
+		PassName:     "Analyzing",
+		Progress:     0.5,
+		Level:        -18.0,
+		Measurements: measurements,
+	})
+
+	if got.Pass != PassAnalysis {
+		t.Fatalf("callback Pass = %d, want %d", got.Pass, PassAnalysis)
+	}
+	if got.PassName != "Analyzing" {
+		t.Fatalf("callback PassName = %q, want %q", got.PassName, "Analyzing")
+	}
+	if got.Progress != 0.5 {
+		t.Fatalf("callback Progress = %.2f, want 0.50", got.Progress)
+	}
+	if got.Level != -18.0 {
+		t.Fatalf("callback Level = %.2f, want -18.00", got.Level)
+	}
+	if got.Measurements != measurements {
+		t.Fatal("callback Measurements did not preserve pointer")
 	}
 }
 
@@ -536,7 +633,7 @@ func TestProcessAudio(t *testing.T) {
 	baseFilterOrder := append([]FilterID(nil), config.FilterOrder...)
 
 	// Process the audio with a no-op progress callback
-	result, err := ProcessAudio(testFile, config, func(pass PassNumber, passName string, progress float64, level float64, measurements *AudioMeasurements) {
+	result, err := ProcessAudio(testFile, config, func(update ProgressUpdate) {
 		// No-op for tests
 	})
 	if err != nil {

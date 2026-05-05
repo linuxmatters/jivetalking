@@ -94,6 +94,36 @@ func TestOpenDebugLog_CreateFailureIncludesPath(t *testing.T) {
 	}
 }
 
+func TestProgressCallbackBoundariesUseProcessorEvent(t *testing.T) {
+	progressCallbackType := reflect.TypeFor[processor.ProgressCallback]()
+	progressUpdateType := reflect.TypeFor[processor.ProgressUpdate]()
+
+	depsType := reflect.TypeFor[analysisOnlyDeps]()
+	analyzeDetailed, ok := depsType.FieldByName("analyzeDetailed")
+	if !ok {
+		t.Fatal("analysisOnlyDeps has no analyzeDetailed field")
+	}
+	if analyzeDetailed.Type.Kind() != reflect.Func {
+		t.Fatalf("analysisOnlyDeps.analyzeDetailed = %s, want func", analyzeDetailed.Type)
+	}
+	if analyzeDetailed.Type.NumIn() != 3 {
+		t.Fatalf("analysisOnlyDeps.analyzeDetailed has %d parameters, want 3", analyzeDetailed.Type.NumIn())
+	}
+	if analyzeDetailed.Type.In(2) != progressCallbackType {
+		t.Fatalf("analysisOnlyDeps.analyzeDetailed progress callback = %s, want %s",
+			analyzeDetailed.Type.In(2), progressCallbackType)
+	}
+
+	callbackType := reflect.TypeOf((&progressHandler{}).callback)
+	if callbackType.NumIn() != 1 {
+		t.Fatalf("progressHandler.callback has %d parameters, want 1", callbackType.NumIn())
+	}
+	if callbackType.In(0) != progressUpdateType {
+		t.Fatalf("progressHandler.callback parameter = %s, want %s",
+			callbackType.In(0), progressUpdateType)
+	}
+}
+
 func TestRunAnalysisOnlyWithDeps_NonTTYOmitsBenchPath(t *testing.T) {
 	inputPath := ".bench/analysis/input/sample.wav"
 	config := processor.DefaultFilterConfig()
@@ -118,7 +148,7 @@ func TestRunAnalysisOnlyWithDeps_NonTTYOmitsBenchPath(t *testing.T) {
 			t.Fatal("runWithTUI should not be called for non-TTY output")
 			return nil, nil
 		},
-		analyzeDetailed: func(path string, cfg *processor.BaseFilterConfig, progress func(processor.PassNumber, string, float64, float64, *processor.AudioMeasurements)) (*processor.AnalysisResult, error) {
+		analyzeDetailed: func(path string, cfg *processor.BaseFilterConfig, progress processor.ProgressCallback) (*processor.AnalysisResult, error) {
 			if path != inputPath {
 				t.Fatalf("analyzeDetailed path = %q, want %q", path, inputPath)
 			}
@@ -196,7 +226,7 @@ func TestRunAnalysisOnlyWithDeps_UsesPerFileResultConfig(t *testing.T) {
 			t.Fatal("runWithTUI should not be called for non-TTY output")
 			return nil, nil
 		},
-		analyzeDetailed: func(path string, cfg *processor.BaseFilterConfig, progress func(processor.PassNumber, string, float64, float64, *processor.AudioMeasurements)) (*processor.AnalysisResult, error) {
+		analyzeDetailed: func(path string, cfg *processor.BaseFilterConfig, progress processor.ProgressCallback) (*processor.AnalysisResult, error) {
 			if cfg != baseConfig {
 				t.Fatalf("analyzeDetailed config = %p, want shared base %p", cfg, baseConfig)
 			}
