@@ -211,7 +211,7 @@ type analysisOnlyDeps struct {
 	hasTTY          func() bool
 	openMetadata    func(string) (*audio.Metadata, error)
 	runWithTUI      func(string, *processor.BaseFilterConfig, func(string, ...any)) (*processor.AnalysisResult, error)
-	analyzeDetailed func(string, *processor.BaseFilterConfig, func(processor.PassNumber, string, float64, float64, *processor.AudioMeasurements)) (*processor.AnalysisResult, error)
+	analyzeDetailed func(string, *processor.BaseFilterConfig, processor.ProgressCallback) (*processor.AnalysisResult, error)
 	displayResults  func(io.Writer, string, *audio.Metadata, *processor.AudioMeasurements, *processor.EffectiveFilterConfig, *processor.AdaptiveDiagnostics, ...logging.AnalysisTimings)
 	printError      func(string)
 }
@@ -258,31 +258,31 @@ type progressHandler struct {
 	pass4Time  time.Duration
 }
 
-func (ph *progressHandler) callback(pass processor.PassNumber, passName string, progress float64, level float64, measurements *processor.AudioMeasurements) {
-	ph.log("[MAIN] Sending ProgressMsg: Pass %d (%s), Progress %.1f%%, Level %.1f dB", pass, passName, progress*100, level)
+func (ph *progressHandler) callback(update processor.ProgressUpdate) {
+	ph.log("[MAIN] Sending ProgressMsg: Pass %d (%s), Progress %.1f%%, Level %.1f dB", update.Pass, update.PassName, update.Progress*100, update.Level)
 
 	// Track pass timing
 	switch {
-	case pass == processor.PassAnalysis && progress == 0.0:
+	case update.Pass == processor.PassAnalysis && update.Progress == 0.0:
 		ph.pass1Start = time.Now()
-	case pass == processor.PassAnalysis && progress == 1.0:
+	case update.Pass == processor.PassAnalysis && update.Progress == 1.0:
 		ph.pass1Time = time.Since(ph.pass1Start)
-	case pass == processor.PassMeasuring && progress == 0.0:
+	case update.Pass == processor.PassMeasuring && update.Progress == 0.0:
 		ph.pass3Start = time.Now()
-	case pass == processor.PassMeasuring && progress == 1.0:
+	case update.Pass == processor.PassMeasuring && update.Progress == 1.0:
 		ph.pass3Time = time.Since(ph.pass3Start)
-	case pass == processor.PassNormalising && progress == 0.0:
+	case update.Pass == processor.PassNormalising && update.Progress == 0.0:
 		ph.pass4Start = time.Now()
-	case pass == processor.PassNormalising && progress == 1.0:
+	case update.Pass == processor.PassNormalising && update.Progress == 1.0:
 		ph.pass4Time = time.Since(ph.pass4Start)
 	}
 
 	ph.p.Send(ui.ProgressMsg{
-		Pass:         pass,
-		PassName:     passName,
-		Progress:     progress,
-		Level:        level,
-		Measurements: measurements,
+		Pass:         update.Pass,
+		PassName:     update.PassName,
+		Progress:     update.Progress,
+		Level:        update.Level,
+		Measurements: update.Measurements,
 	})
 }
 
@@ -370,11 +370,11 @@ func runAnalysisWithTUI(inputPath string, config *processor.BaseFilterConfig, lo
 		})
 
 		// Create progress callback that sends updates to TUI
-		progressCallback := func(pass processor.PassNumber, passName string, progress float64, level float64, measurements *processor.AudioMeasurements) {
-			log("[ANALYSIS] Progress: Pass %d (%s), %.1f%%, Level %.1f dB", pass, passName, progress*100, level)
+		progressCallback := func(update processor.ProgressUpdate) {
+			log("[ANALYSIS] Progress: Pass %d (%s), %.1f%%, Level %.1f dB", update.Pass, update.PassName, update.Progress*100, update.Level)
 			p.Send(ui.AnalysisProgressMsg{
-				Progress: progress,
-				Level:    level,
+				Progress: update.Progress,
+				Level:    update.Level,
 			})
 		}
 
