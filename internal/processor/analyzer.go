@@ -478,7 +478,6 @@ func assignInputMeasurementSuggestions(measurements *AudioMeasurements) {
 }
 
 type analysisFrameCollection struct {
-	metadata         *audio.Metadata
 	accumulators     *metadataAccumulators
 	intervals        []IntervalSample
 	silenceIntervals []IntervalSample
@@ -597,7 +596,6 @@ func collectAnalysisFrames(filename string, config *BaseFilterConfig, context *P
 	filterFreed = true
 
 	return &analysisFrameCollection{
-		metadata:         metadata,
 		accumulators:     acc,
 		intervals:        intervals,
 		silenceIntervals: silenceIntervals,
