@@ -191,7 +191,7 @@ DS201 Gate (dynamics cleanup) → Dolby SR (noise polish) → LA-2A (levelling) 
 ```
 
 **Division of responsibility:**
-- **DS201 Gate:** Inter-phrase silence cleanup
+- **DS201 Gate:** Room-tone-aware inter-phrase cleanup
 - **Dolby SR:** Spectral noise floor polishing
 - **LA-2A:** Dynamic range levelling with warmth
 - **Limiter:** Final peak control

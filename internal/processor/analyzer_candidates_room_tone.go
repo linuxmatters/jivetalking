@@ -260,28 +260,28 @@ func findRoomToneCandidatesFromIntervals(intervals []IntervalSample, threshold f
 	return candidates
 }
 
-// Threshold bounds for adaptive silence detection
+// Threshold bounds for adaptive room tone detection
 const (
-	// silenceFallbackHeadroom is added to the noise floor to get the silencedetect threshold.
-	// A region is considered "silence" if it's within this headroom of the noise floor.
-	// Higher values detect more silence (including quieter room tone) but may include crosstalk.
+	// silenceFallbackHeadroom is added to the noise floor to get the room tone threshold.
+	// A 250 ms interval is treated as room tone if its level is within this headroom of the noise floor.
+	// Higher values capture more room tone (including quieter ambience) but may include crosstalk.
 	silenceFallbackHeadroom = 6.0 // dB
 
-	// silenceMinThreshold prevents silencedetect from being too sensitive in very quiet recordings.
-	// Even professional recordings rarely have silence below -70 dBFS.
+	// silenceMinThreshold prevents the room tone threshold from being too sensitive in very quiet recordings.
+	// Even professional recordings rarely have room tone below -70 dBFS.
 	silenceMinThreshold = -70.0
 
-	// silenceMaxThreshold prevents silencedetect from detecting loud sections as silence.
+	// silenceMaxThreshold prevents loud sections from being mistaken for room tone.
 	// If the estimated threshold is above this, something is wrong with the recording.
 	silenceMaxThreshold = -35.0
 )
 
-// calculateAdaptiveSilenceThreshold computes a bounded silence threshold from a noise floor estimate.
-// Returns a threshold that's slightly above the noise floor to detect quiet room tone as silence.
+// calculateAdaptiveSilenceThreshold computes a bounded room tone threshold from a noise floor estimate.
+// Returns a threshold slightly above the noise floor so quiet ambience scores as room tone during interval sampling.
 // This is used as a fallback when interval-based estimation has insufficient data.
 func calculateAdaptiveSilenceThreshold(noiseFloor float64) float64 {
-	// Silence threshold = noise floor + headroom
-	// This allows silencedetect to find regions that are at or slightly above the ambient noise
+	// Room tone threshold = noise floor + headroom
+	// This admits 250 ms intervals at or slightly above the ambient noise into the room tone candidate set used for noise profiling.
 	threshold := noiseFloor + silenceFallbackHeadroom
 
 	// Apply bounds to prevent extreme values

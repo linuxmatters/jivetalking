@@ -405,7 +405,7 @@ Loudnorm parameters did not change between 0.3.1 and current; the integrated-lou
 
 Integrated loudness parity is the headline result; spectrograms and per-region metric tables from each binary's `.log` report confirm parity at the spectral and perceptual level too. No axis of comparison shows audible damage from the retunes.
 
-**Pass 1 is byte-for-byte identical.** Both binaries selected the same silence noise floor (-85.6 dBFS), the same silence centroid (7309 Hz), the same speech RMS (-40.5 dBFS), the same speech centroid (2641 Hz), the same speech kurtosis (18.044), and the same voicing density (92.1 %). The Pass 1 frontend is deterministic and the parity confirms both binaries read the input identically before adaptive tuning diverges.
+**Pass 1 is byte-for-byte identical.** Both binaries selected the same room tone noise floor (-85.6 dBFS), the same room tone centroid (7309 Hz), the same speech RMS (-40.5 dBFS), the same speech centroid (2641 Hz), the same speech kurtosis (18.044), and the same voicing density (92.1 %). The Pass 1 frontend is deterministic and the parity confirms both binaries read the input identically before adaptive tuning diverges.
 
 **Speech-region drift after the full chain is small, expected, and benign.** The Final-stage speech sample from each report:
 
