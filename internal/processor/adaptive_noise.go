@@ -1,7 +1,8 @@
 package processor
 
 // tuneNoiseRemove adjusts compand parameters based on measured noise floor.
-// Uses silence region measurements for accurate noise characterisation.
+// Uses the noise profile extracted from the elected room-tone region for
+// accurate noise characterisation.
 //
 // The anlmdn parameters (strength, patch, research, smooth) are kept constant from spike validation.
 // Compand parameters adapt to the measured noise floor:

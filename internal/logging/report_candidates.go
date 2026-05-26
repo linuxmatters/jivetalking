@@ -20,9 +20,9 @@ type candidateDisplayEntry[T any] struct {
 	candidate T
 }
 
-func writeReportSilenceCandidateMetrics(f io.Writer, index int, c processor.SilenceCandidateMetrics, elected bool) {
+func writeReportRoomToneCandidateMetrics(f io.Writer, index int, c processor.RoomToneCandidateMetrics, elected bool) {
 	if !elected {
-		writeReportCompactSilenceCandidateRow(f, index, c)
+		writeReportCompactRoomToneCandidateRow(f, index, c)
 		return
 	}
 
@@ -61,32 +61,32 @@ func writeReportSilenceCandidateMetrics(f io.Writer, index int, c processor.Sile
 	fmt.Fprintf(f, "      True Peak:     %.1f dBTP\n", c.TruePeak)
 }
 
-func writeReportCompactSilenceCandidateRow(f io.Writer, index int, c processor.SilenceCandidateMetrics) {
+func writeReportCompactRoomToneCandidateRow(f io.Writer, index int, c processor.RoomToneCandidateMetrics) {
 	fmt.Fprintf(f, "  Candidate %d:       %.1fs at %.1fs (score: %.3f)\n",
 		index+1, c.Region.Duration.Seconds(), c.Region.Start.Seconds(), c.Score)
 	fmt.Fprintf(f, "    RMS: %.1f dBFS, Crest: %.1f dB, Entropy: %.3f (%s)\n",
 		c.RMSLevel, c.CrestFactor, c.Spectral.Entropy, interpretEntropy(c.Spectral.Entropy))
 }
 
-// writeReportRejectionSummary outputs a compact summary of rejected silence candidates to the report file.
-func writeReportRejectionSummary(f *os.File, candidates []processor.SilenceCandidateMetrics) {
-	writeReportCandidateRejectionSummary(f, silenceRejectionSummary(candidates))
+// writeReportRejectionSummary outputs a compact summary of rejected room tone candidates to the report file.
+func writeReportRejectionSummary(f *os.File, candidates []processor.RoomToneCandidateMetrics) {
+	writeReportCandidateRejectionSummary(f, roomToneRejectionSummary(candidates))
 }
 
-func rankedSilenceCandidateEntries(measurements *processor.AudioMeasurements) (*candidateDisplayEntry[processor.SilenceCandidateMetrics], []candidateDisplayEntry[processor.SilenceCandidateMetrics]) {
-	if measurements == nil || len(measurements.SilenceCandidates) == 0 {
+func rankedRoomToneCandidateEntries(measurements *processor.AudioMeasurements) (*candidateDisplayEntry[processor.RoomToneCandidateMetrics], []candidateDisplayEntry[processor.RoomToneCandidateMetrics]) {
+	if measurements == nil || len(measurements.RoomToneCandidates) == 0 {
 		return nil, nil
 	}
 
 	return rankedCandidateEntries(
-		measurements.SilenceCandidates,
-		func(c processor.SilenceCandidateMetrics) bool { return isSelectedSilenceCandidate(c, measurements) },
-		func(c processor.SilenceCandidateMetrics) time.Duration { return c.Region.Start },
-		func(c processor.SilenceCandidateMetrics) float64 { return c.Score },
+		measurements.RoomToneCandidates,
+		func(c processor.RoomToneCandidateMetrics) bool { return isSelectedRoomToneCandidate(c, measurements) },
+		func(c processor.RoomToneCandidateMetrics) time.Duration { return c.Region.Start },
+		func(c processor.RoomToneCandidateMetrics) float64 { return c.Score },
 	)
 }
 
-func isSelectedSilenceCandidate(c processor.SilenceCandidateMetrics, measurements *processor.AudioMeasurements) bool {
+func isSelectedRoomToneCandidate(c processor.RoomToneCandidateMetrics, measurements *processor.AudioMeasurements) bool {
 	if measurements == nil || measurements.NoiseProfile == nil {
 		return false
 	}
@@ -254,16 +254,16 @@ func writeReportCandidateRejectionSummary(w io.Writer, summary string) {
 	fmt.Fprintf(w, "Rejected:            %s\n", summary)
 }
 
-func writeAnalysisSilenceCandidates(w io.Writer, measurements *processor.AudioMeasurements) {
-	if len(measurements.SilenceCandidates) == 0 {
-		writeAnalysisSilenceFallback(w, measurements)
+func writeAnalysisRoomToneCandidates(w io.Writer, measurements *processor.AudioMeasurements) {
+	if len(measurements.RoomToneCandidates) == 0 {
+		writeAnalysisRoomToneFallback(w, measurements)
 		return
 	}
 
-	electedCandidate, displayCandidates := rankedSilenceCandidateEntries(measurements)
+	electedCandidate, displayCandidates := rankedRoomToneCandidateEntries(measurements)
 	writeAnalysisCandidateFlow(
 		w,
-		len(measurements.SilenceCandidates),
+		len(measurements.RoomToneCandidates),
 		electedCandidate,
 		displayCandidates,
 		func() {
@@ -271,19 +271,19 @@ func writeAnalysisSilenceCandidates(w io.Writer, measurements *processor.AudioMe
 				fmt.Fprintln(w, "  Voice-activated recording detected")
 			}
 		},
-		func(w io.Writer, entry candidateDisplayEntry[processor.SilenceCandidateMetrics]) {
-			writeAnalysisSilenceCandidateMetrics(w, entry, measurements)
+		func(w io.Writer, entry candidateDisplayEntry[processor.RoomToneCandidateMetrics]) {
+			writeAnalysisRoomToneCandidateMetrics(w, entry, measurements)
 		},
-		func(w io.Writer, entry candidateDisplayEntry[processor.SilenceCandidateMetrics]) {
-			writeCompactAnalysisSilenceCandidateRow(w, entry.index, entry.candidate)
+		func(w io.Writer, entry candidateDisplayEntry[processor.RoomToneCandidateMetrics]) {
+			writeCompactAnalysisRoomToneCandidateRow(w, entry.index, entry.candidate)
 		},
 		func() {
-			writeSilenceRejectionSummary(w, measurements.SilenceCandidates)
+			writeRoomToneRejectionSummary(w, measurements.RoomToneCandidates)
 		},
 	)
 }
 
-func writeAnalysisSilenceFallback(w io.Writer, measurements *processor.AudioMeasurements) {
+func writeAnalysisRoomToneFallback(w io.Writer, measurements *processor.AudioMeasurements) {
 	if measurements.NoiseProfile != nil {
 		writeAnalysisMetricRows(w, "  ", 15, []analysisMetricSpec{
 			{"Sample", fmt.Sprintf("%.1fs at %s", measurements.NoiseProfile.Duration.Seconds(), formatTimestamp(measurements.NoiseProfile.Start))},
@@ -292,7 +292,7 @@ func writeAnalysisSilenceFallback(w io.Writer, measurements *processor.AudioMeas
 		return
 	}
 
-	fmt.Fprintln(w, "  No silence detected")
+	fmt.Fprintln(w, "  No room tone detected")
 	if measurements.VoiceActivated {
 		fmt.Fprintln(w, "  Voice-activated recording detected")
 	}
@@ -366,8 +366,8 @@ func writeAnalysisCandidateFlow[T any](
 	writeRejected()
 }
 
-// writeSilenceCandidateMetrics writes the metric lines for a single silence candidate.
-func writeSilenceCandidateMetrics(w io.Writer, c processor.SilenceCandidateMetrics) {
+// writeRoomToneCandidateMetrics writes the metric lines for a single room tone candidate.
+func writeRoomToneCandidateMetrics(w io.Writer, c processor.RoomToneCandidateMetrics) {
 	writeAnalysisMetricRows(w, "      ", 12, []analysisMetricSpec{
 		{"Score", fmt.Sprintf("%.3f", c.Score)},
 		{"RMS Level", fmt.Sprintf("%.1f dBFS", c.RMSLevel)},
@@ -380,7 +380,7 @@ func writeSilenceCandidateMetrics(w io.Writer, c processor.SilenceCandidateMetri
 	})
 }
 
-func writeAnalysisSilenceCandidateMetrics(w io.Writer, entry candidateDisplayEntry[processor.SilenceCandidateMetrics], measurements *processor.AudioMeasurements) {
+func writeAnalysisRoomToneCandidateMetrics(w io.Writer, entry candidateDisplayEntry[processor.RoomToneCandidateMetrics], measurements *processor.AudioMeasurements) {
 	c := entry.candidate
 	fmt.Fprintf(w, "  #%d: %.1fs at %s (elected)\n",
 		entry.index+1, c.Region.Duration.Seconds(), formatTimestamp(c.Region.Start))
@@ -388,7 +388,7 @@ func writeAnalysisSilenceCandidateMetrics(w io.Writer, entry candidateDisplayEnt
 		fmt.Fprintf(w, "      Refined:     %.1fs at %s (golden sub-region)\n",
 			measurements.NoiseProfile.Duration.Seconds(), formatTimestamp(measurements.NoiseProfile.Start))
 	}
-	writeSilenceCandidateMetrics(w, c)
+	writeRoomToneCandidateMetrics(w, c)
 }
 
 func writeAnalysisSpeechCandidateMetrics(w io.Writer, entry candidateDisplayEntry[processor.SpeechCandidateMetrics]) {
@@ -417,7 +417,7 @@ func writeAnalysisSpeechCandidateMetrics(w io.Writer, entry candidateDisplayEntr
 	writeAnalysisMetricRows(w, "      ", 12, rows)
 }
 
-func writeCompactAnalysisSilenceCandidateRow(w io.Writer, index int, c processor.SilenceCandidateMetrics) {
+func writeCompactAnalysisRoomToneCandidateRow(w io.Writer, index int, c processor.RoomToneCandidateMetrics) {
 	fmt.Fprintf(w, "  #%d: %.1fs at %s (score: %.3f)\n",
 		index+1, c.Region.Duration.Seconds(), formatTimestamp(c.Region.Start), c.Score)
 	fmt.Fprintf(w, "      RMS: %.1f dBFS, Crest: %.1f dB, Entropy: %.3f (%s)\n",
@@ -431,10 +431,10 @@ func writeCompactAnalysisSpeechCandidateRow(w io.Writer, index int, c processor.
 		c.RMSLevel, c.CrestFactor, c.Spectral.Centroid, interpretCentroid(c.Spectral.Centroid))
 }
 
-// writeSilenceRejectionSummary outputs a compact summary of rejected silence candidates.
+// writeRoomToneRejectionSummary outputs a compact summary of rejected room tone candidates.
 // Groups zero-scored candidates by rejection reason extracted from TransientWarning.
-func writeSilenceRejectionSummary(w io.Writer, candidates []processor.SilenceCandidateMetrics) {
-	writeAnalysisCandidateRejectionSummary(w, silenceRejectionSummary(candidates))
+func writeRoomToneRejectionSummary(w io.Writer, candidates []processor.RoomToneCandidateMetrics) {
+	writeAnalysisCandidateRejectionSummary(w, roomToneRejectionSummary(candidates))
 }
 
 func writeSpeechRejectionSummary(w io.Writer, candidates []processor.SpeechCandidateMetrics) {
@@ -445,7 +445,7 @@ func writeAnalysisCandidateRejectionSummary(w io.Writer, summary string) {
 	fmt.Fprintf(w, "  Rejected:       %s\n", summary)
 }
 
-func silenceRejectionSummary(candidates []processor.SilenceCandidateMetrics) string {
+func roomToneRejectionSummary(candidates []processor.RoomToneCandidateMetrics) string {
 	reasonCounts := make(map[string]int)
 	for _, c := range candidates {
 		if c.Score != 0.0 {

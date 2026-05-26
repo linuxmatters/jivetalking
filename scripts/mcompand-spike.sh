@@ -3,7 +3,7 @@
 #
 # Tests gentler compand settings appropriate for use AFTER anlmdn has done
 # the heavy noise reduction. Compand's role is now:
-# - Residual noise suppression in silence regions
+# - Residual noise suppression in room tone regions
 # - Breath noise attenuation between speech
 # - NOT primary noise reduction (anlmdn does that)
 #

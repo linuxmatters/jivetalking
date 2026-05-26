@@ -217,7 +217,7 @@ func formatNoiseRemoveFilter(f *os.File, cfg *processor.EffectiveFilterConfig, m
 
 	// compand parameters and rationale - show noise floor source
 	if m != nil && m.NoiseProfile != nil && m.NoiseProfile.MeasuredNoiseFloor < 0 {
-		fmt.Fprintf(f, "        noise floor: %.1f dBFS (from silence regions)\n",
+		fmt.Fprintf(f, "        noise floor: %.1f dBFS (from room tone)\n",
 			m.NoiseProfile.MeasuredNoiseFloor)
 		fmt.Fprintf(f, "        compand: threshold %.0f dB (floor + 5dB), expansion %.0f dB\n",
 			noiseRemove.CompandThreshold,

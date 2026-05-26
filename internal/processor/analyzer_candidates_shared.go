@@ -7,7 +7,7 @@ import (
 )
 
 // refineToSubregion implements the shared sliding-window refinement logic used by both
-// silence and speech sub-region selection. It finds the best-scoring contiguous window
+// room tone and speech sub-region selection. It finds the best-scoring contiguous window
 // within the given time range, where "best" is determined by the provided scoring function
 // and comparison: isBetter(candidate, current) returns true when candidate should replace current.
 //
@@ -97,10 +97,10 @@ func getIntervalsInRange(intervals []IntervalSample, start, end time.Duration) [
 	return result
 }
 
-// measureSilenceCandidateFromIntervals computes metrics for a silence region using pre-collected interval data.
+// measureRoomToneCandidateFromIntervals computes metrics for a room tone region using pre-collected interval data.
 // This avoids re-reading the audio file - all measurements come from Pass 1's interval samples.
 // Returns nil if no intervals fall within the region (should not happen for valid candidates).
-func measureSilenceCandidateFromIntervals(region SilenceRegion, intervals []IntervalSample) *SilenceCandidateMetrics {
+func measureRoomToneCandidateFromIntervals(region RoomToneRegion, intervals []IntervalSample) *RoomToneCandidateMetrics {
 	// Extract intervals within the candidate region
 	regionIntervals := getIntervalsInRange(intervals, region.Start, region.Start+region.Duration)
 	if len(regionIntervals) == 0 {
@@ -135,7 +135,7 @@ func measureSilenceCandidateFromIntervals(region SilenceRegion, intervals []Inte
 	avgRMS := rmsSum / n
 	avgSpectral := spectralSum.average(n)
 
-	return &SilenceCandidateMetrics{
+	return &RoomToneCandidateMetrics{
 		Region:      region,
 		RMSLevel:    avgRMS,
 		PeakLevel:   peakMax,

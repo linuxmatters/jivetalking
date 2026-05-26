@@ -72,7 +72,7 @@ func BenchmarkMeasureOutputRegions(b *testing.B) {
 	inputPath := generateBenchmarkAudio(b, b.TempDir(), 5*time.Minute)
 	defer cleanupTestAudio(b, inputPath)
 
-	silenceRegion := &SilenceRegion{
+	roomToneRegion := &RoomToneRegion{
 		Start:    30 * time.Second,
 		End:      31 * time.Second,
 		Duration: time.Second,
@@ -86,7 +86,7 @@ func BenchmarkMeasureOutputRegions(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		MeasureOutputRegions(inputPath, silenceRegion, speechRegion)
+		MeasureOutputRegions(inputPath, roomToneRegion, speechRegion)
 	}
 }
 

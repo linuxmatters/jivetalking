@@ -45,7 +45,7 @@ func DisplayAnalysisResultsWithDiagnostics(w io.Writer, inputPath string, metada
 
 	writeAnalysisHeader(w, inputPath, metadata)
 	writeAnalysisLoudnessAndDynamics(w, measurements)
-	writeAnalysisSilenceDetection(w, measurements)
+	writeAnalysisRoomToneDetection(w, measurements)
 	writeAnalysisSpeechDetection(w, measurements)
 	writeAnalysisDerivedMeasurements(w, measurements)
 	writeAnalysisFilterAdaptation(w, measurements, config, diagnostics)
@@ -93,12 +93,12 @@ func writeAnalysisLoudnessAndDynamics(w io.Writer, measurements *processor.Audio
 	fmt.Fprintln(w)
 }
 
-func writeAnalysisSilenceDetection(w io.Writer, measurements *processor.AudioMeasurements) {
-	writeAnalysisSection(w, "SILENCE DETECTION")
+func writeAnalysisRoomToneDetection(w io.Writer, measurements *processor.AudioMeasurements) {
+	writeAnalysisSection(w, "ROOM TONE DETECTION")
 	fmt.Fprintf(w, "  Threshold:      %.1f dB (%.1f dBFS room tone estimate + 1 dB)\n",
-		measurements.SilenceDetectLevel, measurements.PreScanNoiseFloor)
+		measurements.RoomToneDetectLevel, measurements.PreScanNoiseFloor)
 
-	writeAnalysisSilenceCandidates(w, measurements)
+	writeAnalysisRoomToneCandidates(w, measurements)
 	fmt.Fprintln(w)
 }
 
@@ -113,7 +113,7 @@ func writeAnalysisDerivedMeasurements(w io.Writer, measurements *processor.Audio
 	if measurements.NoiseProfile != nil {
 		suggestedGateDB := processor.LinearToDb(measurements.SuggestedGateThreshold)
 		writeAnalysisMetricRows(w, "  ", 15, []analysisMetricSpec{
-			{"Noise Floor", fmt.Sprintf("%.1f dBFS (from elected silence)", measurements.NoiseProfile.MeasuredNoiseFloor)},
+			{"Noise Floor", fmt.Sprintf("%.1f dBFS (from elected room tone)", measurements.NoiseProfile.MeasuredNoiseFloor)},
 			{"Gate Baseline", fmt.Sprintf("%.1f dB (noise floor + margin)", suggestedGateDB)},
 			{"NR Headroom", fmt.Sprintf("%.1f dB (noise-to-speech gap)", measurements.NoiseReductionHeadroom)},
 		})
@@ -258,7 +258,7 @@ func noiseFloorSourceLabel(source string) string {
 	case "ebur128_estimate":
 		return "estimated from loudness"
 	case "silence_profile":
-		return "from silence profile"
+		return "from room tone profile"
 	default:
 		return "derived"
 	}

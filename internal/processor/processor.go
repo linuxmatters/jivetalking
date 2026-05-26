@@ -143,14 +143,14 @@ func ProcessAudio(inputPath string, config *BaseFilterConfig, progressCallback P
 		})
 	}
 
-	// Measure silence and speech regions in Pass 2 output (before normalisation) for comparison
+	// Measure room tone and speech regions in Pass 2 output (before normalisation) for comparison
 	if filteredMeasurements != nil {
-		silRegion, spRegion := extractRegionPair(measurements)
-		if silRegion != nil || spRegion != nil {
+		roomToneRegion, spRegion := extractRegionPair(measurements)
+		if roomToneRegion != nil || spRegion != nil {
 			regionStart := time.Now()
-			silSample, spSample := MeasureOutputRegions(outputPath, silRegion, spRegion)
+			roomToneSample, spSample := MeasureOutputRegions(outputPath, roomToneRegion, spRegion)
 			regionTimings.FilteredOutput = time.Since(regionStart)
-			filteredMeasurements.SilenceSample = silSample
+			filteredMeasurements.RoomToneSample = roomToneSample
 			filteredMeasurements.SpeechSample = spSample
 		}
 	}

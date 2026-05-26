@@ -31,11 +31,37 @@ var createDebugLogFile = os.Create
 
 // CLI defines the command-line interface
 type CLI struct {
-	Version             bool          `short:"v" help:"Show version information"`
-	Debug               bool          `short:"d" help:"Enable debug logging to jivetalking-debug.log"`
-	AnalysisOnly        bool          `short:"a" help:"Run analysis only (Pass 1), display results, skip processing"`
-	SilenceScanDuration time.Duration `help:"Cap silence-candidate scan to the first DURATION of input (e.g. 30s, 1m30s). Faster on long files at the cost of coverage; loudness, true peak, LRA, spectral, and speech analysis remain whole-file. Fewer silence candidates also reach voice-activated detection when capped. 0s means scan the whole file." placeholder:"DURATION" default:"0s"`
-	Files               []string      `arg:"" name:"files" help:"Audio files to process" type:"existingfile" optional:""`
+	Version              bool          `short:"v" help:"Show version information"`
+	Debug                bool          `short:"d" help:"Enable debug logging to jivetalking-debug.log"`
+	AnalysisOnly         bool          `short:"a" help:"Run analysis only (Pass 1), display results, skip processing"`
+	RoomToneScanDuration time.Duration `name:"room-tone-scan-duration" help:"Cap room-tone-candidate scan to the first DURATION of input (e.g. 30s, 1m30s). Faster on long files at the cost of coverage; loudness, true peak, LRA, spectral, and speech analysis remain whole-file. Fewer room-tone candidates also reach voice-activated detection when capped. 0s means scan the whole file." placeholder:"DURATION" default:"0s"`
+	SilenceScanDuration  time.Duration `name:"silence-scan-duration" help:"[deprecated alias for --room-tone-scan-duration] Cap room-tone-candidate scan to the first DURATION of input. Supplying both flags with different non-zero values is rejected. 0s means scan the whole file." placeholder:"DURATION" default:"0s"`
+	Files                []string      `arg:"" name:"files" help:"Audio files to process" type:"existingfile" optional:""`
+}
+
+// resolveRoomToneScanDuration validates the room-tone scan duration flags and
+// returns the effective duration to use. The new --room-tone-scan-duration
+// flag is primary; --silence-scan-duration is a deprecated alias that emits a
+// one-line notice to deprecationOut when used. Supplying both flags with
+// different non-zero values is rejected. Negative values are rejected for
+// either flag.
+func resolveRoomToneScanDuration(roomTone, silence time.Duration, deprecationOut io.Writer) (time.Duration, error) {
+	if roomTone < 0 {
+		return 0, fmt.Errorf("--room-tone-scan-duration must be >= 0, got %s", roomTone)
+	}
+	if silence < 0 {
+		return 0, fmt.Errorf("--silence-scan-duration must be >= 0, got %s", silence)
+	}
+	if roomTone != 0 && silence != 0 && roomTone != silence {
+		return 0, fmt.Errorf("--room-tone-scan-duration (%s) and --silence-scan-duration (%s) conflict; supply only one", roomTone, silence)
+	}
+	if silence != 0 && deprecationOut != nil {
+		fmt.Fprintln(deprecationOut, "warning: --silence-scan-duration is deprecated; use --room-tone-scan-duration")
+	}
+	if roomTone != 0 {
+		return roomTone, nil
+	}
+	return silence, nil
 }
 
 func main() {
@@ -67,14 +93,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	if cliArgs.SilenceScanDuration < 0 {
-		cli.PrintError(fmt.Sprintf("--silence-scan-duration must be >= 0, got %s", cliArgs.SilenceScanDuration))
+	scanDuration, err := resolveRoomToneScanDuration(cliArgs.RoomToneScanDuration, cliArgs.SilenceScanDuration, os.Stderr)
+	if err != nil {
+		cli.PrintError(err.Error())
 		os.Exit(1)
 	}
 
 	// Create default filter configuration
 	config := processor.DefaultFilterConfig()
-	config.Analysis.SilenceScanDuration = cliArgs.SilenceScanDuration
+	config.Analysis.RoomToneScanDuration = scanDuration
 
 	// Open debug log file if --debug flag is set
 	debugLog, err := openDebugLog(cliArgs.Debug)

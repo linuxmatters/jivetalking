@@ -28,7 +28,7 @@ func makeReportData(t *testing.T) ReportData {
 		},
 		Result: &processor.ProcessingResult{
 			Measurements:         makeInputMeasurements(),
-			FilteredMeasurements: makeOutputMeasurements(-20.2, -2.1, 6.4, makeSilenceSample(-64.0), makeSpeechSample(-24.0)),
+			FilteredMeasurements: makeOutputMeasurements(-20.2, -2.1, 6.4, makeRoomToneSample(-64.0), makeSpeechSample(-24.0)),
 			Config:               config,
 			NormResult: &processor.NormalisationResult{
 				InputLUFS:  -20.2,
@@ -37,7 +37,7 @@ func makeReportData(t *testing.T) ReportData {
 					-16.0,
 					-1.1,
 					5.9,
-					makeSilenceSample(-61.0),
+					makeRoomToneSample(-61.0),
 					makeSpeechSample(-19.8),
 				),
 			},
@@ -53,7 +53,7 @@ func makeReportData(t *testing.T) ReportData {
 }
 
 func makeInputMeasurements() *processor.AudioMeasurements {
-	silenceRegion := processor.SilenceRegion{
+	roomToneRegion := processor.RoomToneRegion{
 		Start:    10 * time.Second,
 		End:      15 * time.Second,
 		Duration: 5 * time.Second,
@@ -63,8 +63,8 @@ func makeInputMeasurements() *processor.AudioMeasurements {
 		End:      90 * time.Second,
 		Duration: 60 * time.Second,
 	}
-	silenceSample := makeSilenceSample(-58.0)
-	silenceSample.Region = silenceRegion
+	roomToneSample := makeRoomToneSample(-58.0)
+	roomToneSample.Region = roomToneRegion
 	speechSample := makeSpeechSample(-28.0)
 	speechSample.Region = speechRegion
 
@@ -81,36 +81,36 @@ func makeInputMeasurements() *processor.AudioMeasurements {
 		NoiseFloor:       -58.0,
 		NoiseFloorSource: "rms_estimate",
 		NoiseProfile: &processor.NoiseProfile{
-			Start:              silenceRegion.Start,
-			Duration:           silenceRegion.Duration,
+			Start:              roomToneRegion.Start,
+			Duration:           roomToneRegion.Duration,
 			MeasuredNoiseFloor: -58.0,
 			PeakLevel:          -45.0,
 			CrestFactor:        13.0,
 			Entropy:            0.42,
 		},
-		SilenceCandidates: []processor.SilenceCandidateMetrics{*silenceSample},
-		SpeechProfile:     speechSample,
+		RoomToneCandidates: []processor.RoomToneCandidateMetrics{*roomToneSample},
+		SpeechProfile:      speechSample,
 	}
 }
 
-func makeOutputMeasurements(inputI, inputTP, inputLRA float64, silenceSample *processor.SilenceCandidateMetrics, speechSample *processor.SpeechCandidateMetrics) *processor.OutputMeasurements {
+func makeOutputMeasurements(inputI, inputTP, inputLRA float64, roomToneSample *processor.RoomToneCandidateMetrics, speechSample *processor.SpeechCandidateMetrics) *processor.OutputMeasurements {
 	return &processor.OutputMeasurements{
 		BaseMeasurements: processor.BaseMeasurements{
 			MomentaryLoudness: inputI - 0.5,
 			ShortTermLoudness: inputI - 0.2,
 			SamplePeak:        inputTP - 0.3,
 		},
-		OutputI:       inputI,
-		OutputTP:      inputTP,
-		OutputLRA:     inputLRA,
-		SilenceSample: silenceSample,
-		SpeechSample:  speechSample,
+		OutputI:        inputI,
+		OutputTP:       inputTP,
+		OutputLRA:      inputLRA,
+		RoomToneSample: roomToneSample,
+		SpeechSample:   speechSample,
 	}
 }
 
-func makeSilenceSample(rms float64) *processor.SilenceCandidateMetrics {
-	return &processor.SilenceCandidateMetrics{
-		Region:      processor.SilenceRegion{Start: 10 * time.Second, End: 15 * time.Second, Duration: 5 * time.Second},
+func makeRoomToneSample(rms float64) *processor.RoomToneCandidateMetrics {
+	return &processor.RoomToneCandidateMetrics{
+		Region:      processor.RoomToneRegion{Start: 10 * time.Second, End: 15 * time.Second, Duration: 5 * time.Second},
 		RMSLevel:    rms,
 		PeakLevel:   rms + 12,
 		CrestFactor: 12,
@@ -365,7 +365,7 @@ func TestGenerateReport_LoudnormAndPeakLimiterSections(t *testing.T) {
 			-16.1,
 			-1.3,
 			5.8,
-			makeSilenceSample(-61.0),
+			makeRoomToneSample(-61.0),
 			makeSpeechSample(-19.8),
 		),
 	}
@@ -459,21 +459,21 @@ func TestGenerateReport_SkippedNormalisationTimingLabels(t *testing.T) {
 	}
 }
 
-func TestWriteDiagnosticSilence_CapsCandidatesChronologicallyWithElectedFirst(t *testing.T) {
+func TestWriteDiagnosticRoomTone_CapsCandidatesChronologicallyWithElectedFirst(t *testing.T) {
 	m := makeInputMeasurements()
-	m.SilenceCandidates = makeRankedSilenceCandidates(12)
+	m.RoomToneCandidates = makeRankedRoomToneCandidates(12)
 	m.NoiseProfile = &processor.NoiseProfile{
-		Start:              m.SilenceCandidates[0].Region.Start,
-		Duration:           m.SilenceCandidates[0].Region.Duration,
-		MeasuredNoiseFloor: m.SilenceCandidates[0].RMSLevel,
+		Start:              m.RoomToneCandidates[0].Region.Start,
+		Duration:           m.RoomToneCandidates[0].Region.Duration,
+		MeasuredNoiseFloor: m.RoomToneCandidates[0].RMSLevel,
 	}
 
 	output := captureReportDiagnostic(t, func(f *os.File) {
-		writeDiagnosticSilence(f, m)
+		writeDiagnosticRoomTone(f, m)
 	})
 
 	for _, want := range []string{
-		"Silence Candidates:  12 evaluated",
+		"Room Tone Candidates:  12 evaluated",
 		"Displayed:           elected + top 10 chronological (1 omitted)",
 		"Candidate 1:       5.0s at 1.0s (score: 0.010, elected)",
 		"Candidate 2:       5.0s at 2.0s (score: 0.020)",
@@ -481,18 +481,18 @@ func TestWriteDiagnosticSilence_CapsCandidatesChronologicallyWithElectedFirst(t 
 		"Rejected:            0",
 	} {
 		if !strings.Contains(output, want) {
-			t.Errorf("silence diagnostic missing %q", want)
+			t.Errorf("room tone diagnostic missing %q", want)
 		}
 	}
 
 	for _, heading := range []string{"    Amplitude:\n", "    Spectral:\n", "    Loudness:\n"} {
 		if count := strings.Count(output, heading); count != 1 {
-			t.Fatalf("silence diagnostic %q heading count = %d, want 1", strings.TrimSpace(heading), count)
+			t.Fatalf("room tone diagnostic %q heading count = %d, want 1", strings.TrimSpace(heading), count)
 		}
 	}
 
 	if count := strings.Count(output, "  Candidate "); count != 11 {
-		t.Fatalf("displayed silence candidates = %d, want 11", count)
+		t.Fatalf("displayed room tone candidates = %d, want 11", count)
 	}
 	assertAppearsBefore(t, output, "Candidate 1:", "Candidate 2:")
 	assertAppearsBefore(t, output, "Candidate 2:", "Candidate 3:")
@@ -501,7 +501,7 @@ func TestWriteDiagnosticSilence_CapsCandidatesChronologicallyWithElectedFirst(t 
 		t.Fatal("expected candidate 12 to be omitted")
 	}
 	if strings.Contains(output, "[SELECTED]") {
-		t.Fatal("expected silence diagnostic to use elected terminology")
+		t.Fatal("expected room tone diagnostic to use elected terminology")
 	}
 	assertCandidateSummaryTerminology(t, output, "Displayed:           elected + top 10 chronological (1 omitted)")
 }
@@ -602,17 +602,17 @@ func TestWriteDiagnosticSpeech_DisplaySummaryIncludesZeroOmitted(t *testing.T) {
 }
 
 func TestCandidateRejectionSummaries(t *testing.T) {
-	silenceCandidates := makeRankedSilenceCandidates(3)
-	if got := silenceRejectionSummary(silenceCandidates); got != "0" {
-		t.Fatalf("silenceRejectionSummary() = %q, want 0", got)
+	roomToneCandidates := makeRankedRoomToneCandidates(3)
+	if got := roomToneRejectionSummary(roomToneCandidates); got != "0" {
+		t.Fatalf("roomToneRejectionSummary() = %q, want 0", got)
 	}
 
-	silenceCandidates[0].Score = 0.0
-	silenceCandidates[0].TransientWarning = "rejected: digital silence"
-	silenceCandidates[1].Score = 0.0
-	silenceCandidates[1].TransientWarning = "rejected: transient contamination"
-	if got := silenceRejectionSummary(silenceCandidates); got != "1 digital silence, 1 transient contamination" {
-		t.Fatalf("silenceRejectionSummary() = %q", got)
+	roomToneCandidates[0].Score = 0.0
+	roomToneCandidates[0].TransientWarning = "rejected: digital silence"
+	roomToneCandidates[1].Score = 0.0
+	roomToneCandidates[1].TransientWarning = "rejected: transient contamination"
+	if got := roomToneRejectionSummary(roomToneCandidates); got != "1 digital silence, 1 transient contamination" {
+		t.Fatalf("roomToneRejectionSummary() = %q", got)
 	}
 
 	speechCandidates := makeRankedSpeechCandidates(3)
@@ -625,12 +625,12 @@ func TestCandidateRejectionSummaries(t *testing.T) {
 	}
 }
 
-func makeRankedSilenceCandidates(count int) []processor.SilenceCandidateMetrics {
-	candidates := make([]processor.SilenceCandidateMetrics, 0, count)
+func makeRankedRoomToneCandidates(count int) []processor.RoomToneCandidateMetrics {
+	candidates := make([]processor.RoomToneCandidateMetrics, 0, count)
 	for i := 1; i <= count; i++ {
-		c := *makeSilenceSample(-60.0 + float64(i)/10.0)
+		c := *makeRoomToneSample(-60.0 + float64(i)/10.0)
 		start := time.Duration(i) * time.Second
-		c.Region = processor.SilenceRegion{
+		c.Region = processor.RoomToneRegion{
 			Start:    start,
 			End:      start + 5*time.Second,
 			Duration: 5 * time.Second,

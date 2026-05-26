@@ -1,6 +1,7 @@
 package processor
 
 import (
+	"encoding/json"
 	"math"
 	"reflect"
 	"strings"
@@ -397,5 +398,243 @@ func TestIntervalAccumulatorFinalize_WritesAveragedSpectralMetrics(t *testing.T)
 		if math.Abs(c.got-c.want) > spectralTestEpsilon {
 			t.Errorf("%s: got %v, want %v", c.name, c.got, c.want)
 		}
+	}
+}
+
+// TestAudioMeasurementsUnmarshal_AcceptsLegacySilenceKeys verifies that a payload
+// containing only the legacy silence_* keys (no room_tone_* keys) populates the
+// renamed room-tone Go fields identically to a new-key payload would.
+func TestAudioMeasurementsUnmarshal_AcceptsLegacySilenceKeys(t *testing.T) {
+	payload := []byte(`{
+		"silence_detect_level": -55.0,
+		"silence_regions": [{"start": 1000000000, "end": 2000000000, "duration": 1000000000}],
+		"silence_candidates": [{"rms_level": -58.0}]
+	}`)
+
+	var got AudioMeasurements
+	if err := json.Unmarshal(payload, &got); err != nil {
+		t.Fatalf("Unmarshal() failed: %v", err)
+	}
+
+	if got.RoomToneDetectLevel != -55.0 {
+		t.Errorf("RoomToneDetectLevel = %v, want -55.0", got.RoomToneDetectLevel)
+	}
+	if len(got.RoomToneRegions) != 1 {
+		t.Fatalf("RoomToneRegions length = %d, want 1", len(got.RoomToneRegions))
+	}
+	if got.RoomToneRegions[0].Start != time.Second {
+		t.Errorf("RoomToneRegions[0].Start = %v, want %v", got.RoomToneRegions[0].Start, time.Second)
+	}
+	if got.RoomToneRegions[0].End != 2*time.Second {
+		t.Errorf("RoomToneRegions[0].End = %v, want %v", got.RoomToneRegions[0].End, 2*time.Second)
+	}
+	if got.RoomToneRegions[0].Duration != time.Second {
+		t.Errorf("RoomToneRegions[0].Duration = %v, want %v", got.RoomToneRegions[0].Duration, time.Second)
+	}
+	if len(got.RoomToneCandidates) != 1 {
+		t.Fatalf("RoomToneCandidates length = %d, want 1", len(got.RoomToneCandidates))
+	}
+	if got.RoomToneCandidates[0].RMSLevel != -58.0 {
+		t.Errorf("RoomToneCandidates[0].RMSLevel = %v, want -58.0", got.RoomToneCandidates[0].RMSLevel)
+	}
+}
+
+// TestAudioMeasurementsUnmarshal_AcceptsNewRoomToneKeys is a regression test for
+// task 2.1 that a payload containing only new room_tone_* keys populates the
+// renamed Go fields.
+func TestAudioMeasurementsUnmarshal_AcceptsNewRoomToneKeys(t *testing.T) {
+	payload := []byte(`{
+		"room_tone_detect_level": -55.0,
+		"room_tone_regions": [{"start": 1000000000, "end": 2000000000, "duration": 1000000000}],
+		"room_tone_candidates": [{"rms_level": -58.0}]
+	}`)
+
+	var got AudioMeasurements
+	if err := json.Unmarshal(payload, &got); err != nil {
+		t.Fatalf("Unmarshal() failed: %v", err)
+	}
+
+	if got.RoomToneDetectLevel != -55.0 {
+		t.Errorf("RoomToneDetectLevel = %v, want -55.0", got.RoomToneDetectLevel)
+	}
+	if len(got.RoomToneRegions) != 1 {
+		t.Fatalf("RoomToneRegions length = %d, want 1", len(got.RoomToneRegions))
+	}
+	if got.RoomToneRegions[0].Start != time.Second {
+		t.Errorf("RoomToneRegions[0].Start = %v, want %v", got.RoomToneRegions[0].Start, time.Second)
+	}
+	if len(got.RoomToneCandidates) != 1 {
+		t.Fatalf("RoomToneCandidates length = %d, want 1", len(got.RoomToneCandidates))
+	}
+	if got.RoomToneCandidates[0].RMSLevel != -58.0 {
+		t.Errorf("RoomToneCandidates[0].RMSLevel = %v, want -58.0", got.RoomToneCandidates[0].RMSLevel)
+	}
+}
+
+// TestAudioMeasurementsUnmarshal_NewKeysWinOverLegacy verifies that when both
+// the legacy silence_* keys and the new room_tone_* keys are present with
+// different values, the new keys win deterministically.
+func TestAudioMeasurementsUnmarshal_NewKeysWinOverLegacy(t *testing.T) {
+	payload := []byte(`{
+		"silence_detect_level": -55.0,
+		"room_tone_detect_level": -42.0,
+		"silence_regions": [{"start": 1000000000, "end": 2000000000, "duration": 1000000000}],
+		"room_tone_regions": [{"start": 3000000000, "end": 5000000000, "duration": 2000000000}],
+		"silence_candidates": [{"rms_level": -58.0}],
+		"room_tone_candidates": [{"rms_level": -61.0}, {"rms_level": -62.0}]
+	}`)
+
+	var got AudioMeasurements
+	if err := json.Unmarshal(payload, &got); err != nil {
+		t.Fatalf("Unmarshal() failed: %v", err)
+	}
+
+	if got.RoomToneDetectLevel != -42.0 {
+		t.Errorf("RoomToneDetectLevel = %v, want -42.0 (new key wins)", got.RoomToneDetectLevel)
+	}
+	if len(got.RoomToneRegions) != 1 {
+		t.Fatalf("RoomToneRegions length = %d, want 1 (from new key)", len(got.RoomToneRegions))
+	}
+	if got.RoomToneRegions[0].Start != 3*time.Second {
+		t.Errorf("RoomToneRegions[0].Start = %v, want %v (new key wins)", got.RoomToneRegions[0].Start, 3*time.Second)
+	}
+	if got.RoomToneRegions[0].Duration != 2*time.Second {
+		t.Errorf("RoomToneRegions[0].Duration = %v, want %v (new key wins)", got.RoomToneRegions[0].Duration, 2*time.Second)
+	}
+	if len(got.RoomToneCandidates) != 2 {
+		t.Fatalf("RoomToneCandidates length = %d, want 2 (from new key)", len(got.RoomToneCandidates))
+	}
+	if got.RoomToneCandidates[0].RMSLevel != -61.0 {
+		t.Errorf("RoomToneCandidates[0].RMSLevel = %v, want -61.0 (new key wins)", got.RoomToneCandidates[0].RMSLevel)
+	}
+}
+
+// TestAudioMeasurementsJSON_LegacyRoundTrip verifies that marshal-then-unmarshal
+// preserves the room-tone values. Marshal emits only new keys; unmarshal reads
+// them back identically.
+func TestAudioMeasurementsJSON_LegacyRoundTrip(t *testing.T) {
+	original := AudioMeasurements{
+		RoomToneDetectLevel: -55.0,
+		RoomToneRegions: []RoomToneRegion{
+			{Start: time.Second, End: 2 * time.Second, Duration: time.Second},
+		},
+		RoomToneCandidates: []RoomToneCandidateMetrics{
+			{RMSLevel: -58.0, Spectral: flatSpectralMetricsFixture()},
+		},
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal() failed: %v", err)
+	}
+
+	var decoded AudioMeasurements
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal() failed: %v", err)
+	}
+
+	if decoded.RoomToneDetectLevel != original.RoomToneDetectLevel {
+		t.Errorf("RoomToneDetectLevel = %v, want %v", decoded.RoomToneDetectLevel, original.RoomToneDetectLevel)
+	}
+	if len(decoded.RoomToneRegions) != len(original.RoomToneRegions) {
+		t.Fatalf("RoomToneRegions length = %d, want %d", len(decoded.RoomToneRegions), len(original.RoomToneRegions))
+	}
+	if decoded.RoomToneRegions[0] != original.RoomToneRegions[0] {
+		t.Errorf("RoomToneRegions[0] = %+v, want %+v", decoded.RoomToneRegions[0], original.RoomToneRegions[0])
+	}
+	if len(decoded.RoomToneCandidates) != len(original.RoomToneCandidates) {
+		t.Fatalf("RoomToneCandidates length = %d, want %d", len(decoded.RoomToneCandidates), len(original.RoomToneCandidates))
+	}
+	if decoded.RoomToneCandidates[0].RMSLevel != original.RoomToneCandidates[0].RMSLevel {
+		t.Errorf("RoomToneCandidates[0].RMSLevel = %v, want %v", decoded.RoomToneCandidates[0].RMSLevel, original.RoomToneCandidates[0].RMSLevel)
+	}
+}
+
+// TestOutputMeasurementsUnmarshal_AcceptsLegacySilenceSample verifies that a
+// payload containing only the legacy silence_sample key populates RoomToneSample
+// identically to a new-key payload would.
+func TestOutputMeasurementsUnmarshal_AcceptsLegacySilenceSample(t *testing.T) {
+	payload := []byte(`{"silence_sample": {"rms_level": -58.0}}`)
+
+	var got OutputMeasurements
+	if err := json.Unmarshal(payload, &got); err != nil {
+		t.Fatalf("Unmarshal() failed: %v", err)
+	}
+
+	if got.RoomToneSample == nil {
+		t.Fatal("RoomToneSample is nil; expected to be populated from legacy silence_sample")
+	}
+	if got.RoomToneSample.RMSLevel != -58.0 {
+		t.Errorf("RoomToneSample.RMSLevel = %v, want -58.0", got.RoomToneSample.RMSLevel)
+	}
+}
+
+// TestOutputMeasurementsUnmarshal_AcceptsNewRoomToneSample is a regression test
+// for task 2.1 that a payload containing only the new room_tone_sample key
+// populates RoomToneSample.
+func TestOutputMeasurementsUnmarshal_AcceptsNewRoomToneSample(t *testing.T) {
+	payload := []byte(`{"room_tone_sample": {"rms_level": -58.0}}`)
+
+	var got OutputMeasurements
+	if err := json.Unmarshal(payload, &got); err != nil {
+		t.Fatalf("Unmarshal() failed: %v", err)
+	}
+
+	if got.RoomToneSample == nil {
+		t.Fatal("RoomToneSample is nil; expected to be populated from new room_tone_sample")
+	}
+	if got.RoomToneSample.RMSLevel != -58.0 {
+		t.Errorf("RoomToneSample.RMSLevel = %v, want -58.0", got.RoomToneSample.RMSLevel)
+	}
+}
+
+// TestOutputMeasurementsUnmarshal_NewKeyWinsOverLegacy verifies that when both
+// silence_sample and room_tone_sample are present with different values, the
+// new room_tone_sample wins deterministically.
+func TestOutputMeasurementsUnmarshal_NewKeyWinsOverLegacy(t *testing.T) {
+	payload := []byte(`{
+		"silence_sample": {"rms_level": -58.0},
+		"room_tone_sample": {"rms_level": -62.0}
+	}`)
+
+	var got OutputMeasurements
+	if err := json.Unmarshal(payload, &got); err != nil {
+		t.Fatalf("Unmarshal() failed: %v", err)
+	}
+
+	if got.RoomToneSample == nil {
+		t.Fatal("RoomToneSample is nil; expected to be populated from room_tone_sample")
+	}
+	if got.RoomToneSample.RMSLevel != -62.0 {
+		t.Errorf("RoomToneSample.RMSLevel = %v, want -62.0 (new key wins)", got.RoomToneSample.RMSLevel)
+	}
+}
+
+// TestOutputMeasurementsJSON_LegacyRoundTrip verifies that marshal-then-unmarshal
+// preserves the room-tone sample. Marshal emits only the new key; unmarshal reads
+// it back identically.
+func TestOutputMeasurementsJSON_LegacyRoundTrip(t *testing.T) {
+	original := OutputMeasurements{
+		RoomToneSample: &RoomToneCandidateMetrics{
+			RMSLevel: -58.0,
+			Spectral: flatSpectralMetricsFixture(),
+		},
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal() failed: %v", err)
+	}
+
+	var decoded OutputMeasurements
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal() failed: %v", err)
+	}
+
+	if decoded.RoomToneSample == nil {
+		t.Fatal("expected RoomToneSample to round-trip")
+	}
+	if decoded.RoomToneSample.RMSLevel != original.RoomToneSample.RMSLevel {
+		t.Errorf("RoomToneSample.RMSLevel = %v, want %v", decoded.RoomToneSample.RMSLevel, original.RoomToneSample.RMSLevel)
 	}
 }

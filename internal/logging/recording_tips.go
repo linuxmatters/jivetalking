@@ -267,8 +267,8 @@ func tipBackgroundNoise(m *processor.AudioMeasurements, _ *processor.EffectiveFi
 	return nil
 }
 
-// tipMainsHum fires when silence regions show tonal noise characteristics.
-// Requires NoiseProfile with low entropy (< 0.30, matching silenceEntropyTonal in adaptive.go),
+// tipMainsHum fires when the elected room tone shows tonal noise characteristics.
+// Requires NoiseProfile with low entropy (< 0.30, matching roomToneEntropyTonal in adaptive.go),
 // low flatness (< 0.3, confirming tonal character), and audible noise (> -65 dBFS).
 func tipMainsHum(m *processor.AudioMeasurements, _ *processor.EffectiveFilterConfig) *RecordingTip {
 	if m.NoiseProfile == nil {

@@ -417,7 +417,7 @@ func TestRenameNoClobberReportsSourceCleanupFailureAfterPublish(t *testing.T) {
 func TestEffectiveConfigFilterOrderIsolation(t *testing.T) {
 	base := newTestBaseConfig()
 	base.FilterOrder = []FilterID{FilterAnalysis, FilterDeesser}
-	base.Analysis.SilenceScanDuration = 1500 * time.Millisecond
+	base.Analysis.RoomToneScanDuration = 1500 * time.Millisecond
 
 	first, firstDiagnostics := AdaptConfig(base, &AudioMeasurements{
 		BaseMeasurements: BaseMeasurements{Spectral: SpectralMetrics{Centroid: 5000}},
@@ -433,7 +433,7 @@ func TestEffectiveConfigFilterOrderIsolation(t *testing.T) {
 	}
 
 	first.FilterOrder[0] = FilterDownmix
-	first.Analysis.SilenceScanDuration = 250 * time.Millisecond
+	first.Analysis.RoomToneScanDuration = 250 * time.Millisecond
 
 	if reflect.DeepEqual(first.FilterOrder, base.FilterOrder) {
 		t.Fatal("test setup failed: first effective FilterOrder did not change")
@@ -444,13 +444,13 @@ func TestEffectiveConfigFilterOrderIsolation(t *testing.T) {
 	if !reflect.DeepEqual(second.FilterOrder, []FilterID{FilterAnalysis, FilterDeesser}) {
 		t.Errorf("second effective FilterOrder = %v, want independent copy", second.FilterOrder)
 	}
-	if base.Analysis.SilenceScanDuration != 1500*time.Millisecond {
-		t.Errorf("base Analysis.SilenceScanDuration = %v, want unchanged 1.5s",
-			base.Analysis.SilenceScanDuration)
+	if base.Analysis.RoomToneScanDuration != 1500*time.Millisecond {
+		t.Errorf("base Analysis.RoomToneScanDuration = %v, want unchanged 1.5s",
+			base.Analysis.RoomToneScanDuration)
 	}
-	if second.Analysis.SilenceScanDuration != 1500*time.Millisecond {
-		t.Errorf("second effective Analysis.SilenceScanDuration = %v, want independent copy",
-			second.Analysis.SilenceScanDuration)
+	if second.Analysis.RoomToneScanDuration != 1500*time.Millisecond {
+		t.Errorf("second effective Analysis.RoomToneScanDuration = %v, want independent copy",
+			second.Analysis.RoomToneScanDuration)
 	}
 }
 
@@ -747,11 +747,11 @@ func TestProcessAudio(t *testing.T) {
 		// Verify silence sample measurements are captured in Pass 2 output (if NoiseProfile exists)
 		if result.Measurements != nil && result.Measurements.NoiseProfile != nil {
 			t.Logf("NoiseProfile exists: Start=%v, Duration=%v", result.Measurements.NoiseProfile.Start, result.Measurements.NoiseProfile.Duration)
-			if result.FilteredMeasurements.SilenceSample == nil {
-				t.Error("FilteredMeasurements.SilenceSample is nil despite NoiseProfile existing")
+			if result.FilteredMeasurements.RoomToneSample == nil {
+				t.Error("FilteredMeasurements.RoomToneSample is nil despite NoiseProfile existing")
 			} else {
-				t.Logf("Pass 2 silence sample RMS: %.2f dBFS", result.FilteredMeasurements.SilenceSample.RMSLevel)
-				t.Logf("Pass 2 silence sample spectral centroid: %.1f Hz", result.FilteredMeasurements.SilenceSample.Spectral.Centroid)
+				t.Logf("Pass 2 silence sample RMS: %.2f dBFS", result.FilteredMeasurements.RoomToneSample.RMSLevel)
+				t.Logf("Pass 2 silence sample spectral centroid: %.1f Hz", result.FilteredMeasurements.RoomToneSample.Spectral.Centroid)
 			}
 		} else {
 			t.Logf("NoiseProfile is nil - skipping silence sample validation")
@@ -770,7 +770,7 @@ func TestProcessAudio(t *testing.T) {
 			t.Logf("SpeechProfile is nil - skipping speech sample validation")
 		}
 
-		if (result.FilteredMeasurements.SilenceSample != nil || result.FilteredMeasurements.SpeechSample != nil) &&
+		if (result.FilteredMeasurements.RoomToneSample != nil || result.FilteredMeasurements.SpeechSample != nil) &&
 			result.RegionTimings.FilteredOutput <= 0 {
 			t.Error("RegionTimings.FilteredOutput was not captured despite filtered region measurements")
 		}
@@ -780,11 +780,11 @@ func TestProcessAudio(t *testing.T) {
 	if result.NormResult != nil && result.NormResult.FinalMeasurements != nil {
 		// Verify silence sample measurements are captured in Pass 4 output (if NoiseProfile exists)
 		if result.Measurements != nil && result.Measurements.NoiseProfile != nil {
-			if result.NormResult.FinalMeasurements.SilenceSample == nil {
-				t.Error("FinalMeasurements.SilenceSample is nil despite NoiseProfile existing")
+			if result.NormResult.FinalMeasurements.RoomToneSample == nil {
+				t.Error("FinalMeasurements.RoomToneSample is nil despite NoiseProfile existing")
 			} else {
-				t.Logf("Pass 4 silence sample RMS: %.2f dBFS", result.NormResult.FinalMeasurements.SilenceSample.RMSLevel)
-				t.Logf("Pass 4 silence sample spectral centroid: %.1f Hz", result.NormResult.FinalMeasurements.SilenceSample.Spectral.Centroid)
+				t.Logf("Pass 4 silence sample RMS: %.2f dBFS", result.NormResult.FinalMeasurements.RoomToneSample.RMSLevel)
+				t.Logf("Pass 4 silence sample spectral centroid: %.1f Hz", result.NormResult.FinalMeasurements.RoomToneSample.Spectral.Centroid)
 			}
 		}
 
@@ -802,7 +802,7 @@ func TestProcessAudio(t *testing.T) {
 	}
 
 	if result.NormResult != nil && result.NormResult.FinalMeasurements != nil &&
-		(result.NormResult.FinalMeasurements.SilenceSample != nil || result.NormResult.FinalMeasurements.SpeechSample != nil) &&
+		(result.NormResult.FinalMeasurements.RoomToneSample != nil || result.NormResult.FinalMeasurements.SpeechSample != nil) &&
 		result.RegionTimings.FinalOutput <= 0 {
 		t.Error("RegionTimings.FinalOutput was not captured despite final region measurements")
 	}

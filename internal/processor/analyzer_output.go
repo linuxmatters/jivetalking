@@ -10,7 +10,7 @@ import (
 )
 
 // regionMeasurements holds the common measurement results from analysing an
-// output audio region. Both silence and speech region measurement functions
+// output audio region. Both room tone and speech region measurement functions
 // share this intermediate type before mapping to their specific candidate types.
 type regionMeasurements struct {
 	RMSLevel        float64
@@ -26,7 +26,7 @@ type regionMeasurements struct {
 
 // measureOutputRegionFromReader measures amplitude, spectral, and loudness
 // metrics for a time region in an already-opened audio file. This is the
-// shared implementation behind measureOutputSilenceRegionFromReader and
+// shared implementation behind measureOutputRoomToneRegionFromReader and
 // measureOutputSpeechRegionFromReader.
 func measureOutputRegionFromReader(reader *audio.Reader, start, duration time.Duration) (*regionMeasurements, error) {
 	if start < 0 {
@@ -156,10 +156,10 @@ func measureOutputRegionFromReader(reader *audio.Reader, start, duration time.Du
 	return result, nil
 }
 
-// measureOutputSilenceRegionFromReader measures a silence region and maps
-// the result to SilenceCandidateMetrics.
-func measureOutputSilenceRegionFromReader(reader *audio.Reader, region SilenceRegion) (*SilenceCandidateMetrics, error) {
-	debugLog("=== measureOutputSilenceRegion: start=%.3fs, duration=%.3fs ===",
+// measureOutputRoomToneRegionFromReader measures a room tone region and maps
+// the result to RoomToneCandidateMetrics.
+func measureOutputRoomToneRegionFromReader(reader *audio.Reader, region RoomToneRegion) (*RoomToneCandidateMetrics, error) {
+	debugLog("=== measureOutputRoomToneRegion: start=%.3fs, duration=%.3fs ===",
 		region.Start.Seconds(), region.Duration.Seconds())
 
 	result, err := measureOutputRegionFromReader(reader, region.Start, region.Duration)
@@ -167,9 +167,9 @@ func measureOutputSilenceRegionFromReader(reader *audio.Reader, region SilenceRe
 		return nil, err
 	}
 
-	debugLog("=== measureOutputSilenceRegion SUMMARY ===")
+	debugLog("=== measureOutputRoomToneRegion SUMMARY ===")
 
-	return &SilenceCandidateMetrics{
+	return &RoomToneCandidateMetrics{
 		Region:        region,
 		RMSLevel:      result.RMSLevel,
 		PeakLevel:     result.PeakLevel,
@@ -182,13 +182,13 @@ func measureOutputSilenceRegionFromReader(reader *audio.Reader, region SilenceRe
 	}, nil
 }
 
-// extractRegionPair builds optional SilenceRegion and SpeechRegion pointers
+// extractRegionPair builds optional RoomToneRegion and SpeechRegion pointers
 // from AudioMeasurements profiles. Returns (nil, nil) when both profiles are absent.
-func extractRegionPair(m *AudioMeasurements) (*SilenceRegion, *SpeechRegion) {
-	var silRegion *SilenceRegion
+func extractRegionPair(m *AudioMeasurements) (*RoomToneRegion, *SpeechRegion) {
+	var roomToneRegion *RoomToneRegion
 	var spRegion *SpeechRegion
 	if m.NoiseProfile != nil {
-		silRegion = &SilenceRegion{
+		roomToneRegion = &RoomToneRegion{
 			Start:    m.NoiseProfile.Start,
 			End:      m.NoiseProfile.Start + m.NoiseProfile.Duration,
 			Duration: m.NoiseProfile.Duration,
@@ -201,18 +201,18 @@ func extractRegionPair(m *AudioMeasurements) (*SilenceRegion, *SpeechRegion) {
 			Duration: m.SpeechProfile.Region.Duration,
 		}
 	}
-	return silRegion, spRegion
+	return roomToneRegion, spRegion
 }
 
-// MeasureOutputRegions measures both silence and speech regions from the same
+// MeasureOutputRegions measures both room tone and speech regions from the same
 // output file in a single open/close cycle. This avoids redundant file opens,
-// demuxing, and decoding that would occur if silence and speech regions were
+// demuxing, and decoding that would occur if room tone and speech regions were
 // measured in separate passes.
 //
 // Either region parameter may be nil to skip that measurement. Returns nil for
 // any skipped or failed measurement (non-fatal - matches existing behaviour).
-func MeasureOutputRegions(outputPath string, silenceRegion *SilenceRegion, speechRegion *SpeechRegion) (*SilenceCandidateMetrics, *SpeechCandidateMetrics) {
-	if silenceRegion == nil && speechRegion == nil {
+func MeasureOutputRegions(outputPath string, roomToneRegion *RoomToneRegion, speechRegion *SpeechRegion) (*RoomToneCandidateMetrics, *SpeechCandidateMetrics) {
+	if roomToneRegion == nil && speechRegion == nil {
 		return nil, nil
 	}
 
@@ -224,35 +224,35 @@ func MeasureOutputRegions(outputPath string, silenceRegion *SilenceRegion, speec
 	}
 	defer reader.Close()
 
-	// Measure silence region first (if requested)
-	var silenceMetrics *SilenceCandidateMetrics
-	if silenceRegion != nil {
-		silenceMetrics, err = measureOutputSilenceRegionFromReader(reader, *silenceRegion)
+	// Measure room tone region first (if requested)
+	var roomToneMetrics *RoomToneCandidateMetrics
+	if roomToneRegion != nil {
+		roomToneMetrics, err = measureOutputRoomToneRegionFromReader(reader, *roomToneRegion)
 		if err != nil {
-			debugLog("Warning: Failed to measure silence region: %v", err)
+			debugLog("Warning: Failed to measure room tone region: %v", err)
 			// Non-fatal - continue to speech measurement
 		}
 	}
 
 	// Seek back to the beginning before measuring the speech region
 	if speechRegion != nil {
-		if silenceRegion != nil {
-			// Only need to seek if we already read through the file for silence
+		if roomToneRegion != nil {
+			// Only need to seek if we already read through the file for room tone
 			if err := reader.SeekTo(0); err != nil {
 				debugLog("Warning: Failed to seek for speech region measurement: %v", err)
-				return silenceMetrics, nil
+				return roomToneMetrics, nil
 			}
 		}
 
 		speechMetrics, err := measureOutputSpeechRegionFromReader(reader, *speechRegion)
 		if err != nil {
 			debugLog("Warning: Failed to measure speech region: %v", err)
-			return silenceMetrics, nil
+			return roomToneMetrics, nil
 		}
-		return silenceMetrics, speechMetrics
+		return roomToneMetrics, speechMetrics
 	}
 
-	return silenceMetrics, nil
+	return roomToneMetrics, nil
 }
 
 // measureOutputSpeechRegionFromReader measures a speech region and maps

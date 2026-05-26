@@ -22,14 +22,16 @@ func debugLog(format string, args ...any) {
 	}
 }
 
-// SilenceRegion represents a detected silence period in the audio
-type SilenceRegion struct {
+// RoomToneRegion represents a detected room tone period in the audio.
+// This is the elected quiet ambient region used for noise profiling and
+// before/after comparison; it is distinct from true digital silence.
+type RoomToneRegion struct {
 	Start    time.Duration `json:"start"`
 	End      time.Duration `json:"end"`
 	Duration time.Duration `json:"duration"`
 }
 
-// NoiseProfile contains measurements from the elected silence region.
+// NoiseProfile contains measurements from the elected room tone region.
 // These measurements serve as a reference baseline for adaptive filter tuning:
 //   - MeasuredNoiseFloor → compand expansion threshold (NoiseRemove)
 //   - Entropy → gate release timing and range adaptation (DS201Gate)
@@ -37,13 +39,13 @@ type SilenceRegion struct {
 //     low entropy 0.08-0.30 = ordered/voiced; high entropy > 0.50 = disordered/noise)
 //   - CrestFactor/PeakLevel → transient detection mode selection
 //
-// Note: The silence region is also re-measured in Pass 2 and Pass 4 for
+// Note: The room tone region is also re-measured in Pass 2 and Pass 4 for
 // before/after comparison of noise reduction effectiveness.
 type NoiseProfile struct {
-	Start              time.Duration `json:"start"`                        // Start time of silence region used
+	Start              time.Duration `json:"start"`                        // Start time of room tone region used
 	Duration           time.Duration `json:"duration"`                     // Duration of extracted sample
-	MeasuredNoiseFloor float64       `json:"measured_noise_floor"`         // dBFS, RMS level of silence (average noise)
-	PeakLevel          float64       `json:"peak_level"`                   // dBFS, peak level in silence (transient noise indicator)
+	MeasuredNoiseFloor float64       `json:"measured_noise_floor"`         // dBFS, RMS level of room tone (average noise)
+	PeakLevel          float64       `json:"peak_level"`                   // dBFS, peak level in room tone (transient noise indicator)
 	CrestFactor        float64       `json:"crest_factor"`                 // Peak - RMS in dB (high = impulsive noise, low = steady noise)
 	Entropy            float64       `json:"entropy"`                      // Signal randomness (1.0 = white noise, lower = tonal noise like hum)
 	ExtractionWarning  string        `json:"extraction_warning,omitempty"` // Warning message if extraction had issues
@@ -59,11 +61,11 @@ type NoiseProfile struct {
 	WasRefined       bool          `json:"was_refined,omitempty"`       // True if region was refined from a longer candidate
 }
 
-// SilenceCandidateMetrics contains measurements for evaluating silence region candidates.
+// RoomToneCandidateMetrics contains measurements for evaluating room tone region candidates.
 // These metrics are collected before final selection to enable multi-metric scoring.
 // Includes all measurements available from IntervalSample for future filter tuning.
-type SilenceCandidateMetrics struct {
-	Region SilenceRegion `json:"region"` // The silence region being evaluated
+type RoomToneCandidateMetrics struct {
+	Region RoomToneRegion `json:"region"` // The room tone region being evaluated
 
 	// Amplitude metrics
 	RMSLevel    float64 `json:"rms_level"`    // dBFS, average level (lower = quieter)
@@ -85,7 +87,7 @@ type SilenceCandidateMetrics struct {
 	// Scoring (computed after measurement)
 	Score float64 `json:"score"` // Composite score for candidate ranking
 
-	// StabilityScore measures the temporal consistency of the silence region (0-1).
+	// StabilityScore measures the temporal consistency of the room tone region (0-1).
 	// Higher scores indicate more stable measurements across the region, suggesting
 	// intentionally-recorded room tone rather than accidental gaps between speech.
 	// Calculated from RMS variance and average spectral flux across intervals.
@@ -137,10 +139,10 @@ type SpeechCandidateMetrics struct {
 	WasRefined       bool          `json:"was_refined,omitempty"`       // True if region was refined from a longer candidate
 }
 
-// Silence detection constants for interval-based analysis
+// Room tone detection constants for interval-based analysis
 // AudioMeasurements contains the measurements from Pass 1 analysis.
 // Uses ebur128 (LUFS/LRA), astats (dynamic range/noise floor), and aspectralstats (spectral analysis).
-// Silence detection is performed in Go using 250ms interval sampling for improved accuracy.
+// Room tone detection is performed in Go using 250ms interval sampling for improved accuracy.
 // BaseMeasurements contains fields shared between input (Pass 1) and output (Pass 2) measurements.
 // Embedded in both AudioMeasurements and OutputMeasurements to avoid duplication.
 type BaseMeasurements struct {
@@ -180,7 +182,7 @@ type BaseMeasurements struct {
 
 // AudioMeasurements contains the measurements from Pass 1 analysis.
 // Uses ebur128 (LUFS/LRA), astats (dynamic range/noise floor), and aspectralstats (spectral analysis).
-// Silence detection is performed in Go using 250ms interval sampling for improved accuracy.
+// Room tone detection is performed in Go using 250ms interval sampling for improved accuracy.
 type AudioMeasurements struct {
 	// Embed shared measurement fields
 	BaseMeasurements
@@ -194,18 +196,18 @@ type AudioMeasurements struct {
 	NoiseFloor       float64 `json:"noise_floor"`        // Derived noise floor (dBFS), three-tier: astats → RMS estimate → ebur128 estimate
 	NoiseFloorSource string  `json:"noise_floor_source"` // Source of NoiseFloor: "astats", "rms_estimate", "ebur128_estimate"
 
-	// Adaptive silence detection thresholds (derived from interval sampling)
-	PreScanNoiseFloor  float64 `json:"prescan_noise_floor"`  // Noise floor estimated from interval data (dBFS)
-	SilenceDetectLevel float64 `json:"silence_detect_level"` // Adaptive silencedetect threshold used (dBFS)
+	// Adaptive room tone detection thresholds (derived from interval sampling)
+	PreScanNoiseFloor   float64 `json:"prescan_noise_floor"`    // Noise floor estimated from interval data (dBFS)
+	RoomToneDetectLevel float64 `json:"room_tone_detect_level"` // Adaptive room tone detection threshold (dBFS)
 
-	// Silence detection results (derived from interval sampling)
-	SilenceRegions []SilenceRegion `json:"silence_regions,omitempty"` // Detected silence regions
+	// Room tone detection results (derived from interval sampling)
+	RoomToneRegions []RoomToneRegion `json:"room_tone_regions,omitempty"` // Detected room tone regions
 
-	// 250ms interval samples for data-driven silence candidate detection
+	// 250ms interval samples for data-driven room tone candidate detection
 	IntervalSamples []IntervalSample `json:"interval_samples,omitempty"` // Per-interval measurements
 
-	// Scored silence candidates (for debugging/reporting)
-	SilenceCandidates []SilenceCandidateMetrics `json:"silence_candidates,omitempty"` // All evaluated candidates with scores
+	// Scored room tone candidates (for debugging/reporting)
+	RoomToneCandidates []RoomToneCandidateMetrics `json:"room_tone_candidates,omitempty"` // All evaluated candidates with scores
 
 	// Speech detection results
 	SpeechRegions    []SpeechRegion           `json:"speech_regions,omitempty"`    // Detected speech regions
@@ -215,9 +217,9 @@ type AudioMeasurements struct {
 	SpeechProfile *SpeechCandidateMetrics `json:"speech_profile,omitempty"` // Best speech candidate metrics
 
 	// Voice-activated recording detection
-	VoiceActivated bool `json:"voice_activated"` // True when >= 95% of silence candidates are digital silence
+	VoiceActivated bool `json:"voice_activated"` // True when >= 95% of room tone candidates are digital silence
 
-	// Noise profile extracted from best silence candidate
+	// Noise profile extracted from elected room tone candidate
 	NoiseProfile *NoiseProfile `json:"noise_profile,omitempty"` // nil if extraction failed
 
 	// Derived suggestions for Pass 2 adaptive processing
@@ -227,7 +229,7 @@ type AudioMeasurements struct {
 
 // OutputMeasurements contains the measurements from Pass 2 output analysis.
 // Uses BaseMeasurements for comparison with AudioMeasurements.
-// Does not include silence detection or noise profile fields (those are input-only).
+// Does not include room tone detection or noise profile fields (those are input-only).
 type OutputMeasurements struct {
 	// Embed shared measurement fields
 	BaseMeasurements
@@ -249,8 +251,8 @@ type OutputMeasurements struct {
 	LoudnormTargetOffset float64 `json:"loudnorm_target_offset"` // Loudnorm's calculated offset for second pass
 	LoudnormMeasured     bool    `json:"loudnorm_measured"`      // True if loudnorm measurement was captured
 
-	// Silence region analysis (same region as Pass 1, for noise reduction comparison)
-	SilenceSample *SilenceCandidateMetrics `json:"silence_sample,omitempty"` // Measurements from same silence region
+	// Room tone region analysis (same region as Pass 1, for noise reduction comparison)
+	RoomToneSample *RoomToneCandidateMetrics `json:"room_tone_sample,omitempty"` // Measurements from same room tone region
 
 	// Speech region analysis (same region as Pass 1, for processing comparison)
 	SpeechSample *SpeechCandidateMetrics `json:"speech_sample,omitempty"` // Measurements from same speech region
@@ -292,23 +294,23 @@ func AnalyzeAudio(filename string, config *BaseFilterConfig, progressCallback Pr
 }
 
 type noiseProfileSelection struct {
-	silenceResult *findBestSilenceRegionResult
-	noiseProfile  *NoiseProfile
+	roomToneResult *findBestRoomToneRegionResult
+	noiseProfile   *NoiseProfile
 }
 
 func selectNoiseProfile(measurements *AudioMeasurements, intervals, silenceIntervals []IntervalSample, silMedians silenceMedians) noiseProfileSelection {
-	measurements.SilenceRegions = findSilenceCandidatesFromIntervals(silenceIntervals, measurements.SilenceDetectLevel, silMedians)
+	measurements.RoomToneRegions = findRoomToneCandidatesFromIntervals(silenceIntervals, measurements.RoomToneDetectLevel, silMedians)
 
-	silenceResult := findBestSilenceRegion(measurements.SilenceRegions, silenceIntervals)
-	measurements.SilenceCandidates = silenceResult.Candidates
-	measurements.VoiceActivated = detectVoiceActivated(silenceResult.Candidates)
+	roomToneResult := findBestRoomToneRegion(measurements.RoomToneRegions, silenceIntervals)
+	measurements.RoomToneCandidates = roomToneResult.Candidates
+	measurements.VoiceActivated = detectVoiceActivated(roomToneResult.Candidates)
 
-	selection := noiseProfileSelection{silenceResult: silenceResult}
-	if silenceResult.BestRegion == nil {
+	selection := noiseProfileSelection{roomToneResult: roomToneResult}
+	if roomToneResult.BestRegion == nil {
 		return selection
 	}
 
-	originalRegion := silenceResult.BestRegion
+	originalRegion := roomToneResult.BestRegion
 	refinedRegion := refineToGoldenSubregion(originalRegion, intervals)
 	wasRefined := refinedRegion.Start != originalRegion.Start || refinedRegion.Duration != originalRegion.Duration
 
@@ -337,10 +339,10 @@ func selectNoiseProfile(measurements *AudioMeasurements, intervals, silenceInter
 func selectSpeechProfile(measurements *AudioMeasurements, intervals []IntervalSample, noiseSelection noiseProfileSelection) {
 	speechSearchStart := 30 * time.Second
 	switch {
-	case noiseSelection.silenceResult != nil && noiseSelection.silenceResult.BestRegion != nil:
-		speechSearchStart = noiseSelection.silenceResult.BestRegion.End
-	case len(measurements.SilenceRegions) > 0:
-		speechSearchStart = measurements.SilenceRegions[0].End
+	case noiseSelection.roomToneResult != nil && noiseSelection.roomToneResult.BestRegion != nil:
+		speechSearchStart = noiseSelection.roomToneResult.BestRegion.End
+	case len(measurements.RoomToneRegions) > 0:
+		speechSearchStart = measurements.RoomToneRegions[0].End
 	}
 
 	measurements.SpeechRegions = findSpeechCandidatesFromIntervals(intervals, speechSearchStart, measurements.VoiceActivated, measurements.RMSLevel, measurements.NoiseFloor)
@@ -370,9 +372,9 @@ func buildInputMeasurements(filename string, collection *analysisFrameCollection
 	}
 
 	measurements := &AudioMeasurements{
-		PreScanNoiseFloor:  noiseFloorEstimate,
-		SilenceDetectLevel: silenceThreshold,
-		IntervalSamples:    collection.intervals,
+		PreScanNoiseFloor:   noiseFloorEstimate,
+		RoomToneDetectLevel: silenceThreshold,
+		IntervalSamples:     collection.intervals,
 	}
 
 	if !acc.ebur128Found {
@@ -546,7 +548,7 @@ func collectAnalysisFrames(filename string, config *BaseFilterConfig, context *P
 			if inputFrameTime-intervalStartTime >= intervalDuration {
 				finalised := intervalAcc.finalize(intervalStartTime)
 				intervals = append(intervals, finalised)
-				if config.Analysis.SilenceScanDuration > 0 && intervalStartTime < config.Analysis.SilenceScanDuration {
+				if config.Analysis.RoomToneScanDuration > 0 && intervalStartTime < config.Analysis.RoomToneScanDuration {
 					silenceIntervals = append(silenceIntervals, finalised)
 				}
 				intervalStartTime = inputFrameTime
@@ -583,12 +585,12 @@ func collectAnalysisFrames(filename string, config *BaseFilterConfig, context *P
 	if intervalAcc.rawSampleCount > 0 {
 		finalised := intervalAcc.finalize(intervalStartTime)
 		intervals = append(intervals, finalised)
-		if config.Analysis.SilenceScanDuration > 0 && intervalStartTime < config.Analysis.SilenceScanDuration {
+		if config.Analysis.RoomToneScanDuration > 0 && intervalStartTime < config.Analysis.RoomToneScanDuration {
 			silenceIntervals = append(silenceIntervals, finalised)
 		}
 	}
 
-	if config.Analysis.SilenceScanDuration == 0 {
+	if config.Analysis.RoomToneScanDuration == 0 {
 		silenceIntervals = intervals
 	}
 

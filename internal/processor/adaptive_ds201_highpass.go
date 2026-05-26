@@ -8,8 +8,8 @@ const (
 	ds201HPDefaultFreq     = 80.0  // Hz - normal voice cutoff
 	ds201HPBrightFreq      = 100.0 // Hz - bright voice cutoff
 	ds201HPMaxFreq         = 120.0 // Hz - maximum to preserve voice fundamentals
-	ds201HPBoostModerate   = 10.0  // Hz - added when silence sample shows LF noise
-	ds201HPBoostAggressive = 20.0  // Hz - added for noisy silence sample (> -55 dBFS)
+	ds201HPBoostModerate   = 10.0  // Hz - added when room-tone noise profile shows LF noise
+	ds201HPBoostAggressive = 20.0  // Hz - added for noisy room-tone noise profile (> -55 dBFS)
 
 	// DS201 High-Pass warm voice protection parameters
 	// Instead of disabling highpass for warm voices, we use gentler settings
@@ -30,12 +30,14 @@ const (
 	// Used as secondary protection when spectral decrease alone doesn't catch warm voices
 	spectralSkewnessLFEmphasis = 1.0 // Above: significant LF emphasis, needs gentle HPF
 
-	// Silence sample noise floor thresholds for highpass boost decision
-	silenceNoiseFloorClean = -70.0 // dBFS - very clean, no boost needed
-	silenceNoiseFloorNoisy = -55.0 // dBFS - noisy, may need boost
+	// Room-tone noise floor thresholds for highpass boost decision
+	// (noise floor measured from the noise profile extracted from the
+	// elected room-tone region)
+	roomToneNoiseFloorClean = -70.0 // dBFS - very clean, no boost needed
+	roomToneNoiseFloorNoisy = -55.0 // dBFS - noisy, may need boost
 
-	// Silence entropy threshold for noise character
-	silenceEntropyTonal = 0.30 // Below: tonal noise (hum), bandreject better than highpass
+	// Room-tone entropy threshold for noise character
+	roomToneEntropyTonal = 0.30 // Below: tonal noise (hum), bandreject better than highpass
 
 	// Spectral centroid thresholds (Hz) for voice brightness classification
 	centroidBright = 4000.0 // Above: bright voice
@@ -45,8 +47,8 @@ const (
 // tuneDS201HighPass adapts DS201-inspired highpass composite filter based on:
 // - Spectral centroid (voice brightness/warmth)
 // - Spectral decrease (LF voice content - protects warm voices)
-// - Silence sample noise floor (actual LF noise level)
-// - Silence sample entropy (noise character - tonal vs broadband)
+// - Room-tone noise floor (LF noise level from the noise profile extracted from the elected room-tone region)
+// - Room-tone entropy (noise character - tonal vs broadband, from the elected room-tone region)
 //
 // This is a composite tuner that configures both:
 // 1. Highpass frequency and slope settings
@@ -57,7 +59,7 @@ const (
 // - Higher centroid (brighter voice) → higher cutoff, safe for rumble removal
 // - Negative spectral decrease (warm voice) → cap cutoff to protect LF body
 // - Tonal noise (low entropy) → don't boost, let bandreject handle hum
-// - Only boost cutoff if silence sample shows actual broadband LF noise
+// - Only boost cutoff if room-tone noise profile shows actual broadband LF noise
 //
 // Hum notch strategy:
 // - Low entropy (< 0.30) indicates periodic/tonal noise → enable hum removal
@@ -107,24 +109,26 @@ func tuneDS201HighPass(config *EffectiveFilterConfig, measurements *AudioMeasure
 	}
 
 	// Check if we should boost cutoff based on actual noise characteristics
-	// Only boost if silence sample shows broadband LF noise (not tonal hum)
+	// Only boost if the room-tone noise profile shows broadband LF noise
+	// (not tonal hum)
 	shouldBoost := false
 	boostAmount := 0.0
 
 	if measurements.NoiseProfile != nil {
-		silenceNoiseFloor := measurements.NoiseProfile.MeasuredNoiseFloor
-		silenceEntropy := measurements.NoiseProfile.Entropy
+		// NoiseProfile is extracted from the elected room-tone region.
+		roomToneNoiseFloor := measurements.NoiseProfile.MeasuredNoiseFloor
+		roomToneEntropy := measurements.NoiseProfile.Entropy
 
 		// Only consider boost if noise is broadband (not tonal hum)
 		// Tonal noise (low entropy) is better handled by bandreject filter
-		if silenceEntropy >= silenceEntropyTonal {
+		if roomToneEntropy >= roomToneEntropyTonal {
 			// Broadband noise - highpass can help
 			switch {
-			case silenceNoiseFloor > silenceNoiseFloorNoisy:
-				// Noisy silence sample - aggressive boost warranted
+			case roomToneNoiseFloor > roomToneNoiseFloorNoisy:
+				// Noisy room-tone region - aggressive boost warranted
 				shouldBoost = true
 				boostAmount = ds201HPBoostAggressive
-			case silenceNoiseFloor > silenceNoiseFloorClean:
+			case roomToneNoiseFloor > roomToneNoiseFloorClean:
 				// Moderate noise - gentle boost
 				shouldBoost = true
 				boostAmount = ds201HPBoostModerate
