@@ -189,7 +189,7 @@ func ProcessAudio(inputPath string, config *BaseFilterConfig, progressCallback P
 	}
 
 	// Rename output file to include LUFS value: <name>-processed.<ext> → <name>-LUFS-NN-processed.<ext>
-	lufsValue := int(math.Abs(result.OutputLUFS))
+	lufsValue := lufsFilenameValue(result.OutputLUFS)
 	finalPath := generateLUFSOutputPath(inputPath, lufsValue)
 	if err := renameNoClobber(outputPath, finalPath); err != nil {
 		return nil, fmt.Errorf("failed to publish output: %w", err)
@@ -367,4 +367,8 @@ func generateLUFSOutputPath(inputPath string, lufsValue int) string {
 	filename := filepath.Base(inputPath)
 	nameWithoutExt := strings.TrimSuffix(filename, filepath.Ext(filename))
 	return filepath.Join(dir, fmt.Sprintf("%s-LUFS-%d-processed.flac", nameWithoutExt, lufsValue))
+}
+
+func lufsFilenameValue(outputLUFS float64) int {
+	return int(math.Round(math.Abs(outputLUFS)))
 }

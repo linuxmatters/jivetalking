@@ -39,6 +39,28 @@ func TestGenerateLUFSOutputPath(t *testing.T) {
 	}
 }
 
+func TestLUFSFilenameValueRoundsNearestWhole(t *testing.T) {
+	cases := []struct {
+		name string
+		lufs float64
+		want int
+	}{
+		{"round down", -16.4, 16},
+		{"half rounds up", -16.5, 17},
+		{"round up", -16.6, 17},
+		{"positive value", 15.5, 16},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := lufsFilenameValue(tc.lufs)
+			if got != tc.want {
+				t.Errorf("lufsFilenameValue(%v) = %d, want %d", tc.lufs, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestCreateSiblingTempPath(t *testing.T) {
 	dir := t.TempDir()
 	targetPath := filepath.Join(dir, "presenter.wav")
