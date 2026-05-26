@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # afftdn-spike.sh - Validate FFmpeg afftdn noise reduction in isolation
 #
-# Tests whether afftdn actually removes noise when given a known silence sample.
-# Uses the same silence windows identified by Jivetalking's Pass 1 analysis.
+# Tests whether afftdn actually removes noise when given a known room tone sample.
+# Uses the same room tone windows identified by Jivetalking's Pass 1 analysis.
 #
 # This spike isolates afftdn from Jivetalking's filter chain to determine if:
 # 1. afftdn works at all with our parameters
-# 2. The noise profile from silence samples is being learned correctly
+# 2. The noise profile from room tone samples is being learned correctly
 # 3. Noise reduction is measurable in before/after comparisons
 #
 # Usage: ./scripts/afftdn-spike.sh [duration_seconds]
@@ -20,8 +20,8 @@ OUTPUT_DIR="testdata/afftdn-spike"
 DURATION="${1:-900}"
 
 # Presenter configurations (from Jivetalking logs for LMP-72)
-# Format: "name|silence_start|silence_end|silence_rms|trough"
-# silence_end = silence_start + duration (10s windows)
+# Format: "name|room_tone_start|room_tone_end|room_tone_rms|trough"
+# room_tone_end = room_tone_start + duration (10s windows)
 # Measurements from source audio analysis
 declare -a PRESENTERS=(
     "mark|31.208|41.208|-82.2|-83.6"
@@ -31,7 +31,7 @@ declare -a PRESENTERS=(
 
 # Sweep configurations to test
 # Format: "label|nr|nf_offset|rf|ad|fo|gs|tr"
-# nf_offset: added to measured silence RMS to get noise_floor
+# nf_offset: added to measured room tone RMS to get noise_floor
 # rf: residual floor (target floor after processing)
 # ad: adaptivity (0=instant, 1=slow)
 # fo: floor offset multiplier (>1 = more aggressive on estimated floor)
@@ -132,9 +132,9 @@ measure_audio() {
     echo "$rms_db $peak_db $trough_db $centroid $rolloff $flatness"
 }
 
-# Measure silence region specifically (for noise floor comparison)
+# Measure room tone region specifically (for noise floor comparison)
 # Arguments: input_file start_time end_time
-measure_silence() {
+measure_room_tone() {
     local input="$1"
     local start="$2"
     local end="$3"
@@ -153,11 +153,11 @@ measure_silence() {
 }
 
 # Build afftdn filter string with full parameter control
-# Arguments: silence_start silence_end nr nf rf ad fo gs tr
+# Arguments: room_tone_start room_tone_end nr nf rf ad fo gs tr
 # Returns: filter chain "asendcmd=...,afftdn@dns=..."
 build_afftdn_filter() {
-    local silence_start="$1"
-    local silence_end="$2"
+    local room_tone_start="$1"
+    local room_tone_end="$2"
     local nr="$3"   # noise reduction (dB)
     local nf="$4"   # noise floor (dB)
     local rf="$5"   # residual floor (dB)
@@ -167,7 +167,7 @@ build_afftdn_filter() {
     local tr="$9"   # track residual (0/1)
 
     # Build asendcmd to trigger noise sampling at specific times
-    local cmd_spec="asendcmd=c='${silence_start} afftdn@dns sn start; ${silence_end} afftdn@dns sn stop'"
+    local cmd_spec="asendcmd=c='${room_tone_start} afftdn@dns sn start; ${room_tone_end} afftdn@dns sn stop'"
 
     # Build afftdn filter with all tunable parameters
     local afftdn_spec="afftdn@dns=nr=${nr}:nf=${nf}:rf=${rf}:tn=1:ad=${ad}:fo=${fo}:gs=${gs}:tr=${tr}:om=o"
@@ -219,15 +219,15 @@ main() {
 
     # Arrays to store results for summary
     # Key format: "presenter|config"
-    declare -A SRC_TROUGH SRC_CENTROID SILENCE_BEFORE
-    declare -A OUT_TROUGH OUT_CENTROID SILENCE_AFTER
+    declare -A SRC_TROUGH SRC_CENTROID ROOM_TONE_BEFORE
+    declare -A OUT_TROUGH OUT_CENTROID ROOM_TONE_AFTER
 
     # ========================================================================
     # Phase 1: Process each presenter with each configuration
     # ========================================================================
 
     for presenter_config in "${PRESENTERS[@]}"; do
-        IFS='|' read -r name silence_start silence_end silence_rms trough <<< "$presenter_config"
+        IFS='|' read -r name room_tone_start room_tone_end room_tone_rms trough <<< "$presenter_config"
 
         local src_file="${TESTDATA_DIR}/LMP-72-${name}.flac"
 
@@ -237,8 +237,8 @@ main() {
         fi
 
         log_header "Processing: ${name}"
-        echo "  Silence window: ${silence_start}s – ${silence_end}s"
-        echo "  Silence RMS: ${silence_rms} dBFS"
+        echo "  Silence window: ${room_tone_start}s – ${room_tone_end}s"
+        echo "  Silence RMS: ${room_tone_rms} dBFS"
         echo "  Trough: ${trough} dB"
         echo ""
 
@@ -253,20 +253,20 @@ main() {
         printf "  Source: RMS %.1f dB | Trough %.1f dB | Centroid %.0f Hz\n" \
             "$src_rms" "$src_trough" "$src_centroid"
 
-        # Measure silence region in source
-        local silence_before
-        silence_before=$(measure_silence "$src_file" "$silence_start" "$silence_end")
-        SILENCE_BEFORE[$name]="$silence_before"
-        printf "  Silence RMS: %.1f dBFS\n" "$silence_before"
+        # Measure room tone region in source
+        local room_tone_before
+        room_tone_before=$(measure_room_tone "$src_file" "$room_tone_start" "$room_tone_end")
+        ROOM_TONE_BEFORE[$name]="$room_tone_before"
+        printf "  Silence RMS: %.1f dBFS\n" "$room_tone_before"
         echo ""
 
         # Process with each configuration
         for cfg in "${CONFIGS[@]}"; do
             IFS='|' read -r label nr nf_offset rf ad fo gs tr <<< "$cfg"
 
-            # Calculate noise floor from measured silence RMS + offset
+            # Calculate noise floor from measured room tone RMS + offset
             local nf
-            nf=$(awk -v rms="$silence_rms" -v offset="$nf_offset" 'BEGIN {printf "%.1f", rms + offset}')
+            nf=$(awk -v rms="$room_tone_rms" -v offset="$nf_offset" 'BEGIN {printf "%.1f", rms + offset}')
             # Clamp to valid range (-80 to -20)
             nf=$(awk -v nf="$nf" 'BEGIN {if(nf < -80) print -80; else if(nf > -20) print -20; else print nf}')
 
@@ -277,7 +277,7 @@ main() {
             echo "  nr=${nr}dB nf=${nf}dB rf=${rf}dB ad=${ad} fo=${fo} gs=${gs} tr=${tr}"
 
             local filter
-            filter=$(build_afftdn_filter "$silence_start" "$silence_end" "$nr" "$nf" "$rf" "$ad" "$fo" "$gs" "$tr")
+            filter=$(build_afftdn_filter "$room_tone_start" "$room_tone_end" "$nr" "$nf" "$rf" "$ad" "$fo" "$gs" "$tr")
 
             if ! ffmpeg -hide_banner -loglevel error -stats \
                 -i "$src_file" -t "$DURATION" \
@@ -295,14 +295,14 @@ main() {
             OUT_TROUGH[$key]="$out_trough"
             OUT_CENTROID[$key]="$out_centroid"
 
-            local silence_after
-            silence_after=$(measure_silence "$out_file" "$silence_start" "$silence_end")
-            SILENCE_AFTER[$key]="$silence_after"
+            local room_tone_after
+            room_tone_after=$(measure_room_tone "$out_file" "$room_tone_start" "$room_tone_end")
+            ROOM_TONE_AFTER[$key]="$room_tone_after"
 
-            local d_silence
-            d_silence=$(awk -v a="$silence_after" -v b="$silence_before" 'BEGIN {printf "%.1f", a - b}')
+            local d_room_tone
+            d_room_tone=$(awk -v a="$room_tone_after" -v b="$room_tone_before" 'BEGIN {printf "%.1f", a - b}')
             printf "  Result: Silence Δ "
-            format_delta "$d_silence" "3.0" " dB"
+            format_delta "$d_room_tone" "3.0" " dB"
             printf " | Trough %.1f dB → %.1f dB\n" "$src_trough" "$out_trough"
             log_success "$out_file"
             echo ""
@@ -333,9 +333,9 @@ main() {
             IFS='|' read -r label _ _ _ _ _ _ _ <<< "$cfg"
             local key="${name}|${label}"
 
-            if [[ -n "${SILENCE_AFTER[$key]:-}" ]]; then
-                local d_silence d_trough d_centroid
-                d_silence=$(awk -v a="${SILENCE_AFTER[$key]}" -v b="${SILENCE_BEFORE[$name]}" \
+            if [[ -n "${ROOM_TONE_AFTER[$key]:-}" ]]; then
+                local d_room_tone d_trough d_centroid
+                d_room_tone=$(awk -v a="${ROOM_TONE_AFTER[$key]}" -v b="${ROOM_TONE_BEFORE[$name]}" \
                     'BEGIN {printf "%.1f", a - b}')
                 d_trough=$(awk -v a="${OUT_TROUGH[$key]}" -v b="${SRC_TROUGH[$name]}" \
                     'BEGIN {printf "%.1f", a - b}')
@@ -343,7 +343,7 @@ main() {
                     'BEGIN {if(b>0) printf "%.1f", ((a-b)/b)*100; else print 0}')
 
                 printf "%-12s │ " "$label"
-                format_delta "$d_silence" "3.0" " dB"
+                format_delta "$d_room_tone" "3.0" " dB"
                 printf "   │ "
                 format_delta "$d_trough" "3.0" " dB"
                 printf "   │ "
@@ -355,7 +355,7 @@ main() {
     done
 
     echo "Interpretation:"
-    echo "  Silence Δ: Negative = noise reduced in silence regions (target: < -6 dB)"
+    echo "  Silence Δ: Negative = noise reduced in room tone regions (target: < -6 dB)"
     echo "  Trough Δ:  Negative = lower noise floor overall"
     echo "  Centroid:  Should stay close to 0% (no spectral damage)"
     echo ""

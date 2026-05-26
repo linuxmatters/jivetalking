@@ -75,8 +75,9 @@ func TestAudioMeasurementsJSON_PreservesInputFields(t *testing.T) {
 		NoiseFloor:             -62.0,
 		NoiseFloorSource:       "astats",
 		PreScanNoiseFloor:      -63.0,
-		SilenceDetectLevel:     -55.0,
-		SilenceRegions:         []SilenceRegion{{Start: time.Second, End: 2 * time.Second, Duration: time.Second}},
+		RoomToneDetectLevel:    -55.0,
+		RoomToneRegions:        []RoomToneRegion{{Start: time.Second, End: 2 * time.Second, Duration: time.Second}},
+		RoomToneCandidates:     []RoomToneCandidateMetrics{{RMSLevel: -58.0, Spectral: flatSpectralMetricsFixture()}},
 		IntervalSamples:        []IntervalSample{{Timestamp: 250 * time.Millisecond, RMSLevel: -48.0, Spectral: flatSpectralMetricsFixture()}},
 		SpeechRegions:          []SpeechRegion{{Start: 3 * time.Second, End: 4 * time.Second, Duration: time.Second}},
 		SpeechProfile:          &SpeechCandidateMetrics{RMSLevel: -24.0, Spectral: flatSpectralMetricsFixture()},
@@ -95,6 +96,12 @@ func TestAudioMeasurementsJSON_PreservesInputFields(t *testing.T) {
 	assertJSONField(t, data, "interval_samples")
 	assertJSONField(t, data, "speech_profile")
 	assertJSONField(t, data, "noise_profile")
+	assertJSONField(t, data, "room_tone_detect_level")
+	assertJSONField(t, data, "room_tone_regions")
+	assertJSONField(t, data, "room_tone_candidates")
+	assertJSONFieldAbsent(t, data, "silence_detect_level")
+	assertJSONFieldAbsent(t, data, "silence_regions")
+	assertJSONFieldAbsent(t, data, "silence_candidates")
 
 	var decoded AudioMeasurements
 	if err := json.Unmarshal(data, &decoded); err != nil {
@@ -157,7 +164,7 @@ func TestOutputMeasurementsJSON_PreservesOutputFields(t *testing.T) {
 		LoudnormInputThresh:  -28.0,
 		LoudnormTargetOffset: 1.2,
 		LoudnormMeasured:     true,
-		SilenceSample:        &SilenceCandidateMetrics{RMSLevel: -58.0, Spectral: flatSpectralMetricsFixture()},
+		RoomToneSample:       &RoomToneCandidateMetrics{RMSLevel: -58.0, Spectral: flatSpectralMetricsFixture()},
 		SpeechSample:         &SpeechCandidateMetrics{RMSLevel: -22.0, Spectral: flatSpectralMetricsFixture()},
 	}
 
@@ -168,8 +175,9 @@ func TestOutputMeasurementsJSON_PreservesOutputFields(t *testing.T) {
 	assertJSONField(t, data, "output_i")
 	assertJSONField(t, data, "loudnorm_input_i")
 	assertJSONField(t, data, "loudnorm_measured")
-	assertJSONField(t, data, "silence_sample")
+	assertJSONField(t, data, "room_tone_sample")
 	assertJSONField(t, data, "speech_sample")
+	assertJSONFieldAbsent(t, data, "silence_sample")
 
 	var decoded OutputMeasurements
 	if err := json.Unmarshal(data, &decoded); err != nil {
@@ -184,8 +192,8 @@ func TestOutputMeasurementsJSON_PreservesOutputFields(t *testing.T) {
 	if !decoded.LoudnormMeasured {
 		t.Fatal("expected LoudnormMeasured to round-trip")
 	}
-	if decoded.SilenceSample == nil {
-		t.Fatal("expected SilenceSample to round-trip")
+	if decoded.RoomToneSample == nil {
+		t.Fatal("expected RoomToneSample to round-trip")
 	}
 	if decoded.SpeechSample == nil {
 		t.Fatal("expected SpeechSample to round-trip")
@@ -223,6 +231,18 @@ func assertJSONField(t *testing.T, data []byte, field string) {
 	}
 	if _, ok := object[field]; !ok {
 		t.Errorf("missing JSON field %q in %s", field, string(data))
+	}
+}
+
+func assertJSONFieldAbsent(t *testing.T, data []byte, field string) {
+	t.Helper()
+
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(data, &object); err != nil {
+		t.Fatalf("Unmarshal() failed: %v", err)
+	}
+	if _, ok := object[field]; ok {
+		t.Errorf("unexpected JSON field %q in %s", field, string(data))
 	}
 }
 
@@ -387,10 +407,10 @@ func TestAnalyzeAudioDoesNotMutateCallerConfig(t *testing.T) {
 
 	config := DefaultFilterConfig()
 	config.FilterOrder = []FilterID{FilterNoiseRemove, FilterAnalysis}
-	config.Analysis.SilenceScanDuration = 250 * time.Millisecond
+	config.Analysis.RoomToneScanDuration = 250 * time.Millisecond
 
 	originalOrder := append([]FilterID(nil), config.FilterOrder...)
-	originalSilenceScanDuration := config.Analysis.SilenceScanDuration
+	originalRoomToneScanDuration := config.Analysis.RoomToneScanDuration
 
 	if _, err := AnalyzeAudio(testFile, config, nil); err != nil {
 		t.Fatalf("AnalyzeAudio failed: %v", err)
@@ -404,8 +424,8 @@ func TestAnalyzeAudioDoesNotMutateCallerConfig(t *testing.T) {
 			t.Errorf("FilterOrder[%d] = %q, want %q", i, config.FilterOrder[i], originalOrder[i])
 		}
 	}
-	if config.Analysis.SilenceScanDuration != originalSilenceScanDuration {
-		t.Errorf("Analysis.SilenceScanDuration = %v, want %v", config.Analysis.SilenceScanDuration, originalSilenceScanDuration)
+	if config.Analysis.RoomToneScanDuration != originalRoomToneScanDuration {
+		t.Errorf("Analysis.RoomToneScanDuration = %v, want %v", config.Analysis.RoomToneScanDuration, originalRoomToneScanDuration)
 	}
 }
 
@@ -517,7 +537,7 @@ func makeTestIntervals(startTime time.Duration, rmsLevels []float64) []IntervalS
 func TestRefineToGoldenSubregion(t *testing.T) {
 	tests := []struct {
 		name          string
-		candidate     *SilenceRegion
+		candidate     *RoomToneRegion
 		intervals     []IntervalSample
 		wantStart     time.Duration
 		wantDuration  time.Duration
@@ -526,7 +546,7 @@ func TestRefineToGoldenSubregion(t *testing.T) {
 	}{
 		{
 			name: "short candidate - no refinement needed",
-			candidate: &SilenceRegion{
+			candidate: &RoomToneRegion{
 				Start:    24 * time.Second,
 				End:      34 * time.Second,
 				Duration: 10 * time.Second,
@@ -539,7 +559,7 @@ func TestRefineToGoldenSubregion(t *testing.T) {
 		},
 		{
 			name: "long candidate with uniform quality",
-			candidate: &SilenceRegion{
+			candidate: &RoomToneRegion{
 				Start:    24 * time.Second,
 				End:      44 * time.Second,
 				Duration: 20 * time.Second,
@@ -558,7 +578,7 @@ func TestRefineToGoldenSubregion(t *testing.T) {
 		},
 		{
 			name: "long candidate with golden pocket at end",
-			candidate: &SilenceRegion{
+			candidate: &RoomToneRegion{
 				Start:    24 * time.Second,
 				End:      44 * time.Second,
 				Duration: 20 * time.Second,
@@ -581,7 +601,7 @@ func TestRefineToGoldenSubregion(t *testing.T) {
 		},
 		{
 			name: "candidate at recording start",
-			candidate: &SilenceRegion{
+			candidate: &RoomToneRegion{
 				Start:    0,
 				End:      15 * time.Second,
 				Duration: 15 * time.Second,
@@ -604,7 +624,7 @@ func TestRefineToGoldenSubregion(t *testing.T) {
 		},
 		{
 			name: "insufficient intervals - returns original",
-			candidate: &SilenceRegion{
+			candidate: &RoomToneRegion{
 				Start:    24 * time.Second,
 				End:      30 * time.Second,
 				Duration: 6 * time.Second,
@@ -624,7 +644,7 @@ func TestRefineToGoldenSubregion(t *testing.T) {
 		},
 		{
 			name: "no intervals in range",
-			candidate: &SilenceRegion{
+			candidate: &RoomToneRegion{
 				Start:    100 * time.Second,
 				End:      120 * time.Second,
 				Duration: 20 * time.Second,
@@ -791,12 +811,12 @@ func TestScoreIntervalWindow(t *testing.T) {
 }
 
 // ============================================================================
-// Two-Pass Silence Candidate Selection Tests
+// Two-Pass Room Tone Candidate Selection Tests
 // ============================================================================
 
-// makeSilenceTestIntervals creates interval samples for testing findBestSilenceRegion.
+// makeRoomToneTestIntervals creates interval samples for testing findBestRoomToneRegion.
 // All intervals share the same spectral/amplitude values for predictable scoring.
-func makeSilenceTestIntervals(start time.Duration, duration time.Duration, rms, peak, centroid, flatness, kurtosis, flux float64) []IntervalSample {
+func makeRoomToneTestIntervals(start time.Duration, duration time.Duration, rms, peak, centroid, flatness, kurtosis, flux float64) []IntervalSample {
 	count := int(duration / (250 * time.Millisecond))
 	intervals := make([]IntervalSample, count)
 	for i := range intervals {
@@ -815,31 +835,31 @@ func makeSilenceTestIntervals(start time.Duration, duration time.Duration, rms, 
 	return intervals
 }
 
-func TestFindBestSilenceRegion_HighestScoreWinsAfterDip(t *testing.T) {
+func TestFindBestRoomToneRegion_HighestScoreWinsAfterDip(t *testing.T) {
 	// Three candidates: A (~0.77), B (~0.52, dip), C (~0.91, highest).
 	// Under the old single-pass algorithm the dip from A to B would trigger
 	// early termination, electing A. The two-pass algorithm scores all
 	// candidates first and then selects the highest, so C should win.
 
-	regions := []SilenceRegion{
+	regions := []RoomToneRegion{
 		{Start: 0, End: 10 * time.Second, Duration: 10 * time.Second},
 		{Start: 15 * time.Second, End: 25 * time.Second, Duration: 10 * time.Second},
 		{Start: 30 * time.Second, End: 40 * time.Second, Duration: 10 * time.Second},
 	}
 
 	// Candidate A intervals: ~0.77 score
-	intervalsA := makeSilenceTestIntervals(0, 10*time.Second,
+	intervalsA := makeRoomToneTestIntervals(0, 10*time.Second,
 		-60.0, -55.0, 100.0, 0.8, 2.0, 0.0)
 	// Candidate B intervals: ~0.52 score (the dip)
-	intervalsB := makeSilenceTestIntervals(15*time.Second, 10*time.Second,
+	intervalsB := makeRoomToneTestIntervals(15*time.Second, 10*time.Second,
 		-50.0, -45.0, 2375.0, 0.3, 5.0, 0.005)
 	// Candidate C intervals: ~0.91 score (highest)
-	intervalsC := makeSilenceTestIntervals(30*time.Second, 10*time.Second,
+	intervalsC := makeRoomToneTestIntervals(30*time.Second, 10*time.Second,
 		-75.0, -70.0, 100.0, 0.9, 1.0, 0.0)
 
 	allIntervals := append(append(intervalsA, intervalsB...), intervalsC...)
 
-	result := findBestSilenceRegion(regions, allIntervals)
+	result := findBestRoomToneRegion(regions, allIntervals)
 
 	if result.BestRegion == nil {
 		t.Fatal("expected a best region to be selected")
@@ -857,27 +877,27 @@ func TestFindBestSilenceRegion_HighestScoreWinsAfterDip(t *testing.T) {
 	}
 }
 
-func TestFindBestSilenceRegion_EarlierCandidatePreferredWithinTolerance(t *testing.T) {
+func TestFindBestRoomToneRegion_EarlierCandidatePreferredWithinTolerance(t *testing.T) {
 	// Two candidates with scores differing by < 0.02 (within selectionTolerance).
 	// The earlier candidate should be preferred.
 
-	regions := []SilenceRegion{
+	regions := []RoomToneRegion{
 		{Start: 5 * time.Second, End: 15 * time.Second, Duration: 10 * time.Second},
 		{Start: 30 * time.Second, End: 40 * time.Second, Duration: 10 * time.Second},
 	}
 
 	// Candidate A intervals: ~0.85
-	intervalsA := makeSilenceTestIntervals(5*time.Second, 10*time.Second,
+	intervalsA := makeRoomToneTestIntervals(5*time.Second, 10*time.Second,
 		-68.0, -63.0, 100.0, 0.8, 2.0, 0.001)
 	// Candidate B intervals: ~0.86 (slightly higher, within tolerance)
-	intervalsB := makeSilenceTestIntervals(30*time.Second, 10*time.Second,
+	intervalsB := makeRoomToneTestIntervals(30*time.Second, 10*time.Second,
 		-69.0, -64.0, 100.0, 0.85, 1.5, 0.0)
 
 	allIntervals := make([]IntervalSample, 0, len(intervalsA)+len(intervalsB))
 	allIntervals = append(allIntervals, intervalsA...)
 	allIntervals = append(allIntervals, intervalsB...)
 
-	result := findBestSilenceRegion(regions, allIntervals)
+	result := findBestRoomToneRegion(regions, allIntervals)
 
 	if result.BestRegion == nil {
 		t.Fatal("expected a best region to be selected")
@@ -893,11 +913,11 @@ func TestFindBestSilenceRegion_EarlierCandidatePreferredWithinTolerance(t *testi
 	}
 }
 
-func TestFindBestSilenceRegion_AllBelowMinAcceptableScoreFallsBack(t *testing.T) {
+func TestFindBestRoomToneRegion_AllBelowMinAcceptableScoreFallsBack(t *testing.T) {
 	// Two regions that will score below minAcceptableScore (0.3).
 	// Both have poor characteristics: high RMS, voice-range centroid, etc.
 
-	regions := []SilenceRegion{
+	regions := []RoomToneRegion{
 		{Start: 0, End: 10 * time.Second, Duration: 10 * time.Second},
 		{Start: 15 * time.Second, End: 25 * time.Second, Duration: 10 * time.Second},
 	}
@@ -907,16 +927,16 @@ func TestFindBestSilenceRegion_AllBelowMinAcceptableScoreFallsBack(t *testing.T)
 	// flatness 0.0, kurtosis 9.0 (kurtosisScore 0.55, below crosstalk threshold of 10),
 	// high flux 0.03 (fluxStabilityScore 0.0, rmsStabilityScore 1.0, stability ~0.6)
 	// Expected: 0.0125*0.30 + 0.11*0.35 + 1.0*0.10 + 0.6*0.25 ≈ 0.29
-	intervalsA := makeSilenceTestIntervals(0, 10*time.Second,
+	intervalsA := makeRoomToneTestIntervals(0, 10*time.Second,
 		-40.5, -35.5, 2375.0, 0.0, 9.0, 0.03)
-	intervalsB := makeSilenceTestIntervals(15*time.Second, 10*time.Second,
+	intervalsB := makeRoomToneTestIntervals(15*time.Second, 10*time.Second,
 		-40.5, -35.5, 2375.0, 0.0, 9.0, 0.03)
 
 	allIntervals := make([]IntervalSample, 0, len(intervalsA)+len(intervalsB))
 	allIntervals = append(allIntervals, intervalsA...)
 	allIntervals = append(allIntervals, intervalsB...)
 
-	result := findBestSilenceRegion(regions, allIntervals)
+	result := findBestRoomToneRegion(regions, allIntervals)
 
 	if result.BestRegion == nil {
 		t.Fatal("expected fallback BestRegion when candidates exist below minAcceptableScore")
@@ -939,22 +959,22 @@ func TestFindBestSilenceRegion_AllBelowMinAcceptableScoreFallsBack(t *testing.T)
 	}
 }
 
-func TestFindBestSilenceRegion_AllRejectedCandidatesDoNotFallback(t *testing.T) {
-	regions := []SilenceRegion{
+func TestFindBestRoomToneRegion_AllRejectedCandidatesDoNotFallback(t *testing.T) {
+	regions := []RoomToneRegion{
 		{Start: 0, End: 10 * time.Second, Duration: 10 * time.Second},
 		{Start: 15 * time.Second, End: 25 * time.Second, Duration: 10 * time.Second},
 	}
 
-	intervalsA := makeSilenceTestIntervals(0, 10*time.Second,
+	intervalsA := makeRoomToneTestIntervals(0, 10*time.Second,
 		-120.0, -120.0, 100.0, 0.8, 2.0, 0.0)
-	intervalsB := makeSilenceTestIntervals(15*time.Second, 10*time.Second,
+	intervalsB := makeRoomToneTestIntervals(15*time.Second, 10*time.Second,
 		-120.0, -120.0, 100.0, 0.8, 2.0, 0.0)
 
 	allIntervals := make([]IntervalSample, 0, len(intervalsA)+len(intervalsB))
 	allIntervals = append(allIntervals, intervalsA...)
 	allIntervals = append(allIntervals, intervalsB...)
 
-	result := findBestSilenceRegion(regions, allIntervals)
+	result := findBestRoomToneRegion(regions, allIntervals)
 
 	if result.BestRegion != nil {
 		t.Fatalf("BestRegion = %+v, want nil for all rejected candidates", result.BestRegion)
@@ -969,18 +989,18 @@ func TestFindBestSilenceRegion_AllRejectedCandidatesDoNotFallback(t *testing.T) 
 	}
 }
 
-func TestFindBestSilenceRegion_SingleAcceptableCandidateElected(t *testing.T) {
+func TestFindBestRoomToneRegion_SingleAcceptableCandidateElected(t *testing.T) {
 	// A single region with an acceptable score should be elected.
 
-	regions := []SilenceRegion{
+	regions := []RoomToneRegion{
 		{Start: 0, End: 10 * time.Second, Duration: 10 * time.Second},
 	}
 
 	// Acceptable score: RMS -65, centroid outside voice range, good flatness
-	intervals := makeSilenceTestIntervals(0, 10*time.Second,
+	intervals := makeRoomToneTestIntervals(0, 10*time.Second,
 		-65.0, -60.0, 100.0, 0.8, 2.0, 0.0)
 
-	result := findBestSilenceRegion(regions, intervals)
+	result := findBestRoomToneRegion(regions, intervals)
 
 	if result.BestRegion == nil {
 		t.Fatal("expected a best region to be selected")
@@ -995,27 +1015,27 @@ func TestFindBestSilenceRegion_SingleAcceptableCandidateElected(t *testing.T) {
 	t.Logf("single candidate score=%.4f", result.Candidates[0].Score)
 }
 
-func TestFindBestSilenceRegion_LaterCandidateWinsWhenGapExceedsTolerance(t *testing.T) {
+func TestFindBestRoomToneRegion_LaterCandidateWinsWhenGapExceedsTolerance(t *testing.T) {
 	// Two candidates where the score gap far exceeds selectionTolerance (0.02).
 	// The later, higher-scoring candidate should win.
 
-	regions := []SilenceRegion{
+	regions := []RoomToneRegion{
 		{Start: 5 * time.Second, End: 15 * time.Second, Duration: 10 * time.Second},
 		{Start: 30 * time.Second, End: 40 * time.Second, Duration: 10 * time.Second},
 	}
 
 	// Candidate A intervals: ~0.77 (same as test 2.1 candidate A)
-	intervalsA := makeSilenceTestIntervals(5*time.Second, 10*time.Second,
+	intervalsA := makeRoomToneTestIntervals(5*time.Second, 10*time.Second,
 		-60.0, -55.0, 100.0, 0.8, 2.0, 0.0)
 	// Candidate B intervals: ~0.91 (same as test 2.1 candidate C)
-	intervalsB := makeSilenceTestIntervals(30*time.Second, 10*time.Second,
+	intervalsB := makeRoomToneTestIntervals(30*time.Second, 10*time.Second,
 		-75.0, -70.0, 100.0, 0.9, 1.0, 0.0)
 
 	allIntervals := make([]IntervalSample, 0, len(intervalsA)+len(intervalsB))
 	allIntervals = append(allIntervals, intervalsA...)
 	allIntervals = append(allIntervals, intervalsB...)
 
-	result := findBestSilenceRegion(regions, allIntervals)
+	result := findBestRoomToneRegion(regions, allIntervals)
 
 	if result.BestRegion == nil {
 		t.Fatal("expected a best region to be selected")
@@ -1031,21 +1051,21 @@ func TestFindBestSilenceRegion_LaterCandidateWinsWhenGapExceedsTolerance(t *test
 	}
 }
 
-func TestFindBestSilenceRegion_LateCandidateDiscoverable(t *testing.T) {
+func TestFindBestRoomToneRegion_LateCandidateDiscoverable(t *testing.T) {
 	// A high-scoring candidate placed at 50% of totalDuration (1800s into a 3600s recording)
 	// is correctly elected when it is the only candidate above minAcceptableScore.
 	// Verifies that all three former restrictions (excludeFirstSeconds, silenceSearchPercent,
 	// candidateCutoffPercent) no longer prevent discovery.
 
-	regions := []SilenceRegion{
+	regions := []RoomToneRegion{
 		{Start: 1800 * time.Second, End: 1810 * time.Second, Duration: 10 * time.Second},
 	}
 
-	// High-scoring silence candidate: low RMS, low centroid, high flatness, low kurtosis, no flux
-	intervals := makeSilenceTestIntervals(1800*time.Second, 10*time.Second,
+	// High-scoring room tone candidate: low RMS, low centroid, high flatness, low kurtosis, no flux
+	intervals := makeRoomToneTestIntervals(1800*time.Second, 10*time.Second,
 		-75.0, -70.0, 100.0, 0.9, 1.0, 0.0)
 
-	result := findBestSilenceRegion(regions, intervals)
+	result := findBestRoomToneRegion(regions, intervals)
 
 	if result.BestRegion == nil {
 		t.Fatal("expected candidate at t=1800s to be elected")
@@ -1307,13 +1327,13 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 	}
 
 	t.Run("finds 30s speech region", func(t *testing.T) {
-		// 10s silence + 2.5min speech (600 intervals)
+		// 10s room tone + 2.5min speech (600 intervals)
 		// With 25% above threshold, this gives ~150 speech intervals (above 120 minimum)
 		// Search starts at 12s, so we lose 8 intervals, leaving 592 → ~148 speech intervals
-		silenceIntervals := makeVariedSpeechIntervals(0, 40, false)             // 10s silence
+		roomToneIntervals := makeVariedSpeechIntervals(0, 40, false)            // 10s room tone
 		speechIntervals := makeVariedSpeechIntervals(10*time.Second, 600, true) // 2.5min speech
-		intervals := make([]IntervalSample, 0, len(silenceIntervals)+len(speechIntervals))
-		intervals = append(intervals, silenceIntervals...)
+		intervals := make([]IntervalSample, 0, len(roomToneIntervals)+len(speechIntervals))
+		intervals = append(intervals, roomToneIntervals...)
 		intervals = append(intervals, speechIntervals...)
 
 		candidates := findSpeechCandidatesFromIntervals(intervals, 10*time.Second, false, -20.0, -55.0)
@@ -1327,11 +1347,11 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 	})
 
 	t.Run("no candidates for short speech", func(t *testing.T) {
-		// 10s silence + 20s speech (too short - only 80 intervals)
-		silenceIntervals := makeVariedSpeechIntervals(0, 40, false)
+		// 10s room tone + 20s speech (too short - only 80 intervals)
+		roomToneIntervals := makeVariedSpeechIntervals(0, 40, false)
 		speechIntervals := makeVariedSpeechIntervals(10*time.Second, 80, true) // 20s
-		intervals := make([]IntervalSample, 0, len(silenceIntervals)+len(speechIntervals))
-		intervals = append(intervals, silenceIntervals...)
+		intervals := make([]IntervalSample, 0, len(roomToneIntervals)+len(speechIntervals))
+		intervals = append(intervals, roomToneIntervals...)
 		intervals = append(intervals, speechIntervals...)
 
 		candidates := findSpeechCandidatesFromIntervals(intervals, 10*time.Second, false, -20.0, -55.0)
@@ -1360,8 +1380,8 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 		}
 	})
 
-	t.Run("respects silence end boundary", func(t *testing.T) {
-		// Speech before and after silence end - only speech after should be detected
+	t.Run("respects room-tone end boundary", func(t *testing.T) {
+		// Speech before and after the elected room-tone region end - only speech after should be detected
 		// Need 480+ intervals for late speech to have enough high-scoring intervals
 		earlyIntervals := makeVariedSpeechIntervals(0, 200, true)             // 50s speech at start
 		lateIntervals := makeVariedSpeechIntervals(60*time.Second, 500, true) // 125s speech later
@@ -1373,11 +1393,11 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 		candidates := findSpeechCandidatesFromIntervals(intervals, 50*time.Second, false, -20.0, -55.0)
 
 		if len(candidates) == 0 {
-			t.Fatal("expected speech candidate after silence end")
+			t.Fatal("expected speech candidate after room-tone region end")
 		}
 		// First candidate should start after 50s + 2s buffer = 52s
 		if candidates[0].Start < 52*time.Second {
-			t.Errorf("speech start %v should be after silence end + buffer (52s)", candidates[0].Start)
+			t.Errorf("speech start %v should be after room-tone region end + buffer (52s)", candidates[0].Start)
 		}
 	})
 
@@ -2170,8 +2190,8 @@ func TestFindBestSpeechRegion_SNRMarginCheck(t *testing.T) {
 	})
 }
 
-func Test_measureOutputSilenceRegion(t *testing.T) {
-	// Generate processed test audio file with known silence region
+func TestMeasureOutputRoomToneRegion(t *testing.T) {
+	// Generate processed test audio file with known room tone region
 	// Using a simple tone with a substantial silence gap for predictable measurements
 	testFile := generateTestAudio(t, TestAudioOptions{
 		DurationSecs: 5.0,
@@ -2189,21 +2209,21 @@ func Test_measureOutputSilenceRegion(t *testing.T) {
 	})
 	defer cleanupTestAudio(t, testFile)
 
-	// Define the silence region we want to measure
-	silenceRegion := SilenceRegion{
+	// Define the room tone region we want to measure
+	roomToneRegion := RoomToneRegion{
 		Start:    time.Duration(1.5 * float64(time.Second)),
 		End:      time.Duration(2.5 * float64(time.Second)),
 		Duration: time.Duration(1.0 * float64(time.Second)),
 	}
 
-	t.Run("valid_silence_region", func(t *testing.T) {
-		metrics, err := measureOutputSilenceRegion(testFile, silenceRegion)
+	t.Run("valid_room_tone_region", func(t *testing.T) {
+		metrics, err := measureOutputRoomToneRegion(testFile, roomToneRegion)
 		if err != nil {
-			t.Fatalf("measureOutputSilenceRegion failed: %v", err)
+			t.Fatalf("measureOutputRoomToneRegion failed: %v", err)
 		}
 
 		// Log all measurements for inspection
-		t.Logf("Silence Region Measurements:")
+		t.Logf("Room Tone Region Measurements:")
 		t.Logf("  RMSLevel: %.2f dBFS", metrics.RMSLevel)
 		t.Logf("  PeakLevel: %.2f dBFS", metrics.PeakLevel)
 		t.Logf("  CrestFactor: %.2f dB", metrics.CrestFactor)
@@ -2215,22 +2235,22 @@ func Test_measureOutputSilenceRegion(t *testing.T) {
 		t.Logf("  TruePeak: %.2f dBTP", metrics.TruePeak)
 
 		// Verify region is captured correctly
-		if metrics.Region.Start != silenceRegion.Start {
-			t.Errorf("Region start mismatch: got %v, want %v", metrics.Region.Start, silenceRegion.Start)
+		if metrics.Region.Start != roomToneRegion.Start {
+			t.Errorf("Region start mismatch: got %v, want %v", metrics.Region.Start, roomToneRegion.Start)
 		}
-		if metrics.Region.Duration != silenceRegion.Duration {
-			t.Errorf("Region duration mismatch: got %v, want %v", metrics.Region.Duration, silenceRegion.Duration)
+		if metrics.Region.Duration != roomToneRegion.Duration {
+			t.Errorf("Region duration mismatch: got %v, want %v", metrics.Region.Duration, roomToneRegion.Duration)
 		}
 
-		// Amplitude metrics: silence should have very low RMS (< -40 dBFS)
+		// Amplitude metrics: room tone should have very low RMS (< -40 dBFS)
 		// With -60dB noise, we expect RMS around -60dB range
 		if metrics.RMSLevel > -40.0 {
-			t.Errorf("RMSLevel too high for silence: %.2f dBFS (expected < -40)", metrics.RMSLevel)
+			t.Errorf("RMSLevel too high for room tone: %.2f dBFS (expected < -40)", metrics.RMSLevel)
 		}
 
-		// Peak should also be low for silence region
+		// Peak should also be low for room tone region
 		if metrics.PeakLevel > -30.0 {
-			t.Errorf("PeakLevel too high for silence: %.2f dBFS (expected < -30)", metrics.PeakLevel)
+			t.Errorf("PeakLevel too high for room tone: %.2f dBFS (expected < -30)", metrics.PeakLevel)
 		}
 
 		// Spectral entropy should be relatively high for noise (closer to 1.0 than speech)
@@ -2253,7 +2273,7 @@ func Test_measureOutputSilenceRegion(t *testing.T) {
 	})
 
 	t.Run("invalid_path", func(t *testing.T) {
-		metrics, err := measureOutputSilenceRegion("/nonexistent/path.wav", silenceRegion)
+		metrics, err := measureOutputRoomToneRegion("/nonexistent/path.wav", roomToneRegion)
 		if err == nil {
 			t.Error("Expected error for invalid path, got nil")
 		}
@@ -2263,12 +2283,12 @@ func Test_measureOutputSilenceRegion(t *testing.T) {
 	})
 
 	t.Run("zero_duration_region", func(t *testing.T) {
-		zeroRegion := SilenceRegion{
+		zeroRegion := RoomToneRegion{
 			Start:    time.Duration(1.0 * float64(time.Second)),
 			End:      time.Duration(1.0 * float64(time.Second)),
 			Duration: 0,
 		}
-		metrics, err := measureOutputSilenceRegion(testFile, zeroRegion)
+		metrics, err := measureOutputRoomToneRegion(testFile, zeroRegion)
 		if err == nil {
 			t.Error("Expected error for zero duration region, got nil")
 		}
@@ -2674,28 +2694,28 @@ func TestRunFilterGraphLenientErrors(t *testing.T) {
 	t.Logf("lenient config processed %d filtered frames", frameCount)
 }
 
-func TestFindBestSilenceRegion_BoundaryTransientSurvivesAfterRefinement(t *testing.T) {
-	// An 18s candidate where the first 3s contain a boundary transient (speech-to-silence
+func TestFindBestRoomToneRegion_BoundaryTransientSurvivesAfterRefinement(t *testing.T) {
+	// An 18s candidate where the first 3s contain a boundary transient (speech-to-room-tone
 	// transition) and the remaining 15s are clean room tone. Without pre-scoring refinement,
 	// the full-span crest factor exceeds silenceCrestFactorMax (25 dB) and the candidate
 	// scores 0.0. With refinement, the golden sub-region trims the transient before scoring.
 
-	region := SilenceRegion{
+	region := RoomToneRegion{
 		Start:    10 * time.Second,
 		End:      28 * time.Second,
 		Duration: 18 * time.Second,
 	}
-	regions := []SilenceRegion{region}
+	regions := []RoomToneRegion{region}
 
 	// First 3s: boundary transient - high peak (simulating speech tail), elevated RMS
-	transientIntervals := makeSilenceTestIntervals(
+	transientIntervals := makeRoomToneTestIntervals(
 		10*time.Second, 3*time.Second,
 		-50.0, -10.0, // RMS -50, peak -10: crest factor 40 dB per interval
 		100.0, 0.8, 2.0, 0.0,
 	)
 
 	// Remaining 15s: clean room tone - low RMS, low peak, good spectral characteristics
-	cleanIntervals := makeSilenceTestIntervals(
+	cleanIntervals := makeRoomToneTestIntervals(
 		13*time.Second, 15*time.Second,
 		-70.0, -65.0, // RMS -70, peak -65: crest factor 5 dB per interval
 		100.0, 0.9, 1.0, 0.0,
@@ -2705,7 +2725,7 @@ func TestFindBestSilenceRegion_BoundaryTransientSurvivesAfterRefinement(t *testi
 	allIntervals = append(allIntervals, transientIntervals...)
 	allIntervals = append(allIntervals, cleanIntervals...)
 
-	result := findBestSilenceRegion(regions, allIntervals)
+	result := findBestRoomToneRegion(regions, allIntervals)
 
 	if result.BestRegion == nil {
 		t.Fatal("expected candidate to be elected after pre-scoring refinement trims boundary transient")
@@ -2755,16 +2775,16 @@ func TestFindBestSilenceRegion_BoundaryTransientSurvivesAfterRefinement(t *testi
 func TestDetectVoiceActivated(t *testing.T) {
 	// Helper to build a candidate slice with a given number of digital silence
 	// and non-digital-silence candidates.
-	makeCandidates := func(digitalSilence, other int, otherWarning string) []SilenceCandidateMetrics {
-		candidates := make([]SilenceCandidateMetrics, 0, digitalSilence+other)
+	makeCandidates := func(digitalSilence, other int, otherWarning string) []RoomToneCandidateMetrics {
+		candidates := make([]RoomToneCandidateMetrics, 0, digitalSilence+other)
 		for range digitalSilence {
-			candidates = append(candidates, SilenceCandidateMetrics{
+			candidates = append(candidates, RoomToneCandidateMetrics{
 				TransientWarning: "rejected: digital silence (RMS -120.0 dBFS)",
 				Score:            0.0,
 			})
 		}
 		for range other {
-			candidates = append(candidates, SilenceCandidateMetrics{
+			candidates = append(candidates, RoomToneCandidateMetrics{
 				TransientWarning: otherWarning,
 				Score:            0.0,
 			})
@@ -2774,7 +2794,7 @@ func TestDetectVoiceActivated(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		candidates []SilenceCandidateMetrics
+		candidates []RoomToneCandidateMetrics
 		want       bool
 	}{
 		{
@@ -2800,7 +2820,7 @@ func TestDetectVoiceActivated(t *testing.T) {
 		{
 			name: "candidates with scores pulling ratio down",
 			// 90 digital silence + 10 scored candidates = 90% < 95% threshold
-			candidates: func() []SilenceCandidateMetrics {
+			candidates: func() []RoomToneCandidateMetrics {
 				cs := makeCandidates(90, 10, "")
 				for i := 90; i < 100; i++ {
 					cs[i].Score = 0.5
@@ -2821,7 +2841,7 @@ func TestDetectVoiceActivated(t *testing.T) {
 	}
 }
 
-func TestAnalyzeAudio_SilenceScanDuration(t *testing.T) {
+func TestAnalyzeAudio_RoomToneScanDuration(t *testing.T) {
 	// Deterministic synthetic input for the silence-scan-duration cap.
 	//
 	// Layout (85 seconds total):
@@ -2867,7 +2887,7 @@ func TestAnalyzeAudio_SilenceScanDuration(t *testing.T) {
 	}
 	if baseline.NoiseProfile == nil {
 		t.Fatalf("baseline NoiseProfile is nil; the silence pipeline did not elect a region "+
-			"for the synthetic input (regions=%d)", len(baseline.SilenceRegions))
+			"for the synthetic input (regions=%d)", len(baseline.RoomToneRegions))
 	}
 
 	abs := func(x float64) float64 {
@@ -2901,7 +2921,7 @@ func TestAnalyzeAudio_SilenceScanDuration(t *testing.T) {
 		// AC1 / AC5: explicit zero is identical to flag absent (no cap).
 		config := newTestBaseConfig()
 		config.Analysis.Enabled = true
-		config.Analysis.SilenceScanDuration = 0
+		config.Analysis.RoomToneScanDuration = 0
 
 		got, err := AnalyzeAudio(testFile, config, nil)
 		if err != nil {
@@ -2910,9 +2930,9 @@ func TestAnalyzeAudio_SilenceScanDuration(t *testing.T) {
 
 		assertLoudnessMatches(t, got)
 
-		if !regionsEqual(got.SilenceRegions, baseline.SilenceRegions) {
-			t.Errorf("SilenceRegions = %+v, baseline = %+v",
-				got.SilenceRegions, baseline.SilenceRegions)
+		if !regionsEqual(got.RoomToneRegions, baseline.RoomToneRegions) {
+			t.Errorf("RoomToneRegions = %+v, baseline = %+v",
+				got.RoomToneRegions, baseline.RoomToneRegions)
 		}
 		if !speechRegionsEqual(got.SpeechRegions, baseline.SpeechRegions) {
 			t.Errorf("SpeechRegions = %+v, baseline = %+v",
@@ -2930,16 +2950,16 @@ func TestAnalyzeAudio_SilenceScanDuration(t *testing.T) {
 		// 2 s lands cleanly between the 1.75 s and 2.0 s interval start times.
 		config := newTestBaseConfig()
 		config.Analysis.Enabled = true
-		config.Analysis.SilenceScanDuration = 2 * time.Second
+		config.Analysis.RoomToneScanDuration = 2 * time.Second
 
 		got, err := AnalyzeAudio(testFile, config, nil)
 		if err != nil {
 			t.Fatalf("AnalyzeAudio failed: %v", err)
 		}
 
-		if len(got.SilenceRegions) != 0 {
-			t.Errorf("len(SilenceRegions) = %d, want 0 (cap should exclude silence at 8-55 s)",
-				len(got.SilenceRegions))
+		if len(got.RoomToneRegions) != 0 {
+			t.Errorf("len(RoomToneRegions) = %d, want 0 (cap should exclude silence at 8-55 s)",
+				len(got.RoomToneRegions))
 		}
 		if got.NoiseProfile != nil {
 			t.Errorf("NoiseProfile = %+v, want nil", got.NoiseProfile)
@@ -2952,7 +2972,7 @@ func TestAnalyzeAudio_SilenceScanDuration(t *testing.T) {
 		// produces the same NoiseProfile placement.
 		config := newTestBaseConfig()
 		config.Analysis.Enabled = true
-		config.Analysis.SilenceScanDuration = 60 * time.Second
+		config.Analysis.RoomToneScanDuration = 60 * time.Second
 
 		got, err := AnalyzeAudio(testFile, config, nil)
 		if err != nil {
@@ -2980,7 +3000,7 @@ func TestAnalyzeAudio_SilenceScanDuration(t *testing.T) {
 		// only the silence pipeline reads the capped slice.
 		config := newTestBaseConfig()
 		config.Analysis.Enabled = true
-		config.Analysis.SilenceScanDuration = 60 * time.Second
+		config.Analysis.RoomToneScanDuration = 60 * time.Second
 
 		got, err := AnalyzeAudio(testFile, config, nil)
 		if err != nil {
@@ -3000,8 +3020,8 @@ func TestAnalyzeAudio_SilenceScanDuration(t *testing.T) {
 	})
 }
 
-// regionsEqual returns true when two SilenceRegion slices match element-wise.
-func regionsEqual(a, b []SilenceRegion) bool {
+// regionsEqual returns true when two RoomToneRegion slices match element-wise.
+func regionsEqual(a, b []RoomToneRegion) bool {
 	if len(a) != len(b) {
 		return false
 	}

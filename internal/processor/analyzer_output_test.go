@@ -8,12 +8,12 @@ import (
 	"github.com/linuxmatters/jivetalking/internal/audio"
 )
 
-// measureOutputSilenceRegion analyses the elected silence region in the output file
+// measureOutputRoomToneRegion analyses the elected room tone region in the output file
 // to capture comprehensive metrics for before/after comparison and adaptive tuning.
 //
 // The region parameter should use the same Start/Duration as the NoiseProfile
 // from Pass 1 analysis. Returns nil if the region cannot be measured.
-func measureOutputSilenceRegion(outputPath string, region SilenceRegion) (*SilenceCandidateMetrics, error) {
+func measureOutputRoomToneRegion(outputPath string, region RoomToneRegion) (*RoomToneCandidateMetrics, error) {
 	// Open the processed audio file
 	reader, _, err := audio.OpenAudioFile(outputPath)
 	if err != nil {
@@ -21,7 +21,7 @@ func measureOutputSilenceRegion(outputPath string, region SilenceRegion) (*Silen
 	}
 	defer reader.Close()
 
-	return measureOutputSilenceRegionFromReader(reader, region)
+	return measureOutputRoomToneRegionFromReader(reader, region)
 }
 
 // measureOutputSpeechRegion analyses a speech region in the output file
@@ -55,7 +55,7 @@ func TestExtractRegionPair(t *testing.T) {
 			wantSpeech:   false,
 		},
 		{
-			name: "NoiseProfile only returns silence region",
+			name: "NoiseProfile only returns room tone region",
 			measurements: &AudioMeasurements{
 				NoiseProfile: &NoiseProfile{
 					Start:    2 * time.Second,
@@ -100,7 +100,7 @@ func TestExtractRegionPair(t *testing.T) {
 			wantSilEnd:  1*time.Second + 400*time.Millisecond,
 		},
 		{
-			name: "End equals Start plus Duration for silence region",
+			name: "End equals Start plus Duration for room tone region",
 			measurements: &AudioMeasurements{
 				NoiseProfile: &NoiseProfile{
 					Start:    3 * time.Second,
@@ -118,10 +118,10 @@ func TestExtractRegionPair(t *testing.T) {
 			silRegion, spRegion := extractRegionPair(tt.measurements)
 
 			if tt.wantSilence && silRegion == nil {
-				t.Fatal("expected non-nil SilenceRegion, got nil")
+				t.Fatal("expected non-nil RoomToneRegion, got nil")
 			}
 			if !tt.wantSilence && silRegion != nil {
-				t.Fatalf("expected nil SilenceRegion, got %+v", silRegion)
+				t.Fatalf("expected nil RoomToneRegion, got %+v", silRegion)
 			}
 			if tt.wantSpeech && spRegion == nil {
 				t.Fatal("expected non-nil SpeechRegion, got nil")
@@ -132,10 +132,10 @@ func TestExtractRegionPair(t *testing.T) {
 
 			if silRegion != nil && tt.wantSilEnd != 0 {
 				if silRegion.End != tt.wantSilEnd {
-					t.Errorf("SilenceRegion.End = %v, want %v (Start + Duration)", silRegion.End, tt.wantSilEnd)
+					t.Errorf("RoomToneRegion.End = %v, want %v (Start + Duration)", silRegion.End, tt.wantSilEnd)
 				}
 				if silRegion.End != silRegion.Start+silRegion.Duration {
-					t.Errorf("SilenceRegion.End (%v) != Start (%v) + Duration (%v)",
+					t.Errorf("RoomToneRegion.End (%v) != Start (%v) + Duration (%v)",
 						silRegion.End, silRegion.Start, silRegion.Duration)
 				}
 			}

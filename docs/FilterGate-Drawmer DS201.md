@@ -61,7 +61,7 @@ The DS201 requires manual adjustment. We measure your audio in Pass 1 and tune e
 | **Ratio** | Loudness range (expressive → gentle) | 1.5:1–2.5:1 |
 | **Attack** | Transient sharpness indicators | 10–17ms |
 | **Release** | Spectral flux + noise character | 150–500ms |
-| **Range** | Silence entropy (tonal → gentle) | -12dB to -36dB |
+| **Range** | Room tone entropy (tonal → gentle) | -12dB to -36dB |
 | **Knee** | Spectral crest (dynamic → soft) | 2–5dB |
 | **Detection** | Noise character | RMS or Peak |
 

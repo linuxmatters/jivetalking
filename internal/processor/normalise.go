@@ -547,7 +547,7 @@ type NormalisationResult struct {
 	LimiterClamped    bool    // True when calculateLimiterCeiling clamped ceiling to minimum
 	Pass3FilterPrefix string  // Filter prefix used for Pass 3 measurement (empty when no pre-gain/limiting)
 
-	RegionMeasurementTime time.Duration // Final-output silence/speech region measurement duration
+	RegionMeasurementTime time.Duration // Final-output room tone/speech region measurement duration
 
 	// FinalMeasurements contains full analysis after normalisation (Pass 4)
 	// Includes spectral characteristics, amplitude stats, and loudness measurements
@@ -912,15 +912,15 @@ func finalizeLoudnormOutputMeasurements(
 		return finalMeasurements, regionMeasurementTime
 	}
 
-	silRegion, spRegion := extractRegionPair(inputMeasurements)
-	if silRegion == nil && spRegion == nil {
+	roomToneRegion, spRegion := extractRegionPair(inputMeasurements)
+	if roomToneRegion == nil && spRegion == nil {
 		return finalMeasurements, regionMeasurementTime
 	}
 
 	regionStart := time.Now()
-	silSample, spSample := MeasureOutputRegions(inputPath, silRegion, spRegion)
+	roomToneSample, spSample := MeasureOutputRegions(inputPath, roomToneRegion, spRegion)
 	regionMeasurementTime = time.Since(regionStart)
-	finalMeasurements.SilenceSample = silSample
+	finalMeasurements.RoomToneSample = roomToneSample
 	finalMeasurements.SpeechSample = spSample
 
 	return finalMeasurements, regionMeasurementTime

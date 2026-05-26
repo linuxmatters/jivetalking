@@ -9,25 +9,25 @@ import (
 	"github.com/linuxmatters/jivetalking/internal/processor"
 )
 
-// writeDiagnosticSilence outputs detailed silence detection diagnostics.
-func writeDiagnosticSilence(f *os.File, measurements *processor.AudioMeasurements) {
+// writeDiagnosticRoomTone outputs detailed room tone detection diagnostics.
+func writeDiagnosticRoomTone(f *os.File, measurements *processor.AudioMeasurements) {
 	if measurements == nil {
 		return
 	}
 
-	writeSection(f, "Diagnostic: Silence Detection")
+	writeSection(f, "Diagnostic: Room Tone Detection")
 
-	// Show adaptive silence detection threshold if different from default
-	if measurements.SilenceDetectLevel != 0 && measurements.SilenceDetectLevel != -50.0 {
-		fmt.Fprintf(f, "Silence Threshold:   %.1f dB (from %.1f dB noise floor estimate)\n",
-			measurements.SilenceDetectLevel, measurements.PreScanNoiseFloor)
+	// Show adaptive room tone detection threshold if different from default
+	if measurements.RoomToneDetectLevel != 0 && measurements.RoomToneDetectLevel != -50.0 {
+		fmt.Fprintf(f, "Room Tone Threshold: %.1f dB (from %.1f dB noise floor estimate)\n",
+			measurements.RoomToneDetectLevel, measurements.PreScanNoiseFloor)
 	}
 
 	// Interval sampling summary with RMSLevel distribution analysis
 	if len(measurements.IntervalSamples) > 0 {
 		fmt.Fprintf(f, "Interval Samples:    %d × 250ms windows analysed\n", len(measurements.IntervalSamples))
 
-		// Calculate and display RMSLevel distribution for silence detection debugging
+		// Calculate and display RMSLevel distribution for room tone detection debugging
 		rmsValues := make([]float64, 0, len(measurements.IntervalSamples))
 		for _, interval := range measurements.IntervalSamples {
 			if interval.RMSLevel > -120 { // Exclude digital silence
@@ -48,7 +48,7 @@ func writeDiagnosticSilence(f *os.File, measurements *processor.AudioMeasurement
 				sorted[len(sorted)*9/10],
 				sorted[len(sorted)-1])
 
-			// Find largest gap for silence/speech boundary detection
+			// Find largest gap for room tone / speech boundary detection
 			var largestGap float64
 			var gapIndex int
 			for i := 1; i < len(sorted); i++ {
@@ -65,42 +65,42 @@ func writeDiagnosticSilence(f *os.File, measurements *processor.AudioMeasurement
 		}
 	}
 
-	// Silence candidates (ranked display of evaluated candidates with scores)
+	// Room tone candidates (ranked display of evaluated candidates with scores)
 	//nolint:gocritic // ifElseChain: complex display branches with different condition types
-	if len(measurements.SilenceCandidates) > 0 {
-		fmt.Fprintf(f, "Silence Candidates:  %d evaluated\n", len(measurements.SilenceCandidates))
+	if len(measurements.RoomToneCandidates) > 0 {
+		fmt.Fprintf(f, "Room Tone Candidates:  %d evaluated\n", len(measurements.RoomToneCandidates))
 		if measurements.VoiceActivated {
 			fmt.Fprintf(f, "Voice-Activated:     yes (digital silence fraction >= 95%%)\n")
 		}
-		electedCandidate, displayCandidates := rankedSilenceCandidateEntries(measurements)
-		writeCandidateDisplaySummary(f, len(measurements.SilenceCandidates), electedCandidate != nil, len(displayCandidates))
+		electedCandidate, displayCandidates := rankedRoomToneCandidateEntries(measurements)
+		writeCandidateDisplaySummary(f, len(measurements.RoomToneCandidates), electedCandidate != nil, len(displayCandidates))
 		if electedCandidate != nil {
 			entry := *electedCandidate
-			writeReportSilenceCandidateMetrics(f, entry.index, entry.candidate, true)
+			writeReportRoomToneCandidateMetrics(f, entry.index, entry.candidate, true)
 		}
 		for _, entry := range displayCandidates {
-			writeReportSilenceCandidateMetrics(f, entry.index, entry.candidate, false)
+			writeReportRoomToneCandidateMetrics(f, entry.index, entry.candidate, false)
 		}
 
 		// Rejection summary for zero-scored candidates
-		writeReportRejectionSummary(f, measurements.SilenceCandidates)
+		writeReportRejectionSummary(f, measurements.RoomToneCandidates)
 	} else if measurements.NoiseProfile != nil {
-		fmt.Fprintf(f, "Silence Sample:      %.1fs at %.1fs\n",
+		fmt.Fprintf(f, "Room Tone Sample:    %.1fs at %.1fs\n",
 			measurements.NoiseProfile.Duration.Seconds(),
 			measurements.NoiseProfile.Start.Seconds())
 		fmt.Fprintf(f, "  Noise Floor:       %.1f dBFS (RMS)\n", measurements.NoiseProfile.MeasuredNoiseFloor)
 		fmt.Fprintf(f, "  Peak Level:        %.1f dBFS\n", measurements.NoiseProfile.PeakLevel)
 		fmt.Fprintf(f, "  Crest Factor:      %.1f dB\n", measurements.NoiseProfile.CrestFactor)
-	} else if len(measurements.SilenceRegions) > 0 {
-		r := measurements.SilenceRegions[0]
-		fmt.Fprintf(f, "Silence Detected:    %.1fs at %.1fs (no profile extracted)\n",
+	} else if len(measurements.RoomToneRegions) > 0 {
+		r := measurements.RoomToneRegions[0]
+		fmt.Fprintf(f, "Room Tone Detected:  %.1fs at %.1fs (no profile extracted)\n",
 			r.Duration.Seconds(), r.Start.Seconds())
 	} else {
-		fmt.Fprintf(f, "Silence Candidates:  NONE FOUND\n")
+		fmt.Fprintf(f, "Room Tone Candidates:  NONE FOUND\n")
 		if measurements.VoiceActivated {
 			fmt.Fprintf(f, "Voice-Activated:     yes (digital silence fraction >= 95%%)\n")
 		}
-		fmt.Fprintf(f, "  No silence regions detected in audio. Noise profiling unavailable.\n")
+		fmt.Fprintf(f, "  No room tone regions detected in audio. Noise profiling unavailable.\n")
 	}
 
 	fmt.Fprintln(f, "")
@@ -148,7 +148,7 @@ func writeDiagnosticSpeech(f *os.File, measurements *processor.AudioMeasurements
 		fmt.Fprintf(f, "  No candidate met quality threshold for speech profiling.\n")
 	} else {
 		fmt.Fprintf(f, "Speech Candidates:   NONE FOUND\n")
-		fmt.Fprintf(f, "  No speech regions detected (file may be too short or all silence).\n")
+		fmt.Fprintf(f, "  No speech regions detected (file may be too short or all room tone).\n")
 	}
 
 	fmt.Fprintln(f, "")

@@ -73,8 +73,8 @@ func GenerateReport(data ReportData) error {
 		finalMeasurements = getFinalMeasurements(data.Result)
 	}
 
-	// Silence Detection (analysis that informs filter chain decisions)
-	writeDiagnosticSilence(f, inputMeasurements)
+	// Room Tone Detection (analysis that informs filter chain decisions)
+	writeDiagnosticRoomTone(f, inputMeasurements)
 
 	// Speech Detection (for adaptive tuning)
 	writeDiagnosticSpeech(f, inputMeasurements)

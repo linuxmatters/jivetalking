@@ -21,7 +21,7 @@ const (
 	// 40 intervals = 10 seconds, bridging platform-inserted gaps up to 10s.
 	voiceActivatedSpeechInterruptionToleranceIntervals = 40
 
-	// speechSearchStartBuffer adds time after silence end before searching for speech.
+	// speechSearchStartBuffer adds time after the elected room-tone region end before searching for speech.
 	// Allows transition from room tone to actual speech content.
 	speechSearchStartBuffer = 2 * time.Second
 
@@ -264,24 +264,24 @@ func speechScore(interval IntervalSample, rmsP50 float64, speechRMSMin float64) 
 }
 
 // findSpeechCandidatesFromIntervals identifies speech regions from interval samples.
-// Only searches after silenceEnd to ensure speech follows the elected silence candidate.
+// Only searches after roomToneEnd to ensure speech follows the elected room-tone candidate.
 // Uses a speech score approach that rewards amplitude, voice-range centroid, and low entropy.
 //
 // Detection algorithm:
-// 1. Start searching after silenceEnd + buffer
+// 1. Start searching after roomToneEnd + buffer
 // 2. Calculate reference values (medians) for speech scoring
 // 3. Score each interval for "speech likelihood"
 // 4. Find consecutive runs that meet minimum duration (30 seconds)
 // 5. Allow brief interruptions (2s) for natural pauses
-func findSpeechCandidatesFromIntervals(intervals []IntervalSample, silenceEnd time.Duration, voiceActivated bool, rmsLevel, noiseFloor float64) []SpeechRegion {
+func findSpeechCandidatesFromIntervals(intervals []IntervalSample, roomToneEnd time.Duration, voiceActivated bool, rmsLevel, noiseFloor float64) []SpeechRegion {
 	if len(intervals) < minimumSpeechIntervals {
 		return nil
 	}
 
 	speechRMSMin := computeSpeechRMSMinimum(rmsLevel, noiseFloor)
 
-	// Find start index: after silence end + buffer
-	searchStart := silenceEnd + speechSearchStartBuffer
+	// Find start index: after elected room-tone region end + buffer
+	searchStart := roomToneEnd + speechSearchStartBuffer
 	startIdx := -1
 	for i, interval := range intervals {
 		if interval.Timestamp >= searchStart {
@@ -295,7 +295,7 @@ func findSpeechCandidatesFromIntervals(intervals []IntervalSample, silenceEnd ti
 	}
 
 	if len(intervals)-startIdx < minimumSpeechIntervals {
-		return nil // Not enough intervals after silence
+		return nil // Not enough intervals after the elected room-tone region
 	}
 
 	searchIntervals := intervals[startIdx:]
@@ -309,7 +309,7 @@ func findSpeechCandidatesFromIntervals(intervals []IntervalSample, silenceEnd ti
 
 	rmsP50 := rmsLevels[len(rmsLevels)/2]
 
-	// Speech score threshold (lower than silence since speech varies more)
+	// Speech score threshold (lower than the room-tone candidate threshold since speech varies more)
 	const speechScoreThreshold = 0.4
 
 	// Select interruption tolerance based on voice-activated status
@@ -386,7 +386,7 @@ type findBestSpeechRegionResult struct {
 
 // findBestSpeechRegion selects the best speech region for measurements.
 // Strategy: prefer longest duration that meets quality threshold.
-// Unlike silence (where earlier is better), speech benefits from longer samples.
+// Unlike room-tone candidate selection (where earlier is better), speech benefits from longer samples.
 // For long candidates (>60s), refines to the best 60s sub-region to avoid
 // contaminating spectral metrics with pauses.
 // The noiseProfile parameter enables SNR margin checking to penalise candidates

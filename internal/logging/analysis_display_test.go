@@ -19,11 +19,11 @@ func makeMinimalMeasurements() *processor.AudioMeasurements {
 			PeakLevel:    -6.0,
 			DynamicRange: 18.0,
 		},
-		InputI:             -23.0,
-		InputTP:            -1.0,
-		InputLRA:           6.0,
-		PreScanNoiseFloor:  -50.0,
-		SilenceDetectLevel: -45.0,
+		InputI:              -23.0,
+		InputTP:             -1.0,
+		InputLRA:            6.0,
+		PreScanNoiseFloor:   -50.0,
+		RoomToneDetectLevel: -45.0,
 	}
 }
 
@@ -45,7 +45,7 @@ func makeFullAnalysisMeasurements() *processor.AudioMeasurements {
 	m.DynamicRange = 20.8
 	m.CrestFactor = 11.4
 	m.PreScanNoiseFloor = -58.4
-	m.SilenceDetectLevel = -57.4
+	m.RoomToneDetectLevel = -57.4
 	m.NoiseFloor = -58.4
 	m.NoiseFloorSource = "silence_profile"
 	m.SuggestedGateThreshold = processor.DbToLinear(-52.4)
@@ -74,9 +74,9 @@ func makeFullAnalysisMeasurements() *processor.AudioMeasurements {
 		OriginalStart:      5 * time.Second,
 		OriginalDuration:   8 * time.Second,
 	}
-	m.SilenceCandidates = []processor.SilenceCandidateMetrics{
+	m.RoomToneCandidates = []processor.RoomToneCandidateMetrics{
 		{
-			Region:      processor.SilenceRegion{Start: 5 * time.Second, Duration: 8 * time.Second},
+			Region:      processor.RoomToneRegion{Start: 5 * time.Second, Duration: 8 * time.Second},
 			RMSLevel:    -58.4,
 			PeakLevel:   -44.0,
 			CrestFactor: 14.4,
@@ -89,14 +89,14 @@ func makeFullAnalysisMeasurements() *processor.AudioMeasurements {
 			Score: 0.910,
 		},
 		{
-			Region:      processor.SilenceRegion{Start: 40 * time.Second, Duration: 3 * time.Second},
+			Region:      processor.RoomToneRegion{Start: 40 * time.Second, Duration: 3 * time.Second},
 			RMSLevel:    -56.1,
 			CrestFactor: 10.2,
 			Spectral:    processor.SpectralMetrics{Entropy: 0.620},
 			Score:       0.420,
 		},
 		{
-			Region:           processor.SilenceRegion{Start: 70 * time.Second, Duration: 2 * time.Second},
+			Region:           processor.RoomToneRegion{Start: 70 * time.Second, Duration: 2 * time.Second},
 			TransientWarning: "rejected: digital silence",
 			Score:            0,
 		},
@@ -134,11 +134,11 @@ func makeFullAnalysisMeasurements() *processor.AudioMeasurements {
 func TestDisplayAnalysisResults_VoiceActivated_NoElectedCandidate(t *testing.T) {
 	m := makeMinimalMeasurements()
 	m.VoiceActivated = true
-	m.SilenceCandidates = []processor.SilenceCandidateMetrics{
+	m.RoomToneCandidates = []processor.RoomToneCandidateMetrics{
 		{
 			Score:            0.0,
 			TransientWarning: "rejected: digital silence",
-			Region:           processor.SilenceRegion{Start: 10 * time.Second, Duration: 5 * time.Second},
+			Region:           processor.RoomToneRegion{Start: 10 * time.Second, Duration: 5 * time.Second},
 		},
 	}
 
@@ -195,7 +195,7 @@ DYNAMICS
   Dynamic Range:  20.8 dB
   Crest Factor:   12.8 dB (speech)
 
-SILENCE DETECTION
+ROOM TONE DETECTION
   Threshold:      -57.4 dB (-58.4 dBFS room tone estimate + 1 dB)
   Candidates:     3 evaluated
   Displayed:      elected + 1 chronological (1 omitted)
@@ -234,7 +234,7 @@ SPEECH DETECTION
   Rejected:       1 zero score
 
 DERIVED MEASUREMENTS
-  Noise Floor:    -58.4 dBFS (from elected silence)
+  Noise Floor:    -58.4 dBFS (from elected room tone)
   Gate Baseline:  -52.4 dB (noise floor + margin)
   NR Headroom:    24.6 dB (noise-to-speech gap)
 
@@ -322,21 +322,21 @@ func TestDisplayAnalysisResultsWithDiagnostics_UsesEffectiveConfigAndDiagnostics
 	}
 }
 
-func TestDisplayAnalysisResults_VoiceActivated_NoSilence(t *testing.T) {
+func TestDisplayAnalysisResults_VoiceActivated_NoRoomTone(t *testing.T) {
 	m := makeMinimalMeasurements()
 	m.VoiceActivated = true
-	// No SilenceCandidates, no NoiseProfile
+	// No RoomToneCandidates, no NoiseProfile
 
 	config := processor.DefaultEffectiveFilterConfig()
 	var buf bytes.Buffer
 	DisplayAnalysisResults(&buf, "/tmp/test.wav", makeMinimalMetadata(), m, config)
 	output := buf.String()
 
-	if !strings.Contains(output, "No silence detected") {
-		t.Error("expected 'No silence detected' in output")
+	if !strings.Contains(output, "No room tone detected") {
+		t.Error("expected 'No room tone detected' in output")
 	}
 	if !strings.Contains(output, "Voice-activated recording detected") {
-		t.Error("expected 'Voice-activated recording detected' in no-silence branch")
+		t.Error("expected 'Voice-activated recording detected' in no-room-tone branch")
 	}
 }
 
@@ -348,10 +348,10 @@ func TestDisplayAnalysisResults_Normal_NoVoiceActivated(t *testing.T) {
 		Duration:           5 * time.Second,
 		MeasuredNoiseFloor: -55.0,
 	}
-	m.SilenceCandidates = []processor.SilenceCandidateMetrics{
+	m.RoomToneCandidates = []processor.RoomToneCandidateMetrics{
 		{
 			Score:  0.85,
-			Region: processor.SilenceRegion{Start: 30 * time.Second, Duration: 5 * time.Second},
+			Region: processor.RoomToneRegion{Start: 30 * time.Second, Duration: 5 * time.Second},
 		},
 	}
 
@@ -487,13 +487,13 @@ func TestDisplayAnalysisResults_ExcludesProcessingOnlyFields(t *testing.T) {
 	}
 }
 
-func TestDisplayAnalysisResults_CapsSilenceCandidatesChronologicallyWithElectedFirst(t *testing.T) {
+func TestDisplayAnalysisResults_CapsRoomToneCandidatesChronologicallyWithElectedFirst(t *testing.T) {
 	m := makeMinimalMeasurements()
-	m.SilenceCandidates = makeRankedSilenceCandidates(12)
+	m.RoomToneCandidates = makeRankedRoomToneCandidates(12)
 	m.NoiseProfile = &processor.NoiseProfile{
-		Start:              m.SilenceCandidates[0].Region.Start,
-		Duration:           m.SilenceCandidates[0].Region.Duration,
-		MeasuredNoiseFloor: m.SilenceCandidates[0].RMSLevel,
+		Start:              m.RoomToneCandidates[0].Region.Start,
+		Duration:           m.RoomToneCandidates[0].Region.Duration,
+		MeasuredNoiseFloor: m.RoomToneCandidates[0].RMSLevel,
 	}
 
 	config := processor.DefaultEffectiveFilterConfig()
@@ -522,21 +522,21 @@ func TestDisplayAnalysisResults_CapsSilenceCandidatesChronologicallyWithElectedF
 		"      Kurtosis:    ",
 	} {
 		if count := strings.Count(output, detailedLine); count != 1 {
-			t.Fatalf("analysis silence detail line %q count = %d, want 1", strings.TrimSpace(detailedLine), count)
+			t.Fatalf("analysis room tone detail line %q count = %d, want 1", strings.TrimSpace(detailedLine), count)
 		}
 	}
 
 	if count := strings.Count(output, "  #"); count != 11 {
-		t.Fatalf("displayed analysis silence candidates = %d, want 11", count)
+		t.Fatalf("displayed analysis room tone candidates = %d, want 11", count)
 	}
 	assertAppearsBefore(t, output, "#1:", "#2:")
 	assertAppearsBefore(t, output, "#2:", "#3:")
 	assertAppearsBefore(t, output, "#10:", "#11:")
 	if strings.Contains(output, "#12:") {
-		t.Fatal("expected silence candidate 12 to be omitted")
+		t.Fatal("expected room tone candidate 12 to be omitted")
 	}
 	if strings.Contains(output, "[SELECTED]") {
-		t.Fatal("expected silence output to use elected terminology")
+		t.Fatal("expected room tone output to use elected terminology")
 	}
 	assertCandidateSummaryTerminology(t, output, "  Displayed:      elected + top 10 chronological (1 omitted)")
 }
@@ -645,24 +645,24 @@ func TestDisplayAnalysisResults_SpeechDisplaySummaryIncludesZeroOmitted(t *testi
 	assertCandidateSummaryTerminology(t, output, "  Displayed:      elected + 3 chronological (0 omitted)")
 }
 
-func TestWriteDiagnosticSilence_VoiceActivated_WithCandidates(t *testing.T) {
+func TestWriteDiagnosticRoomTone_VoiceActivated_WithCandidates(t *testing.T) {
 	m := makeMinimalMeasurements()
 	m.VoiceActivated = true
-	m.SilenceCandidates = []processor.SilenceCandidateMetrics{
+	m.RoomToneCandidates = []processor.RoomToneCandidateMetrics{
 		{
 			Score:            0.0,
 			TransientWarning: "rejected: digital silence",
-			Region:           processor.SilenceRegion{Start: 5 * time.Second, Duration: 3 * time.Second},
+			Region:           processor.RoomToneRegion{Start: 5 * time.Second, Duration: 3 * time.Second},
 		},
 	}
 
-	tmpFile, err := os.CreateTemp("", "diag-silence-test-*.txt")
+	tmpFile, err := os.CreateTemp("", "diag-room-tone-test-*.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer os.Remove(tmpFile.Name())
 
-	writeDiagnosticSilence(tmpFile, m)
+	writeDiagnosticRoomTone(tmpFile, m)
 	tmpFile.Close()
 
 	data, err := os.ReadFile(tmpFile.Name())
@@ -672,22 +672,22 @@ func TestWriteDiagnosticSilence_VoiceActivated_WithCandidates(t *testing.T) {
 	output := string(data)
 
 	if !strings.Contains(output, "Voice-Activated:     yes") {
-		t.Error("expected 'Voice-Activated: yes' in diagnostic silence output with candidates")
+		t.Error("expected 'Voice-Activated: yes' in diagnostic room tone output with candidates")
 	}
 }
 
-func TestWriteDiagnosticSilence_VoiceActivated_NoneFound(t *testing.T) {
+func TestWriteDiagnosticRoomTone_VoiceActivated_NoneFound(t *testing.T) {
 	m := makeMinimalMeasurements()
 	m.VoiceActivated = true
-	// No candidates, no noise profile, no silence regions
+	// No candidates, no noise profile, no room tone regions
 
-	tmpFile, err := os.CreateTemp("", "diag-silence-test-*.txt")
+	tmpFile, err := os.CreateTemp("", "diag-room-tone-test-*.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer os.Remove(tmpFile.Name())
 
-	writeDiagnosticSilence(tmpFile, m)
+	writeDiagnosticRoomTone(tmpFile, m)
 	tmpFile.Close()
 
 	data, err := os.ReadFile(tmpFile.Name())
@@ -704,18 +704,18 @@ func TestWriteDiagnosticSilence_VoiceActivated_NoneFound(t *testing.T) {
 	}
 }
 
-func TestWriteDiagnosticSilence_Normal_NoVoiceActivated(t *testing.T) {
+func TestWriteDiagnosticRoomTone_Normal_NoVoiceActivated(t *testing.T) {
 	m := makeMinimalMeasurements()
 	m.VoiceActivated = false
 	// No candidates - triggers NONE FOUND
 
-	tmpFile, err := os.CreateTemp("", "diag-silence-test-*.txt")
+	tmpFile, err := os.CreateTemp("", "diag-room-tone-test-*.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer os.Remove(tmpFile.Name())
 
-	writeDiagnosticSilence(tmpFile, m)
+	writeDiagnosticRoomTone(tmpFile, m)
 	tmpFile.Close()
 
 	data, err := os.ReadFile(tmpFile.Name())

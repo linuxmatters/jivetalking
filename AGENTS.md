@@ -28,8 +28,8 @@ internal/
 ├── audio/reader.go         # FFmpeg demuxer/decoder wrapper (Reader, Metadata, OpenAudioFile)
 ├── processor/
 │   ├── adaptive.go         # AdaptConfig() - derives effective filter settings + diagnostics from Pass 1 measurements
-│   ├── analyzer.go         # AnalyzeAudio() - Pass 1: ebur128 + astats + aspectralstats; silence/speech detection
-│   ├── analyzer_candidates.go  # Silence candidate scoring and election
+│   ├── analyzer.go         # AnalyzeAudio() - Pass 1: ebur128 + astats + aspectralstats; room-tone/speech detection
+│   ├── analyzer_candidates.go  # Room-tone candidate scoring and election
 │   ├── analyzer_metrics.go     # IntervalSample, SpectralMetrics, per-250ms metric accumulation
 │   ├── analyzer_output.go      # MeasureOutputRegions() - before/after region comparison
 │   ├── encoder.go          # Output file encoder wrapper
@@ -58,7 +58,7 @@ internal/
 
 **Four-pass architecture:**
 
-1. **Pass 1 (Analysis):** Measures LUFS, true peak, LRA, noise floor, spectral characteristics; detects silence/speech regions via 250ms interval sampling
+1. **Pass 1 (Analysis):** Measures LUFS, true peak, LRA, noise floor, spectral characteristics; detects room-tone/speech regions via 250ms interval sampling
 2. **Pass 2 (Processing):** Applies adaptive filter chain tuned to measurements; output measured for before/after comparison
 3. **Pass 3 (Measuring):** Optionally prepends `volume` (pre-gain) + `alimiter` (Volumax) when limiting is active, then runs loudnorm in measurement mode (JSON output via FFmpeg log capture) to get input stats for linear mode; measures the post-limiter signal so `measured_I`/`measured_TP` are accurate
 4. **Pass 4 (Normalising):** Applies `volume` (pre-gain, when ceiling clamped) + `alimiter` (Volumax) + `loudnorm` (linear mode) + `adeclick`; pre-gain raises very quiet recordings so the alimiter can use a viable ceiling; `alimiter` creates headroom so loudnorm achieves full linear gain to reach -16 LUFS
@@ -122,7 +122,7 @@ Two separate message sets exist for the two TUI modes.
 
 `AdaptConfig()` in `adaptive.go` derives per-file filter state from Pass 1 `AudioMeasurements`: it accepts caller-owned `BaseFilterConfig` defaults, returns `EffectiveFilterConfig` for filter building, and returns `AdaptiveDiagnostics` for report-only adaptation explanations. Do not reintroduce `FilterChainConfig` or store pass execution state in config; use `ProcessingFilterContext` for pass-local state.
 
-- **DS201 highpass frequency:** 60-120Hz based on spectral decrease (warm/thin voice detection) and silence noise floor; warm voices use gentler Q (0.5) and reduced wet/dry mix
+- **DS201 highpass frequency:** 60-120Hz based on spectral decrease (warm/thin voice detection) and room-tone noise floor; warm voices use gentler Q (0.5) and reduced wet/dry mix
 - **DS201 lowpass:** Enabled adaptively based on content type and HF noise indicators (rolloff/centroid ratio)
 - **NoiseRemove compand:** Adaptive threshold (noise floor + 5 dB, clamped [-70, -40]); expansion scales 4-12 dB based on noise severity
 - **DS201 gate threshold:** Derived from measured noise floor; with breath reduction, positioned at 60% of gap between noise floor and quiet speech level (`SpeechProfile.RMSLevel - CrestFactor`); firmer ratio (1.5x, clamped 2.0-4.0) and deeper range (+6 dB) when breath reduction active

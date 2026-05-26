@@ -72,7 +72,7 @@ func buildSpectralMetricRows(values func(spectralMetricDescriptor) [3]float64, i
 	return specs
 }
 
-func silenceSpectralValueOr(src *processor.SilenceCandidateMetrics, descriptor spectralMetricDescriptor) float64 {
+func roomToneSpectralValueOr(src *processor.RoomToneCandidateMetrics, descriptor spectralMetricDescriptor) float64 {
 	if src == nil {
 		return math.NaN()
 	}
@@ -207,13 +207,13 @@ func writeLoudnessTable(f *os.File, input *processor.AudioMeasurements, filtered
 }
 
 // writeNoiseFloorTable outputs a three-column comparison table for noise floor metrics.
-// Columns: Input (Pass 1 elected silence candidate), Filtered (Pass 2 SilenceSample), Final (Pass 4 SilenceSample)
+// Columns: Input (Pass 1 elected room tone candidate), Filtered (Pass 2 RoomToneSample), Final (Pass 4 RoomToneSample)
 func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurements, filteredMeasurements *processor.OutputMeasurements, finalMeasurements *processor.OutputMeasurements, normResult *processor.NormalisationResult) {
 	writeSection(f, "Noise Floor Analysis")
 
 	// Skip if no input measurements or noise profile
 	if inputMeasurements == nil || inputMeasurements.NoiseProfile == nil {
-		fmt.Fprintln(f, "No silence detected in input — noise profiling unavailable")
+		fmt.Fprintln(f, "No room tone detected in input — noise profiling unavailable")
 		fmt.Fprintln(f, "")
 		return
 	}
@@ -225,9 +225,9 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	}
 	gainNormalise := effectiveGainDB != 0
 
-	// Find the elected silence candidate in SilenceCandidates by matching Region.Start to NoiseProfile.Start
-	// NoiseProfile only has ~10 fields, but we need the full 20+ field SilenceCandidateMetrics
-	var inputNoise *processor.SilenceCandidateMetrics
+	// Find the elected room tone candidate in RoomToneCandidates by matching Region.Start to NoiseProfile.Start
+	// NoiseProfile only has ~10 fields, but we need the full 20+ field RoomToneCandidateMetrics
+	var inputNoise *processor.RoomToneCandidateMetrics
 	noiseProfile := inputMeasurements.NoiseProfile
 
 	// Handle refined regions - match against OriginalStart if refined, otherwise match against Start
@@ -236,27 +236,27 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 		targetStart = noiseProfile.OriginalStart
 	}
 
-	for i := range inputMeasurements.SilenceCandidates {
-		if inputMeasurements.SilenceCandidates[i].Region.Start == targetStart {
-			inputNoise = &inputMeasurements.SilenceCandidates[i]
+	for i := range inputMeasurements.RoomToneCandidates {
+		if inputMeasurements.RoomToneCandidates[i].Region.Start == targetStart {
+			inputNoise = &inputMeasurements.RoomToneCandidates[i]
 			break
 		}
 	}
 
 	// Fall back to NoiseProfile fields if candidate not found (shouldn't happen, but be defensive)
 	if inputNoise == nil {
-		fmt.Fprintln(f, "Warning: Could not find matching silence candidate — using NoiseProfile data")
+		fmt.Fprintln(f, "Warning: Could not find matching room tone candidate — using NoiseProfile data")
 		fmt.Fprintln(f, "")
 	}
 
-	// Extract filtered and final silence samples
-	var filteredNoise *processor.SilenceCandidateMetrics
-	var finalNoise *processor.SilenceCandidateMetrics
+	// Extract filtered and final room tone samples
+	var filteredNoise *processor.RoomToneCandidateMetrics
+	var finalNoise *processor.RoomToneCandidateMetrics
 	if filteredMeasurements != nil {
-		filteredNoise = filteredMeasurements.SilenceSample
+		filteredNoise = filteredMeasurements.RoomToneSample
 	}
 	if finalMeasurements != nil {
-		finalNoise = finalMeasurements.SilenceSample
+		finalNoise = finalMeasurements.RoomToneSample
 	}
 
 	table := NewMetricTable()
@@ -384,14 +384,14 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	// Show "n/a" instead of misleading zeros or arbitrary values.
 
 	// Entropy input has a special fallback to NoiseProfile when candidate not found
-	inputEntropy := valOr(inputNoise, func(m *processor.SilenceCandidateMetrics) float64 { return m.Spectral.Entropy })
+	inputEntropy := valOr(inputNoise, func(m *processor.RoomToneCandidateMetrics) float64 { return m.Spectral.Entropy })
 	if inputNoise == nil {
 		inputEntropy = noiseProfile.Entropy
 	}
-	filteredEntropy := valOr(filteredNoise, func(m *processor.SilenceCandidateMetrics) float64 { return m.Spectral.Entropy })
-	finalEntropy := valOr(finalNoise, func(m *processor.SilenceCandidateMetrics) float64 { return m.Spectral.Entropy })
+	filteredEntropy := valOr(filteredNoise, func(m *processor.RoomToneCandidateMetrics) float64 { return m.Spectral.Entropy })
+	finalEntropy := valOr(finalNoise, func(m *processor.RoomToneCandidateMetrics) float64 { return m.Spectral.Entropy })
 
-	v := func(field func(*processor.SilenceCandidateMetrics) float64) [3]float64 {
+	v := func(field func(*processor.RoomToneCandidateMetrics) float64) [3]float64 {
 		return [3]float64{
 			valOr(inputNoise, field),
 			valOr(filteredNoise, field),
@@ -404,22 +404,22 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 			return [3]float64{inputEntropy, filteredEntropy, finalEntropy}
 		}
 		return [3]float64{
-			silenceSpectralValueOr(inputNoise, d),
-			silenceSpectralValueOr(filteredNoise, d),
-			silenceSpectralValueOr(finalNoise, d),
+			roomToneSpectralValueOr(inputNoise, d),
+			roomToneSpectralValueOr(filteredNoise, d),
+			roomToneSpectralValueOr(finalNoise, d),
 		}
 	}, false), nfFmtSpectral, gainNormalise, effectiveGainDB, filteredIsDigitalSilence, finalIsDigitalSilence)
 
 	// ========== LOUDNESS METRICS ==========
 
 	addNoiseFloorMetricRows(table, []threeColMetricSpec{
-		{"Momentary LUFS", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.MomentaryLUFS }), 1, "LUFS", 0, nil},
-		{"Short-term LUFS", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.ShortTermLUFS }), 1, "LUFS", 0, nil},
+		{"Momentary LUFS", v(func(m *processor.RoomToneCandidateMetrics) float64 { return m.MomentaryLUFS }), 1, "LUFS", 0, nil},
+		{"Short-term LUFS", v(func(m *processor.RoomToneCandidateMetrics) float64 { return m.ShortTermLUFS }), 1, "LUFS", 0, nil},
 	}, nfFmtLUFS, gainNormalise, effectiveGainDB, filteredIsDigitalSilence, finalIsDigitalSilence)
 
 	addNoiseFloorMetricRows(table, []threeColMetricSpec{
-		{"True Peak", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.TruePeak }), 1, "dBTP", 0, nil},
-		{"Sample Peak", v(func(m *processor.SilenceCandidateMetrics) float64 { return m.SamplePeak }), 1, "dBFS", 0, nil},
+		{"True Peak", v(func(m *processor.RoomToneCandidateMetrics) float64 { return m.TruePeak }), 1, "dBTP", 0, nil},
+		{"Sample Peak", v(func(m *processor.RoomToneCandidateMetrics) float64 { return m.SamplePeak }), 1, "dBFS", 0, nil},
 	}, nfFmtDB, gainNormalise, effectiveGainDB, filteredIsDigitalSilence, finalIsDigitalSilence)
 
 	// Character (interpretation row) - based on entropy

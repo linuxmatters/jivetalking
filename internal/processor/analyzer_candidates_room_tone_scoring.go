@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// Silence region scoring for measurement reference extraction.
+// Room tone region scoring for measurement reference extraction.
 //
 // The "noise profile" is no longer used for afftdn training (anlmdn is self-adapting).
 // Instead, these measurements serve as:
@@ -26,7 +26,7 @@ const (
 	idealDurationMin       = 8 * time.Second  // Ideal range lower bound
 	idealDurationMax       = 18 * time.Second // Ideal range upper bound
 
-	// Long region segmentation: break up long silence regions to find cleanest subsection
+	// Long region segmentation: break up long room tone regions to find cleanest subsection
 	// Intentional room tone may be embedded within a longer quiet period (e.g., quiet lead-up + room tone)
 	segmentationThreshold = 20 * time.Second // Regions longer than this get segmented
 	segmentDuration       = 12 * time.Second // Each segment is this long (ideal duration)
@@ -40,9 +40,9 @@ const (
 	crosstalkKurtosisThreshold    = 10.0 // Above this + voice centroid = likely crosstalk
 	crosstalkCrestFactorThreshold = 15.0 // Above this + voice centroid = likely crosstalk
 	crosstalkPeakRMSGap           = 45.0 // dB - catches severe transient contamination regardless of spectral content
-	// silenceCrestFactorMax is the maximum acceptable crest factor for silence candidates.
+	// silenceCrestFactorMax is the maximum acceptable crest factor for room tone candidates.
 	// Crest factor > 25 dB indicates physical transients (bumps, interference) contaminating
-	// the silence region, making noise floor measurements unreliable.
+	// the room tone region, making noise floor measurements unreliable.
 	// Normal room tone: 5-20 dB; contaminated: 25-45 dB.
 	silenceCrestFactorMax = 25.0 // dB - hard rejection above this
 
@@ -52,14 +52,14 @@ const (
 	// Genuine room tone never drops below ~-95 dBFS due to preamp thermal noise.
 	digitalSilenceRMSThreshold = -115.0 // dBFS - 5 dB margin above measurement floor
 
-	// voiceActivatedDigitalSilenceThreshold is the fraction of silence candidates
+	// voiceActivatedDigitalSilenceThreshold is the fraction of room tone candidates
 	// that must be digital silence to classify a recording as voice-activated.
 	// 95% threshold provides a 10-point margin above the highest known normal recording (Marius: 85%).
 	voiceActivatedDigitalSilenceThreshold = 0.95
 
-	// Crest factor penalty thresholds for silence candidates.
-	// Context: These apply to SILENCE CANDIDATES (RMS < -70 dBFS).
-	// In silence regions, even modest transients produce extreme crest factors:
+	// Crest factor penalty thresholds for room tone candidates.
+	// Context: These apply to ROOM TONE CANDIDATES (RMS < -70 dBFS).
+	// In room tone regions, even modest transients produce extreme crest factors:
 	//   Peak -30 dBFS, RMS -74 dBFS -> Crest 44 dB (expected, not pathological)
 	crestFactorSoftThreshold = 30.0  // dB - start mild penalty
 	crestFactorHardThreshold = 35.0  // dB - require peak check
@@ -84,21 +84,21 @@ const (
 	selectionTolerance = 0.02
 )
 
-// findBestSilenceRegionResult contains the selected region and all evaluated candidates.
-type findBestSilenceRegionResult struct {
-	BestRegion *SilenceRegion
-	Candidates []SilenceCandidateMetrics
+// findBestRoomToneRegionResult contains the selected region and all evaluated candidates.
+type findBestRoomToneRegionResult struct {
+	BestRegion *RoomToneRegion
+	Candidates []RoomToneCandidateMetrics
 }
 
-// refineToGoldenSubregion finds the cleanest sub-region within a silence candidate.
+// refineToGoldenSubregion finds the cleanest sub-region within a room tone candidate.
 // Uses existing interval samples to find the window with lowest average RMS.
 // Returns the original region if it's already at or below goldenWindowDuration,
 // or if refinement fails for any reason (insufficient intervals, etc.).
 //
 // This addresses cases where a 17.2s candidate at 24.0s absorbed
-// both pre-intentional (noisier) and intentional (cleaner) silence periods.
+// both pre-intentional (noisier) and intentional (cleaner) room tone periods.
 // By refining to the cleanest 10s window, we isolate the optimal noise profile.
-func refineToGoldenSubregion(candidate *SilenceRegion, intervals []IntervalSample) *SilenceRegion {
+func refineToGoldenSubregion(candidate *RoomToneRegion, intervals []IntervalSample) *RoomToneRegion {
 	if candidate == nil {
 		return nil
 	}
@@ -114,13 +114,13 @@ func refineToGoldenSubregion(candidate *SilenceRegion, intervals []IntervalSampl
 		return candidate
 	}
 
-	return &SilenceRegion{Start: start, End: end, Duration: dur}
+	return &RoomToneRegion{Start: start, End: end, Duration: dur}
 }
 
 // detectVoiceActivated determines whether a recording was made with a voice-activated
-// platform by examining the fraction of silence candidates flagged as digital silence.
+// platform by examining the fraction of room tone candidates flagged as digital silence.
 // Returns true when candidates exist and >= 95% have "digital silence" in their TransientWarning.
-func detectVoiceActivated(candidates []SilenceCandidateMetrics) bool {
+func detectVoiceActivated(candidates []RoomToneCandidateMetrics) bool {
 	if len(candidates) == 0 {
 		return false
 	}
@@ -136,7 +136,7 @@ func detectVoiceActivated(candidates []SilenceCandidateMetrics) bool {
 	return fraction >= voiceActivatedDigitalSilenceThreshold
 }
 
-// findBestSilenceRegion finds the best silence region for noise profile extraction.
+// findBestRoomToneRegion finds the best room tone region for noise profile extraction.
 // Evaluates all candidates regardless of temporal position. Uses a two-pass approach:
 // first scores all candidates using multi-metric analysis (amplitude, spectral
 // characteristics, stability, duration), then elects the earliest candidate whose
@@ -144,19 +144,19 @@ func detectVoiceActivated(candidates []SilenceCandidateMetrics) bool {
 //
 // Uses pre-collected interval data for measurements - no file re-reading required.
 // Returns an empty result if no suitable region is found.
-func findBestSilenceRegion(regions []SilenceRegion, intervals []IntervalSample) *findBestSilenceRegionResult {
-	result := &findBestSilenceRegionResult{}
+func findBestRoomToneRegion(regions []RoomToneRegion, intervals []IntervalSample) *findBestRoomToneRegionResult {
+	result := &findBestRoomToneRegionResult{}
 
 	if len(regions) == 0 {
 		return result
 	}
 
-	var candidates []SilenceRegion
+	var candidates []RoomToneRegion
 	for _, r := range regions {
 		if r.Duration < minimumSilenceDuration {
 			continue
 		}
-		segments := segmentLongSilenceRegion(r)
+		segments := segmentLongRoomToneRegion(r)
 		candidates = append(candidates, segments...)
 	}
 
@@ -167,7 +167,7 @@ func findBestSilenceRegion(regions []SilenceRegion, intervals []IntervalSample) 
 	for i := range candidates {
 		candidate := &candidates[i]
 
-		metrics := measureSilenceCandidateFromIntervals(*candidate, intervals)
+		metrics := measureRoomToneCandidateFromIntervals(*candidate, intervals)
 		if metrics == nil {
 			continue
 		}
@@ -176,7 +176,7 @@ func findBestSilenceRegion(regions []SilenceRegion, intervals []IntervalSample) 
 			refined := refineToGoldenSubregion(candidate, intervals)
 			wasRefined := refined.Start != candidate.Start || refined.Duration != candidate.Duration
 			if wasRefined {
-				refinedMetrics := measureSilenceCandidateFromIntervals(*refined, intervals)
+				refinedMetrics := measureRoomToneCandidateFromIntervals(*refined, intervals)
 				if refinedMetrics != nil {
 					refinedMetrics.WasRefined = true
 					refinedMetrics.OriginalStart = candidate.Start
@@ -186,7 +186,7 @@ func findBestSilenceRegion(regions []SilenceRegion, intervals []IntervalSample) 
 			}
 		}
 
-		score := scoreSilenceCandidate(metrics)
+		score := scoreRoomToneCandidate(metrics)
 		metrics.Score = score
 
 		result.Candidates = append(result.Candidates, *metrics)
@@ -203,7 +203,7 @@ func findBestSilenceRegion(regions []SilenceRegion, intervals []IntervalSample) 
 		for _, c := range result.Candidates {
 			if c.Score >= maxScore-selectionTolerance && c.Score >= minAcceptableScore {
 				region := c.Region
-				result.BestRegion = &SilenceRegion{
+				result.BestRegion = &RoomToneRegion{
 					Start:    region.Start,
 					End:      region.End,
 					Duration: region.Duration,
@@ -215,7 +215,7 @@ func findBestSilenceRegion(regions []SilenceRegion, intervals []IntervalSample) 
 			for _, c := range result.Candidates {
 				if c.Score > 0.0 && c.Score >= maxScore-selectionTolerance {
 					region := c.Region
-					result.BestRegion = &SilenceRegion{
+					result.BestRegion = &RoomToneRegion{
 						Start:    region.Start,
 						End:      region.End,
 						Duration: region.Duration,
@@ -229,16 +229,16 @@ func findBestSilenceRegion(regions []SilenceRegion, intervals []IntervalSample) 
 	return result
 }
 
-// scoreSilenceCandidate computes a composite score for a silence region candidate.
+// scoreRoomToneCandidate computes a composite score for a room tone region candidate.
 // Higher scores indicate better candidates for noise profiling.
 // Returns 0.0 for candidates that should be rejected (e.g., crosstalk detected).
-func scoreSilenceCandidate(m *SilenceCandidateMetrics) float64 {
+func scoreRoomToneCandidate(m *RoomToneCandidateMetrics) float64 {
 	if m == nil {
 		return 0.0
 	}
 
 	if m.RMSLevel <= digitalSilenceRMSThreshold {
-		debugLog("scoreSilenceCandidate: REJECTING candidate at %.3fs - RMS %.1f dBFS at or below %.1f dBFS threshold (digital silence)",
+		debugLog("scoreRoomToneCandidate: REJECTING candidate at %.3fs - RMS %.1f dBFS at or below %.1f dBFS threshold (digital silence)",
 			m.Region.Start.Seconds(), m.RMSLevel, digitalSilenceRMSThreshold)
 		m.TransientWarning = fmt.Sprintf(
 			"rejected: RMS %.1f dBFS at or below %.1f dBFS threshold (digital silence from voice-activated recording)",
@@ -248,10 +248,10 @@ func scoreSilenceCandidate(m *SilenceCandidateMetrics) float64 {
 	}
 
 	isCrosstalk := isLikelyCrosstalk(m)
-	debugLog("scoreSilenceCandidate: start=%.3fs, CrestFactor=%.2f dB, isCrosstalk=%v",
+	debugLog("scoreRoomToneCandidate: start=%.3fs, CrestFactor=%.2f dB, isCrosstalk=%v",
 		m.Region.Start.Seconds(), m.CrestFactor, isCrosstalk)
 	if isCrosstalk {
-		debugLog("scoreSilenceCandidate: REJECTING candidate at %.3fs (returning score=0.0)", m.Region.Start.Seconds())
+		debugLog("scoreRoomToneCandidate: REJECTING candidate at %.3fs (returning score=0.0)", m.Region.Start.Seconds())
 		m.TransientWarning = fmt.Sprintf(
 			"rejected: crosstalk detected (crest %.1f dB, centroid %.0f Hz)",
 			m.CrestFactor, m.Spectral.Centroid,
@@ -260,7 +260,7 @@ func scoreSilenceCandidate(m *SilenceCandidateMetrics) float64 {
 	}
 
 	if m.CrestFactor > silenceCrestFactorMax {
-		debugLog("scoreSilenceCandidate: REJECTING candidate at %.3fs - crest factor %.1f dB exceeds %.1f dB threshold",
+		debugLog("scoreRoomToneCandidate: REJECTING candidate at %.3fs - crest factor %.1f dB exceeds %.1f dB threshold",
 			m.Region.Start.Seconds(), m.CrestFactor, silenceCrestFactorMax)
 		m.TransientWarning = fmt.Sprintf(
 			"rejected: crest factor %.1f dB exceeds %.1f dB threshold (transient contamination)",
@@ -332,10 +332,10 @@ func calculateStabilityScore(intervals []IntervalSample) float64 {
 	return rmsStabilityScore*0.6 + fluxStabilityScore*0.4
 }
 
-// isLikelyCrosstalk detects if a silence candidate is likely crosstalk (leaked voice).
+// isLikelyCrosstalk detects if a room tone candidate is likely crosstalk (leaked voice).
 // Returns true if centroid is in voice range AND has peaked/impulsive characteristics,
 // OR if the crest factor indicates severe transient contamination (centroid-independent).
-func isLikelyCrosstalk(m *SilenceCandidateMetrics) bool {
+func isLikelyCrosstalk(m *RoomToneCandidateMetrics) bool {
 	crestExceedsThreshold := m.CrestFactor > crosstalkPeakRMSGap
 	debugLog("isLikelyCrosstalk: CrestFactor=%.2f dB, threshold=%.2f dB, exceeds=%v",
 		m.CrestFactor, crosstalkPeakRMSGap, crestExceedsThreshold)

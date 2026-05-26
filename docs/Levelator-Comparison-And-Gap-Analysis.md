@@ -102,7 +102,7 @@ downmix → ds201_highpass → ds201_lowpass → noiseremove → ds201_gate → 
 |--------|---------------------|-------|
 | **DS201 Highpass** | Frequency (60-120Hz), poles, mix | Spectral centroid, spectral decrease, noise floor |
 | **DS201 Lowpass** | Cutoff frequency, enable/disable | Content type detection (speech/music/mixed), rolloff, ZCR |
-| **NoiseRemove** | Compand threshold, expansion depth (disabled when no noise profile) | Measured noise floor + 5 dB, noise severity; compand requires an elected silence region; production `anlmdn` runs at the source sample rate with `r=0.0020` and `m=3` |
+| **NoiseRemove** | Compand threshold, expansion depth (disabled when no noise profile) | Measured noise floor + 5 dB, noise severity; compand requires an elected room tone region; production `anlmdn` runs at the source sample rate with `r=0.0020` and `m=3` |
 | **DS201 Gate** | Threshold, ratio, attack, release, range, knee | LRA, noise floor, quiet speech estimate, spectral flux, entropy |
 | **LA-2A Compressor** | Threshold, ratio, attack, release, knee, mix | Kurtosis, flux, dynamic range, spectral centroid |
 | **De-esser** | Intensity (0.0-0.6) | Spectral centroid + rolloff |
@@ -120,8 +120,8 @@ downmix → ds201_highpass → ds201_lowpass → noiseremove → ds201_gate → 
 
 Jivetalking employs speech profile extraction for adaptive tuning:
 
-- **Silence detection:** Uses 250ms interval sampling with spectral analysis; digital silence (below -115 dBFS) rejected as unsuitable room tone
-- **Voice-activated detection:** Recordings where >= 95% of silence candidates are digital silence (Riverside, Zencastr) are flagged; speech interruption tolerance widens from 2s to 10s for accurate speech region extraction
+- **Room tone detection:** Uses 250ms interval sampling with spectral analysis; digital silence (below -115 dBFS) rejected as unsuitable room tone
+- **Voice-activated detection:** Recordings where >= 95% of room tone candidates are digital silence (Riverside, Zencastr) are flagged; speech interruption tolerance widens from 2s to 10s for accurate speech region extraction
 - **Speech region detection:** Finds representative speech segments (30s+ duration)
 - **Golden sub-region refinement:** Identifies cleanest sub-windows for noise/speech profiling
 - **Speech metrics:** RMS level, crest factor, spectral centroid, kurtosis, flux for each profile
@@ -220,7 +220,7 @@ Jivetalking employs speech profile extraction for adaptive tuning:
 
 ### Capabilities Jivetalking Has That Levelator Lacked
 
-1. **Noise Reduction:** Non-Local Means denoising (`anlmdn`) always active, running at the source sample rate with a small research radius (`r=0.0020`) and a tight LUT decay (`m=3`) for sharp rejection of distant patches. Adaptive compand applies when a silence region is elected as the noise profile
+1. **Noise Reduction:** Non-Local Means denoising (`anlmdn`) always active, running at the source sample rate with a small research radius (`r=0.0020`) and a tight LUT decay (`m=3`) for sharp rejection of distant patches. Adaptive compand applies when a room tone region is elected as the noise profile
 2. **Gating:** Soft expander for inter-speech cleanup
 3. **True Peak Limiting:** Prevents inter-sample peaks
 4. **De-essing:** Automatic sibilance control

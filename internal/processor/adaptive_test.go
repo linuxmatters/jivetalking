@@ -293,7 +293,7 @@ func TestTuneDS201HighPass(t *testing.T) {
 		centroid         float64       // spectral centroid (Hz)
 		spectralDecrease float64       // spectral decrease (negative = warm voice)
 		spectralSkewness float64       // spectral skewness (positive = LF emphasis)
-		noiseProfile     *NoiseProfile // silence sample characteristics
+		noiseProfile     *NoiseProfile // room-tone region noise profile characteristics
 		wantFreqMin      float64       // minimum expected frequency
 		wantFreqMax      float64       // maximum expected frequency
 		wantPoles        int           // expected poles (0 = don't check, 1 = gentle, 2 = standard)
@@ -328,9 +328,9 @@ func TestTuneDS201HighPass(t *testing.T) {
 			wantFreqMax:      100,
 		},
 
-		// Clean silence sample (< -70 dBFS) - no boost regardless of entropy
+		// Clean room-tone region (< -70 dBFS) - no boost regardless of entropy
 		{
-			name:             "bright voice, clean silence, broadband noise",
+			name:             "bright voice, clean room tone, broadband noise",
 			centroid:         5000,
 			spectralDecrease: 0.0,
 			noiseProfile:     makeNoiseProfile(-75.0, 0.8), // clean, broadband
@@ -348,9 +348,9 @@ func TestTuneDS201HighPass(t *testing.T) {
 			wantFreqMax:      110,
 		},
 
-		// Noisy silence (> -55 dBFS) with broadband character - aggressive boost
+		// Noisy room tone (> -55 dBFS) with broadband character - aggressive boost
 		{
-			name:             "bright voice, noisy silence, broadband",
+			name:             "bright voice, noisy room tone, broadband",
 			centroid:         5000,
 			spectralDecrease: 0.0,
 			noiseProfile:     makeNoiseProfile(-50.0, 0.8), // noisy, broadband
@@ -360,7 +360,7 @@ func TestTuneDS201HighPass(t *testing.T) {
 
 		// Tonal noise (low entropy) - no boost, bandreject handles it
 		{
-			name:             "bright voice, noisy silence, tonal (hum)",
+			name:             "bright voice, noisy room tone, tonal (hum)",
 			centroid:         5000,
 			spectralDecrease: 0.0,
 			noiseProfile:     makeNoiseProfile(-50.0, 0.25), // noisy but tonal (below 0.30 threshold)
@@ -506,7 +506,7 @@ func TestTuneDS201HighPass(t *testing.T) {
 			wantFreqMax:      80,
 		},
 		{
-			name:             "boundary: exactly at silenceEntropyTonal",
+			name:             "boundary: exactly at roomToneEntropyTonal",
 			centroid:         5000,
 			spectralDecrease: 0.0,
 			noiseProfile:     makeNoiseProfile(-50.0, 0.30), // exactly at threshold
@@ -514,7 +514,7 @@ func TestTuneDS201HighPass(t *testing.T) {
 			wantFreqMax:      120,
 		},
 		{
-			name:             "boundary: exactly at silenceNoiseFloorClean",
+			name:             "boundary: exactly at roomToneNoiseFloorClean",
 			centroid:         5000,
 			spectralDecrease: 0.0,
 			noiseProfile:     makeNoiseProfile(-70.0, 0.8), // exactly at clean threshold
@@ -1136,7 +1136,8 @@ func TestTuneDeesser(t *testing.T) {
 
 func TestTuneDS201Gate(t *testing.T) {
 	// Tests the comprehensive gate tuning which calculates all gate parameters
-	// based on measurements including NoiseProfile (silence sample analysis).
+	// based on measurements including NoiseProfile (extracted from the elected
+	// room-tone region).
 	//
 	// Key constants from adaptive.go:
 	// gateThresholdMinDB = -50.0 dB (quiet speech floor)
@@ -1155,8 +1156,8 @@ func TestTuneDS201Gate(t *testing.T) {
 		tests := []struct {
 			name            string
 			noiseFloor      float64 // dB
-			silencePeak     float64 // dB
-			silenceCrest    float64 // dB - determines if we use peak or floor
+			roomTonePeak    float64 // dB
+			roomToneCrest   float64 // dB - determines if we use peak or floor
 			inputLRA        float64 // LU - determines ratio, which determines gap
 			wantThresholdDB float64 // expected threshold dB
 			tolerance       float64 // tolerance in dB
@@ -1165,8 +1166,8 @@ func TestTuneDS201Gate(t *testing.T) {
 			{
 				name:            "clean studio - uses target threshold",
 				noiseFloor:      -75.0,
-				silencePeak:     -70.0,
-				silenceCrest:    10.0, // Low crest = stable noise, use floor
+				roomTonePeak:    -70.0,
+				roomToneCrest:   10.0, // Low crest = stable noise, use floor
 				inputLRA:        8.0,  // Narrow LRA → ratio 2.5 → gap 20dB → -75+20=-55, but target -40 is higher
 				wantThresholdDB: -40.0,
 				tolerance:       1.0,
@@ -1175,8 +1176,8 @@ func TestTuneDS201Gate(t *testing.T) {
 			{
 				name:            "typical podcast - derived gap with moderate ratio",
 				noiseFloor:      -55.0,
-				silencePeak:     -50.0,
-				silenceCrest:    10.0, // Low crest = stable noise
+				roomTonePeak:    -50.0,
+				roomToneCrest:   10.0, // Low crest = stable noise
 				inputLRA:        12.0, // Moderate LRA → ratio 2.0 → gap 24dB → -55+24=-31
 				wantThresholdDB: -31.0,
 				tolerance:       1.0,
@@ -1185,8 +1186,8 @@ func TestTuneDS201Gate(t *testing.T) {
 			{
 				name:            "noisy room - derived gap",
 				noiseFloor:      -42.0,
-				silencePeak:     -38.0,
-				silenceCrest:    10.0,
+				roomTonePeak:    -38.0,
+				roomToneCrest:   10.0,
 				inputLRA:        8.0, // Narrow LRA → ratio 2.5 → gap 20dB → -42+20=-22, clamped to -25
 				wantThresholdDB: -25.0,
 				tolerance:       1.0,
@@ -1195,8 +1196,8 @@ func TestTuneDS201Gate(t *testing.T) {
 			{
 				name:            "bleed with high crest - uses peak + margin",
 				noiseFloor:      -55.0,
-				silencePeak:     -48.0, // Transient spikes
-				silenceCrest:    25.0,  // High crest = transient bleed
+				roomTonePeak:    -48.0, // Transient spikes
+				roomToneCrest:   25.0,  // High crest = transient bleed
 				inputLRA:        12.0,
 				wantThresholdDB: -45.0, // -48 (peak) + 3dB margin
 				tolerance:       1.0,
@@ -1205,8 +1206,8 @@ func TestTuneDS201Gate(t *testing.T) {
 			{
 				name:            "extreme noise - clamped to max",
 				noiseFloor:      -20.0,
-				silencePeak:     -15.0,
-				silenceCrest:    25.0,
+				roomTonePeak:    -15.0,
+				roomToneCrest:   25.0,
 				inputLRA:        8.0,
 				wantThresholdDB: -25.0, // Clamped to max
 				tolerance:       0.5,
@@ -1221,8 +1222,8 @@ func TestTuneDS201Gate(t *testing.T) {
 					NoiseFloor: tt.noiseFloor,
 					InputLRA:   tt.inputLRA,
 					NoiseProfile: &NoiseProfile{
-						PeakLevel:   tt.silencePeak,
-						CrestFactor: tt.silenceCrest,
+						PeakLevel:   tt.roomTonePeak,
+						CrestFactor: tt.roomToneCrest,
 						Entropy:     0.5, // Moderate entropy
 					},
 				}
@@ -1314,14 +1315,14 @@ func TestTuneDS201Gate(t *testing.T) {
 
 	t.Run("detection mode based on noise character", func(t *testing.T) {
 		// Detection uses RMS for tonal or spiky noise, peak for clean
-		// gateEntropyTonal = 0.3, gateSilenceCrestThreshold = 25.0
+		// gateEntropyTonal = 0.3, gateRoomToneCrestThreshold = 25.0
 		// gateEntropyClean = 0.7 (above this + crest < 15 = peak)
 		tests := []struct {
-			name           string
-			silenceEntropy float64
-			silenceCrest   float64
-			wantDetection  string
-			desc           string
+			name            string
+			roomToneEntropy float64
+			roomToneCrest   float64
+			wantDetection   string
+			desc            string
 		}{
 			{"tonal noise", 0.2, 10.0, "rms", "low entropy = tonal, use RMS"},
 			{"transient bleed", 0.5, 28.0, "rms", "high crest > 25 = bleed spikes, use RMS"},
@@ -1336,8 +1337,8 @@ func TestTuneDS201Gate(t *testing.T) {
 					NoiseFloor: -55.0,
 					NoiseProfile: &NoiseProfile{
 						PeakLevel:   -55.0,
-						CrestFactor: tt.silenceCrest,
-						Entropy:     tt.silenceEntropy,
+						CrestFactor: tt.roomToneCrest,
+						Entropy:     tt.roomToneEntropy,
 					},
 				}
 
@@ -1418,7 +1419,7 @@ func TestTuneDS201Gate(t *testing.T) {
 	})
 
 	t.Run("release based on noise entropy", func(t *testing.T) {
-		// Release times adapt based on silence entropy:
+		// Release times adapt based on room-tone entropy:
 		// - Very tonal (< 0.1): slowest release (hide pumping on pure hum)
 		// - Tonal (< 0.15): slow release (some pumping hiding)
 		// - Mixed (< 0.2): moderate release

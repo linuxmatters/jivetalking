@@ -108,7 +108,8 @@ jivetalking [flags] <files...>
 | `-v, --version` | Show version and exit |
 | `-a, --analysis-only` | Run analysis only (Pass 1), display results, skip processing |
 | `-d, --debug` | Enable debug logging to `jivetalking-debug.log` |
-| `--silence-scan-duration=DURATION` | Cap silence-candidate scan to the first `DURATION` of input (e.g. `30s`, `1m30s`). Default `0s` scans the whole file |
+| `--room-tone-scan-duration=DURATION` | Cap room-tone candidate scan to the first `DURATION` of input (e.g. `30s`, `1m30s`). Default `0s` scans the whole file |
+| `--silence-scan-duration=DURATION` | Deprecated alias for `--room-tone-scan-duration`; still accepted for backwards compatibility |
 
 
 ### Examples
@@ -129,19 +130,19 @@ jivetalking *.flac
 
 Processing writes a per-file `.log` report by default next to each processed output. For example, `recording-LUFS-16-processed.flac` gets `recording-LUFS-16-processed.log`.
 
-### Limiting silence-scan duration
+### Limiting room-tone scan duration
 
-Long recordings can spend disproportionate time scoring silence candidates across the whole file. `--silence-scan-duration` caps that scan to the first `DURATION` of input, trading coverage for speed. Loudness, true peak, LRA, spectral statistics, and speech detection still see the whole file; only silence-candidate collection is constrained, so fewer candidates reach voice-activated detection when the cap is engaged. The flag accepts Go duration syntax (`30s`, `1m`, `2m30s`); the default `0s` scans the whole file. Works with `--analysis-only` as well.
+Long recordings can spend disproportionate time scoring room-tone candidates across the whole file. `--room-tone-scan-duration` caps that scan to the first `DURATION` of input, trading coverage for speed. Loudness, true peak, LRA, spectral statistics, and speech detection still see the whole file; only room-tone candidate collection is constrained, so fewer candidates reach voice-activated detection when the cap is engaged. The flag accepts Go duration syntax (`30s`, `1m`, `2m30s`); the default `0s` scans the whole file. Works with `--analysis-only` as well. The legacy `--silence-scan-duration` flag remains accepted as a deprecated alias.
 
 ```bash
-# Cap silence scanning to the first 30 seconds
-jivetalking --silence-scan-duration=30s presenter1.flac
+# Cap room-tone scanning to the first 30 seconds
+jivetalking --room-tone-scan-duration=30s presenter1.flac
 
 # One minute prefix
-jivetalking --silence-scan-duration=1m presenter1.flac
+jivetalking --room-tone-scan-duration=1m presenter1.flac
 
 # Two and a half minutes, analysis only
-jivetalking -a --silence-scan-duration=2m30s presenter1.flac
+jivetalking -a --room-tone-scan-duration=2m30s presenter1.flac
 ```
 
 ### Analysis-Only Mode
@@ -151,7 +152,7 @@ Pass `-a` to run only Pass 1 analysis, printing a detailed report to the console
 The report covers:
 
 - **Loudness & dynamics** — integrated LUFS, true peak, loudness range, crest factor
-- **Silence & speech detection** — candidate regions scored and elected for noise profiling and speech-aware metrics; voice-activated recording detected automatically (Riverside, Zencastr)
+- **Room tone & speech detection** — candidate regions scored and elected for noise profiling and speech-aware metrics; voice-activated recording detected automatically (Riverside, Zencastr)
 - **Derived measurements** — noise floor, gate baseline, noise-to-speech headroom
 - **Filter adaptation** — the exact parameters jivetalking would apply: highpass frequency, gate threshold, NR settings, de-esser intensity, LA-2A configuration
 - **Spectral summary** — full spectral characterisation with human-readable interpretations
@@ -173,7 +174,7 @@ LOUDNESS
   Loudness Range: 18.2 LU
 
 DERIVED MEASUREMENTS
-  Noise Floor:    -52.3 dBFS (from elected silence)
+  Noise Floor:    -52.3 dBFS (from elected room tone)
   Gate Baseline:  -46.0 dB (noise floor + margin)
   NR Headroom:    19.9 dB (noise-to-speech gap)
 
@@ -210,7 +211,7 @@ Record → Process → Edit → Finalise
   └─ Each presenter records separately, exports FLAC
 ```
 
-**Include 10-15 seconds of silence somewhere in your recording.** Just sit quietly and let the room breathe - at the start, between sections, or at the end. Jivetalking scans the entire file to find the cleanest quiet section for building a noise profile, which drives the adaptive noise reduction in Pass 2. Without a clean quiet section, the NR compander is disabled entirely and the source-rate `anlmdn` path still runs.
+**Include 10-15 seconds of room tone somewhere in your recording.** Just sit quietly and let the room breathe - at the start, between sections, or at the end. Jivetalking scans the entire file to find the cleanest room-tone section for building a noise profile, which drives the adaptive noise reduction in Pass 2. Without a clean room-tone section, the NR compander is disabled entirely and the source-rate `anlmdn` path still runs.
 
 ---
 

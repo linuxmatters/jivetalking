@@ -3,7 +3,7 @@
 #
 # Unlike afftdn which requires a noise profile, anlmdn works by finding similar
 # patterns in the audio and averaging them to reduce noise. It's more suitable
-# for stationary noise and doesn't require silence detection.
+# for stationary noise and doesn't require room tone detection.
 #
 # Parameters:
 # - strength (s): 0.00001 to 10000, default 0.00001 (higher = more reduction)
@@ -111,8 +111,8 @@ measure_audio() {
     echo "$rms_db $peak_db $centroid $rolloff $flatness"
 }
 
-# Measure silence region
-measure_silence() {
+# Measure room tone region
+measure_room_tone() {
     local input="$1"
     local start="$2"
     local end="$3"
@@ -192,15 +192,15 @@ main() {
 
     mkdir -p "$OUTPUT_DIR"
 
-    declare -A SRC_CENTROID SRC_ROLLOFF SRC_FLATNESS SILENCE_BEFORE
-    declare -A OUT_CENTROID OUT_ROLLOFF OUT_FLATNESS SILENCE_AFTER
+    declare -A SRC_CENTROID SRC_ROLLOFF SRC_FLATNESS ROOM_TONE_BEFORE
+    declare -A OUT_CENTROID OUT_ROLLOFF OUT_FLATNESS ROOM_TONE_AFTER
 
     # ========================================================================
     # Phase 1: Process each presenter with each configuration
     # ========================================================================
 
     for presenter_config in "${PRESENTERS[@]}"; do
-        IFS='|' read -r name silence_start silence_end silence_rms trough <<< "$presenter_config"
+        IFS='|' read -r name room_tone_start room_tone_end room_tone_rms trough <<< "$presenter_config"
 
         src_file="${TESTDATA_DIR}/LMP-72-${name}.flac"
 
@@ -210,8 +210,8 @@ main() {
         fi
 
         log_header "Processing: ${name}"
-        echo "  Silence window: ${silence_start}s – ${silence_end}s"
-        echo "  Silence RMS: ${silence_rms} dBFS"
+        echo "  Silence window: ${room_tone_start}s – ${room_tone_end}s"
+        echo "  Silence RMS: ${room_tone_rms} dBFS"
         echo "  Trough: ${trough} dB"
         echo ""
 
@@ -227,10 +227,10 @@ main() {
         printf "  Source: RMS %.1f dB | Peak %.1f dB | Centroid %.0f Hz | Rolloff %.0f Hz | Flatness %.4f\n" \
             "$src_rms" "$src_peak" "$src_centroid" "$src_rolloff" "$src_flatness"
 
-        # Measure silence region
-        silence_before=$(measure_silence "$src_file" "$silence_start" "$silence_end")
-        SILENCE_BEFORE[$name]="$silence_before"
-        printf "  Silence RMS: %.1f dBFS\n" "$silence_before"
+        # Measure room tone region
+        room_tone_before=$(measure_room_tone "$src_file" "$room_tone_start" "$room_tone_end")
+        ROOM_TONE_BEFORE[$name]="$room_tone_before"
+        printf "  Silence RMS: %.1f dBFS\n" "$room_tone_before"
         echo ""
 
         # Process with each configuration
@@ -264,16 +264,16 @@ main() {
             OUT_ROLLOFF[$key]="$out_rolloff"
             OUT_FLATNESS[$key]="$out_flatness"
 
-            # Measure output silence
-            silence_after=$(measure_silence "$out_file" "$silence_start" "$silence_end")
-            SILENCE_AFTER[$key]="$silence_after"
+            # Measure output room tone
+            room_tone_after=$(measure_room_tone "$out_file" "$room_tone_start" "$room_tone_end")
+            ROOM_TONE_AFTER[$key]="$room_tone_after"
 
             # Calculate deltas
-            d_silence=$(awk -v a="$silence_after" -v b="$silence_before" \
+            d_room_tone=$(awk -v a="$room_tone_after" -v b="$room_tone_before" \
                 'BEGIN {printf "%.1f", a - b}')
 
             printf "\n  Result: Silence Δ %.2f dB | Peak %.1f dB\n" \
-                "$d_silence" "$out_peak"
+                "$d_room_tone" "$out_peak"
             log_success "$out_file"
             echo ""
         done
@@ -298,8 +298,8 @@ main() {
             IFS='|' read -r label _ _ _ _ <<< "$cfg"
             key="${name}|${label}"
 
-            if [[ -n "${SILENCE_AFTER[$key]:-}" ]]; then
-                d_silence=$(awk -v a="${SILENCE_AFTER[$key]}" -v b="${SILENCE_BEFORE[$name]}" \
+            if [[ -n "${ROOM_TONE_AFTER[$key]:-}" ]]; then
+                d_room_tone=$(awk -v a="${ROOM_TONE_AFTER[$key]}" -v b="${ROOM_TONE_BEFORE[$name]}" \
                     'BEGIN {printf "%.1f", a - b}')
                 d_centroid=$(awk -v a="${OUT_CENTROID[$key]}" -v b="${SRC_CENTROID[$name]}" \
                     'BEGIN {if(b>0) printf "%.1f", ((a-b)/b)*100; else print 0}')
@@ -309,7 +309,7 @@ main() {
                     'BEGIN {if(b>0) printf "%.1f", ((a-b)/b)*100; else print 0}')
 
                 printf "%-16s │ " "$label"
-                format_delta "$d_silence" "3.0" " dB"
+                format_delta "$d_room_tone" "3.0" " dB"
                 printf "   │ "
                 format_delta "$d_centroid" "5.0" "%"
                 printf "   │ "
@@ -323,7 +323,7 @@ main() {
     done
 
     echo "Interpretation:"
-    echo "  Silence Δ:  Negative = noise reduced in silence regions (target: < -6 dB)"
+    echo "  Silence Δ:  Negative = noise reduced in room tone regions (target: < -6 dB)"
     echo "  Centroid Δ: Should stay close to 0% (spectral brightness preserved)"
     echo "  Rolloff Δ:  Should stay close to 0% (high-frequency content preserved)"
     echo "  Flatness Δ: Should stay close to 0% (spectral balance preserved)"
