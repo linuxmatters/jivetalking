@@ -193,12 +193,12 @@ The volume filter applies no dynamics processing, no lookahead, and creates no a
 
 **Filter chain when clamped:**
 ```
-volume (pre-gain) → alimiter → loudnorm → adeclick → astats → aspectralstats → ebur128 → resample
+volume (pre-gain) → alimiter → loudnorm → aresample (source rate) → adeclick → astats → aspectralstats → ebur128 → resample
 ```
 
 **Filter chain when not clamped (unchanged):**
 ```
-alimiter → loudnorm → adeclick → astats → aspectralstats → ebur128 → resample
+alimiter → loudnorm → aresample (source rate) → adeclick → astats → aspectralstats → ebur128 → resample
 ```
 
 ---

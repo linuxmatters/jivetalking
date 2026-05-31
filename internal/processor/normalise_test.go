@@ -2160,7 +2160,7 @@ func TestBuildLoudnormFilterSpec_PreGain(t *testing.T) {
 				ceiling = reDerivedCeiling
 			}
 
-			filterSpec := buildLoudnormFilterSpec(config, measurement, preGainDB, ceiling, needsLimiting)
+			filterSpec := buildLoudnormFilterSpec(config, measurement, preGainDB, ceiling, needsLimiting, 48000)
 
 			// (a)/(b): Check volume filter presence
 			hasVolume := strings.Contains(filterSpec, "volume=")
@@ -2236,7 +2236,7 @@ func TestBuildLoudnormFilterSpec_DoesNotMutateConfig(t *testing.T) {
 		TargetOffset: -0.5,
 	}
 
-	filterSpec := buildLoudnormFilterSpec(config, measurement, 0, -1.0, false)
+	filterSpec := buildLoudnormFilterSpec(config, measurement, 0, -1.0, false, 48000)
 
 	if config.Resample.Enabled {
 		t.Error("buildLoudnormFilterSpec mutated config.Resample.Enabled")
@@ -2260,7 +2260,7 @@ func TestBuildLoudnormFilterSpec_Adeclick(t *testing.T) {
 	t.Run("uses Pass 4 adeclick helper", func(t *testing.T) {
 		config := defaultNormalisationTestConfig()
 
-		filterSpec := buildLoudnormFilterSpec(config, measurement, 0, -1.0, false)
+		filterSpec := buildLoudnormFilterSpec(config, measurement, 0, -1.0, false, 48000)
 
 		const want = "adeclick=t=2.0:w=55:o=50:m=s"
 		if !strings.Contains(filterSpec, want) {
@@ -2272,10 +2272,63 @@ func TestBuildLoudnormFilterSpec_Adeclick(t *testing.T) {
 		config := defaultNormalisationTestConfig()
 		config.Adeclick.Enabled = false
 
-		filterSpec := buildLoudnormFilterSpec(config, measurement, 0, -1.0, false)
+		filterSpec := buildLoudnormFilterSpec(config, measurement, 0, -1.0, false, 48000)
 
 		if strings.Contains(filterSpec, "adeclick=") {
 			t.Errorf("buildLoudnormFilterSpec() emitted disabled adeclick\nfilterSpec: %s", filterSpec)
+		}
+	})
+}
+
+func TestBuildLoudnormFilterSpecSourceRateResample(t *testing.T) {
+	measurement := &LoudnormMeasurement{
+		InputI:       -24.0,
+		InputTP:      -5.0,
+		InputLRA:     6.0,
+		InputThresh:  -34.0,
+		TargetOffset: -0.5,
+	}
+
+	// Pins source-rate derivation against a NON-48000 rate so a future refactor
+	// that hardcodes 48000 (instead of deriving from metadata) or drops the
+	// param is caught. The resample must sit after loudnorm and immediately
+	// before adeclick.
+	t.Run("derives resample rate and orders it between loudnorm and adeclick", func(t *testing.T) {
+		config := defaultNormalisationTestConfig()
+
+		filterSpec := buildLoudnormFilterSpec(config, measurement, 0, -1.0, false, 96000)
+
+		const wantResample = "aresample=96000"
+		if !strings.Contains(filterSpec, wantResample) {
+			t.Fatalf("buildLoudnormFilterSpec() missing %q (hardcoded 48000?)\nfilterSpec: %s", wantResample, filterSpec)
+		}
+		if strings.Contains(filterSpec, "aresample=48000") {
+			t.Fatalf("buildLoudnormFilterSpec() emitted hardcoded aresample=48000 for 96000 source rate\nfilterSpec: %s", filterSpec)
+		}
+
+		loudnormAt := strings.Index(filterSpec, "loudnorm=")
+		resampleAt := strings.Index(filterSpec, wantResample)
+		adeclickAt := strings.Index(filterSpec, "adeclick=")
+		if loudnormAt < 0 || resampleAt < 0 || adeclickAt < 0 {
+			t.Fatalf("missing a required stage (loudnorm=%d aresample=%d adeclick=%d)\nfilterSpec: %s", loudnormAt, resampleAt, adeclickAt, filterSpec)
+		}
+		if loudnormAt >= resampleAt || resampleAt >= adeclickAt {
+			t.Fatalf("stage order = loudnorm@%d, aresample@%d, adeclick@%d, want loudnorm < aresample < adeclick\nfilterSpec: %s", loudnormAt, resampleAt, adeclickAt, filterSpec)
+		}
+	})
+
+	// Pins the sourceSampleRate <= 0 guard: no resample stage emitted, adeclick
+	// still present.
+	t.Run("omits resample when source rate is zero", func(t *testing.T) {
+		config := defaultNormalisationTestConfig()
+
+		filterSpec := buildLoudnormFilterSpec(config, measurement, 0, -1.0, false, 0)
+
+		if strings.Contains(filterSpec, "aresample=") {
+			t.Fatalf("buildLoudnormFilterSpec() emitted aresample for zero source rate\nfilterSpec: %s", filterSpec)
+		}
+		if !strings.Contains(filterSpec, "adeclick=") {
+			t.Fatalf("buildLoudnormFilterSpec() dropped adeclick when source rate is zero\nfilterSpec: %s", filterSpec)
 		}
 	})
 }
@@ -2291,7 +2344,7 @@ func TestBuildLoudnormFilterSpecIgnoresNonNormalisationFields(t *testing.T) {
 
 	base := defaultNormalisationTestConfig()
 	assertNoStaleEffectiveConfigFields(t)
-	controlSpec := buildLoudnormFilterSpec(base, measurement, 0, -1.0, false)
+	controlSpec := buildLoudnormFilterSpec(base, measurement, 0, -1.0, false, 48000)
 
 	withUnrelatedFilterFields := *base
 	withUnrelatedFilterFields.FilterOrder = []FilterID{FilterAnalysis}
@@ -2299,7 +2352,7 @@ func TestBuildLoudnormFilterSpecIgnoresNonNormalisationFields(t *testing.T) {
 	withUnrelatedFilterFields.DS201Gate.Ratio = 4.0
 	withUnrelatedFilterFields.LA2A.Threshold = -30.0
 
-	gotSpec := buildLoudnormFilterSpec(&withUnrelatedFilterFields, measurement, 0, -1.0, false)
+	gotSpec := buildLoudnormFilterSpec(&withUnrelatedFilterFields, measurement, 0, -1.0, false, 48000)
 	if gotSpec != controlSpec {
 		t.Fatalf("buildLoudnormFilterSpec() changed when unrelated filter fields changed\ncontrol: %s\ngot:     %s", controlSpec, gotSpec)
 	}
@@ -2504,7 +2557,7 @@ func TestClampedTargetPropagation_Arithmetic(t *testing.T) {
 				bCeiling = bReDerived
 			}
 
-			filterSpec := buildLoudnormFilterSpec(config, measurement, preGainDB, bCeiling, bNeeded)
+			filterSpec := buildLoudnormFilterSpec(config, measurement, preGainDB, bCeiling, bNeeded, 48000)
 			if !bClamped {
 				t.Error("expected pre-computation to report clamped")
 			}
@@ -2691,7 +2744,7 @@ func TestLoudnormPrefixAndFilterSpecParityRepresentativeCases(t *testing.T) {
 			},
 			wantPass3:      "",
 			wantPass4Start: "loudnorm=",
-			wantPass4:      "loudnorm=I=-16.00:TP=-2.00:LRA=20.0:measured_I=-20.00:measured_TP=-10.00:measured_LRA=5.00:measured_thresh=-30.00:offset=0.00:dual_mono=true:linear=true:print_format=json,adeclick=t=2.0:w=55:o=50:m=s,astats=metadata=1:measure_perchannel=all,aspectralstats=win_size=2048:win_func=hann:measure=all,ebur128=metadata=1:peak=sample+true:dualmono=true,aformat=sample_rates=44100:channel_layouts=mono:sample_fmts=s16,asetnsamples=n=4096", // #nosec G101 -- FFmpeg filter fixture, not a credential.
+			wantPass4:      "loudnorm=I=-16.00:TP=-2.00:LRA=20.0:measured_I=-20.00:measured_TP=-10.00:measured_LRA=5.00:measured_thresh=-30.00:offset=0.00:dual_mono=true:linear=true:print_format=json,aresample=48000,adeclick=t=2.0:w=55:o=50:m=s,astats=metadata=1:measure_perchannel=all,aspectralstats=win_size=2048:win_func=hann:measure=all,ebur128=metadata=1:peak=sample+true:dualmono=true,aformat=sample_rates=44100:channel_layouts=mono:sample_fmts=s16,asetnsamples=n=4096", // #nosec G101 -- FFmpeg filter fixture, not a credential.
 		},
 		{
 			name:     "limited",
@@ -2706,7 +2759,7 @@ func TestLoudnormPrefixAndFilterSpecParityRepresentativeCases(t *testing.T) {
 			},
 			wantPass3:      "alimiter=limit=0.239883:attack=5:release=100:level_in=1:level_out=1:level=0:latency=1:asc=1:asc_level=0.8",
 			wantPass4Start: "alimiter=limit=0.239883:attack=5:release=100:level_in=1:level_out=1:level=0:latency=1:asc=1:asc_level=0.8,loudnorm=",
-			wantPass4:      "alimiter=limit=0.239883:attack=5:release=100:level_in=1:level_out=1:level=0:latency=1:asc=1:asc_level=0.8,loudnorm=I=-16.00:TP=-2.00:LRA=20.0:measured_I=-24.90:measured_TP=-5.00:measured_LRA=6.00:measured_thresh=-35.00:offset=-0.50:dual_mono=true:linear=true:print_format=json,adeclick=t=2.0:w=55:o=50:m=s,astats=metadata=1:measure_perchannel=all,aspectralstats=win_size=2048:win_func=hann:measure=all,ebur128=metadata=1:peak=sample+true:dualmono=true,aformat=sample_rates=44100:channel_layouts=mono:sample_fmts=s16,asetnsamples=n=4096", // #nosec G101 -- FFmpeg filter fixture, not a credential.
+			wantPass4:      "alimiter=limit=0.239883:attack=5:release=100:level_in=1:level_out=1:level=0:latency=1:asc=1:asc_level=0.8,loudnorm=I=-16.00:TP=-2.00:LRA=20.0:measured_I=-24.90:measured_TP=-5.00:measured_LRA=6.00:measured_thresh=-35.00:offset=-0.50:dual_mono=true:linear=true:print_format=json,aresample=48000,adeclick=t=2.0:w=55:o=50:m=s,astats=metadata=1:measure_perchannel=all,aspectralstats=win_size=2048:win_func=hann:measure=all,ebur128=metadata=1:peak=sample+true:dualmono=true,aformat=sample_rates=44100:channel_layouts=mono:sample_fmts=s16,asetnsamples=n=4096", // #nosec G101 -- FFmpeg filter fixture, not a credential.
 		},
 		{
 			name:     "clamped pre-gain",
@@ -2721,7 +2774,7 @@ func TestLoudnormPrefixAndFilterSpecParityRepresentativeCases(t *testing.T) {
 			},
 			wantPass3:      "volume=6.7dB,alimiter=limit=0.063096:attack=5:release=100:level_in=1:level_out=1:level=0:latency=1:asc=1:asc_level=0.8",
 			wantPass4Start: "volume=6.7dB,alimiter=limit=0.063096:attack=5:release=100:level_in=1:level_out=1:level=0:latency=1:asc=1:asc_level=0.8,loudnorm=",
-			wantPass4:      "volume=6.7dB,alimiter=limit=0.063096:attack=5:release=100:level_in=1:level_out=1:level=0:latency=1:asc=1:asc_level=0.8,loudnorm=I=-16.00:TP=-2.00:LRA=20.0:measured_I=-36.50:measured_TP=-24.00:measured_LRA=8.00:measured_thresh=-46.50:offset=-2.50:dual_mono=true:linear=true:print_format=json,adeclick=t=2.0:w=55:o=50:m=s,astats=metadata=1:measure_perchannel=all,aspectralstats=win_size=2048:win_func=hann:measure=all,ebur128=metadata=1:peak=sample+true:dualmono=true,aformat=sample_rates=44100:channel_layouts=mono:sample_fmts=s16,asetnsamples=n=4096", // #nosec G101 -- FFmpeg filter fixture, not a credential.
+			wantPass4:      "volume=6.7dB,alimiter=limit=0.063096:attack=5:release=100:level_in=1:level_out=1:level=0:latency=1:asc=1:asc_level=0.8,loudnorm=I=-16.00:TP=-2.00:LRA=20.0:measured_I=-36.50:measured_TP=-24.00:measured_LRA=8.00:measured_thresh=-46.50:offset=-2.50:dual_mono=true:linear=true:print_format=json,aresample=48000,adeclick=t=2.0:w=55:o=50:m=s,astats=metadata=1:measure_perchannel=all,aspectralstats=win_size=2048:win_func=hann:measure=all,ebur128=metadata=1:peak=sample+true:dualmono=true,aformat=sample_rates=44100:channel_layouts=mono:sample_fmts=s16,asetnsamples=n=4096", // #nosec G101 -- FFmpeg filter fixture, not a credential.
 		},
 	}
 
@@ -2744,6 +2797,7 @@ func TestLoudnormPrefixAndFilterSpecParityRepresentativeCases(t *testing.T) {
 				limiter.preGainDB,
 				limiter.ceilingDB,
 				limiter.needed,
+				48000,
 			)
 			if !strings.HasPrefix(gotPass4, tt.wantPass4Start) {
 				t.Fatalf("pass 4 filter spec prefix = %q, want prefix %q", gotPass4, tt.wantPass4Start)

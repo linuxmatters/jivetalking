@@ -702,7 +702,7 @@ func ApplyNormalisation(
 // applyLoudnormAndMeasure applies loudnorm's second pass to the audio file and measures the result.
 // Uses in-place processing: reads input, applies loudnorm, writes to temp file, renames.
 //
-// Filter chain: [volume+alimiter] → loudnorm → [adeclick] → astats → aspectralstats → ebur128 → resample
+// Filter chain: [volume+alimiter] → loudnorm → aresample → [adeclick] → astats → aspectralstats → ebur128 → resample
 //
 // This is the second pass of loudnorm's two-pass workflow. The first pass
 // measurements come from measureWithLoudnorm() (stored in LoudnormMeasurement).
@@ -753,6 +753,7 @@ func prepareLoudnormApplication(request loudnormApplicationRequest) (*loudnormAp
 		request.limiter.preGainDB,
 		request.limiter.ceilingDB,
 		request.limiter.needed,
+		metadata.SampleRate,
 	)
 	filterGraph, bufferSrcCtx, bufferSinkCtx, err := loudnormSetupFilterGraph(
 		reader.GetDecoderContext(),
@@ -796,12 +797,10 @@ func executeAndPublishLoudnormApplication(
 		}
 	}()
 
-	// Process frames and accumulate ebur128 measurements using Pass 2's extraction function
-	var framesProcessed int64
-
 	// Calculate total samples for accurate progress reporting
 	totalSamples := int64(prep.metadata.Duration * float64(prep.metadata.SampleRate))
 	var samplesProcessed int64
+	var inputFramesRead int64
 	const progressUpdateInterval = 100 // Send progress update every N frames
 
 	lenientHandler := func(err error) error { return nil }
@@ -809,7 +808,22 @@ func executeAndPublishLoudnormApplication(
 		OnPushError: lenientHandler,
 		OnPullError: lenientHandler,
 		OnInputFrame: func(inputFrame *ffmpeg.AVFrame) {
+			// Drive progress from input-frame consumption so the bar advances
+			// monotonically. loudnorm and adeclick drain output frames in large
+			// bursts, so reporting on output drain alone makes the bar stall then
+			// sweep. samplesProcessed and totalSamples are both at the input rate.
 			samplesProcessed += int64(inputFrame.NbSamples())
+			inputFramesRead++
+
+			if request.progress != nil && inputFramesRead%progressUpdateInterval == 0 {
+				progress := math.Min(0.99, float64(samplesProcessed)/float64(totalSamples))
+				request.progress(ProgressUpdate{
+					Pass:     PassNormalising,
+					PassName: "Normalising",
+					Progress: progress,
+					Level:    result.acc.ebur128OutputI,
+				})
+			}
 		},
 		OnFrame: func(inputFrame, filteredFrame *ffmpeg.AVFrame) error {
 			// Extract validation measurements using Pass 2's function
@@ -818,19 +832,6 @@ func executeAndPublishLoudnormApplication(
 			// Encode frame
 			if err := encoder.WriteFrame(filteredFrame); err != nil {
 				return fmt.Errorf("encoding failed: %w", err)
-			}
-
-			framesProcessed++
-
-			// Progress update periodically (every N output frames for smooth updates)
-			if request.progress != nil && framesProcessed%progressUpdateInterval == 0 {
-				progress := math.Min(0.99, float64(samplesProcessed)/float64(totalSamples))
-				request.progress(ProgressUpdate{
-					Pass:     PassNormalising,
-					PassName: "Normalising",
-					Progress: progress,
-					Level:    result.acc.ebur128OutputI,
-				})
 			}
 
 			return nil
@@ -928,7 +929,7 @@ func finalizeLoudnormOutputMeasurements(
 
 // buildLoudnormFilterSpec constructs the filter chain for Pass 4 loudnorm application.
 //
-// Chain order: [volume+alimiter] → loudnorm → [adeclick] → astats → aspectralstats → ebur128 → resample
+// Chain order: [volume+alimiter] → loudnorm → aresample → [adeclick] → astats → aspectralstats → ebur128 → resample
 //
 // The caller pre-computes preGainDB, ceiling, and needsLimiting from Pass 2 measurements.
 // This function builds the prefix via buildPreLimiterPrefix() and passes measurement.InputI
@@ -946,7 +947,7 @@ func finalizeLoudnormOutputMeasurements(
 //
 // Per ffmpeg-loudnorm-helper: the offset parameter MUST come from loudnorm's own
 // first pass measurement, not from external calculations.
-func buildLoudnormFilterSpec(config *EffectiveFilterConfig, measurement *LoudnormMeasurement, preGainDB float64, ceiling float64, needsLimiting bool) string {
+func buildLoudnormFilterSpec(config *EffectiveFilterConfig, measurement *LoudnormMeasurement, preGainDB float64, ceiling float64, needsLimiting bool, sourceSampleRate int) string {
 	var filters []string
 	loudnorm := config.Loudnorm
 
@@ -981,29 +982,38 @@ func buildLoudnormFilterSpec(config *EffectiveFilterConfig, measurement *Loudnor
 	)
 	filters = append(filters, loudnormFilter)
 
-	// 3. adeclick for click/pop repair
+	// 3. Resample back to the source rate before adeclick.
+	// loudnorm's linear-mode true-peak limiter upsamples to 192kHz internally and
+	// emits at 192kHz. Downstream filters (adeclick, astats, aspectralstats, ebur128)
+	// would otherwise run at 4x the sample count. Resampling here restores the rate
+	// adeclick and the analysis filters were tuned for in Pass 2.
+	if sourceSampleRate > 0 {
+		filters = append(filters, fmt.Sprintf("aresample=%d", sourceSampleRate))
+	}
+
+	// 4. adeclick for click/pop repair
 	// Repairs waveform discontinuities from limiter/loudnorm gain transitions
 	// Must come after loudnorm (catches its clicks) and before measurement filters
 	if spec := config.buildAdeclickFilter(); spec != "" {
 		filters = append(filters, spec)
 	}
 
-	// 4. astats for amplitude measurements (same as Pass 2)
+	// 5. astats for amplitude measurements (same as Pass 2)
 	// Provides noise floor, dynamic range, RMS level, peak level, etc.
 	// measure_perchannel=all requests all available per-channel statistics
 	filters = append(filters, "astats=metadata=1:measure_perchannel=all")
 
-	// 5. aspectralstats for spectral analysis (same as Pass 2)
+	// 6. aspectralstats for spectral analysis (same as Pass 2)
 	// Provides centroid, spread, skewness, kurtosis, entropy, flatness, crest, rolloff, etc.
 	// win_size=2048 and win_func=hann match Pass 2 settings for comparable measurements
 	filters = append(filters, "aspectralstats=win_size=2048:win_func=hann:measure=all")
 
-	// 6. ebur128 for loudness validation (metadata only, no audio modification)
+	// 7. ebur128 for loudness validation (metadata only, no audio modification)
 	// dualmono=true ensures accurate mono loudness measurement
 	// Note: ebur128 upsamples to 192kHz internally and outputs f64
 	filters = append(filters, "ebur128=metadata=1:peak=sample+true:dualmono=true")
 
-	// 7. Resample back to output format (44.1kHz/s16/mono)
+	// 8. Resample back to output format (44.1kHz/s16/mono)
 	// Required because ebur128 outputs f64 at 192kHz; encoder expects s16 at 44.1kHz
 	filters = append(filters, config.buildRequiredOutputFormatFilter())
 

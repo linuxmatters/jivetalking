@@ -483,4 +483,40 @@ The `r_half_m_strict` / `r_half_m_relax` "compensation" hypothesis was wrong. `m
 
 ---
 
-Document compiled May 2026; end-to-end comparison (§6) added May 2026. The working investigation notes, the per-filter benchmark Go fixtures, and the `bench-anlmdn-*` / `bench-adeclick-*` justfile recipes have been retired. Their reasoning is preserved here.
+---
+
+## 8. Pass 4 rate discovery: loudnorm linear mode emits at 192 kHz
+
+*Added May 2026.*
+
+After the §5 adeclick tuning shipped, a long-file timing observation exposed a previously unknown rate issue in Pass 4. A 49-minute file projected Pass 4 at 9-20 minutes; after the fix it completed in ~1m29s. The §5 matrix had not isolated sample rate as a variable, so the dominant cost was invisible during tuning.
+
+### 8.1 The discovery
+
+FFmpeg's `loudnorm` filter in `linear=true` mode upsamples internally to 192 kHz and **emits at 192 kHz**. The §5 benchmark constructed each Pass 4 candidate graph as:
+
+```
+[volume + alimiter] → loudnorm → adeclick → astats → aspectralstats → ebur128 → resample
+```
+
+With no resample between `loudnorm` and `adeclick`, every filter after loudnorm received a 192 kHz stream for a 48 kHz source - 4× the sample count. The §5 runtime measurements were therefore accurate for the graph they tested, but the graph was processing adeclick (and the analysis tail) at a rate four times higher than the source rate the parameters were tuned for. The "~75% runtime reduction" reported in §5.6 was relative to the *previous* adeclick clause at 192 kHz, not relative to source-rate operation. In other words, §5 measured adeclick's speed at two different parameter settings, both at 192 kHz, and correctly found the new clause faster - it just never isolated the rate as a separate variable.
+
+### 8.2 The fix
+
+An `aresample` to the source sample rate is now inserted between `loudnorm` and `adeclick`:
+
+```
+volume (pre-gain, when clamped) → alimiter (Volumax) → loudnorm (linear) → aresample (source rate) → adeclick → astats → aspectralstats → ebur128 → resample
+```
+
+The adeclick parameters themselves are unchanged (`t=2.0:w=55:o=50:m=s`). The analysis filters (`astats`, `aspectralstats`, `ebur128`) also benefit: they now run at the source rate they were designed to see, matching the Pass 1 and Pass 2 measurement context.
+
+### 8.3 Measured impact
+
+On a 49-minute file, Pass 4 projected 9-20 minutes before the fix and completed in ~1m29s after. The per-60s-segment standalone Pass 4 chain (loudnorm + adeclick + analysis tail + resample) measured 4.21s → 0.94s, a 4.5× reduction.
+
+The adeclick quality parameters are unchanged; the fix removes a structural overhead that the §5 matrix did not observe.
+
+---
+
+Document compiled May 2026; end-to-end comparison (§6) added May 2026; Pass 4 rate discovery (§8) added May 2026. The working investigation notes, the per-filter benchmark Go fixtures, and the `bench-anlmdn-*` / `bench-adeclick-*` justfile recipes have been retired. Their reasoning is preserved here.
