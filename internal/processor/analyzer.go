@@ -508,7 +508,7 @@ func collectAnalysisFrames(filename string, config *BaseFilterConfig, context *P
 	var filterFreed bool
 	defer func() {
 		if !filterFreed && filterGraph != nil {
-			ffmpeg.AVFilterGraphFree(&filterGraph)
+			freeFilterGraphLocked(&filterGraph)
 		}
 	}()
 
@@ -593,7 +593,7 @@ func collectAnalysisFrames(filename string, config *BaseFilterConfig, context *P
 		silenceIntervals = intervals
 	}
 
-	ffmpeg.AVFilterGraphFree(&filterGraph)
+	freeFilterGraphLocked(&filterGraph)
 	filterFreed = true
 
 	return &analysisFrameCollection{

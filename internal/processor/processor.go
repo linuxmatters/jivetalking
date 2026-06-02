@@ -271,7 +271,7 @@ func processWithFilters(inputPath, outputPath string, config *EffectiveFilterCon
 	if err != nil {
 		return InputMetadata{}, fmt.Errorf("failed to create filter graph: %w", err)
 	}
-	defer ffmpeg.AVFilterGraphFree(&filterGraph)
+	defer freeFilterGraphLocked(&filterGraph)
 
 	// Create output encoder
 	encoder, err := createOutputEncoder(outputPath, metadata, bufferSinkCtx)

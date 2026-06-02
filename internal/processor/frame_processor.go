@@ -153,14 +153,14 @@ func setupFilterGraph(decCtx *ffmpeg.AVCodecContext, filterSpec string) (
 	// Create abuffer source
 	bufferSrcCtx, err := createBufferSource(filterGraph, decCtx)
 	if err != nil {
-		ffmpeg.AVFilterGraphFree(&filterGraph)
+		freeFilterGraphLocked(&filterGraph)
 		return nil, nil, nil, err
 	}
 
 	// Create abuffersink
 	bufferSinkCtx, err := createBufferSink(filterGraph)
 	if err != nil {
-		ffmpeg.AVFilterGraphFree(&filterGraph)
+		freeFilterGraphLocked(&filterGraph)
 		return nil, nil, nil, err
 	}
 
@@ -184,13 +184,13 @@ func setupFilterGraph(decCtx *ffmpeg.AVCodecContext, filterSpec string) (
 	defer filterSpecC.Free()
 
 	if _, err := ffmpeg.AVFilterGraphParsePtr(filterGraph, filterSpecC, &inputs, &outputs, nil); err != nil {
-		ffmpeg.AVFilterGraphFree(&filterGraph)
+		freeFilterGraphLocked(&filterGraph)
 		return nil, nil, nil, fmt.Errorf("failed to parse filter graph: %w", err)
 	}
 
 	// Configure filter graph
 	if _, err := ffmpeg.AVFilterGraphConfig(filterGraph, nil); err != nil {
-		ffmpeg.AVFilterGraphFree(&filterGraph)
+		freeFilterGraphLocked(&filterGraph)
 		return nil, nil, nil, fmt.Errorf("failed to configure filter graph: %w", err)
 	}
 

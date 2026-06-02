@@ -45,13 +45,13 @@ type LoudnormStats struct {
 // loudnormLogCapture manages thread-safe capture of loudnorm's JSON output.
 //
 // Parallelism blocker: capture hijacks FFmpeg's process-global log callback and
-// log level, serialised by lifecycleMu. Only one Pass 3/4 loudnorm measurement
-// can capture at a time, so concurrent multi-file loudnorm measurement is
-// blocked. Resolving it needs an FFmpeg log-routing redesign (per-graph or
-// metadata-based JSON extraction); that decision is deferred to the
-// parallel-design phase.
+// log level, serialised by graphFreeMu (held across the whole capture bracket,
+// from raise-level through the graph free to JSON parse). Only one Pass 3/4
+// loudnorm measurement can capture at a time, so concurrent multi-file loudnorm
+// measurement is blocked. Resolving it needs an FFmpeg log-routing redesign
+// (per-graph or metadata-based JSON extraction); that decision is deferred to
+// the parallel-design phase.
 var loudnormLogCapture = struct {
-	lifecycleMu  sync.Mutex
 	mu           sync.Mutex
 	buffer       strings.Builder
 	capturing    bool
@@ -70,6 +70,23 @@ var (
 	}
 	loudnormRename = os.Rename
 )
+
+// graphFreeMu serialises filter-graph frees across the package. The lock is
+// private to the package; frame-processing paths must never acquire it. The
+// loudnorm capture path must NOT call freeFilterGraphLocked: it already holds
+// graphFreeMu across its capture bracket, and the mutex is non-reentrant, so
+// calling the helper there would deadlock.
+var graphFreeMu sync.Mutex
+
+// freeFilterGraphLocked frees a filter graph while holding graphFreeMu, giving a
+// single serialised chokepoint for non-loudnorm graph frees. Do not call it from
+// the loudnorm capture path, which already holds graphFreeMu (re-entry would
+// deadlock on the non-reentrant mutex).
+func freeFilterGraphLocked(graph **ffmpeg.AVFilterGraph) {
+	graphFreeMu.Lock()
+	defer graphFreeMu.Unlock()
+	ffmpeg.AVFilterGraphFree(graph)
+}
 
 type loudnormOutputEncoder interface {
 	WriteFrame(*ffmpeg.AVFrame) error
@@ -93,8 +110,13 @@ func loudnormLogCallback(_ *ffmpeg.LogCtx, _ int, msg string) {
 // FFmpeg logging is process-global, so capture is serialised from start through
 // stop. The narrow capture boundary is graph finalisation, where loudnorm emits
 // JSON as the filter graph is freed.
+//
+// The capture holds graphFreeMu across the whole bracket so the graph free in
+// captureLoudnormGraphFinalisation runs under the same serialisation point as
+// every other graph free. graphFreeMu is non-reentrant, so that free must call
+// loudnormAVFilterGraphFree directly, never freeFilterGraphLocked.
 func startLoudnormCapture() {
-	loudnormLogCapture.lifecycleMu.Lock()
+	graphFreeMu.Lock()
 
 	loudnormLogCapture.mu.Lock()
 	defer loudnormLogCapture.mu.Unlock()
@@ -110,7 +132,7 @@ func startLoudnormCapture() {
 // emitted while loudnorm graph finalisation was captured.
 // Returns the parsed LoudnormStats or an error if JSON was not found/parseable.
 func stopLoudnormCapture() (*LoudnormStats, error) {
-	defer loudnormLogCapture.lifecycleMu.Unlock()
+	defer graphFreeMu.Unlock()
 
 	loudnormLogCapture.mu.Lock()
 	defer loudnormLogCapture.mu.Unlock()

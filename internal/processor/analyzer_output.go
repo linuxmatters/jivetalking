@@ -9,6 +9,13 @@ import (
 	"github.com/linuxmatters/jivetalking/internal/audio"
 )
 
+// outputRegionAnalysisFilterFormat is the fmt.Sprintf format string for the
+// output-region analysis filter graph in measureOutputRegionFromReader. The
+// %f verbs take the region start and duration in seconds. Hoisted to a
+// package-level constant so guard tests can assert the metadata flags against
+// live source without re-typing the filter string.
+const outputRegionAnalysisFilterFormat = "atrim=start=%f:duration=%f,asetpts=PTS-STARTPTS,astats=metadata=1:measure_perchannel=0,aspectralstats=measure=all,ebur128=metadata=1:peak=sample+true"
+
 // regionMeasurements holds the common measurement results from analysing an
 // output audio region. Both room tone and speech region measurement functions
 // share this intermediate type before mapping to their specific candidate types.
@@ -37,7 +44,7 @@ func measureOutputRegionFromReader(reader *audio.Reader, start, duration time.Du
 	}
 
 	filterSpec := fmt.Sprintf(
-		"atrim=start=%f:duration=%f,asetpts=PTS-STARTPTS,astats=metadata=1:measure_perchannel=0,aspectralstats=measure=all,ebur128=metadata=1:peak=sample+true",
+		outputRegionAnalysisFilterFormat,
 		start.Seconds(),
 		duration.Seconds(),
 	)
@@ -46,7 +53,7 @@ func measureOutputRegionFromReader(reader *audio.Reader, start, duration time.Du
 	if err != nil {
 		return nil, fmt.Errorf("failed to create analysis filter graph: %w", err)
 	}
-	defer ffmpeg.AVFilterGraphFree(&filterGraph)
+	defer freeFilterGraphLocked(&filterGraph)
 
 	var rmsLevel float64
 	var peakLevel float64
