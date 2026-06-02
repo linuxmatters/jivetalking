@@ -242,6 +242,7 @@ func (linear LinearAmplitude) Float64() float64 {
 // BaseFilterConfig holds caller-owned defaults and user-facing options only.
 type BaseFilterConfig struct {
 	filterConfigDefaults
+	logger debugLogger
 }
 
 // AdaptiveFilterResult holds a complete per-file set of tunable filter values.
@@ -313,6 +314,13 @@ type EffectiveFilterConfig filterConfigDefaults
 // podcast spoken word audio processing.
 func DefaultFilterConfig() *BaseFilterConfig {
 	return &BaseFilterConfig{filterConfigDefaults: defaultFilterConfigDefaults()}
+}
+
+// SetLogger installs the debug logger used by the filter chain and all passes
+// that consume this config. Callers outside the package pass a bare function so
+// they need not name the unexported logger type.
+func (cfg *BaseFilterConfig) SetLogger(l func(format string, args ...any)) {
+	cfg.logger = debugLogger(l)
 }
 
 func defaultFilterConfigDefaults() filterConfigDefaults {

@@ -10,15 +10,14 @@ import (
 	"github.com/linuxmatters/jivetalking/internal/audio"
 )
 
-// DebugLog is a package-level function for debug logging.
-// When set (non-nil), diagnostic output is written via this function.
-// Set by main.go when --debug flag is enabled.
-var DebugLog func(format string, args ...any)
+// debugLogger is a config-borne debug logging function threaded through the
+// processor.
+type debugLogger func(format string, args ...any)
 
-// debugLog writes to the debug log if enabled, otherwise does nothing.
-func debugLog(format string, args ...any) {
-	if DebugLog != nil {
-		DebugLog(format, args...)
+// Logf writes to the logger if non-nil, otherwise does nothing.
+func (l debugLogger) Logf(format string, args ...any) {
+	if l != nil {
+		l(format, args...)
 	}
 }
 
@@ -285,8 +284,8 @@ func AnalyzeAudio(filename string, config *BaseFilterConfig, progressCallback Pr
 		return nil, err
 	}
 
-	noiseSelection := selectNoiseProfile(measurements, intervals, silenceIntervals, silMedians)
-	selectSpeechProfile(measurements, intervals, noiseSelection)
+	noiseSelection := selectNoiseProfile(measurements, intervals, silenceIntervals, silMedians, config.logger)
+	selectSpeechProfile(measurements, intervals, noiseSelection, config.logger)
 
 	assignInputMeasurementSuggestions(measurements)
 
@@ -298,10 +297,10 @@ type noiseProfileSelection struct {
 	noiseProfile   *NoiseProfile
 }
 
-func selectNoiseProfile(measurements *AudioMeasurements, intervals, silenceIntervals []IntervalSample, silMedians silenceMedians) noiseProfileSelection {
+func selectNoiseProfile(measurements *AudioMeasurements, intervals, silenceIntervals []IntervalSample, silMedians silenceMedians, log debugLogger) noiseProfileSelection {
 	measurements.RoomToneRegions = findRoomToneCandidatesFromIntervals(silenceIntervals, measurements.RoomToneDetectLevel, silMedians)
 
-	roomToneResult := findBestRoomToneRegion(measurements.RoomToneRegions, silenceIntervals)
+	roomToneResult := findBestRoomToneRegion(measurements.RoomToneRegions, silenceIntervals, log)
 	measurements.RoomToneCandidates = roomToneResult.Candidates
 	measurements.VoiceActivated = detectVoiceActivated(roomToneResult.Candidates)
 
@@ -336,7 +335,7 @@ func selectNoiseProfile(measurements *AudioMeasurements, intervals, silenceInter
 	return selection
 }
 
-func selectSpeechProfile(measurements *AudioMeasurements, intervals []IntervalSample, noiseSelection noiseProfileSelection) {
+func selectSpeechProfile(measurements *AudioMeasurements, intervals []IntervalSample, noiseSelection noiseProfileSelection, log debugLogger) {
 	speechSearchStart := 30 * time.Second
 	switch {
 	case noiseSelection.roomToneResult != nil && noiseSelection.roomToneResult.BestRegion != nil:
@@ -347,7 +346,7 @@ func selectSpeechProfile(measurements *AudioMeasurements, intervals []IntervalSa
 
 	measurements.SpeechRegions = findSpeechCandidatesFromIntervals(intervals, speechSearchStart, measurements.VoiceActivated, measurements.RMSLevel, measurements.NoiseFloor)
 
-	speechResult := findBestSpeechRegion(measurements.SpeechRegions, intervals, noiseSelection.noiseProfile)
+	speechResult := findBestSpeechRegion(measurements.SpeechRegions, intervals, noiseSelection.noiseProfile, log)
 	measurements.SpeechCandidates = speechResult.Candidates
 
 	if speechResult.BestRegion == nil {

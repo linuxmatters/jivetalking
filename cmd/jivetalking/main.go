@@ -118,8 +118,8 @@ func main() {
 		}
 	}
 
-	// Set the processor package's debug log function to use the same log
-	processor.DebugLog = log
+	// Set the config's debug log function to use the same log
+	config.SetLogger(log)
 
 	// Handle analysis-only mode: run Pass 1 and display results, skip TUI
 	if cliArgs.AnalysisOnly {

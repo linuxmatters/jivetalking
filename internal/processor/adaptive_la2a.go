@@ -119,8 +119,8 @@ type la2aOverrides struct {
 //
 // This implementation uses spectral measurements to emulate program-dependent
 // behaviour that the optical T4 cell provides naturally.
-func tuneLA2ACompressor(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagnostics, measurements *AudioMeasurements) {
-	overrides := applyHighCrestOverrides(config, diagnostics, measurements)
+func tuneLA2ACompressor(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagnostics, measurements *AudioMeasurements, log debugLogger) {
+	overrides := applyHighCrestOverrides(config, diagnostics, measurements, log)
 	tuneLA2AAttack(config, measurements)
 	tuneLA2ARelease(config, measurements, overrides)
 	tuneLA2ARatio(config, measurements, overrides)
@@ -138,9 +138,9 @@ func tuneLA2ACompressor(config *EffectiveFilterConfig, diagnostics *AdaptiveDiag
 //
 // Diagnostic fields are always populated (active or not) when diagnostics is non-nil.
 // Returns zero-value la2aOverrides when no overrides are needed (deficit <= 0).
-func applyHighCrestOverrides(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagnostics, measurements *AudioMeasurements) la2aOverrides {
+func applyHighCrestOverrides(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagnostics, measurements *AudioMeasurements, log debugLogger) la2aOverrides {
 	if measurements.SpeechProfile == nil {
-		debugLog("high-crest: SpeechProfile is nil, using full-file InputI/InputTP for deficit calculation")
+		log.Logf("high-crest: SpeechProfile is nil, using full-file InputI/InputTP for deficit calculation")
 	}
 
 	// Deficit calculation

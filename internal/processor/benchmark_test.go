@@ -86,7 +86,7 @@ func BenchmarkMeasureOutputRegions(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		MeasureOutputRegions(inputPath, roomToneRegion, speechRegion)
+		MeasureOutputRegions(inputPath, roomToneRegion, speechRegion, nil)
 	}
 }
 

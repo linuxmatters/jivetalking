@@ -2513,7 +2513,7 @@ func TestApplyHighCrestOverrides(t *testing.T) {
 					SpeechProfile: tt.speechProfile,
 				}
 
-				overrides := applyHighCrestOverrides(config, diagnostics, measurements)
+				overrides := applyHighCrestOverrides(config, diagnostics, measurements, nil)
 
 				if diagnostics.LA2AHighCrestActive != tt.wantActive {
 					t.Errorf("LA2AHighCrestActive = %v, want %v", diagnostics.LA2AHighCrestActive, tt.wantActive)
@@ -2584,7 +2584,7 @@ func TestApplyHighCrestOverrides(t *testing.T) {
 					SpeechProfile: &SpeechCandidateMetrics{},
 				}
 
-				overrides := applyHighCrestOverrides(config, diagnostics, measurements)
+				overrides := applyHighCrestOverrides(config, diagnostics, measurements, nil)
 
 				assertClose(t, "ThresholdFloor", overrides.ThresholdFloor, tt.wantThresholdFloor, 0.01)
 				assertClose(t, "RatioFloor", overrides.RatioFloor, tt.wantRatioFloor, 0.01)
@@ -2624,7 +2624,7 @@ func TestApplyHighCrestOverrides(t *testing.T) {
 				SpeechProfile: &SpeechCandidateMetrics{},
 			}
 
-			applyHighCrestOverrides(config, diagnostics, measurements)
+			applyHighCrestOverrides(config, diagnostics, measurements, nil)
 
 			assertClose(t, "deficit", diagnostics.LA2AHighCrestDeficit, tt.wantDeficit, 0.01)
 			assertClose(t, "severity", diagnostics.LA2AHighCrestSeverity, tt.wantSeverity, 0.001)
@@ -2643,7 +2643,7 @@ func TestApplyHighCrestOverrides(t *testing.T) {
 			SpeechProfile: &SpeechCandidateMetrics{},
 		}
 
-		applyHighCrestOverrides(config, diagnostics, measurements)
+		applyHighCrestOverrides(config, diagnostics, measurements, nil)
 
 		if diagnostics.LA2AHighCrestActive {
 			t.Error("expected LA2AHighCrestActive=false for Marius-like input")
@@ -2697,7 +2697,7 @@ func TestTuneLA2ACompressorHighCrest(t *testing.T) {
 			SpeechProfile: speechProfile,
 		}
 
-		tuneLA2ACompressor(config, diagnostics, measurements)
+		tuneLA2ACompressor(config, diagnostics, measurements, nil)
 
 		// Diagnostic fields must be set
 		if !diagnostics.LA2AHighCrestActive {
@@ -2748,7 +2748,7 @@ func TestTuneLA2ACompressorHighCrest(t *testing.T) {
 		}
 
 		// Run once with the full tuner chain
-		tuneLA2ACompressor(config, diagnostics, measurements)
+		tuneLA2ACompressor(config, diagnostics, measurements, nil)
 
 		if diagnostics.LA2AHighCrestActive {
 			t.Error("expected LA2AHighCrestActive=false for Marius-like input")
@@ -2766,7 +2766,7 @@ func TestTuneLA2ACompressorHighCrest(t *testing.T) {
 		config2 := newTestConfig()
 		config2.Loudnorm.TargetTP = -2.0
 		diagnostics2 := &AdaptiveDiagnostics{}
-		tuneLA2ACompressor(config2, diagnostics2, measurements)
+		tuneLA2ACompressor(config2, diagnostics2, measurements, nil)
 		assertNoStaleEffectiveConfigFields(t)
 
 		assertClose(t, "ratio", ratioWithOverrides, config2.LA2A.Ratio, 0.001)
@@ -2808,7 +2808,7 @@ func TestTuneLA2ACompressorHighCrest(t *testing.T) {
 					SpeechProfile: speechProfile,
 				}
 
-				tuneLA2ACompressor(config, diagnostics, measurements)
+				tuneLA2ACompressor(config, diagnostics, measurements, nil)
 
 				if diagnostics.LA2AHighCrestActive {
 					t.Errorf("deficit > 0 (%.2f) with hot InputTP (%.1f dBTP) - invariant violated",
@@ -2837,7 +2837,7 @@ func TestTuneLA2ACompressorHighCrest(t *testing.T) {
 			SpeechProfile: speechProfile,
 		}
 
-		tuneLA2ACompressor(config, diagnostics, measurements)
+		tuneLA2ACompressor(config, diagnostics, measurements, nil)
 
 		if !diagnostics.LA2AHighCrestActive {
 			t.Fatal("expected LA2AHighCrestActive=true for maximum severity input")

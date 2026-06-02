@@ -144,7 +144,7 @@ func detectVoiceActivated(candidates []RoomToneCandidateMetrics) bool {
 //
 // Uses pre-collected interval data for measurements - no file re-reading required.
 // Returns an empty result if no suitable region is found.
-func findBestRoomToneRegion(regions []RoomToneRegion, intervals []IntervalSample) *findBestRoomToneRegionResult {
+func findBestRoomToneRegion(regions []RoomToneRegion, intervals []IntervalSample, log debugLogger) *findBestRoomToneRegionResult {
 	result := &findBestRoomToneRegionResult{}
 
 	if len(regions) == 0 {
@@ -186,7 +186,7 @@ func findBestRoomToneRegion(regions []RoomToneRegion, intervals []IntervalSample
 			}
 		}
 
-		score := scoreRoomToneCandidate(metrics)
+		score := scoreRoomToneCandidate(metrics, log)
 		metrics.Score = score
 
 		result.Candidates = append(result.Candidates, *metrics)
@@ -232,13 +232,13 @@ func findBestRoomToneRegion(regions []RoomToneRegion, intervals []IntervalSample
 // scoreRoomToneCandidate computes a composite score for a room tone region candidate.
 // Higher scores indicate better candidates for noise profiling.
 // Returns 0.0 for candidates that should be rejected (e.g., crosstalk detected).
-func scoreRoomToneCandidate(m *RoomToneCandidateMetrics) float64 {
+func scoreRoomToneCandidate(m *RoomToneCandidateMetrics, log debugLogger) float64 {
 	if m == nil {
 		return 0.0
 	}
 
 	if m.RMSLevel <= digitalSilenceRMSThreshold {
-		debugLog("scoreRoomToneCandidate: REJECTING candidate at %.3fs - RMS %.1f dBFS at or below %.1f dBFS threshold (digital silence)",
+		log.Logf("scoreRoomToneCandidate: REJECTING candidate at %.3fs - RMS %.1f dBFS at or below %.1f dBFS threshold (digital silence)",
 			m.Region.Start.Seconds(), m.RMSLevel, digitalSilenceRMSThreshold)
 		m.TransientWarning = fmt.Sprintf(
 			"rejected: RMS %.1f dBFS at or below %.1f dBFS threshold (digital silence from voice-activated recording)",
@@ -247,11 +247,11 @@ func scoreRoomToneCandidate(m *RoomToneCandidateMetrics) float64 {
 		return 0.0
 	}
 
-	isCrosstalk := isLikelyCrosstalk(m)
-	debugLog("scoreRoomToneCandidate: start=%.3fs, CrestFactor=%.2f dB, isCrosstalk=%v",
+	isCrosstalk := isLikelyCrosstalk(m, log)
+	log.Logf("scoreRoomToneCandidate: start=%.3fs, CrestFactor=%.2f dB, isCrosstalk=%v",
 		m.Region.Start.Seconds(), m.CrestFactor, isCrosstalk)
 	if isCrosstalk {
-		debugLog("scoreRoomToneCandidate: REJECTING candidate at %.3fs (returning score=0.0)", m.Region.Start.Seconds())
+		log.Logf("scoreRoomToneCandidate: REJECTING candidate at %.3fs (returning score=0.0)", m.Region.Start.Seconds())
 		m.TransientWarning = fmt.Sprintf(
 			"rejected: crosstalk detected (crest %.1f dB, centroid %.0f Hz)",
 			m.CrestFactor, m.Spectral.Centroid,
@@ -260,7 +260,7 @@ func scoreRoomToneCandidate(m *RoomToneCandidateMetrics) float64 {
 	}
 
 	if m.CrestFactor > silenceCrestFactorMax {
-		debugLog("scoreRoomToneCandidate: REJECTING candidate at %.3fs - crest factor %.1f dB exceeds %.1f dB threshold",
+		log.Logf("scoreRoomToneCandidate: REJECTING candidate at %.3fs - crest factor %.1f dB exceeds %.1f dB threshold",
 			m.Region.Start.Seconds(), m.CrestFactor, silenceCrestFactorMax)
 		m.TransientWarning = fmt.Sprintf(
 			"rejected: crest factor %.1f dB exceeds %.1f dB threshold (transient contamination)",
@@ -335,12 +335,12 @@ func calculateStabilityScore(intervals []IntervalSample) float64 {
 // isLikelyCrosstalk detects if a room tone candidate is likely crosstalk (leaked voice).
 // Returns true if centroid is in voice range AND has peaked/impulsive characteristics,
 // OR if the crest factor indicates severe transient contamination (centroid-independent).
-func isLikelyCrosstalk(m *RoomToneCandidateMetrics) bool {
+func isLikelyCrosstalk(m *RoomToneCandidateMetrics, log debugLogger) bool {
 	crestExceedsThreshold := m.CrestFactor > crosstalkPeakRMSGap
-	debugLog("isLikelyCrosstalk: CrestFactor=%.2f dB, threshold=%.2f dB, exceeds=%v",
+	log.Logf("isLikelyCrosstalk: CrestFactor=%.2f dB, threshold=%.2f dB, exceeds=%v",
 		m.CrestFactor, crosstalkPeakRMSGap, crestExceedsThreshold)
 	if crestExceedsThreshold {
-		debugLog("isLikelyCrosstalk: REJECTING candidate due to crest factor %.2f dB > %.2f dB threshold",
+		log.Logf("isLikelyCrosstalk: REJECTING candidate due to crest factor %.2f dB > %.2f dB threshold",
 			m.CrestFactor, crosstalkPeakRMSGap)
 		return true
 	}
