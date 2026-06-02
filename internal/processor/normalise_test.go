@@ -1084,7 +1084,7 @@ func applyLoudnormTest(
 		inputPath:   inputPath,
 		config:      loudnormApplicationTestConfig(),
 		measurement: loudnormApplicationTestMeasurement(),
-	})
+	}, nil)
 }
 
 func TestApplyLoudnormAndMeasureDoesNotStartCaptureOnOpenError(t *testing.T) {
@@ -1716,6 +1716,7 @@ func TestApplyNormalisationProgressCadenceGuard(t *testing.T) {
 		func(update ProgressUpdate) {
 			events = append(events, loudnormProgressEvent{pass: update.Pass, passName: update.PassName, progress: update.Progress})
 		},
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("ApplyNormalisation() error = %v", err)

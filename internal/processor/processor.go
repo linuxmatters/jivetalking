@@ -148,7 +148,7 @@ func ProcessAudio(inputPath string, config *BaseFilterConfig, progressCallback P
 		roomToneRegion, spRegion := extractRegionPair(measurements)
 		if roomToneRegion != nil || spRegion != nil {
 			regionStart := time.Now()
-			roomToneSample, spSample := MeasureOutputRegions(outputPath, roomToneRegion, spRegion)
+			roomToneSample, spSample := MeasureOutputRegions(outputPath, roomToneRegion, spRegion, config.logger)
 			regionTimings.FilteredOutput = time.Since(regionStart)
 			filteredMeasurements.RoomToneSample = roomToneSample
 			filteredMeasurements.SpeechSample = spSample
@@ -159,7 +159,7 @@ func ProcessAudio(inputPath string, config *BaseFilterConfig, progressCallback P
 	// The FinalMeasurements in the result include region measurements captured in Pass 4
 	var normResult *NormalisationResult
 	if filteredMeasurements != nil {
-		normResult, err = ApplyNormalisation(outputPath, effectiveConfig, filteredMeasurements, measurements, progressCallback)
+		normResult, err = ApplyNormalisation(outputPath, effectiveConfig, filteredMeasurements, measurements, progressCallback, config.logger)
 		if err != nil {
 			return nil, fmt.Errorf("pass 3 failed: %w", err)
 		}

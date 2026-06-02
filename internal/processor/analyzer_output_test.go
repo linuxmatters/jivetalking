@@ -21,7 +21,7 @@ func measureOutputRoomToneRegion(outputPath string, region RoomToneRegion) (*Roo
 	}
 	defer reader.Close()
 
-	return measureOutputRoomToneRegionFromReader(reader, region)
+	return measureOutputRoomToneRegionFromReader(reader, region, nil)
 }
 
 // measureOutputSpeechRegion analyses a speech region in the output file
@@ -37,7 +37,7 @@ func measureOutputSpeechRegion(outputPath string, region SpeechRegion) (*SpeechC
 	}
 	defer reader.Close()
 
-	return measureOutputSpeechRegionFromReader(reader, region)
+	return measureOutputSpeechRegionFromReader(reader, region, nil)
 }
 
 func TestExtractRegionPair(t *testing.T) {

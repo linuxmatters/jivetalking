@@ -391,7 +391,7 @@ type findBestSpeechRegionResult struct {
 // contaminating spectral metrics with pauses.
 // The noiseProfile parameter enables SNR margin checking to penalise candidates
 // too close to the noise floor (where spectral metrics would be unreliable).
-func findBestSpeechRegion(regions []SpeechRegion, intervals []IntervalSample, noiseProfile *NoiseProfile) *findBestSpeechRegionResult {
+func findBestSpeechRegion(regions []SpeechRegion, intervals []IntervalSample, noiseProfile *NoiseProfile, log debugLogger) *findBestSpeechRegionResult {
 	result := &findBestSpeechRegionResult{}
 
 	if len(regions) == 0 {
@@ -424,7 +424,7 @@ func findBestSpeechRegion(regions []SpeechRegion, intervals []IntervalSample, no
 		if noiseProfile != nil {
 			snrMargin := metrics.RMSLevel - noiseProfile.MeasuredNoiseFloor
 			if snrMargin < minSNRMargin {
-				debugLog("Speech candidate at %.1fs has low SNR margin: %.1f dB < %.1f dB minimum",
+				log.Logf("Speech candidate at %.1fs has low SNR margin: %.1f dB < %.1f dB minimum",
 					candidate.Start.Seconds(), snrMargin, minSNRMargin)
 				// Apply penalty factor rather than rejecting outright
 				// This allows selection if no better candidates exist
@@ -433,7 +433,7 @@ func findBestSpeechRegion(regions []SpeechRegion, intervals []IntervalSample, no
 				metrics.Score = score
 			}
 		} else {
-			debugLog("SNR margin check skipped: no noise profile available")
+			log.Logf("SNR margin check skipped: no noise profile available")
 		}
 
 		// Store for reporting

@@ -504,7 +504,7 @@ func TestProcessorSeedAndProgressCallbackBoundaries(t *testing.T) {
 			fn:          ApplyNormalisation,
 			configArg:   1,
 			progressArg: 4,
-			parameters:  5,
+			parameters:  6,
 		},
 	}
 

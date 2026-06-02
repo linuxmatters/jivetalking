@@ -112,7 +112,7 @@ func AdaptConfig(config *BaseFilterConfig, measurements *AudioMeasurements) (*Ef
 
 	tuneDS201Gate(effectiveConfig, diagnostics, measurements) // DS201-style soft expander gate
 	tuneDeesser(effectiveConfig, measurements)
-	tuneLA2ACompressor(effectiveConfig, diagnostics, measurements)
+	tuneLA2ACompressor(effectiveConfig, diagnostics, measurements, config.logger)
 	// tuneVolumaxLimiter removed - limiter moved to Pass 4, tuned from Pass 3 measurements
 
 	// Final safety checks

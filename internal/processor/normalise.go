@@ -43,6 +43,13 @@ type LoudnormStats struct {
 }
 
 // loudnormLogCapture manages thread-safe capture of loudnorm's JSON output.
+//
+// Parallelism blocker: capture hijacks FFmpeg's process-global log callback and
+// log level, serialised by lifecycleMu. Only one Pass 3/4 loudnorm measurement
+// can capture at a time, so concurrent multi-file loudnorm measurement is
+// blocked. Resolving it needs an FFmpeg log-routing redesign (per-graph or
+// metadata-based JSON extraction); that decision is deferred to the
+// parallel-design phase.
 var loudnormLogCapture = struct {
 	lifecycleMu  sync.Mutex
 	mu           sync.Mutex
@@ -587,6 +594,7 @@ func ApplyNormalisation(
 	outputMeasurements *OutputMeasurements,
 	inputMeasurements *AudioMeasurements,
 	progressCallback ProgressCallback,
+	log debugLogger,
 ) (*NormalisationResult, error) {
 	loudnorm := config.Loudnorm
 	if !loudnorm.Enabled {
@@ -658,7 +666,7 @@ func ApplyNormalisation(
 		inputMeasurements: inputMeasurements,
 		limiter:           limiter,
 		progress:          progressCallback,
-	})
+	}, log)
 	if err != nil {
 		return nil, fmt.Errorf("loudnorm application failed: %w", err)
 	}
@@ -711,7 +719,7 @@ func ApplyNormalisation(
 //
 // Returns the measured integrated loudness, true peak, full output measurements,
 // and loudnorm diagnostic stats.
-func applyLoudnormAndMeasure(request loudnormApplicationRequest) (*loudnormApplicationResult, error) {
+func applyLoudnormAndMeasure(request loudnormApplicationRequest, log debugLogger) (*loudnormApplicationResult, error) {
 	prep, err := prepareLoudnormApplication(request)
 	if err != nil {
 		return nil, err
@@ -721,7 +729,7 @@ func applyLoudnormAndMeasure(request loudnormApplicationRequest) (*loudnormAppli
 		_ = os.Remove(prep.tempPath)
 	}
 	captureGraphStats := func() *LoudnormStats {
-		return capturePass4LoudnormStats(&prep.filterGraph)
+		return capturePass4LoudnormStats(&prep.filterGraph, log)
 	}
 
 	execution, err := executeAndPublishLoudnormApplication(prep, request, captureGraphStats, removeTemp)
@@ -732,7 +740,7 @@ func applyLoudnormAndMeasure(request loudnormApplicationRequest) (*loudnormAppli
 	// Free filter graph before getting stats — loudnorm outputs JSON on graph destruction
 	stats := captureGraphStats()
 
-	return finalizeLoudnormApplicationResult(request, execution, stats), nil
+	return finalizeLoudnormApplicationResult(request, execution, stats, log), nil
 }
 
 func prepareLoudnormApplication(request loudnormApplicationRequest) (*loudnormApplicationPreparation, error) {
@@ -872,10 +880,10 @@ func executeAndPublishLoudnormApplication(
 	return result, nil
 }
 
-func capturePass4LoudnormStats(graph **ffmpeg.AVFilterGraph) *LoudnormStats {
+func capturePass4LoudnormStats(graph **ffmpeg.AVFilterGraph, log debugLogger) *LoudnormStats {
 	stats, err := captureLoudnormGraphFinalisation(graph)
 	if err != nil {
-		debugLog("Warning: failed to capture Pass 4 loudnorm diagnostics: %v", err)
+		log.Logf("Warning: failed to capture Pass 4 loudnorm diagnostics: %v", err)
 		return nil
 	}
 	return stats
@@ -885,11 +893,13 @@ func finalizeLoudnormApplicationResult(
 	request loudnormApplicationRequest,
 	execution *loudnormApplicationExecutionResult,
 	stats *LoudnormStats,
+	log debugLogger,
 ) *loudnormApplicationResult {
 	finalMeasurements, regionMeasurementTime := finalizeLoudnormOutputMeasurements(
 		request.inputPath,
 		request.inputMeasurements,
 		&execution.acc,
+		log,
 	)
 
 	return &loudnormApplicationResult{
@@ -905,6 +915,7 @@ func finalizeLoudnormOutputMeasurements(
 	inputPath string,
 	inputMeasurements *AudioMeasurements,
 	acc *outputMetadataAccumulators,
+	log debugLogger,
 ) (*OutputMeasurements, time.Duration) {
 	finalMeasurements := finalizeOutputMeasurements(acc)
 	var regionMeasurementTime time.Duration
@@ -919,7 +930,7 @@ func finalizeLoudnormOutputMeasurements(
 	}
 
 	regionStart := time.Now()
-	roomToneSample, spSample := MeasureOutputRegions(inputPath, roomToneRegion, spRegion)
+	roomToneSample, spSample := MeasureOutputRegions(inputPath, roomToneRegion, spRegion, log)
 	regionMeasurementTime = time.Since(regionStart)
 	finalMeasurements.RoomToneSample = roomToneSample
 	finalMeasurements.SpeechSample = spSample

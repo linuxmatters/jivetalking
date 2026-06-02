@@ -859,7 +859,7 @@ func TestFindBestRoomToneRegion_HighestScoreWinsAfterDip(t *testing.T) {
 
 	allIntervals := append(append(intervalsA, intervalsB...), intervalsC...)
 
-	result := findBestRoomToneRegion(regions, allIntervals)
+	result := findBestRoomToneRegion(regions, allIntervals, nil)
 
 	if result.BestRegion == nil {
 		t.Fatal("expected a best region to be selected")
@@ -897,7 +897,7 @@ func TestFindBestRoomToneRegion_EarlierCandidatePreferredWithinTolerance(t *test
 	allIntervals = append(allIntervals, intervalsA...)
 	allIntervals = append(allIntervals, intervalsB...)
 
-	result := findBestRoomToneRegion(regions, allIntervals)
+	result := findBestRoomToneRegion(regions, allIntervals, nil)
 
 	if result.BestRegion == nil {
 		t.Fatal("expected a best region to be selected")
@@ -936,7 +936,7 @@ func TestFindBestRoomToneRegion_AllBelowMinAcceptableScoreFallsBack(t *testing.T
 	allIntervals = append(allIntervals, intervalsA...)
 	allIntervals = append(allIntervals, intervalsB...)
 
-	result := findBestRoomToneRegion(regions, allIntervals)
+	result := findBestRoomToneRegion(regions, allIntervals, nil)
 
 	if result.BestRegion == nil {
 		t.Fatal("expected fallback BestRegion when candidates exist below minAcceptableScore")
@@ -974,7 +974,7 @@ func TestFindBestRoomToneRegion_AllRejectedCandidatesDoNotFallback(t *testing.T)
 	allIntervals = append(allIntervals, intervalsA...)
 	allIntervals = append(allIntervals, intervalsB...)
 
-	result := findBestRoomToneRegion(regions, allIntervals)
+	result := findBestRoomToneRegion(regions, allIntervals, nil)
 
 	if result.BestRegion != nil {
 		t.Fatalf("BestRegion = %+v, want nil for all rejected candidates", result.BestRegion)
@@ -1000,7 +1000,7 @@ func TestFindBestRoomToneRegion_SingleAcceptableCandidateElected(t *testing.T) {
 	intervals := makeRoomToneTestIntervals(0, 10*time.Second,
 		-65.0, -60.0, 100.0, 0.8, 2.0, 0.0)
 
-	result := findBestRoomToneRegion(regions, intervals)
+	result := findBestRoomToneRegion(regions, intervals, nil)
 
 	if result.BestRegion == nil {
 		t.Fatal("expected a best region to be selected")
@@ -1035,7 +1035,7 @@ func TestFindBestRoomToneRegion_LaterCandidateWinsWhenGapExceedsTolerance(t *tes
 	allIntervals = append(allIntervals, intervalsA...)
 	allIntervals = append(allIntervals, intervalsB...)
 
-	result := findBestRoomToneRegion(regions, allIntervals)
+	result := findBestRoomToneRegion(regions, allIntervals, nil)
 
 	if result.BestRegion == nil {
 		t.Fatal("expected a best region to be selected")
@@ -1065,7 +1065,7 @@ func TestFindBestRoomToneRegion_LateCandidateDiscoverable(t *testing.T) {
 	intervals := makeRoomToneTestIntervals(1800*time.Second, 10*time.Second,
 		-75.0, -70.0, 100.0, 0.9, 1.0, 0.0)
 
-	result := findBestRoomToneRegion(regions, intervals)
+	result := findBestRoomToneRegion(regions, intervals, nil)
 
 	if result.BestRegion == nil {
 		t.Fatal("expected candidate at t=1800s to be elected")
@@ -1542,7 +1542,7 @@ func TestFindBestSpeechRegion(t *testing.T) {
 			{Start: 95 * time.Second, End: 100 * time.Second, Duration: 5 * time.Second},
 		}
 
-		result := findBestSpeechRegion(regions, intervals, nil)
+		result := findBestSpeechRegion(regions, intervals, nil, nil)
 
 		if result.BestRegion == nil {
 			t.Fatal("expected a best region to be selected")
@@ -1556,7 +1556,7 @@ func TestFindBestSpeechRegion(t *testing.T) {
 	t.Run("returns nil for empty regions", func(t *testing.T) {
 		intervals := makeSpeechTestIntervals(200, -18.0)
 
-		result := findBestSpeechRegion([]SpeechRegion{}, intervals, nil)
+		result := findBestSpeechRegion([]SpeechRegion{}, intervals, nil, nil)
 
 		if result.BestRegion != nil {
 			t.Error("expected nil BestRegion for empty input")
@@ -1571,7 +1571,7 @@ func TestFindBestSpeechRegion(t *testing.T) {
 			{Start: 40 * time.Second, End: 80 * time.Second, Duration: 40 * time.Second},
 		}
 
-		result := findBestSpeechRegion(regions, intervals, nil)
+		result := findBestSpeechRegion(regions, intervals, nil, nil)
 
 		if len(result.Candidates) != 2 {
 			t.Errorf("expected 2 candidates stored, got %d", len(result.Candidates))
@@ -1610,7 +1610,7 @@ func TestFindBestSpeechRegion_AllBelowMinAcceptableScoreFallsBack(t *testing.T) 
 	intervals = append(intervals, lowScoreIntervals...)
 	intervals = append(intervals, higherScoreIntervals...)
 
-	result := findBestSpeechRegion(regions, intervals, nil)
+	result := findBestSpeechRegion(regions, intervals, nil, nil)
 
 	if result.BestRegion == nil {
 		t.Fatal("expected fallback BestRegion when speech candidates exist below threshold")
@@ -1978,7 +1978,7 @@ func TestFindBestSpeechRegion_WithRefinement(t *testing.T) {
 			return append(first, second...)
 		}()
 
-		result := findBestSpeechRegion(regions, intervals, nil)
+		result := findBestSpeechRegion(regions, intervals, nil, nil)
 
 		if result.BestRegion == nil {
 			t.Fatal("expected a best region to be selected")
@@ -2026,7 +2026,7 @@ func TestFindBestSpeechRegion_WithRefinement(t *testing.T) {
 		// Create intervals with good speech characteristics
 		intervals := makeSpeechIntervalsScorable(0, 180, 6.0, 0.1, 2000.0, -15.0)
 
-		result := findBestSpeechRegion(regions, intervals, nil)
+		result := findBestSpeechRegion(regions, intervals, nil, nil)
 
 		if result.BestRegion == nil {
 			t.Fatal("expected a best region to be selected")
@@ -2062,7 +2062,7 @@ func TestFindBestSpeechRegion_WithRefinement(t *testing.T) {
 			return append(append(poor1, excellent...), poor2...)
 		}()
 
-		result := findBestSpeechRegion(regions, intervals, nil)
+		result := findBestSpeechRegion(regions, intervals, nil, nil)
 
 		if result.BestRegion == nil {
 			t.Fatal("expected a best region to be selected")
@@ -2100,7 +2100,7 @@ func TestFindBestSpeechRegion_SNRMarginCheck(t *testing.T) {
 		}
 
 		// Run with good SNR margin
-		resultGood := findBestSpeechRegion(regions, intervals, noiseProfileGood)
+		resultGood := findBestSpeechRegion(regions, intervals, noiseProfileGood, nil)
 		if resultGood.BestRegion == nil {
 			t.Fatal("expected a best region to be selected with good SNR")
 		}
@@ -2112,7 +2112,7 @@ func TestFindBestSpeechRegion_SNRMarginCheck(t *testing.T) {
 		}
 
 		// Run with poor SNR margin
-		resultBad := findBestSpeechRegion(regions, intervals, noiseProfileBad)
+		resultBad := findBestSpeechRegion(regions, intervals, noiseProfileBad, nil)
 		if resultBad.BestRegion == nil {
 			t.Fatal("expected a best region to be selected even with poor SNR")
 		}
@@ -2156,7 +2156,7 @@ func TestFindBestSpeechRegion_SNRMarginCheck(t *testing.T) {
 		intervals := makeSpeechIntervalsScorable(0, 120, 6.0, 0.1, 1500.0, -20.0)
 
 		// Run without noise profile
-		resultNoProfile := findBestSpeechRegion(regions, intervals, nil)
+		resultNoProfile := findBestSpeechRegion(regions, intervals, nil, nil)
 		if resultNoProfile.BestRegion == nil {
 			t.Fatal("expected a best region to be selected without noise profile")
 		}
@@ -2166,7 +2166,7 @@ func TestFindBestSpeechRegion_SNRMarginCheck(t *testing.T) {
 		noiseProfileGood := &NoiseProfile{
 			MeasuredNoiseFloor: -40.0, // 20 dB margin - passes
 		}
-		resultWithProfile := findBestSpeechRegion(regions, intervals, noiseProfileGood)
+		resultWithProfile := findBestSpeechRegion(regions, intervals, noiseProfileGood, nil)
 
 		// Scores should be equal when nil (no penalty applied)
 		var scoreNoProfile, scoreWithProfile float64
@@ -2725,7 +2725,7 @@ func TestFindBestRoomToneRegion_BoundaryTransientSurvivesAfterRefinement(t *test
 	allIntervals = append(allIntervals, transientIntervals...)
 	allIntervals = append(allIntervals, cleanIntervals...)
 
-	result := findBestRoomToneRegion(regions, allIntervals)
+	result := findBestRoomToneRegion(regions, allIntervals, nil)
 
 	if result.BestRegion == nil {
 		t.Fatal("expected candidate to be elected after pre-scoring refinement trims boundary transient")
