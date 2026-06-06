@@ -105,6 +105,8 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Download ffmpeg-statigo libraries
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           cd third_party/ffmpeg-statigo
           go run ./cmd/download-lib
@@ -194,6 +196,8 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Download ffmpeg-statigo libraries
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           cd third_party/ffmpeg-statigo
           go run ./cmd/download-lib
