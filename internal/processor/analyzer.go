@@ -138,10 +138,6 @@ type SpeechCandidateMetrics struct {
 	WasRefined       bool          `json:"was_refined,omitempty"`       // True if region was refined from a longer candidate
 }
 
-// Room tone detection constants for interval-based analysis
-// AudioMeasurements contains the measurements from Pass 1 analysis.
-// Uses ebur128 (LUFS/LRA), astats (dynamic range/noise floor), and aspectralstats (spectral analysis).
-// Room tone detection is performed in Go using 250ms interval sampling for improved accuracy.
 // BaseMeasurements contains fields shared between input (Pass 1) and output (Pass 2) measurements.
 // Embedded in both AudioMeasurements and OutputMeasurements to avoid duplication.
 type BaseMeasurements struct {
@@ -181,7 +177,7 @@ type BaseMeasurements struct {
 
 // AudioMeasurements contains the measurements from Pass 1 analysis.
 // Uses ebur128 (LUFS/LRA), astats (dynamic range/noise floor), and aspectralstats (spectral analysis).
-// Room tone detection is performed in Go using 250ms interval sampling for improved accuracy.
+// Room tone detection runs in Go using 250ms interval sampling rather than an FFmpeg silence filter.
 type AudioMeasurements struct {
 	// Embed shared measurement fields
 	BaseMeasurements
@@ -263,8 +259,8 @@ type OutputMeasurements struct {
 // Implementation note: ebur128 and astats write measurements to frame metadata with lavfi.r128.*
 // and lavfi.astats.Overall.* keys respectively. We extract these from the last processed frames.
 //
-// The noise floor and silence threshold are computed from interval data AFTER the full pass,
-// eliminating the need for a separate pre-scan phase.
+// The noise floor and silence threshold are computed from interval data after the full pass,
+// avoiding the need for a separate pre-scan phase.
 func AnalyzeAudio(filename string, config *BaseFilterConfig, progressCallback ProgressCallback) (*AudioMeasurements, error) {
 	// Default fallback threshold if interval analysis yields insufficient data
 	const defaultNoiseFloor = -50.0
@@ -668,7 +664,7 @@ func calculateAdaptiveDS201GateThreshold(noiseFloor, rmsTrough float64) float64 
 
 // createAnalysisFilterGraph creates an AVFilterGraph for Pass 1 analysis.
 // Uses astats, aspectralstats, and ebur128 filters to extract measurements.
-// Silence detection is now performed in Go using 250ms interval sampling.
+// Silence detection runs in Go using 250ms interval sampling, not in this graph.
 func createAnalysisFilterGraph(
 	decCtx *ffmpeg.AVCodecContext,
 	config *BaseFilterConfig,

@@ -1437,10 +1437,10 @@ func TestTuneDS201Gate(t *testing.T) {
 		// - mixed: < 0.16
 		// - broadband: >= 0.16
 		//
-		// Base release values (lowered for tighter noise control):
-		// - ds201GateReleaseMod = 250ms (was 300ms)
-		// - ds201GateReleaseSustained = 300ms (was 400ms)
-		// - ds201GateReleaseDynamic = 180ms (was 200ms)
+		// Base release values (tuned for tight noise control):
+		// - ds201GateReleaseMod = 250ms
+		// - ds201GateReleaseSustained = 300ms
+		// - ds201GateReleaseDynamic = 180ms
 		tests := []struct {
 			name           string
 			entropy        float64

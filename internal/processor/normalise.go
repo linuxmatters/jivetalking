@@ -531,7 +531,7 @@ func ApplyNormalisation(
 	// that Pass 4 will apply, closing the measurement mismatch.
 	limiter := planLimiterForLoudnorm(outputMeasurements, config)
 
-	// Pass 3: Run loudnorm measurement pass on Pass 2 output
+	// Pass 3: Run loudnorm measurement pass on Pass 2 output.
 	// When a prefix is active, loudnorm measures the post-limiter signal,
 	// so its InputI/InputTP already reflect pre-gain and limiting.
 	measurement, err := measureWithLoudnorm(inputPath, config, limiter.pass3Prefix, progressCallback)
@@ -911,7 +911,7 @@ func buildLoudnormFilterSpec(config *EffectiveFilterConfig, measurement *Loudnor
 	// dual_mono=true: CRITICAL - treats mono as dual-mono for correct loudness measurement
 	// print_format=json: Outputs JSON with normalization_type, target_offset, output_i/tp/lra
 	//
-	// Pass 3 now measures with the same volume+alimiter prefix, so measurement.InputI
+	// Pass 3 measures through the same volume+alimiter prefix, so measurement.InputI
 	// and measurement.InputTP already reflect the post-limiter signal. No manual
 	// effectiveMeasuredI/effectiveMeasuredTP adjustment needed.
 	loudnormFilter := fmt.Sprintf(

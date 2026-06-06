@@ -67,9 +67,9 @@ const (
 	ds201GateFluxLow          = 0.01 // Low flux threshold
 	ds201GateZCRLow           = 0.08 // Low zero crossings rate
 	ds201GateFluxHigh         = 0.05 // High flux threshold
-	ds201GateReleaseSustained = 300  // ms - for sustained speech (was 400)
-	ds201GateReleaseMod       = 250  // ms - standard (was 300)
-	ds201GateReleaseDynamic   = 180  // ms - for dynamic content (was 200)
+	ds201GateReleaseSustained = 300  // ms - for sustained speech
+	ds201GateReleaseMod       = 250  // ms - standard
+	ds201GateReleaseDynamic   = 180  // ms - for dynamic content
 	ds201GateReleaseHoldComp  = 50   // ms - compensation for lack of hold parameter
 	ds201GateReleaseTonalComp = 75   // ms - extra for tonal bleed (hide pump)
 	ds201GateReleaseMin       = 150  // ms - minimum release

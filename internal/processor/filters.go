@@ -39,7 +39,7 @@ const (
 // Pass1FilterOrder defines the filter chain for analysis pass.
 // Downmix → Analysis
 // No processing filters - just measurement for adaptive processing.
-// Silence detection is now performed in Go using 250ms interval sampling.
+// Silence detection runs in Go using 250ms interval sampling, not in the filter graph.
 var Pass1FilterOrder = []FilterID{
 	FilterDownmix,
 	FilterAnalysis,

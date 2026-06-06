@@ -9,11 +9,11 @@ package processor
 // - Threshold: 5dB above noise floor (catches breaths but not speech)
 // - Expansion: scales with noise severity (gentle for clean, aggressive for noisy)
 //
-// anlmdn remains constant because spike testing validated these parameters:
+// anlmdn stays constant because spike testing validated these parameters:
 // - strength: 0.00001 (minimum)
 // - patch: 6ms (context window)
-// - research: production default (search window)
-// - smooth: 11 (weight smoothing)
+// - research: 2.0ms / 0.0020s (r_min search window)
+// - smooth: 3 (m_strict weight smoothing)
 func tuneNoiseRemove(config *EffectiveFilterConfig, m *AudioMeasurements) {
 	if !config.NoiseRemove.Enabled {
 		return

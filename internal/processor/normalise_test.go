@@ -1441,7 +1441,7 @@ func TestBuildLoudnormFilterSpec_PreGain(t *testing.T) {
 				TargetOffset: tt.targetOffset,
 			}
 
-			// Pre-compute values (caller's responsibility after Task 2.2)
+			// Pre-compute values (the caller's responsibility)
 			ceiling, needsLimiting, clamped := calculateLimiterCeiling(
 				tt.inputI, tt.inputTP, config.Loudnorm.TargetI, config.Loudnorm.TargetTP,
 			)
@@ -1838,7 +1838,7 @@ func TestClampedTargetPropagation_Arithmetic(t *testing.T) {
 				TargetOffset: -2.5,
 			}
 
-			// Pre-compute values (caller's responsibility after Task 2.2)
+			// Pre-compute values (the caller's responsibility)
 			bCeiling, bNeeded, bClamped := calculateLimiterCeiling(
 				tt.measuredI, tt.measuredTP, config.Loudnorm.TargetI, config.Loudnorm.TargetTP,
 			)

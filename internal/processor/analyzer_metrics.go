@@ -942,11 +942,9 @@ var (
 	metaKeyEbur128TargetThresh = ffmpeg.GlobalCStr("lavfi.r128.target_threshold")
 )
 
-// metadataAccumulators holds all accumulator variables for frame metadata extraction.
-// Spectral stats (centroid, rolloff) are averaged across all frames.
-// astats and ebur128 values are cumulative, so we keep the latest.
 // baseMetadataAccumulators contains fields shared between input (Pass 1) and output (Pass 2) accumulators.
 // Embedded in both metadataAccumulators and outputMetadataAccumulators to avoid duplication.
+// Spectral stats are averaged across frames; astats and ebur128 values are cumulative, so the latest wins.
 type baseMetadataAccumulators struct {
 	// Spectral statistics from aspectralstats (averaged across frames)
 	spectral SpectralAccumulator
@@ -1345,9 +1343,8 @@ func extractFrameMetadata(metadata *ffmpeg.AVDictionary, acc *metadataAccumulato
 }
 
 // outputMetadataAccumulators holds accumulator variables for Pass 2 output measurement extraction.
-// Mirrors metadataAccumulators but without room tone detection fields.
-// outputMetadataAccumulators holds accumulator variables for Pass 2 output measurement extraction.
 // Uses baseMetadataAccumulators for spectral and astats fields shared with input analysis.
+// Mirrors metadataAccumulators but without room tone detection fields.
 type outputMetadataAccumulators struct {
 	// Embed shared spectral and astats fields
 	baseMetadataAccumulators

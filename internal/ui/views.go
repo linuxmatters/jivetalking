@@ -262,7 +262,7 @@ func renderCompletedFile(file FileProgress) string {
 
 	icon := lipgloss.NewStyle().Foreground(lipgloss.Color("#00AA00")).Render("✓")
 
-	quality := "★★★★★" // Always 5 stars for now
+	quality := "★★★★★" // Always 5 stars
 
 	return fmt.Sprintf(" %s %s → %s\n"+
 		"   Before: %.1f LUFS | After: %.1f LUFS | Quality: %s\n"+

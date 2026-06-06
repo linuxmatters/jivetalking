@@ -36,7 +36,7 @@ type ReportData struct {
 // GenerateReport creates a detailed analysis report and saves it alongside the output file.
 // The report filename will be <output>-LUFS-NN-processed.log
 //
-// Report structure (Phase 3 restructure):
+// Report structure:
 // 1. Header - file info and timestamp
 // 2. Processing Summary - pass timings
 // 3. Filter Chain Applied - adaptive parameters
@@ -113,7 +113,7 @@ func GenerateReport(data ReportData) error {
 }
 
 // =============================================================================
-// Tabular Report Section Writers (Phase 3 restructure)
+// Tabular Report Section Writers
 // =============================================================================
 
 // writeReportHeader outputs the report header with file info and timestamp.

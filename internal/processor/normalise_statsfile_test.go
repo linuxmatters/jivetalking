@@ -9,9 +9,8 @@ import (
 
 // TestParseLoudnormStatsFileParsesFixture proves the file-read parse yields the
 // correct LoudnormStats field values for the known loudnormCaptureTestJSON body.
-// The av_log capture path this once compared against was removed in Phase 3; its
-// field-for-field equivalence to the file parse was proven in Phase 1 before the
-// deletion, so this asserts the file parse against the fixture's known values.
+// The stats file is the sole source of loudnorm measurements, so this asserts the
+// file parse against the fixture's known values.
 func TestParseLoudnormStatsFileParsesFixture(t *testing.T) {
 	statsPath, err := createSiblingStatsPath(filepath.Join(t.TempDir(), "output.flac"), "loudnorm")
 	if err != nil {

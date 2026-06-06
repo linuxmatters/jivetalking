@@ -9,8 +9,8 @@ import (
 
 // Room tone region scoring for measurement reference extraction.
 //
-// The "noise profile" is no longer used for afftdn training (anlmdn is self-adapting).
-// Instead, these measurements serve as:
+// The "noise profile" is not afftdn training data (anlmdn is self-adapting).
+// These measurements serve as:
 // 1. Reference baseline for adaptive filter tuning (gate, compand, highpass)
 // 2. Comparative measurement point (same region re-measured in later passes)
 //
@@ -21,8 +21,8 @@ import (
 //   - Stable (variance) - intentionally recorded, not accidental gaps
 //   - Duration 8-18s - sufficient data without absorbing content changes
 const (
-	// Duration thresholds (Task 5: adjusted constraints)
-	minimumSilenceDuration = 8 * time.Second  // Minimum 8s (up from 2s) to avoid inter-word gaps
+	// Duration thresholds
+	minimumSilenceDuration = 8 * time.Second  // Minimum 8s to avoid inter-word gaps
 	idealDurationMin       = 8 * time.Second  // Ideal range lower bound
 	idealDurationMax       = 18 * time.Second // Ideal range upper bound
 
@@ -69,8 +69,8 @@ const (
 
 	// Scoring weights (must sum to 1.0)
 	stabilityScoreWeight = 0.25
-	amplitudeScoreWeight = 0.30 // was 0.40
-	spectralScoreWeight  = 0.35 // was 0.50
+	amplitudeScoreWeight = 0.30
+	spectralScoreWeight  = 0.35
 	durationScoreWeight  = 0.10
 
 	// Minimum acceptable score for "first wins" selection

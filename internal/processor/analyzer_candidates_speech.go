@@ -107,7 +107,8 @@ const (
 	// fluxAcceptableThreshold: natural speech upper bound.
 	fluxAcceptableThreshold = 0.030
 
-	// SNR margin for noise floor separation (see Phase 7)
+	// minSNRMargin is the minimum speech-to-noise-floor gap (dB) for a speech
+	// candidate; below it, spectral metrics measure noise rather than speech.
 	minSNRMargin = 20.0 // dB
 
 	// Crest factor scoring parameters

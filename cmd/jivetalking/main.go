@@ -18,9 +18,8 @@ import (
 	"github.com/linuxmatters/jivetalking/internal/ui"
 )
 
-// version is set via ldflags at build time
-// Local dev builds: "dev"
-// Release builds: git tag (e.g. "0.1.0")
+// version is injected via ldflags at build time. Local dev builds keep "dev";
+// release builds carry the git tag (e.g. "0.1.0").
 var version = "dev"
 
 var errCancelledByUser = errors.New("cancelled by user")
@@ -29,7 +28,7 @@ const debugLogPath = "jivetalking-debug.log"
 
 var createDebugLogFile = os.Create
 
-// CLI defines the command-line interface
+// CLI defines the command-line interface parsed by kong.
 type CLI struct {
 	Version              bool          `short:"v" help:"Show version information"`
 	Debug                bool          `short:"d" help:"Enable debug logging to jivetalking-debug.log"`
@@ -65,8 +64,8 @@ func resolveRoomToneScanDuration(roomTone, silence time.Duration, deprecationOut
 }
 
 func main() {
-	// Suppress FFmpeg info/verbose logging to keep console clean
-	// This prevents astats and other filters from printing summaries to stderr
+	// Suppress FFmpeg info/verbose logging so astats and other filters do not
+	// print summaries to stderr and clutter the console.
 	ffmpeg.AVLogSetLevel(ffmpeg.AVLogError)
 
 	cliArgs := &CLI{}
@@ -80,13 +79,11 @@ func main() {
 		kong.Help(cli.StyledHelpPrinter(kong.HelpOptions{Compact: true})),
 	)
 
-	// Handle version flag
 	if cliArgs.Version {
 		cli.PrintVersion(version)
 		os.Exit(0)
 	}
 
-	// Validate input
 	if len(cliArgs.Files) == 0 {
 		cli.PrintError("No input files specified")
 		_ = ctx.PrintUsage(false)
@@ -99,11 +96,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create default filter configuration
 	config := processor.DefaultFilterConfig()
 	config.Analysis.RoomToneScanDuration = scanDuration
 
-	// Open debug log file if --debug flag is set
 	debugLog, err := openDebugLog(cliArgs.Debug)
 	if err != nil {
 		cli.PrintError(err.Error())
@@ -117,42 +112,35 @@ func main() {
 		sink.Logf(format, args...)
 	}
 
-	// Set the config's debug log function to use the same log
+	// Route the filter chain's debug output through the same serialised sink.
 	config.SetLogger(log)
 
-	// Handle analysis-only mode: run Pass 1 and display results, skip TUI
 	if cliArgs.AnalysisOnly {
 		runAnalysisOnly(cliArgs.Files, config, log)
 		return
 	}
 
-	// Create the Bubbletea UI model
 	model := ui.NewModel(cliArgs.Files)
 
-	// Start the TUI
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	reportWarnings := make(chan string, len(cliArgs.Files))
 
-	// Start processing in background
 	go func() {
 		for i, inputPath := range cliArgs.Files {
 			fileStartTime := time.Now()
 
-			// Signal file start
 			log("[MAIN] Sending FileStartMsg for file %d: %s", i, inputPath)
 			p.Send(ui.FileStartMsg{
 				FileIndex: i,
 				FileName:  inputPath,
 			})
 
-			// Create progress handler
 			ph := &progressHandler{
 				p:         p,
 				log:       log,
 				fileIndex: i,
 			}
 
-			// Process the audio file
 			pass2Start := time.Now()
 			log("[MAIN] Starting ProcessAudio for %s", inputPath)
 			result, err := processor.ProcessAudio(inputPath, config, ph.callback)
@@ -164,6 +152,8 @@ func main() {
 				})
 				continue
 			}
+			// ProcessAudio runs all four passes; isolate Pass 2 by subtracting the
+			// passes the progress handler timed directly.
 			pass2Time := time.Since(pass2Start) - ph.pass1Time - ph.pass3Time - ph.pass4Time
 
 			reportData := buildProcessingReportData(inputPath, fileStartTime, ph.timings(pass2Time), result)
@@ -172,7 +162,6 @@ func main() {
 				reportWarnings <- fmt.Sprintf("Report was not written for %s: %v", inputPath, err)
 			}
 
-			// Signal file complete with actual data
 			log("[MAIN] Sending FileCompleteMsg for file %d", i)
 			p.Send(ui.FileCompleteMsg{
 				FileIndex:  i,
@@ -183,12 +172,10 @@ func main() {
 			})
 		}
 
-		// Signal all complete
 		log("[MAIN] Sending AllCompleteMsg")
 		p.Send(ui.AllCompleteMsg{})
 	}()
 
-	// Run the program
 	if _, err := p.Run(); err != nil {
 		cli.PrintError(fmt.Sprintf("UI error: %v", err))
 		if debugLog != nil {
@@ -273,7 +260,8 @@ func (ph *progressHandler) timings(pass2Time time.Duration) logging.ProcessingTi
 	}
 }
 
-// progressHandler handles progress updates from the processor
+// progressHandler relays processor progress updates to the TUI and records
+// per-pass timings from the start/end progress boundaries.
 type progressHandler struct {
 	p          *tea.Program
 	log        func(string, ...any)
@@ -289,7 +277,8 @@ type progressHandler struct {
 func (ph *progressHandler) callback(update processor.ProgressUpdate) {
 	ph.log("[MAIN] Sending ProgressMsg: Pass %d (%s), Progress %.1f%%, Level %.1f dB", update.Pass, update.PassName, update.Progress*100, update.Level)
 
-	// Track pass timing
+	// Progress 0.0 marks a pass start, 1.0 marks its end; bracket each pass to
+	// measure its wall-clock duration.
 	switch {
 	case update.Pass == processor.PassAnalysis && update.Progress == 0.0:
 		ph.pass1Start = time.Now()
@@ -322,18 +311,17 @@ func runAnalysisOnly(files []string, config *processor.BaseFilterConfig, log fun
 }
 
 func runAnalysisOnlyWithDeps(files []string, config *processor.BaseFilterConfig, log func(string, ...any), deps analysisOnlyDeps) {
-	// Check if we have a TTY for the progress UI
 	hasTTY := deps.hasTTY()
 
 	for i, inputPath := range files {
-		// Add separator between multiple files
+		// Blank line separates consecutive file reports.
 		if i > 0 {
 			fmt.Fprintln(deps.stdout)
 		}
 
 		log("[ANALYSIS] Starting analysis for %s", inputPath)
 
-		// Get file metadata for duration/sample rate display
+		// Metadata supplies the duration and sample rate shown in the report.
 		metadata, err := deps.openMetadata(inputPath)
 		if err != nil {
 			deps.printError(fmt.Sprintf("Failed to open %s: %v", inputPath, err))
@@ -344,10 +332,9 @@ func runAnalysisOnlyWithDeps(files []string, config *processor.BaseFilterConfig,
 		var analysisErr error
 
 		if hasTTY {
-			// Run with TUI progress display
 			analysisResult, analysisErr = deps.runWithTUI(inputPath, config, log)
 		} else {
-			// Fallback: run without TUI (for non-interactive environments)
+			// No terminal: skip the progress UI for non-interactive environments.
 			log("[ANALYSIS] No TTY available, running without progress UI")
 			fmt.Fprintf(deps.stdout, "Analysing: %s\n", filepath.Base(inputPath))
 			analysisResult, analysisErr = deps.analyzeDetailed(inputPath, config, nil)
@@ -364,7 +351,6 @@ func runAnalysisOnlyWithDeps(files []string, config *processor.BaseFilterConfig,
 
 		log("[ANALYSIS] Analysis complete for %s", inputPath)
 
-		// Display results to console
 		timings := logging.AnalysisTimings{
 			Analysis:   analysisResult.AnalysisDuration,
 			Adaptation: analysisResult.AdaptationDuration,
@@ -373,7 +359,7 @@ func runAnalysisOnlyWithDeps(files []string, config *processor.BaseFilterConfig,
 	}
 }
 
-// isTTY checks if stdout is connected to a terminal
+// isTTY reports whether stdout is connected to a terminal.
 func isTTY() bool {
 	fileInfo, err := os.Stdout.Stat()
 	if err != nil {
@@ -384,21 +370,17 @@ func isTTY() bool {
 
 // runAnalysisWithTUI runs analysis with the Bubbletea progress UI.
 func runAnalysisWithTUI(inputPath string, config *processor.BaseFilterConfig, log func(string, ...any)) (*processor.AnalysisResult, error) {
-	// Create the analysis UI model
 	model := ui.NewAnalysisModel()
 
-	// Start the TUI (not in alt screen so output remains visible)
+	// Run without the alt screen so the report stays on screen after exit.
 	p := tea.NewProgram(model)
 
-	// Run analysis in background goroutine
 	go func(path string) {
-		// Signal analysis start
 		p.Send(ui.AnalysisStartMsg{
 			FileName: path,
 			FilePath: path,
 		})
 
-		// Create progress callback that sends updates to TUI
 		progressCallback := func(update processor.ProgressUpdate) {
 			log("[ANALYSIS] Progress: Pass %d (%s), %.1f%%, Level %.1f dB", update.Pass, update.PassName, update.Progress*100, update.Level)
 			p.Send(ui.AnalysisProgressMsg{
@@ -407,34 +389,29 @@ func runAnalysisWithTUI(inputPath string, config *processor.BaseFilterConfig, lo
 			})
 		}
 
-		// Run analysis-only with progress callback
 		result, err := processor.AnalyzeOnlyDetailed(path, config, progressCallback)
 
-		// Signal completion
 		p.Send(ui.AnalysisCompleteMsg{
 			Result: result,
 			Error:  err,
 		})
 	}(inputPath)
 
-	// Run the TUI until analysis completes
 	finalModel, err := p.Run()
 	if err != nil {
 		return nil, fmt.Errorf("UI error: %w", err)
 	}
 
-	// Get the final model state
 	analysisModel, ok := finalModel.(ui.AnalysisModel)
 	if !ok {
 		return nil, fmt.Errorf("unexpected model type")
 	}
 
-	// Check for analysis error
 	if analysisModel.Error != nil {
 		return nil, analysisModel.Error
 	}
 
-	// Check for user cancellation (TUI exited without completing analysis)
+	// A TUI exit before Done means the user cancelled mid-analysis.
 	if !analysisModel.Done {
 		return nil, errCancelledByUser
 	}

@@ -1054,8 +1054,8 @@ func TestFindBestRoomToneRegion_LaterCandidateWinsWhenGapExceedsTolerance(t *tes
 func TestFindBestRoomToneRegion_LateCandidateDiscoverable(t *testing.T) {
 	// A high-scoring candidate placed at 50% of totalDuration (1800s into a 3600s recording)
 	// is correctly elected when it is the only candidate above minAcceptableScore.
-	// Verifies that all three former restrictions (excludeFirstSeconds, silenceSearchPercent,
-	// candidateCutoffPercent) no longer prevent discovery.
+	// Selection evaluates candidates by score regardless of temporal position, with no
+	// excludeFirstSeconds, silenceSearchPercent, or candidateCutoffPercent gate.
 
 	regions := []RoomToneRegion{
 		{Start: 1800 * time.Second, End: 1810 * time.Second, Duration: 10 * time.Second},
