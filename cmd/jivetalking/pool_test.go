@@ -649,7 +649,11 @@ func TestLaunchWorkerPool_DoneClosesAfterPoolUnwinds(t *testing.T) {
 
 	done := launchWorkerPool(context.Background(), p, files, base, func(string, ...any) {}, 1, reportWarnings)
 
-	<-started
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker never started")
+	}
 	select {
 	case <-done:
 		t.Fatal("done closed while a worker was still in-flight")
@@ -663,6 +667,9 @@ func TestLaunchWorkerPool_DoneClosesAfterPoolUnwinds(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("done did not close after the pool unwound")
 	}
+
+	p.Quit()
+	p.Wait()
 }
 
 // TestLaunchWorkerPool_DoneClosesOnPreCancelledContext proves the wait main()
@@ -701,4 +708,7 @@ func TestLaunchWorkerPool_DoneClosesOnPreCancelledContext(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("done did not close on pre-cancelled context")
 	}
+
+	p.Quit()
+	p.Wait()
 }
