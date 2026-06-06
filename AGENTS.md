@@ -23,7 +23,8 @@ Go CLI tool for podcast audio preprocessing using embedded FFmpeg. Transforms ra
 ## Architecture
 
 ```
-cmd/jivetalking/main.go     # CLI entry, Kong flags, starts TUI + processing goroutine
+cmd/jivetalking/main.go     # CLI entry, Kong flags, resolveJobs(), ctx + cancel(), starts TUI
+cmd/jivetalking/pool.go     # runWorkerPool() - bounded concurrent multi-file processing
 internal/
 ├── audio/reader.go         # FFmpeg demuxer/decoder wrapper (Reader, Metadata, OpenAudioFile)
 ├── processor/
@@ -50,9 +51,9 @@ internal/
 └── cli/                    # Help styling, version output, error formatting
 ```
 
-**Data flow (processing):** `main.go` spawns goroutine → `ProcessAudio()` → Pass 1 (`AnalyzeAudio`) → `AdaptConfig()` → Pass 2 (filter chain) → Pass 3/4 (`ApplyNormalisation`) → `GenerateReport()` writes an always-on processing report → sends `ui.*Msg` to TUI via `tea.Program.Send()`.
+**Data flow (processing):** `main.go` resolves worker count via `resolveJobs()` (`--jobs`, default auto `min(4, NumCPU)`), creates a cancellable `ctx`, then launches `runWorkerPool()` (`pool.go`) → up to `jobs` files run concurrently, each a goroutine bounded by a semaphore, taking a `CloneForWorker()` config copy and `FileIndex`-routed TUI messages → `ProcessAudio(ctx, …)` → Pass 1 (`AnalyzeAudio`) → `AdaptConfig()` → Pass 2 (filter chain) → Pass 3/4 (`ApplyNormalisation`) → `GenerateReport()` writes an always-on processing report → sends `ui.*Msg` to TUI via `tea.Program.Send()`. After `WaitGroup` drains, the pool sends `ui.AllCompleteMsg`. `cancel()` fires after `p.Run()` returns; `runFilterGraph` checks `ctx.Err()` each frame so in-flight workers abort and run deferred temp cleanup.
 
-**Data flow (analysis-only):** `main.go` → `runAnalysisOnly()` → `AnalyzeOnlyDetailed()` → Pass 1 + `AdaptConfig()` → `AnalysisModel` TUI shows progress → `DisplayAnalysisResults()` prints report to console. No output files created.
+**Data flow (analysis-only):** `main.go` → `runAnalysisOnly()` → `AnalyzeOnlyDetailed()` → Pass 1 + `AdaptConfig()` → `AnalysisModel` TUI shows progress → `DisplayAnalysisResults()` prints report to console. No output files created. This path stays serial; the worker pool covers processing only.
 
 ## Audio processing pipeline
 
@@ -120,7 +121,7 @@ Two separate message sets exist for the two TUI modes.
 
 ## Adaptive processing
 
-`AdaptConfig()` in `adaptive.go` derives per-file filter state from Pass 1 `AudioMeasurements`: it accepts caller-owned `BaseFilterConfig` defaults, returns `EffectiveFilterConfig` for filter building, and returns `AdaptiveDiagnostics` for report-only adaptation explanations. Do not reintroduce `FilterChainConfig` or store pass execution state in config; use `ProcessingFilterContext` for pass-local state.
+`AdaptConfig()` in `adaptive.go` derives per-file filter state from Pass 1 `AudioMeasurements`: it accepts caller-owned `BaseFilterConfig` defaults, returns `EffectiveFilterConfig` for filter building, and returns `AdaptiveDiagnostics` for report-only adaptation explanations. Do not reintroduce `FilterChainConfig` or store pass execution state in config; use `ProcessingFilterContext` for pass-local state. Each pool worker calls `BaseFilterConfig.CloneForWorker()` (shallow copy + deep-copy `FilterOrder` + per-worker logger) so concurrent workers share no mutable config or logger.
 
 - **DS201 highpass frequency:** 60-120Hz based on spectral decrease (warm/thin voice detection) and room-tone noise floor; warm voices use gentler Q (0.5) and reduced wet/dry mix
 - **DS201 lowpass:** Enabled adaptively based on content type and HF noise indicators (rolloff/centroid ratio)

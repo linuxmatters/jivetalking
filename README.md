@@ -6,7 +6,7 @@ Raw microphone recordings into broadcast-ready audio in one command. No configur
 jivetalking presenter1.flac presenter2.flac
 ```
 
-Your files emerge at -16 LUFS, a common podcast target, with room rumble, background hiss, clicks, and harsh sibilance sorted automatically. Everything needed is embedded in the binary. This is not how audio tools usually work, and that is rather the point.
+Your files emerge at -16 LUFS, a common podcast target, with room rumble, background hiss, clicks, and harsh sibilance sorted automatically. Multiple files process in parallel, each with its own TUI progress row. Everything needed is embedded in the binary. This is not how audio tools usually work, and that is rather the point.
 
 ---
 
@@ -108,6 +108,7 @@ jivetalking [flags] <files...>
 | `-v, --version` | Show version and exit |
 | `-a, --analysis-only` | Run analysis only (Pass 1), display results, skip processing |
 | `-d, --debug` | Enable debug logging to `jivetalking-debug.log` |
+| `--jobs=N` | Number of files to process concurrently. `0` (default) means auto: `min(4, NumCPU)`; an explicit value is honoured with no upper cap |
 | `--room-tone-scan-duration=DURATION` | Cap room-tone candidate scan to the first `DURATION` of input (e.g. `30s`, `1m30s`). Default `0s` scans the whole file |
 | `--silence-scan-duration=DURATION` | Deprecated alias for `--room-tone-scan-duration`; still accepted for backwards compatibility |
 
@@ -115,8 +116,11 @@ jivetalking [flags] <files...>
 ### Examples
 
 ```bash
-# Process multiple presenters
+# Process multiple presenters in parallel (auto worker count)
 jivetalking presenter1.flac presenter2.flac presenter3.flac
+
+# Process all FLAC files with an explicit worker count
+jivetalking --jobs 4 *.flac
 
 # Inspect recordings without processing
 jivetalking -a presenter1.flac presenter2.flac
