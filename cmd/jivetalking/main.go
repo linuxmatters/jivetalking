@@ -305,7 +305,11 @@ func runAnalysisOnlyWithDeps(files []string, config *processor.BaseFilterConfig,
 		model := ui.NewAnalysisModel(files)
 		p := tea.NewProgram(model)
 
-		go runAnalysisPool(runCtx, p, files, config, log, jobs, results, metas, errs, deps.openMetadata)
+		poolDone := make(chan struct{})
+		go func() {
+			runAnalysisPool(runCtx, p, files, config, log, jobs, results, metas, errs, deps.openMetadata)
+			close(poolDone)
+		}()
 
 		if _, err := p.Run(); err != nil {
 			deps.printError(fmt.Sprintf("UI error: %v", err))
@@ -315,6 +319,11 @@ func runAnalysisOnlyWithDeps(files []string, config *processor.BaseFilterConfig,
 		// already finished), and on user quit it stops in-flight workers via
 		// ctx.Done() so wg.Wait() completes.
 		cancel()
+
+		// Join the pool goroutine before reading results/metas/errs. On user
+		// quit p.Run() returns before the pool drains, so waiting here prevents
+		// a data race on the shared result slices.
+		<-poolDone
 	} else {
 		// No terminal: one up-front banner, then the pool runs synchronously.
 		log("[ANALYSIS] No TTY available, running without progress UI")
