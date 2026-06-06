@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"runtime"
 	"time"
 
@@ -23,8 +22,6 @@ import (
 // version is injected via ldflags at build time. Local dev builds keep "dev";
 // release builds carry the git tag (e.g. "0.1.0").
 var version = "dev"
-
-var errCancelledByUser = errors.New("cancelled by user")
 
 const debugLogPath = "jivetalking-debug.log"
 
@@ -131,7 +128,7 @@ func main() {
 	config.SetLogger(log)
 
 	if cliArgs.AnalysisOnly {
-		runAnalysisOnly(cliArgs.Files, config, log)
+		runAnalysisOnly(cliArgs.Files, config, log, resolveJobs(cliArgs.Jobs, runtime.NumCPU()))
 		return
 	}
 
@@ -212,7 +209,6 @@ type analysisOnlyDeps struct {
 	stdout          io.Writer
 	hasTTY          func() bool
 	openMetadata    func(string) (*audio.Metadata, error)
-	runWithTUI      func(string, *processor.BaseFilterConfig, func(string, ...any)) (*processor.AnalysisResult, error)
 	analyzeDetailed func(context.Context, string, *processor.BaseFilterConfig, processor.ProgressCallback) (*processor.AnalysisResult, error)
 	displayResults  func(io.Writer, string, *audio.Metadata, *processor.AudioMeasurements, *processor.EffectiveFilterConfig, *processor.AdaptiveDiagnostics, ...logging.AnalysisTimings)
 	printError      func(string)
@@ -223,7 +219,6 @@ func defaultAnalysisOnlyDeps() analysisOnlyDeps {
 		stdout:          os.Stdout,
 		hasTTY:          isTTY,
 		openMetadata:    openAudioMetadata,
-		runWithTUI:      runAnalysisWithTUI,
 		analyzeDetailed: processor.AnalyzeOnlyDetailed,
 		displayResults:  logging.DisplayAnalysisResultsWithDiagnostics,
 		printError:      cli.PrintError,
@@ -292,58 +287,76 @@ func (ph *progressHandler) callback(update processor.ProgressUpdate) {
 	})
 }
 
-// runAnalysisOnly performs Pass 1 analysis on each file with a progress UI,
-// then displays results to console. Skips full 4-pass processing.
-func runAnalysisOnly(files []string, config *processor.BaseFilterConfig, log func(string, ...any)) {
-	runAnalysisOnlyWithDeps(files, config, log, defaultAnalysisOnlyDeps())
+// runAnalysisOnly performs Pass 1 analysis on each file under a bounded worker
+// pool, then displays results to console in input order. Skips full 4-pass
+// processing.
+func runAnalysisOnly(files []string, config *processor.BaseFilterConfig, log func(string, ...any), jobs int) {
+	runAnalysisOnlyWithDeps(files, config, log, jobs, defaultAnalysisOnlyDeps())
 }
 
-func runAnalysisOnlyWithDeps(files []string, config *processor.BaseFilterConfig, log func(string, ...any), deps analysisOnlyDeps) {
-	hasTTY := deps.hasTTY()
+func runAnalysisOnlyWithDeps(files []string, config *processor.BaseFilterConfig, log func(string, ...any), jobs int, deps analysisOnlyDeps) {
+	results := make([]*processor.AnalysisResult, len(files))
+	metas := make([]*audio.Metadata, len(files))
+	errs := make([]error, len(files))
 
-	for i, inputPath := range files {
-		// Blank line separates consecutive file reports.
-		if i > 0 {
+	runCtx, cancel := context.WithCancel(context.Background())
+
+	if deps.hasTTY() {
+		model := ui.NewAnalysisModel(files)
+		p := tea.NewProgram(model)
+
+		go runAnalysisPool(runCtx, p, files, config, log, jobs, results, metas, errs, deps.openMetadata)
+
+		if _, err := p.Run(); err != nil {
+			deps.printError(fmt.Sprintf("UI error: %v", err))
+		}
+
+		// Fire cancel() unconditionally: a no-op on natural completion (workers
+		// already finished), and on user quit it stops in-flight workers via
+		// ctx.Done() so wg.Wait() completes.
+		cancel()
+	} else {
+		// No terminal: one up-front banner, then the pool runs synchronously.
+		log("[ANALYSIS] No TTY available, running without progress UI")
+		fmt.Fprintf(deps.stdout, "Analysing %d files…\n", len(files))
+
+		runAnalysisPool(runCtx, nil, files, config, log, jobs, results, metas, errs, deps.openMetadata)
+
+		cancel()
+	}
+
+	// Print reports in input order after the pool completes. A worker cancelled
+	// at the acquire select leaves both results[i] and errs[i] nil; a worker
+	// cancelled mid-analysis sets errs[i] to a context.Canceled-wrapped error.
+	// Both cases are skipped: a user who quit should get no error spew. Real
+	// errors still print so per-file failures stay isolated. The printed flag
+	// drives the inter-report blank line so skipped files cannot emit a stray
+	// leading blank; with no skips it matches the previous i > 0 logic exactly.
+	printed := false
+	for i := range files {
+		if errs[i] != nil {
+			if errors.Is(errs[i], context.Canceled) {
+				continue
+			}
+			deps.printError(fmt.Sprintf("Analysis failed for %s: %v", files[i], errs[i]))
+			continue
+		}
+
+		if results[i] == nil {
+			continue // cancelled before analysis ran
+		}
+
+		// Blank line separates consecutive printed file reports.
+		if printed {
 			fmt.Fprintln(deps.stdout)
 		}
-
-		log("[ANALYSIS] Starting analysis for %s", inputPath)
-
-		// Metadata supplies the duration and sample rate shown in the report.
-		metadata, err := deps.openMetadata(inputPath)
-		if err != nil {
-			deps.printError(fmt.Sprintf("Failed to open %s: %v", inputPath, err))
-			continue
-		}
-
-		var analysisResult *processor.AnalysisResult
-		var analysisErr error
-
-		if hasTTY {
-			analysisResult, analysisErr = deps.runWithTUI(inputPath, config, log)
-		} else {
-			// No terminal: skip the progress UI for non-interactive environments.
-			log("[ANALYSIS] No TTY available, running without progress UI")
-			fmt.Fprintf(deps.stdout, "Analysing: %s\n", filepath.Base(inputPath))
-			analysisResult, analysisErr = deps.analyzeDetailed(context.Background(), inputPath, config, nil)
-		}
-
-		if analysisErr != nil {
-			if errors.Is(analysisErr, errCancelledByUser) {
-				// User pressed Ctrl+C - exit immediately, don't process remaining files
-				return
-			}
-			deps.printError(fmt.Sprintf("Analysis failed for %s: %v", inputPath, analysisErr))
-			continue
-		}
-
-		log("[ANALYSIS] Analysis complete for %s", inputPath)
+		printed = true
 
 		timings := logging.AnalysisTimings{
-			Analysis:   analysisResult.AnalysisDuration,
-			Adaptation: analysisResult.AdaptationDuration,
+			Analysis:   results[i].AnalysisDuration,
+			Adaptation: results[i].AdaptationDuration,
 		}
-		deps.displayResults(deps.stdout, inputPath, metadata, analysisResult.Measurements, analysisResult.Config, analysisResult.Diagnostics, timings)
+		deps.displayResults(deps.stdout, files[i], metas[i], results[i].Measurements, results[i].Config, results[i].Diagnostics, timings)
 	}
 }
 
@@ -354,55 +367,4 @@ func isTTY() bool {
 		return false
 	}
 	return (fileInfo.Mode() & os.ModeCharDevice) != 0
-}
-
-// runAnalysisWithTUI runs analysis with the Bubbletea progress UI.
-func runAnalysisWithTUI(inputPath string, config *processor.BaseFilterConfig, log func(string, ...any)) (*processor.AnalysisResult, error) {
-	model := ui.NewAnalysisModel()
-
-	// Run without the alt screen so the report stays on screen after exit.
-	p := tea.NewProgram(model)
-
-	go func(path string) {
-		p.Send(ui.AnalysisStartMsg{
-			FileName: path,
-			FilePath: path,
-		})
-
-		progressCallback := func(update processor.ProgressUpdate) {
-			log("[ANALYSIS] Progress: Pass %d (%s), %.1f%%, Level %.1f dB", update.Pass, update.PassName, update.Progress*100, update.Level)
-			p.Send(ui.AnalysisProgressMsg{
-				Progress: update.Progress,
-				Level:    update.Level,
-			})
-		}
-
-		result, err := processor.AnalyzeOnlyDetailed(context.Background(), path, config, progressCallback)
-
-		p.Send(ui.AnalysisCompleteMsg{
-			Result: result,
-			Error:  err,
-		})
-	}(inputPath)
-
-	finalModel, err := p.Run()
-	if err != nil {
-		return nil, fmt.Errorf("UI error: %w", err)
-	}
-
-	analysisModel, ok := finalModel.(ui.AnalysisModel)
-	if !ok {
-		return nil, fmt.Errorf("unexpected model type")
-	}
-
-	if analysisModel.Error != nil {
-		return nil, analysisModel.Error
-	}
-
-	// A TUI exit before Done means the user cancelled mid-analysis.
-	if !analysisModel.Done {
-		return nil, errCancelledByUser
-	}
-
-	return analysisModel.Result, nil
 }

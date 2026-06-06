@@ -8,6 +8,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -131,7 +132,24 @@ func TestRunAnalysisOnlyWithDeps_NonTTYOmitsBenchPath(t *testing.T) {
 	config := processor.DefaultFilterConfig()
 	var output bytes.Buffer
 
-	runAnalysisOnlyWithDeps([]string{inputPath}, config, func(string, ...any) {}, analysisOnlyDeps{
+	analyze := func(_ context.Context, path string, cfg *processor.BaseFilterConfig, progress processor.ProgressCallback) (*processor.AnalysisResult, error) {
+		if path != inputPath {
+			t.Fatalf("analyzeDetailed path = %q, want %q", path, inputPath)
+		}
+		effective, diagnostics := processor.AdaptConfig(cfg, makeAnalysisOnlyTestMeasurements())
+		return &processor.AnalysisResult{
+			Measurements:       makeAnalysisOnlyTestMeasurements(),
+			Config:             effective,
+			Diagnostics:        diagnostics,
+			AnalysisDuration:   2 * time.Second,
+			AdaptationDuration: 100 * time.Millisecond,
+		}, nil
+	}
+	origAnalyze := analysisPoolAnalyze
+	analysisPoolAnalyze = analyze
+	t.Cleanup(func() { analysisPoolAnalyze = origAnalyze })
+
+	runAnalysisOnlyWithDeps([]string{inputPath}, config, func(string, ...any) {}, 1, analysisOnlyDeps{
 		stdout: &output,
 		hasTTY: func() bool {
 			return false
@@ -146,27 +164,8 @@ func TestRunAnalysisOnlyWithDeps_NonTTYOmitsBenchPath(t *testing.T) {
 				Channels:   1,
 			}, nil
 		},
-		runWithTUI: func(string, *processor.BaseFilterConfig, func(string, ...any)) (*processor.AnalysisResult, error) {
-			t.Fatal("runWithTUI should not be called for non-TTY output")
-			return nil, nil
-		},
-		analyzeDetailed: func(_ context.Context, path string, cfg *processor.BaseFilterConfig, progress processor.ProgressCallback) (*processor.AnalysisResult, error) {
-			if path != inputPath {
-				t.Fatalf("analyzeDetailed path = %q, want %q", path, inputPath)
-			}
-			if progress != nil {
-				t.Fatal("progress callback should be nil for non-TTY output")
-			}
-			effective, diagnostics := processor.AdaptConfig(cfg, makeAnalysisOnlyTestMeasurements())
-			return &processor.AnalysisResult{
-				Measurements:       makeAnalysisOnlyTestMeasurements(),
-				Config:             effective,
-				Diagnostics:        diagnostics,
-				AnalysisDuration:   2 * time.Second,
-				AdaptationDuration: 100 * time.Millisecond,
-			}, nil
-		},
-		displayResults: logging.DisplayAnalysisResultsWithDiagnostics,
+		analyzeDetailed: analyze,
+		displayResults:  logging.DisplayAnalysisResultsWithDiagnostics,
 		printError: func(message string) {
 			t.Fatalf("printError called: %s", message)
 		},
@@ -177,7 +176,7 @@ func TestRunAnalysisOnlyWithDeps_NonTTYOmitsBenchPath(t *testing.T) {
 		t.Fatalf("analysis-only output leaked benchmark path:\n%s", got)
 	}
 	for _, want := range []string{
-		"Analysing: sample.wav",
+		"Analysing 1 files…",
 		"ANALYSIS: sample.wav",
 		"ANALYSIS TIMINGS",
 		"Analysis:",
@@ -212,7 +211,27 @@ func TestRunAnalysisOnlyWithDeps_UsesPerFileResultConfig(t *testing.T) {
 	var displayedConfigs []*processor.EffectiveFilterConfig
 	var displayedDiagnostics []*processor.AdaptiveDiagnostics
 
-	runAnalysisOnlyWithDeps(files, baseConfig, func(string, ...any) {}, analysisOnlyDeps{
+	fileIndex := map[string]int{files[0]: 0, files[1]: 1}
+	var mu sync.Mutex
+	analyze := func(_ context.Context, path string, cfg *processor.BaseFilterConfig, progress processor.ProgressCallback) (*processor.AnalysisResult, error) {
+		mu.Lock()
+		analyzedConfigs = append(analyzedConfigs, cfg)
+		mu.Unlock()
+
+		index := fileIndex[path]
+		return &processor.AnalysisResult{
+			Measurements:       makeAnalysisOnlyTestMeasurements(),
+			Config:             resultConfigs[index],
+			Diagnostics:        resultDiagnostics[index],
+			AnalysisDuration:   2 * time.Second,
+			AdaptationDuration: 100 * time.Millisecond,
+		}, nil
+	}
+	origAnalyze := analysisPoolAnalyze
+	analysisPoolAnalyze = analyze
+	t.Cleanup(func() { analysisPoolAnalyze = origAnalyze })
+
+	runAnalysisOnlyWithDeps(files, baseConfig, func(string, ...any) {}, 1, analysisOnlyDeps{
 		stdout: &output,
 		hasTTY: func() bool {
 			return false
@@ -224,25 +243,7 @@ func TestRunAnalysisOnlyWithDeps_UsesPerFileResultConfig(t *testing.T) {
 				Channels:   1,
 			}, nil
 		},
-		runWithTUI: func(string, *processor.BaseFilterConfig, func(string, ...any)) (*processor.AnalysisResult, error) {
-			t.Fatal("runWithTUI should not be called for non-TTY output")
-			return nil, nil
-		},
-		analyzeDetailed: func(_ context.Context, path string, cfg *processor.BaseFilterConfig, progress processor.ProgressCallback) (*processor.AnalysisResult, error) {
-			if cfg != baseConfig {
-				t.Fatalf("analyzeDetailed config = %p, want shared base %p", cfg, baseConfig)
-			}
-			analyzedConfigs = append(analyzedConfigs, cfg)
-
-			index := len(analyzedConfigs) - 1
-			return &processor.AnalysisResult{
-				Measurements:       makeAnalysisOnlyTestMeasurements(),
-				Config:             resultConfigs[index],
-				Diagnostics:        resultDiagnostics[index],
-				AnalysisDuration:   2 * time.Second,
-				AdaptationDuration: 100 * time.Millisecond,
-			}, nil
-		},
+		analyzeDetailed: analyze,
 		displayResults: func(w io.Writer, inputPath string, metadata *audio.Metadata, measurements *processor.AudioMeasurements, config *processor.EffectiveFilterConfig, diagnostics *processor.AdaptiveDiagnostics, timings ...logging.AnalysisTimings) {
 			displayedConfigs = append(displayedConfigs, config)
 			displayedDiagnostics = append(displayedDiagnostics, diagnostics)
@@ -258,8 +259,8 @@ func TestRunAnalysisOnlyWithDeps_UsesPerFileResultConfig(t *testing.T) {
 	if len(analyzedConfigs) != len(files) {
 		t.Fatalf("analyzed config count = %d, want %d", len(analyzedConfigs), len(files))
 	}
-	if analyzedConfigs[0] != baseConfig || analyzedConfigs[1] != baseConfig {
-		t.Fatal("analysis-only did not reuse the shared base config pointer for analysis calls")
+	if analyzedConfigs[0] == baseConfig || analyzedConfigs[1] == baseConfig {
+		t.Fatal("analysis-only did not pass per-worker config clones to analysis calls")
 	}
 	if len(displayedConfigs) != len(resultConfigs) {
 		t.Fatalf("displayed config count = %d, want %d", len(displayedConfigs), len(resultConfigs))
@@ -278,6 +279,284 @@ func TestRunAnalysisOnlyWithDeps_UsesPerFileResultConfig(t *testing.T) {
 	if baseConfig.DS201HighPass.Frequency == resultConfigs[0].DS201HighPass.Frequency ||
 		baseConfig.DS201HighPass.Frequency == resultConfigs[1].DS201HighPass.Frequency {
 		t.Fatal("test setup failed: result configs should differ from the shared base seed")
+	}
+}
+
+func TestRunAnalysisOnlyWithDeps_OrderedOutputParityAcrossJobs(t *testing.T) {
+	files := []string{"file0.wav", "file1.wav", "file2.wav", "file3.wav"}
+	baseConfig := processor.DefaultFilterConfig()
+
+	fileIndex := make(map[string]int, len(files))
+	for i, f := range files {
+		fileIndex[f] = i
+	}
+
+	// Deterministic per-index sentinel: distinct measurements keyed by file
+	// index, and a staggered completion delay so that later-submitted files
+	// finish earlier. At jobs=N all workers run concurrently, so completion
+	// order != submission order; at jobs=1 it is serial. Both runs must emit
+	// byte-for-byte identical, input-ordered reports.
+	analyze := func(_ context.Context, path string, _ *processor.BaseFilterConfig, _ processor.ProgressCallback) (*processor.AnalysisResult, error) { //nolint:unparam // signature must match processor.AnalyzeOnlyDetailed
+		index, ok := fileIndex[path]
+		if !ok {
+			t.Fatalf("analysisPoolAnalyze unexpected path %q", path)
+		}
+
+		// Later indices sleep less, so under concurrency they complete first.
+		delay := time.Duration(len(files)-index) * 20 * time.Millisecond
+		time.Sleep(delay)
+
+		measurements := makeAnalysisOnlyTestMeasurements()
+		measurements.InputI -= float64(index)
+		measurements.NoiseFloor -= float64(index)
+
+		effective, diagnostics := processor.AdaptConfig(baseConfig, measurements)
+		return &processor.AnalysisResult{
+			Measurements:       measurements,
+			Config:             effective,
+			Diagnostics:        diagnostics,
+			AnalysisDuration:   2 * time.Second,
+			AdaptationDuration: 100 * time.Millisecond,
+		}, nil
+	}
+	origAnalyze := analysisPoolAnalyze
+	analysisPoolAnalyze = analyze
+	t.Cleanup(func() { analysisPoolAnalyze = origAnalyze })
+
+	run := func(jobs int) string {
+		var output bytes.Buffer
+		runAnalysisOnlyWithDeps(files, baseConfig, func(string, ...any) {}, jobs, analysisOnlyDeps{
+			stdout: &output,
+			hasTTY: func() bool {
+				return false
+			},
+			openMetadata: func(path string) (*audio.Metadata, error) {
+				if _, ok := fileIndex[path]; !ok {
+					t.Fatalf("openMetadata unexpected path %q", path)
+				}
+				return &audio.Metadata{
+					Duration:   120,
+					SampleRate: 48000,
+					Channels:   1,
+				}, nil
+			},
+			analyzeDetailed: analyze,
+			displayResults:  logging.DisplayAnalysisResultsWithDiagnostics,
+			printError: func(message string) {
+				t.Fatalf("printError called: %s", message)
+			},
+		})
+		return output.String()
+	}
+
+	parallel := run(4)
+	serial := run(1)
+
+	if parallel != serial {
+		t.Fatalf("jobs=4 output differs from jobs=1 output\n--- jobs=4 ---\n%s\n--- jobs=1 ---\n%s", parallel, serial)
+	}
+
+	// Order must follow submission (input) order despite staggered completion:
+	// each file's report header appears, and in file0..file3 sequence.
+	lastPos := -1
+	for _, f := range files {
+		header := "ANALYSIS: " + f
+		pos := strings.Index(parallel, header)
+		if pos < 0 {
+			t.Fatalf("output missing report header %q:\n%s", header, parallel)
+		}
+		if pos <= lastPos {
+			t.Fatalf("report for %s out of input order (pos %d <= prev %d):\n%s", f, pos, lastPos, parallel)
+		}
+		lastPos = pos
+	}
+
+	// Both runs print the identical up-front banner.
+	banner := "Analysing 4 files…"
+	if !strings.Contains(parallel, banner) {
+		t.Fatalf("output missing banner %q:\n%s", banner, parallel)
+	}
+}
+
+func TestRunAnalysisOnlyWithDeps_NonTTYBannerThenOrderedReports(t *testing.T) {
+	files := []string{"file0.wav", "file1.wav", "file2.wav"}
+	baseConfig := processor.DefaultFilterConfig()
+	var output bytes.Buffer
+
+	fileIndex := make(map[string]int, len(files))
+	for i, f := range files {
+		fileIndex[f] = i
+	}
+
+	// Staggered completion: later-submitted files sleep less and finish first,
+	// so with jobs >= len(files) the workers overlap and completion order !=
+	// submission order. The buffered slots must still print in input order.
+	analyze := func(_ context.Context, path string, _ *processor.BaseFilterConfig, _ processor.ProgressCallback) (*processor.AnalysisResult, error) {
+		index, ok := fileIndex[path]
+		if !ok {
+			t.Fatalf("analysisPoolAnalyze unexpected path %q", path)
+		}
+
+		delay := time.Duration(len(files)-index) * 20 * time.Millisecond
+		time.Sleep(delay)
+
+		measurements := makeAnalysisOnlyTestMeasurements()
+		measurements.InputI -= float64(index)
+
+		effective, diagnostics := processor.AdaptConfig(baseConfig, measurements)
+		return &processor.AnalysisResult{
+			Measurements:       measurements,
+			Config:             effective,
+			Diagnostics:        diagnostics,
+			AnalysisDuration:   2 * time.Second,
+			AdaptationDuration: 100 * time.Millisecond,
+		}, nil
+	}
+	origAnalyze := analysisPoolAnalyze
+	analysisPoolAnalyze = analyze
+	t.Cleanup(func() { analysisPoolAnalyze = origAnalyze })
+
+	runAnalysisOnlyWithDeps(files, baseConfig, func(string, ...any) {}, len(files), analysisOnlyDeps{
+		stdout: &output,
+		hasTTY: func() bool {
+			return false
+		},
+		openMetadata: func(path string) (*audio.Metadata, error) {
+			if _, ok := fileIndex[path]; !ok {
+				t.Fatalf("openMetadata unexpected path %q", path)
+			}
+			return &audio.Metadata{
+				Duration:   120,
+				SampleRate: 48000,
+				Channels:   1,
+			}, nil
+		},
+		analyzeDetailed: analyze,
+		displayResults:  logging.DisplayAnalysisResultsWithDiagnostics,
+		printError: func(message string) {
+			t.Fatalf("printError called: %s", message)
+		},
+	})
+
+	got := output.String()
+
+	// stdout starts with the up-front banner (byte-for-byte: single U+2026
+	// ellipsis, trailing newline), matching the production main.go no-TTY
+	// branch and the 3.3 test assertion.
+	banner := "Analysing 3 files…\n"
+	if !strings.HasPrefix(got, banner) {
+		t.Fatalf("output does not start with banner %q:\n%s", banner, got)
+	}
+
+	// No per-file "Analysing: <file>" line from the old serial format.
+	if strings.Contains(got, "Analysing: ") {
+		t.Fatalf("output contains the removed per-file %q line:\n%s", "Analysing: ", got)
+	}
+
+	// Reports appear in input order despite staggered completion.
+	lastPos := -1
+	for _, f := range files {
+		header := "ANALYSIS: " + f
+		pos := strings.Index(got, header)
+		if pos < 0 {
+			t.Fatalf("output missing report header %q:\n%s", header, got)
+		}
+		if pos <= lastPos {
+			t.Fatalf("report for %s out of input order (pos %d <= prev %d):\n%s", f, pos, lastPos, got)
+		}
+		lastPos = pos
+	}
+}
+
+func TestRunAnalysisOnlyWithDeps_FailureIsolation(t *testing.T) {
+	files := []string{"file0.wav", "file1.wav", "file2.wav"}
+	baseConfig := processor.DefaultFilterConfig()
+	var output bytes.Buffer
+
+	const failIndex = 1
+	boom := errors.New("boom")
+
+	fileIndex := make(map[string]int, len(files))
+	for i, f := range files {
+		fileIndex[f] = i
+	}
+
+	// One input fails with a plain (non-cancellation) error; the siblings
+	// return valid sentinels. A real error must not be suppressed by the
+	// cancellation filter, so the failing file reports through printError.
+	analyze := func(_ context.Context, path string, _ *processor.BaseFilterConfig, _ processor.ProgressCallback) (*processor.AnalysisResult, error) {
+		index, ok := fileIndex[path]
+		if !ok {
+			t.Fatalf("analysisPoolAnalyze unexpected path %q", path)
+		}
+		if index == failIndex {
+			return nil, boom
+		}
+		effective, diagnostics := processor.AdaptConfig(baseConfig, makeAnalysisOnlyTestMeasurements())
+		return &processor.AnalysisResult{
+			Measurements:       makeAnalysisOnlyTestMeasurements(),
+			Config:             effective,
+			Diagnostics:        diagnostics,
+			AnalysisDuration:   2 * time.Second,
+			AdaptationDuration: 100 * time.Millisecond,
+		}, nil
+	}
+	origAnalyze := analysisPoolAnalyze
+	analysisPoolAnalyze = analyze
+	t.Cleanup(func() { analysisPoolAnalyze = origAnalyze })
+
+	var printErrMu sync.Mutex
+	var printErrors []string
+
+	runAnalysisOnlyWithDeps(files, baseConfig, func(string, ...any) {}, 4, analysisOnlyDeps{
+		stdout: &output,
+		hasTTY: func() bool {
+			return false
+		},
+		openMetadata: func(path string) (*audio.Metadata, error) {
+			if _, ok := fileIndex[path]; !ok {
+				t.Fatalf("openMetadata unexpected path %q", path)
+			}
+			return &audio.Metadata{
+				Duration:   120,
+				SampleRate: 48000,
+				Channels:   1,
+			}, nil
+		},
+		analyzeDetailed: analyze,
+		displayResults:  logging.DisplayAnalysisResultsWithDiagnostics,
+		printError: func(message string) {
+			printErrMu.Lock()
+			printErrors = append(printErrors, message)
+			printErrMu.Unlock()
+		},
+	})
+
+	// The failing file reports exactly one error naming the file and "boom".
+	if len(printErrors) != 1 {
+		t.Fatalf("printError calls = %d (%v), want exactly 1", len(printErrors), printErrors)
+	}
+	if msg := printErrors[0]; !strings.Contains(msg, files[failIndex]) || !strings.Contains(msg, "boom") {
+		t.Fatalf("printError message = %q, want it to mention %q and %q", msg, files[failIndex], "boom")
+	}
+
+	got := output.String()
+
+	// The good siblings' reports print; the failing file has no normal report.
+	for _, f := range []string{files[0], files[2]} {
+		if !strings.Contains(got, "ANALYSIS: "+f) {
+			t.Fatalf("output missing report header for sibling %q:\n%s", f, got)
+		}
+	}
+	if strings.Contains(got, "ANALYSIS: "+files[failIndex]) {
+		t.Fatalf("failing file %q must not produce a normal report:\n%s", files[failIndex], got)
+	}
+
+	// The run completed (no early abort): all good siblings printed in order.
+	pos0 := strings.Index(got, "ANALYSIS: "+files[0])
+	pos2 := strings.Index(got, "ANALYSIS: "+files[2])
+	if pos0 < 0 || pos2 < 0 || pos2 <= pos0 {
+		t.Fatalf("sibling reports out of input order (pos0=%d, pos2=%d):\n%s", pos0, pos2, got)
 	}
 }
 
