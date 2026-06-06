@@ -23,8 +23,9 @@ Go CLI tool for podcast audio preprocessing using embedded FFmpeg. Transforms ra
 ## Architecture
 
 ```
-cmd/jivetalking/main.go     # CLI entry, Kong flags, resolveJobs(), ctx + cancel(), starts TUI
-cmd/jivetalking/pool.go     # runWorkerPool() - bounded concurrent multi-file processing
+cmd/jivetalking/main.go          # CLI entry, Kong flags, resolveJobs(), ctx + cancel(), starts TUI; runAnalysisOnly() / runAnalysisOnlyWithDeps()
+cmd/jivetalking/pool.go          # runWorkerPool() - bounded concurrent multi-file processing
+cmd/jivetalking/analysispool.go  # runAnalysisPool() - bounded concurrent multi-file analysis (mirrors pool.go)
 internal/
 ├── audio/reader.go         # FFmpeg demuxer/decoder wrapper (Reader, Metadata, OpenAudioFile)
 ├── processor/
@@ -53,7 +54,7 @@ internal/
 
 **Data flow (processing):** `main.go` resolves worker count via `resolveJobs()` (`--jobs`, default auto `min(4, NumCPU)`), creates a cancellable `ctx`, then launches `runWorkerPool()` (`pool.go`) → up to `jobs` files run concurrently, each a goroutine bounded by a semaphore, taking a `CloneForWorker()` config copy and `FileIndex`-routed TUI messages → `ProcessAudio(ctx, …)` → Pass 1 (`AnalyzeAudio`) → `AdaptConfig()` → Pass 2 (filter chain) → Pass 3/4 (`ApplyNormalisation`) → `GenerateReport()` writes an always-on processing report → sends `ui.*Msg` to TUI via `tea.Program.Send()`. After `WaitGroup` drains, the pool sends `ui.AllCompleteMsg`. `cancel()` fires after `p.Run()` returns; `runFilterGraph` checks `ctx.Err()` each frame so in-flight workers abort and run deferred temp cleanup.
 
-**Data flow (analysis-only):** `main.go` → `runAnalysisOnly()` → `AnalyzeOnlyDetailed()` → Pass 1 + `AdaptConfig()` → `AnalysisModel` TUI shows progress → `DisplayAnalysisResults()` prints report to console. No output files created. This path stays serial; the worker pool covers processing only.
+**Data flow (analysis-only):** `main.go` → `runAnalysisOnly()` → `runAnalysisOnlyWithDeps()` (passes `jobs` from `resolveJobs()`) → spawns `runAnalysisPool()` (`analysispool.go`) with a buffered semaphore of size `jobs` and a `sync.WaitGroup`. Up to `jobs` files analyse concurrently; each worker owns its index slot in pre-allocated `results`, `metas`, and `errs` slices (no sharing), calls `CloneForWorker()` for an independent config copy, and sends `ui.AnalysisStartMsg` / `ui.AnalysisProgressMsg` / `ui.AnalysisCompleteMsg` keyed by `FileIndex`. After `wg.Wait()` drains, the pool sends `ui.AllCompleteMsg`. Two branches: TTY path launches a `tea.Program` (using `ui.NewAnalysisModel`) in a goroutine alongside the pool; no-TTY path prints an up-front banner then calls the pool synchronously with `p == nil` (all `p.Send` calls are gated). After the pool returns, `runAnalysisOnlyWithDeps()` prints results in input order, skipping cancelled or nil slots. No output files are created.
 
 ## Audio processing pipeline
 
@@ -114,10 +115,11 @@ Two separate message sets exist for the two TUI modes.
 - `ui.FileCompleteMsg` - processing finished with result (or error in `Error` field)
 - `ui.AllCompleteMsg` - all files finished
 
-**Analysis-only mode** (`ui/analysis_model.go`) - sent by `runAnalysisWithTUI()`:
-- `ui.AnalysisStartMsg` - analysis started for a file
-- `ui.AnalysisProgressMsg` - progress and level update
-- `ui.AnalysisCompleteMsg` - analysis finished with measurements, config, or error
+**Analysis-only mode** (`ui/analysis_model.go`) - sent by `runAnalysisPool()` goroutines, routed by `FileIndex`:
+- `ui.AnalysisStartMsg` - analysis started; carries `FileIndex`, `FileName`, `FilePath`
+- `ui.AnalysisProgressMsg` - progress (0.0-1.0) and level update; carries `FileIndex`
+- `ui.AnalysisCompleteMsg` - analysis finished; carries `FileIndex`, `Result`, and `Error`
+- `ui.AllCompleteMsg` - all files finished (shared with processing mode; sent once after `wg.Wait()`)
 
 ## Adaptive processing
 

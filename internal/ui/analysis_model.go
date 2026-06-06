@@ -14,26 +14,30 @@ import (
 // Spinner frames for indeterminate progress
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
+// analysisFileState tracks analysis progress and results for a single file
+type analysisFileState struct {
+	FileName string
+	Progress float64 // 0.0 to 1.0
+	Level    float64 // Current audio level in dB
+	Done     bool
+	Err      error
+	Result   *processor.AnalysisResult
+}
+
 // AnalysisModel is the Bubbletea model for analysis-only mode
 type AnalysisModel struct {
-	// File being analysed
-	FileName string
-	FilePath string
+	// File queue
+	Files          []analysisFileState
+	TotalFiles     int
+	CompletedFiles int
+	FailedFiles    int
 
-	// Progress tracking
-	Progress  float64 // 0.0 to 1.0
-	Level     float64 // Current audio level in dB
+	// Global state
 	StartTime time.Time
+	Done      bool
 
 	// Spinner state
 	spinnerIndex int
-
-	// Results (populated when complete)
-	Result       *processor.AnalysisResult
-	Measurements *processor.AudioMeasurements
-	Config       *processor.EffectiveFilterConfig
-	Error        error
-	Done         bool
 
 	// Terminal dimensions
 	Width  int
@@ -42,18 +46,21 @@ type AnalysisModel struct {
 
 // AnalysisStartMsg signals analysis has started
 type AnalysisStartMsg struct {
-	FileName string
-	FilePath string
+	FileIndex int
+	FileName  string
+	FilePath  string
 }
 
 // AnalysisProgressMsg signals progress update
 type AnalysisProgressMsg struct {
-	Progress float64
-	Level    float64
+	FileIndex int
+	Progress  float64
+	Level     float64
 }
 
 // AnalysisCompleteMsg signals analysis has completed
 type AnalysisCompleteMsg struct {
+	FileIndex    int
 	Result       *processor.AnalysisResult
 	Measurements *processor.AudioMeasurements
 	Config       *processor.EffectiveFilterConfig
@@ -63,10 +70,19 @@ type AnalysisCompleteMsg struct {
 // tickMsg is sent for spinner/timer animation
 type tickMsg time.Time
 
-// NewAnalysisModel creates a new analysis UI model
-func NewAnalysisModel() AnalysisModel {
+// NewAnalysisModel creates a new analysis UI model with the given input files
+func NewAnalysisModel(files []string) AnalysisModel {
+	states := make([]analysisFileState, len(files))
+	for i, path := range files {
+		states[i] = analysisFileState{
+			FileName: filepath.Base(path),
+		}
+	}
+
 	return AnalysisModel{
-		StartTime: time.Now(),
+		Files:      states,
+		TotalFiles: len(files),
+		StartTime:  time.Now(),
 	}
 }
 
@@ -104,26 +120,33 @@ func (m AnalysisModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case AnalysisStartMsg:
-		m.FileName = filepath.Base(msg.FilePath)
-		m.FilePath = msg.FilePath
-		m.StartTime = time.Now()
+		if msg.FileIndex >= 0 && msg.FileIndex < len(m.Files) {
+			m.Files[msg.FileIndex].FileName = filepath.Base(msg.FilePath)
+		}
 		return m, nil
 
 	case AnalysisProgressMsg:
-		m.Progress = msg.Progress
-		m.Level = msg.Level
+		if msg.FileIndex >= 0 && msg.FileIndex < len(m.Files) {
+			m.Files[msg.FileIndex].Progress = msg.Progress
+			m.Files[msg.FileIndex].Level = msg.Level
+		}
 		return m, nil
 
 	case AnalysisCompleteMsg:
-		m.Result = msg.Result
-		if msg.Result != nil {
-			m.Measurements = msg.Result.Measurements
-			m.Config = msg.Result.Config
-		} else {
-			m.Measurements = msg.Measurements
-			m.Config = msg.Config
+		if msg.FileIndex >= 0 && msg.FileIndex < len(m.Files) {
+			m.Files[msg.FileIndex].Result = msg.Result
+			m.Files[msg.FileIndex].Err = msg.Error
+			m.Files[msg.FileIndex].Done = true
+
+			if msg.Error != nil {
+				m.FailedFiles++
+			} else {
+				m.CompletedFiles++
+			}
 		}
-		m.Error = msg.Error
+		return m, nil
+
+	case AllCompleteMsg:
 		m.Done = true
 		return m, tea.Quit
 	}
@@ -153,43 +176,48 @@ func (m AnalysisModel) View() string {
 	b.WriteString(title + " " + subtitle)
 	b.WriteString("\n\n")
 
-	if m.FileName == "" {
+	if len(m.Files) == 0 {
 		b.WriteString("Waiting...")
 		return b.String()
 	}
 
-	// File being analysed
 	fileStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#FFFFFF")).
 		Bold(true)
-
-	b.WriteString("Analysing: ")
-	b.WriteString(fileStyle.Render(m.FileName))
-	b.WriteString("\n\n")
-
-	// Progress bar with spinner
-	elapsed := time.Since(m.StartTime)
 	spinnerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#A40000"))
+	doneStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#00AA00"))
+	errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#A40000"))
 	spinner := spinnerStyle.Render(spinnerFrames[m.spinnerIndex])
+	elapsed := time.Since(m.StartTime)
 
-	if m.Progress > 0 && m.Progress < 1.0 {
-		// Determinate progress bar with spinner
-		b.WriteString(spinner)
-		b.WriteString(" ")
-		b.WriteString(renderAnalysisProgressBar(m.Progress, 40, elapsed))
-	} else if !m.Done {
-		// Indeterminate spinner
-		b.WriteString(spinner)
-		b.WriteString(" Processing...")
-		fmt.Fprintf(&b, " [%s]", formatElapsed(elapsed))
+	for i := range m.Files {
+		f := &m.Files[i]
+
+		switch {
+		case f.Done && f.Err != nil:
+			icon := errorStyle.Render("✗")
+			fmt.Fprintf(&b, " %s %s\n   Error: %v\n", icon, fileStyle.Render(f.FileName), f.Err)
+		case f.Done:
+			icon := doneStyle.Render("🗸")
+			fmt.Fprintf(&b, " %s %s\n   Analysed\n", icon, fileStyle.Render(f.FileName))
+		default:
+			fmt.Fprintf(&b, " %s %s\n", spinner, fileStyle.Render(f.FileName))
+			fmt.Fprintf(&b, "   %s\n", renderAnalysisProgressBar(f.Progress, 40, elapsed))
+			if f.Level != 0 {
+				fmt.Fprintf(&b, "   Level: %.1f dB\n", f.Level)
+			}
+		}
+
+		b.WriteString("\n")
 	}
 
-	b.WriteString("\n")
-
-	// Show audio level if available
-	if m.Level != 0 && !m.Done {
-		fmt.Fprintf(&b, "\nLevel: %.1f dB", m.Level)
-	}
+	footer := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#888888")).
+		Padding(0, 1).
+		Render(fmt.Sprintf("Analysing %d files, %d complete, %d failed",
+			m.TotalFiles, m.CompletedFiles, m.FailedFiles))
+	b.WriteString(footer)
 
 	return b.String()
 }
