@@ -53,7 +53,7 @@ func measureOutputRegionFromReader(reader *audio.Reader, start, duration time.Du
 	if err != nil {
 		return nil, fmt.Errorf("failed to create analysis filter graph: %w", err)
 	}
-	defer freeFilterGraphLocked(&filterGraph)
+	defer ffmpeg.AVFilterGraphFree(&filterGraph)
 
 	var rmsLevel float64
 	var peakLevel float64

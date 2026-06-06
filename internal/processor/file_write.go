@@ -31,11 +31,23 @@ func (e *DestinationExistsError) Unwrap() error {
 // createSiblingTempPath creates a hidden, same-directory temp path whose basename
 // includes the marker and ends in .tmp.flac; tests pin the exact naming pattern.
 func createSiblingTempPath(targetPath, marker string) (string, error) {
+	return createSiblingTempPathSuffix(targetPath, marker, ".tmp.flac")
+}
+
+// createSiblingStatsPath creates a hidden, same-directory temp path whose basename
+// includes the marker and ends in .tmp.json, for per-graph loudnorm stats readback.
+func createSiblingStatsPath(targetPath, marker string) (string, error) {
+	return createSiblingTempPathSuffix(targetPath, marker, ".tmp.json")
+}
+
+// createSiblingTempPathSuffix creates a hidden, same-directory temp path whose
+// basename is .<marker>-*<suffix>. The marker must not contain a path separator.
+func createSiblingTempPathSuffix(targetPath, marker, suffix string) (string, error) {
 	if marker == "" || filepath.Base(marker) != marker {
 		return "", fmt.Errorf("invalid temp marker: %q", marker)
 	}
 
-	tempFile, err := os.CreateTemp(filepath.Dir(targetPath), "."+marker+"-*.tmp.flac")
+	tempFile, err := os.CreateTemp(filepath.Dir(targetPath), "."+marker+"-*"+suffix)
 	if err != nil {
 		return "", fmt.Errorf("failed to create temporary output next to %s: %w", targetPath, err)
 	}
