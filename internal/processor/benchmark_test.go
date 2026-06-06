@@ -1,6 +1,7 @@
 package processor
 
 import (
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -17,7 +18,7 @@ func BenchmarkAnalyzeAudioSynthetic5m(b *testing.B) {
 	for range b.N {
 		config := newTestBaseConfig()
 		config.Analysis.Enabled = true
-		if _, err := AnalyzeAudio(inputPath, config, nil); err != nil {
+		if _, err := AnalyzeAudio(context.Background(), inputPath, config, nil); err != nil {
 			b.Fatalf("AnalyzeAudio failed: %v", err)
 		}
 	}
@@ -31,7 +32,7 @@ func BenchmarkProcessAudioDefaultSynthetic5m(b *testing.B) {
 	b.ResetTimer()
 	for range b.N {
 		config := DefaultFilterConfig()
-		result, err := ProcessAudio(inputPath, config, nil)
+		result, err := ProcessAudio(context.Background(), inputPath, config, nil)
 		if err != nil {
 			b.Fatalf("ProcessAudio failed: %v", err)
 		}
@@ -56,7 +57,7 @@ func BenchmarkProcessAudioManualFixture(b *testing.B) {
 	b.ResetTimer()
 	for range b.N {
 		config := DefaultFilterConfig()
-		result, err := ProcessAudio(inputPath, config, nil)
+		result, err := ProcessAudio(context.Background(), inputPath, config, nil)
 		if err != nil {
 			b.Fatalf("ProcessAudio failed: %v", err)
 		}
@@ -86,7 +87,7 @@ func BenchmarkMeasureOutputRegions(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		MeasureOutputRegions(inputPath, roomToneRegion, speechRegion, nil)
+		MeasureOutputRegions(context.Background(), inputPath, roomToneRegion, speechRegion, nil)
 	}
 }
 

@@ -1,6 +1,7 @@
 package processor
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"os"
@@ -196,7 +197,7 @@ func runFullbenchFilterSpecCore(tb testing.TB, inputPath, outputPath, filterSpec
 		outputAcc = &outputMetadataAccumulators{}
 	}
 
-	if err := runFilterGraph(reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
+	if err := runFilterGraph(context.Background(), reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
 		OnReadError: func(err error) error {
 			return fmt.Errorf("failed to read frame: %w", err)
 		},
@@ -910,7 +911,7 @@ func setupFullbenchAdaptedConfig(tb testing.TB, inputPath string) *fullbenchAdap
 	tb.Helper()
 
 	config := DefaultFilterConfig()
-	analysisResult, err := AnalyzeOnlyDetailed(inputPath, config, nil)
+	analysisResult, err := AnalyzeOnlyDetailed(context.Background(), inputPath, config, nil)
 	if err != nil {
 		tb.Fatalf("failed to prepare fullbench adapted config: %v", err)
 	}
@@ -967,7 +968,7 @@ func setupFullbenchLoudnormMeasurement(tb testing.TB, seed *fullbenchPass2Seed) 
 
 	config := *seed.Config
 	limiter := planLimiterForLoudnorm(seed.OutputMeasurements, &config)
-	measurement, err := measureWithLoudnorm(seed.OutputPath, &config, limiter.pass3Prefix, nil)
+	measurement, err := measureWithLoudnorm(context.Background(), seed.OutputPath, &config, limiter.pass3Prefix, nil)
 	if err != nil {
 		tb.Fatalf("failed to prepare fullbench loudnorm measurement: %v", err)
 	}

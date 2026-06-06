@@ -2,6 +2,7 @@
 package processor
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -35,7 +36,7 @@ type regionMeasurements struct {
 // metrics for a time region in an already-opened audio file. This is the
 // shared implementation behind measureOutputRoomToneRegionFromReader and
 // measureOutputSpeechRegionFromReader.
-func measureOutputRegionFromReader(reader *audio.Reader, start, duration time.Duration, log debugLogger) (*regionMeasurements, error) {
+func measureOutputRegionFromReader(ctx context.Context, reader *audio.Reader, start, duration time.Duration, log debugLogger) (*regionMeasurements, error) {
 	if start < 0 {
 		return nil, fmt.Errorf("invalid region: negative start time")
 	}
@@ -106,7 +107,7 @@ func measureOutputRegionFromReader(reader *audio.Reader, start, duration time.Du
 	}
 
 	lenientHandler := func(err error) error { return nil }
-	_ = runFilterGraph(reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
+	_ = runFilterGraph(ctx, reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
 		OnPushError: lenientHandler,
 		OnPullError: lenientHandler,
 		OnFrame:     extractMeasurements,
@@ -165,11 +166,11 @@ func measureOutputRegionFromReader(reader *audio.Reader, start, duration time.Du
 
 // measureOutputRoomToneRegionFromReader measures a room tone region and maps
 // the result to RoomToneCandidateMetrics.
-func measureOutputRoomToneRegionFromReader(reader *audio.Reader, region RoomToneRegion, log debugLogger) (*RoomToneCandidateMetrics, error) {
+func measureOutputRoomToneRegionFromReader(ctx context.Context, reader *audio.Reader, region RoomToneRegion, log debugLogger) (*RoomToneCandidateMetrics, error) {
 	log.Logf("=== measureOutputRoomToneRegion: start=%.3fs, duration=%.3fs ===",
 		region.Start.Seconds(), region.Duration.Seconds())
 
-	result, err := measureOutputRegionFromReader(reader, region.Start, region.Duration, log)
+	result, err := measureOutputRegionFromReader(ctx, reader, region.Start, region.Duration, log)
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +219,7 @@ func extractRegionPair(m *AudioMeasurements) (*RoomToneRegion, *SpeechRegion) {
 //
 // Either region parameter may be nil to skip that measurement. Returns nil for
 // any skipped or failed measurement (non-fatal - matches existing behaviour).
-func MeasureOutputRegions(outputPath string, roomToneRegion *RoomToneRegion, speechRegion *SpeechRegion, log debugLogger) (*RoomToneCandidateMetrics, *SpeechCandidateMetrics) {
+func MeasureOutputRegions(ctx context.Context, outputPath string, roomToneRegion *RoomToneRegion, speechRegion *SpeechRegion, log debugLogger) (*RoomToneCandidateMetrics, *SpeechCandidateMetrics) {
 	if roomToneRegion == nil && speechRegion == nil {
 		return nil, nil
 	}
@@ -234,7 +235,7 @@ func MeasureOutputRegions(outputPath string, roomToneRegion *RoomToneRegion, spe
 	// Measure room tone region first (if requested)
 	var roomToneMetrics *RoomToneCandidateMetrics
 	if roomToneRegion != nil {
-		roomToneMetrics, err = measureOutputRoomToneRegionFromReader(reader, *roomToneRegion, log)
+		roomToneMetrics, err = measureOutputRoomToneRegionFromReader(ctx, reader, *roomToneRegion, log)
 		if err != nil {
 			log.Logf("Warning: Failed to measure room tone region: %v", err)
 			// Non-fatal - continue to speech measurement
@@ -251,7 +252,7 @@ func MeasureOutputRegions(outputPath string, roomToneRegion *RoomToneRegion, spe
 			}
 		}
 
-		speechMetrics, err := measureOutputSpeechRegionFromReader(reader, *speechRegion, log)
+		speechMetrics, err := measureOutputSpeechRegionFromReader(ctx, reader, *speechRegion, log)
 		if err != nil {
 			log.Logf("Warning: Failed to measure speech region: %v", err)
 			return roomToneMetrics, nil
@@ -264,11 +265,11 @@ func MeasureOutputRegions(outputPath string, roomToneRegion *RoomToneRegion, spe
 
 // measureOutputSpeechRegionFromReader measures a speech region and maps
 // the result to SpeechCandidateMetrics.
-func measureOutputSpeechRegionFromReader(reader *audio.Reader, region SpeechRegion, log debugLogger) (*SpeechCandidateMetrics, error) {
+func measureOutputSpeechRegionFromReader(ctx context.Context, reader *audio.Reader, region SpeechRegion, log debugLogger) (*SpeechCandidateMetrics, error) {
 	log.Logf("=== measureOutputSpeechRegion: start=%.3fs, duration=%.3fs ===",
 		region.Start.Seconds(), region.Duration.Seconds())
 
-	result, err := measureOutputRegionFromReader(reader, region.Start, region.Duration, log)
+	result, err := measureOutputRegionFromReader(ctx, reader, region.Start, region.Duration, log)
 	if err != nil {
 		return nil, err
 	}

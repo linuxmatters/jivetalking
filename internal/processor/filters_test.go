@@ -1281,6 +1281,72 @@ func staleFlatConfigFieldNames() []string {
 	}
 }
 
+func TestCloneForWorkerIsolatesStateAcrossClones(t *testing.T) {
+	base := DefaultFilterConfig()
+	base.FilterOrder = []FilterID{FilterDownmix, FilterAnalysis, FilterResample}
+
+	var sinkA, sinkB []string
+	cloneA := base.CloneForWorker(func(format string, args ...any) {
+		sinkA = append(sinkA, fmt.Sprintf(format, args...))
+	})
+	cloneB := base.CloneForWorker(func(format string, args ...any) {
+		sinkB = append(sinkB, fmt.Sprintf(format, args...))
+	})
+
+	// (a) FilterOrder independence: clones and base must not share a backing array.
+	baseOrderBefore := append([]FilterID(nil), base.FilterOrder...)
+	cloneBOrderBefore := append([]FilterID(nil), cloneB.FilterOrder...)
+
+	cloneA.FilterOrder[0] = FilterDeesser                                 // overwrite element
+	cloneA.FilterOrder = append(cloneA.FilterOrder, FilterLA2ACompressor) // grow slice
+
+	if !reflect.DeepEqual(base.FilterOrder, baseOrderBefore) {
+		t.Errorf("clone A FilterOrder mutation changed base: got %v, want %v",
+			base.FilterOrder, baseOrderBefore)
+	}
+	if !reflect.DeepEqual(cloneB.FilterOrder, cloneBOrderBefore) {
+		t.Errorf("clone A FilterOrder mutation changed clone B: got %v, want %v",
+			cloneB.FilterOrder, cloneBOrderBefore)
+	}
+
+	// Mutating clone B must not bleed into clone A or the base either.
+	cloneA.FilterOrder = append([]FilterID(nil), cloneA.FilterOrder...)
+	cloneAOrderBefore := append([]FilterID(nil), cloneA.FilterOrder...)
+	cloneB.FilterOrder[1] = FilterDS201Gate
+	if !reflect.DeepEqual(base.FilterOrder, baseOrderBefore) {
+		t.Errorf("clone B FilterOrder mutation changed base: got %v, want %v",
+			base.FilterOrder, baseOrderBefore)
+	}
+	if !reflect.DeepEqual(cloneA.FilterOrder, cloneAOrderBefore) {
+		t.Errorf("clone B FilterOrder mutation changed clone A: got %v, want %v",
+			cloneA.FilterOrder, cloneAOrderBefore)
+	}
+
+	// (b) Logger independence: each clone's logger writes only to its own sink.
+	cloneA.logger.Logf("from A %d", 1)
+	if got := len(sinkA); got != 1 {
+		t.Fatalf("clone A logger wrote %d lines to sink A, want 1", got)
+	}
+	if got := len(sinkB); got != 0 {
+		t.Fatalf("clone A logger leaked %d lines into sink B, want 0", got)
+	}
+
+	cloneB.logger.Logf("from B %d", 2)
+	if got := len(sinkB); got != 1 {
+		t.Fatalf("clone B logger wrote %d lines to sink B, want 1", got)
+	}
+	if got := len(sinkA); got != 1 {
+		t.Fatalf("clone B logger leaked into sink A: sink A now has %d lines, want 1", got)
+	}
+
+	if sinkA[0] != "from A 1" {
+		t.Errorf("sink A = %q, want %q", sinkA[0], "from A 1")
+	}
+	if sinkB[0] != "from B 2" {
+		t.Errorf("sink B = %q, want %q", sinkB[0], "from B 2")
+	}
+}
+
 func TestDbToLinear(t *testing.T) {
 	// Test 6 from PLAN.md: dB/Linear conversion accuracy
 	tests := []struct {

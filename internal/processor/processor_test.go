@@ -2,6 +2,7 @@ package processor
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -467,44 +468,44 @@ func TestProcessorSeedAndProgressCallbackBoundaries(t *testing.T) {
 		{
 			name:        "ProcessAudio",
 			fn:          ProcessAudio,
-			configArg:   1,
-			progressArg: 2,
-			parameters:  3,
-		},
-		{
-			name:        "AnalyzeOnlyDetailed",
-			fn:          AnalyzeOnlyDetailed,
-			configArg:   1,
-			progressArg: 2,
-			parameters:  3,
-		},
-		{
-			name:        "AnalyzeAudio",
-			fn:          AnalyzeAudio,
-			configArg:   1,
-			progressArg: 2,
-			parameters:  3,
-		},
-		{
-			name:        "processWithFilters",
-			fn:          processWithFilters,
 			configArg:   2,
-			progressArg: 3,
-			parameters:  6,
-		},
-		{
-			name:        "measureWithLoudnorm",
-			fn:          measureWithLoudnorm,
-			configArg:   1,
 			progressArg: 3,
 			parameters:  4,
 		},
 		{
+			name:        "AnalyzeOnlyDetailed",
+			fn:          AnalyzeOnlyDetailed,
+			configArg:   2,
+			progressArg: 3,
+			parameters:  4,
+		},
+		{
+			name:        "AnalyzeAudio",
+			fn:          AnalyzeAudio,
+			configArg:   2,
+			progressArg: 3,
+			parameters:  4,
+		},
+		{
+			name:        "processWithFilters",
+			fn:          processWithFilters,
+			configArg:   3,
+			progressArg: 4,
+			parameters:  7,
+		},
+		{
+			name:        "measureWithLoudnorm",
+			fn:          measureWithLoudnorm,
+			configArg:   2,
+			progressArg: 4,
+			parameters:  5,
+		},
+		{
 			name:        "ApplyNormalisation",
 			fn:          ApplyNormalisation,
-			configArg:   1,
-			progressArg: 4,
-			parameters:  6,
+			configArg:   2,
+			progressArg: 5,
+			parameters:  7,
 		},
 	}
 
@@ -655,7 +656,7 @@ func TestProcessAudio(t *testing.T) {
 	baseFilterOrder := append([]FilterID(nil), config.FilterOrder...)
 
 	// Process the audio with a no-op progress callback
-	result, err := ProcessAudio(testFile, config, func(update ProgressUpdate) {
+	result, err := ProcessAudio(context.Background(), testFile, config, func(update ProgressUpdate) {
 		// No-op for tests
 	})
 	if err != nil {
@@ -846,7 +847,7 @@ func TestProcessAudioFinalCollisionPreservesOutputAndCleansTemp(t *testing.T) {
 		processorCreateSiblingTempPath = oldCreateSiblingTempPath
 	})
 
-	firstResult, err := ProcessAudio(testFile, config, nil)
+	firstResult, err := ProcessAudio(context.Background(), testFile, config, nil)
 	if err != nil {
 		t.Fatalf("first ProcessAudio() failed: %v", err)
 	}
@@ -859,7 +860,7 @@ func TestProcessAudioFinalCollisionPreservesOutputAndCleansTemp(t *testing.T) {
 		t.Fatalf("failed to read first output: %v", err)
 	}
 
-	secondResult, err := ProcessAudio(testFile, config, nil)
+	secondResult, err := ProcessAudio(context.Background(), testFile, config, nil)
 	if err == nil {
 		if secondResult != nil && secondResult.OutputPath != "" {
 			_ = os.Remove(secondResult.OutputPath)
@@ -929,7 +930,7 @@ func TestAnalyzeOnlyDetailedTimings(t *testing.T) {
 	config.DS201HighPass.Frequency = 95.0
 	baseFilterOrder := append([]FilterID(nil), config.FilterOrder...)
 
-	result, err := AnalyzeOnlyDetailed(testFile, config, nil)
+	result, err := AnalyzeOnlyDetailed(context.Background(), testFile, config, nil)
 	if err != nil {
 		t.Fatalf("AnalyzeOnlyDetailed failed: %v", err)
 	}
