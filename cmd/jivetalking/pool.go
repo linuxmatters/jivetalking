@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/linuxmatters/jivetalking/internal/logging"
 	"github.com/linuxmatters/jivetalking/internal/processor"
 	"github.com/linuxmatters/jivetalking/internal/ui"

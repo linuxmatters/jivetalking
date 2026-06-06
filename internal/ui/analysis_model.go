@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/linuxmatters/jivetalking/internal/processor"
 )
 
@@ -101,7 +101,7 @@ func tickCmd() tea.Cmd {
 // Update handles messages and updates the model
 func (m AnalysisModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
@@ -155,9 +155,9 @@ func (m AnalysisModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // View renders the UI
-func (m AnalysisModel) View() string {
+func (m AnalysisModel) View() tea.View {
 	if m.Width == 0 {
-		return "Initializing..."
+		return tea.NewView("Initializing...")
 	}
 
 	var b strings.Builder
@@ -178,7 +178,7 @@ func (m AnalysisModel) View() string {
 
 	if len(m.Files) == 0 {
 		b.WriteString("Waiting...")
-		return b.String()
+		return tea.NewView(b.String())
 	}
 
 	fileStyle := lipgloss.NewStyle().
@@ -219,7 +219,7 @@ func (m AnalysisModel) View() string {
 			m.TotalFiles, m.CompletedFiles, m.FailedFiles))
 	b.WriteString(footer)
 
-	return b.String()
+	return tea.NewView(b.String())
 }
 
 // renderAnalysisProgressBar renders a progress bar with percentage and elapsed time

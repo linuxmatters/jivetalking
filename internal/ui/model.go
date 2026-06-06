@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/linuxmatters/jivetalking/internal/processor"
 )
 
@@ -95,7 +95,7 @@ func (m Model) Init() tea.Cmd {
 // Update handles messages and updates the model
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
@@ -149,18 +149,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // View renders the UI
-func (m Model) View() string {
+func (m Model) View() tea.View {
 	// Debug: Show basic info even before window size is set
 	if m.Width == 0 {
-		return fmt.Sprintf("Initializing...\nFiles: %d\n", len(m.Files))
+		view := tea.NewView(fmt.Sprintf("Initializing...\nFiles: %d\n", len(m.Files)))
+		view.AltScreen = true
+		return view
 	}
 
 	// Build the view based on current state
+	var view tea.View
 	if m.Done {
-		return renderCompletionSummary(m)
+		view = tea.NewView(renderCompletionSummary(m))
+	} else {
+		view = tea.NewView(renderProcessingView(m))
 	}
-
-	return renderProcessingView(m)
+	view.AltScreen = true
+	return view
 }
 
 // updateFileProgress updates a FileProgress based on a ProgressMsg

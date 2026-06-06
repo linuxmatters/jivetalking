@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"charm.land/lipgloss/v2"
 	"github.com/alecthomas/kong"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // Custom help styles

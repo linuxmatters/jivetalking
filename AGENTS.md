@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-Go CLI tool for podcast audio preprocessing using embedded FFmpeg. Transforms raw voice recordings into broadcast-ready audio at -16 LUFS through a four-pass adaptive processing pipeline. Uses [Charm Bubbletea](https://github.com/charmbracelet/bubbletea) for the TUI.
+Go CLI tool for podcast audio preprocessing using embedded FFmpeg. Transforms raw voice recordings into broadcast-ready audio at -16 LUFS through a four-pass adaptive processing pipeline. Uses the [Charm v2 suite](https://charm.land) for the TUI (bubbletea + lipgloss under the `charm.land/<pkg>/v2` import domain).
 
 ## Setup commands
 
@@ -93,6 +93,7 @@ Pass 4: volume (pre-gain, when clamped) â†’ alimiter (Volumax, peak reduction) â
 - **Stream processing:** Check `AVErrorEOF` and `EAgain` for processing loops
 - **Submodule:** Uses `github.com/linuxmatters/ffmpeg-statigo` in `third_party/ffmpeg-statigo/` (go.mod replace directive points there)
 - **Debug logging:** `processor.DebugLog` is a package-level `func(string, ...any)` set by `main.go` when `--debug` is active; use `debugLog()` (internal wrapper) inside the processor package
+- **Charm v2:** Import `charm.land/bubbletea/v2` and `charm.land/lipgloss/v2`; never `github.com/charmbracelet/...`. Models return `View() tea.View` built with `tea.NewView(...)`, not `View() string`. Match key presses on `tea.KeyPressMsg` (interface), not `tea.KeyMsg`. Set program options as View fields (`view.AltScreen = true`), not via `tea.WithAltScreen()`. `lipgloss.Color` returns `image/color.Color`.
 
 ## Testing instructions
 

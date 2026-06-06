@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/linuxmatters/jivetalking/internal/processor"
 	"github.com/linuxmatters/jivetalking/internal/ui"
 )
@@ -268,7 +268,7 @@ func (m recordingModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m recordingModel) View() string { return "" }
+func (m recordingModel) View() tea.View { return tea.NewView("") }
 
 // runPoolWithFake drives runWorkerPool over n synthetic file paths under a
 // headless recording program, returning the fake plus observed completion
@@ -399,7 +399,7 @@ func (m isolationModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m isolationModel) View() string { return "" }
+func (m isolationModel) View() tea.View { return tea.NewView("") }
 
 // TestRunWorkerPool_FailureIsolation drives the pool over several files where one
 // designated input errors and the rest succeed. It asserts AC4: every sibling
@@ -582,7 +582,7 @@ func (m cancelObserverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m cancelObserverModel) View() string { return "" }
+func (m cancelObserverModel) View() tea.View { return tea.NewView("") }
 
 // TestRunWorkerPool_SerialParityJobs1 asserts jobs == 1 yields the serial
 // outcome: every submitted file is processed exactly once, every file emits a

@@ -129,6 +129,12 @@ jobs:
         with:
           fail-on-severity: moderate
           allow-licenses: 0BSD, AFL-2.0, AFL-2.1, AFL-3.0, ANTLR-PD, ANTLR-PD-fallback, Apache-2.0, Artistic-2.0, BlueOak-1.0.0, BSD-1-Clause, BSD-2-Clause, BSD-2-Clause-FreeBSD, BSD-2-Clause-NetBSD, BSD-2-Clause-Patent, BSD-2-Clause-Views, BSD-3-Clause, BSD-3-Clause-Attribution, BSD-3-Clause-Clear, BSD-3-Clause-HP, BSD-3-Clause-LBNL, BSD-3-Clause-Modification, BSD-3-Clause-No-Nuclear-License-2014, BSD-3-Clause-No-Nuclear-Warranty, BSD-3-Clause-Open-MPI, BSD-3-Clause-Sun, BSD-Source-Code, BSL-1.0, bzip2-1.0.5, bzip2-1.0.6, CC0-1.0, CNRI-Python-GPL-Compatible, curl, ECL-2.0, FTL, GPL-2.0-or-later, GPL-3.0-only, GPL-3.0-or-later, HPND-Fenneberg-Livingston, HPND-sell-regexpr, HTMLTIDY, ICU, ImageMagick, Info-ZIP, Intel, Intel-ACPI, ISC, JasPer-2.0, LGPL-2.1-only, LGPL-2.1-or-later, LGPL-3.0-only, LGPL-3.0-or-later, Libpng, libpng-2.0, libtiff, Linux-OpenIB, LZMA-SDK-9.22, MIT, MIT-0, MIT-advertising, MIT-CMU, MIT-Modern-Variant, MIT-open-group, MITNFA, MPL-2.0, MulanPSL-1.0, MulanPSL-2.0, Multics, NCSA, Net-SNMP, NetCDF, NIST-Software, NTP, OLDAP-2.7, OLDAP-2.8, PostgreSQL, PSF-2.0, SGI-B-2.0, SHL-0.5, Spencer-99, SunPro, TCL, TCP-wrappers, UCAR, Unicode-DFS-2015, Unicode-DFS-2016, UnixCrypt, Unlicense, UPL-1.0, W3C, X11, XFree86-1.1, Xnet, Zlib, zlib-acknowledgement, ZPL-2.0, ZPL-2.1
+          # Exempt deps the SPDX allow-list cannot express:
+          #   golang.org/x/sync  - BSD-3-Clause plus Go's non-SPDX patent grant (LicenseRef)
+          #   mattn/go-runewidth - MIT, but licence not auto-detected for this version
+          allow-dependencies-licenses: >-
+            pkg:golang/golang.org/x/sync,
+            pkg:golang/github.com/mattn/go-runewidth
           fail-on-scopes: runtime
           comment-summary-in-pr: on-failure
 

@@ -9,8 +9,8 @@ import (
 	"runtime"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/alecthomas/kong"
-	tea "github.com/charmbracelet/bubbletea"
 	ffmpeg "github.com/linuxmatters/ffmpeg-statigo"
 	"github.com/linuxmatters/jivetalking/internal/audio"
 	"github.com/linuxmatters/jivetalking/internal/cli"
@@ -81,7 +81,8 @@ func main() {
 	ffmpeg.AVLogSetLevel(ffmpeg.AVLogError)
 
 	cliArgs := &CLI{}
-	ctx := kong.Parse(cliArgs,
+	ctx := kong.Parse(
+		cliArgs,
 		kong.Name("jivetalking"),
 		kong.Description("Professional podcast audio pre-processor"),
 		kong.UsageOnError(),
@@ -134,7 +135,7 @@ func main() {
 
 	model := ui.NewModel(cliArgs.Files)
 
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	p := tea.NewProgram(model)
 	reportWarnings := make(chan string, len(cliArgs.Files))
 
 	runCtx, cancel := context.WithCancel(context.Background())
