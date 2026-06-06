@@ -1,6 +1,7 @@
 package processor
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"sort"
@@ -117,7 +118,7 @@ func TestLoudnormLogProbe(t *testing.T) {
 	phase = "loop"
 	mu.Unlock()
 
-	if err := runFilterGraph(reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
+	if err := runFilterGraph(context.Background(), reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
 		OnReadError: func(err error) error { return err },
 		OnPushError: func(err error) error { return err },
 		OnPullError: func(err error) error { return err },

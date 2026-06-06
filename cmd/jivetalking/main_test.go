@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -107,12 +108,12 @@ func TestProgressCallbackBoundariesUseProcessorEvent(t *testing.T) {
 	if analyzeDetailed.Type.Kind() != reflect.Func {
 		t.Fatalf("analysisOnlyDeps.analyzeDetailed = %s, want func", analyzeDetailed.Type)
 	}
-	if analyzeDetailed.Type.NumIn() != 3 {
-		t.Fatalf("analysisOnlyDeps.analyzeDetailed has %d parameters, want 3", analyzeDetailed.Type.NumIn())
+	if analyzeDetailed.Type.NumIn() != 4 {
+		t.Fatalf("analysisOnlyDeps.analyzeDetailed has %d parameters, want 4", analyzeDetailed.Type.NumIn())
 	}
-	if analyzeDetailed.Type.In(2) != progressCallbackType {
+	if analyzeDetailed.Type.In(3) != progressCallbackType {
 		t.Fatalf("analysisOnlyDeps.analyzeDetailed progress callback = %s, want %s",
-			analyzeDetailed.Type.In(2), progressCallbackType)
+			analyzeDetailed.Type.In(3), progressCallbackType)
 	}
 
 	callbackType := reflect.TypeOf((&progressHandler{}).callback)
@@ -149,7 +150,7 @@ func TestRunAnalysisOnlyWithDeps_NonTTYOmitsBenchPath(t *testing.T) {
 			t.Fatal("runWithTUI should not be called for non-TTY output")
 			return nil, nil
 		},
-		analyzeDetailed: func(path string, cfg *processor.BaseFilterConfig, progress processor.ProgressCallback) (*processor.AnalysisResult, error) {
+		analyzeDetailed: func(_ context.Context, path string, cfg *processor.BaseFilterConfig, progress processor.ProgressCallback) (*processor.AnalysisResult, error) {
 			if path != inputPath {
 				t.Fatalf("analyzeDetailed path = %q, want %q", path, inputPath)
 			}
@@ -227,7 +228,7 @@ func TestRunAnalysisOnlyWithDeps_UsesPerFileResultConfig(t *testing.T) {
 			t.Fatal("runWithTUI should not be called for non-TTY output")
 			return nil, nil
 		},
-		analyzeDetailed: func(path string, cfg *processor.BaseFilterConfig, progress processor.ProgressCallback) (*processor.AnalysisResult, error) {
+		analyzeDetailed: func(_ context.Context, path string, cfg *processor.BaseFilterConfig, progress processor.ProgressCallback) (*processor.AnalysisResult, error) {
 			if cfg != baseConfig {
 				t.Fatalf("analyzeDetailed config = %p, want shared base %p", cfg, baseConfig)
 			}
@@ -437,6 +438,44 @@ func TestResolveRoomToneScanDuration_NeitherSetReturnsZero(t *testing.T) {
 	}
 	if got != 0 {
 		t.Fatalf("got = %s, want 0s", got)
+	}
+}
+
+func TestResolveJobs(t *testing.T) {
+	tests := []struct {
+		name   string
+		jobs   int
+		numCPU int
+		want   int
+	}{
+		{name: "auto caps at 4 on 8 CPUs", jobs: 0, numCPU: 8, want: 4},
+		{name: "auto follows CPU count below 4", jobs: 0, numCPU: 2, want: 2},
+		{name: "explicit one stays one", jobs: 1, numCPU: 8, want: 1},
+		{name: "explicit huge value honoured uncapped", jobs: 1000, numCPU: 8, want: 1000},
+		{name: "negative floors to one", jobs: -3, numCPU: 8, want: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resolveJobs(tt.jobs, tt.numCPU); got != tt.want {
+				t.Fatalf("resolveJobs(%d, %d) = %d, want %d", tt.jobs, tt.numCPU, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCLI_JobsFlag_ParsesIntoStructField(t *testing.T) {
+	fixture := makeFixtureFile(t)
+	cliArgs := parseCLIArgs(t, "--jobs", "8", fixture)
+	if cliArgs.Jobs != 8 {
+		t.Fatalf("Jobs = %d, want 8", cliArgs.Jobs)
+	}
+}
+
+func TestCLI_JobsFlag_OmittedDefaultsToZero(t *testing.T) {
+	fixture := makeFixtureFile(t)
+	cliArgs := parseCLIArgs(t, fixture)
+	if cliArgs.Jobs != 0 {
+		t.Fatalf("Jobs = %d, want 0", cliArgs.Jobs)
 	}
 }
 

@@ -2,6 +2,7 @@
 package processor
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -47,6 +48,7 @@ type FrameLoopConfig struct {
 //
 // The caller owns the filter graph lifetime - runFilterGraph does NOT free it.
 func runFilterGraph(
+	ctx context.Context,
 	reader *audio.Reader,
 	bufferSrcCtx, bufferSinkCtx *ffmpeg.AVFilterContext,
 	config FrameLoopConfig,
@@ -86,6 +88,10 @@ func runFilterGraph(
 
 	// Main read loop
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		frame, err := reader.ReadFrame()
 		if err != nil {
 			if config.OnReadError != nil {

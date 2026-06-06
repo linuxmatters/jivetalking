@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/alecthomas/kong"
@@ -35,6 +37,7 @@ type CLI struct {
 	AnalysisOnly         bool          `short:"a" help:"Run analysis only (Pass 1), display results, skip processing"`
 	RoomToneScanDuration time.Duration `name:"room-tone-scan-duration" help:"Cap room-tone-candidate scan to the first DURATION of input (e.g. 30s, 1m30s). Faster on long files at the cost of coverage; loudness, true peak, LRA, spectral, and speech analysis remain whole-file. Fewer room-tone candidates also reach voice-activated detection when capped. 0s means scan the whole file." placeholder:"DURATION" default:"0s"`
 	SilenceScanDuration  time.Duration `name:"silence-scan-duration" help:"[deprecated alias for --room-tone-scan-duration] Cap room-tone-candidate scan to the first DURATION of input. Supplying both flags with different non-zero values is rejected. 0s means scan the whole file." placeholder:"DURATION" default:"0s"`
+	Jobs                 int           `name:"jobs" help:"Number of files to process concurrently. 0 means auto (min(4, NumCPU)); an explicit value is honoured with no upper cap." default:"0"`
 	Files                []string      `arg:"" name:"files" help:"Audio files to process" type:"existingfile" optional:""`
 }
 
@@ -61,6 +64,18 @@ func resolveRoomToneScanDuration(roomTone, silence time.Duration, deprecationOut
 		return roomTone, nil
 	}
 	return silence, nil
+}
+
+// resolveJobs resolves the effective worker count from the --jobs flag value
+// and the available CPU count. The flag default of 0 (unset) selects auto mode:
+// min(4, numCPU). Any other value is explicit, clamped to a floor of 1 and
+// honoured with no upper cap, so --jobs above NumCPU is respected. numCPU is a
+// parameter so the function is pure and table-testable.
+func resolveJobs(jobs, numCPU int) int {
+	if jobs == 0 {
+		return min(4, numCPU)
+	}
+	return max(1, jobs)
 }
 
 func main() {
@@ -125,58 +140,21 @@ func main() {
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	reportWarnings := make(chan string, len(cliArgs.Files))
 
-	go func() {
-		for i, inputPath := range cliArgs.Files {
-			fileStartTime := time.Now()
+	runCtx, cancel := context.WithCancel(context.Background())
 
-			log("[MAIN] Sending FileStartMsg for file %d: %s", i, inputPath)
-			p.Send(ui.FileStartMsg{
-				FileIndex: i,
-				FileName:  inputPath,
-			})
+	jobs := resolveJobs(cliArgs.Jobs, runtime.NumCPU())
 
-			ph := &progressHandler{
-				p:         p,
-				log:       log,
-				fileIndex: i,
-			}
+	go runWorkerPool(runCtx, p, cliArgs.Files, config, log, jobs, reportWarnings)
 
-			pass2Start := time.Now()
-			log("[MAIN] Starting ProcessAudio for %s", inputPath)
-			result, err := processor.ProcessAudio(inputPath, config, ph.callback)
-			if err != nil {
-				log("[MAIN] ProcessAudio failed: %v", err)
-				p.Send(ui.FileCompleteMsg{
-					FileIndex: i,
-					Error:     err,
-				})
-				continue
-			}
-			// ProcessAudio runs all four passes; isolate Pass 2 by subtracting the
-			// passes the progress handler timed directly.
-			pass2Time := time.Since(pass2Start) - ph.pass1Time - ph.pass3Time - ph.pass4Time
+	_, runErr := p.Run()
 
-			reportData := buildProcessingReportData(inputPath, fileStartTime, ph.timings(pass2Time), result)
-			if err := logging.GenerateReport(reportData); err != nil {
-				log("[MAIN] Failed to generate log file: %v", err)
-				reportWarnings <- fmt.Sprintf("Report was not written for %s: %v", inputPath, err)
-			}
+	// p.Run() blocks until tea.Quit, fired on q/ctrl+c and on AllCompleteMsg.
+	// Fire cancel() unconditionally: a no-op on natural completion (workers
+	// already finished), and on user quit it stops in-flight workers via
+	// ctx.Done() so their deferred temp cleanup runs and wg.Wait() completes.
+	cancel()
 
-			log("[MAIN] Sending FileCompleteMsg for file %d", i)
-			p.Send(ui.FileCompleteMsg{
-				FileIndex:  i,
-				InputLUFS:  result.InputLUFS,
-				OutputLUFS: result.OutputLUFS,
-				NoiseFloor: result.NoiseFloor,
-				OutputPath: result.OutputPath,
-			})
-		}
-
-		log("[MAIN] Sending AllCompleteMsg")
-		p.Send(ui.AllCompleteMsg{})
-	}()
-
-	if _, err := p.Run(); err != nil {
+	if err := runErr; err != nil {
 		cli.PrintError(fmt.Sprintf("UI error: %v", err))
 		if debugLog != nil {
 			debugLog.Close()
@@ -225,7 +203,7 @@ type analysisOnlyDeps struct {
 	hasTTY          func() bool
 	openMetadata    func(string) (*audio.Metadata, error)
 	runWithTUI      func(string, *processor.BaseFilterConfig, func(string, ...any)) (*processor.AnalysisResult, error)
-	analyzeDetailed func(string, *processor.BaseFilterConfig, processor.ProgressCallback) (*processor.AnalysisResult, error)
+	analyzeDetailed func(context.Context, string, *processor.BaseFilterConfig, processor.ProgressCallback) (*processor.AnalysisResult, error)
 	displayResults  func(io.Writer, string, *audio.Metadata, *processor.AudioMeasurements, *processor.EffectiveFilterConfig, *processor.AdaptiveDiagnostics, ...logging.AnalysisTimings)
 	printError      func(string)
 }
@@ -337,7 +315,7 @@ func runAnalysisOnlyWithDeps(files []string, config *processor.BaseFilterConfig,
 			// No terminal: skip the progress UI for non-interactive environments.
 			log("[ANALYSIS] No TTY available, running without progress UI")
 			fmt.Fprintf(deps.stdout, "Analysing: %s\n", filepath.Base(inputPath))
-			analysisResult, analysisErr = deps.analyzeDetailed(inputPath, config, nil)
+			analysisResult, analysisErr = deps.analyzeDetailed(context.Background(), inputPath, config, nil)
 		}
 
 		if analysisErr != nil {
@@ -389,7 +367,7 @@ func runAnalysisWithTUI(inputPath string, config *processor.BaseFilterConfig, lo
 			})
 		}
 
-		result, err := processor.AnalyzeOnlyDetailed(path, config, progressCallback)
+		result, err := processor.AnalyzeOnlyDetailed(context.Background(), path, config, progressCallback)
 
 		p.Send(ui.AnalysisCompleteMsg{
 			Result: result,

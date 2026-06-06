@@ -1,6 +1,7 @@
 package processor
 
 import (
+	"context"
 	"encoding/json"
 	"math"
 	"testing"
@@ -348,7 +349,7 @@ func TestAnalyzeAudio(t *testing.T) {
 			}
 		}
 
-		measurements, err := AnalyzeAudio(testFile, config, progressCallback)
+		measurements, err := AnalyzeAudio(context.Background(), testFile, config, progressCallback)
 		if err != nil {
 			t.Fatalf("AnalyzeAudio failed: %v", err)
 		}
@@ -412,7 +413,7 @@ func TestAnalyzeAudioDoesNotMutateCallerConfig(t *testing.T) {
 	originalOrder := append([]FilterID(nil), config.FilterOrder...)
 	originalRoomToneScanDuration := config.Analysis.RoomToneScanDuration
 
-	if _, err := AnalyzeAudio(testFile, config, nil); err != nil {
+	if _, err := AnalyzeAudio(context.Background(), testFile, config, nil); err != nil {
 		t.Fatalf("AnalyzeAudio failed: %v", err)
 	}
 
@@ -2624,7 +2625,7 @@ func TestRunFilterGraph(t *testing.T) {
 	var inputFrameCount int
 	var filteredFrameCount int
 
-	err = runFilterGraph(reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
+	err = runFilterGraph(context.Background(), reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
 		OnInputFrame: func(_ *ffmpeg.AVFrame) {
 			inputFrameCount++
 		},
@@ -2678,7 +2679,7 @@ func TestRunFilterGraphLenientErrors(t *testing.T) {
 
 	// Run with lenient push errors (continue on push failure) and discard-only
 	var frameCount int
-	err = runFilterGraph(reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
+	err = runFilterGraph(context.Background(), reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
 		OnPushError: func(_ error) error { return nil }, // lenient: continue
 		OnFrame: func(_, _ *ffmpeg.AVFrame) error {
 			frameCount++
@@ -2881,7 +2882,7 @@ func TestAnalyzeAudio_RoomToneScanDuration(t *testing.T) {
 	baselineConfig := newTestBaseConfig()
 	baselineConfig.Analysis.Enabled = true
 
-	baseline, err := AnalyzeAudio(testFile, baselineConfig, nil)
+	baseline, err := AnalyzeAudio(context.Background(), testFile, baselineConfig, nil)
 	if err != nil {
 		t.Fatalf("baseline AnalyzeAudio failed: %v", err)
 	}
@@ -2923,7 +2924,7 @@ func TestAnalyzeAudio_RoomToneScanDuration(t *testing.T) {
 		config.Analysis.Enabled = true
 		config.Analysis.RoomToneScanDuration = 0
 
-		got, err := AnalyzeAudio(testFile, config, nil)
+		got, err := AnalyzeAudio(context.Background(), testFile, config, nil)
 		if err != nil {
 			t.Fatalf("AnalyzeAudio failed: %v", err)
 		}
@@ -2952,7 +2953,7 @@ func TestAnalyzeAudio_RoomToneScanDuration(t *testing.T) {
 		config.Analysis.Enabled = true
 		config.Analysis.RoomToneScanDuration = 2 * time.Second
 
-		got, err := AnalyzeAudio(testFile, config, nil)
+		got, err := AnalyzeAudio(context.Background(), testFile, config, nil)
 		if err != nil {
 			t.Fatalf("AnalyzeAudio failed: %v", err)
 		}
@@ -2974,7 +2975,7 @@ func TestAnalyzeAudio_RoomToneScanDuration(t *testing.T) {
 		config.Analysis.Enabled = true
 		config.Analysis.RoomToneScanDuration = 60 * time.Second
 
-		got, err := AnalyzeAudio(testFile, config, nil)
+		got, err := AnalyzeAudio(context.Background(), testFile, config, nil)
 		if err != nil {
 			t.Fatalf("AnalyzeAudio failed: %v", err)
 		}
@@ -3002,7 +3003,7 @@ func TestAnalyzeAudio_RoomToneScanDuration(t *testing.T) {
 		config.Analysis.Enabled = true
 		config.Analysis.RoomToneScanDuration = 60 * time.Second
 
-		got, err := AnalyzeAudio(testFile, config, nil)
+		got, err := AnalyzeAudio(context.Background(), testFile, config, nil)
 		if err != nil {
 			t.Fatalf("AnalyzeAudio failed: %v", err)
 		}

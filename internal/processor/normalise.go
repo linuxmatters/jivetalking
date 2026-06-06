@@ -2,6 +2,7 @@
 package processor
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -113,7 +114,7 @@ type LoudnormMeasurement struct {
 // Returns:
 //   - measurement: Loudnorm measurements for second pass
 //   - err: Error if measurement failed
-func measureWithLoudnorm(inputPath string, config *EffectiveFilterConfig, filterPrefix string, progressCallback ProgressCallback) (*LoudnormMeasurement, error) {
+func measureWithLoudnorm(ctx context.Context, inputPath string, config *EffectiveFilterConfig, filterPrefix string, progressCallback ProgressCallback) (*LoudnormMeasurement, error) {
 	// Open input file
 	reader, metadata, err := audio.OpenAudioFile(inputPath)
 	if err != nil {
@@ -167,7 +168,7 @@ func measureWithLoudnorm(inputPath string, config *EffectiveFilterConfig, filter
 
 	// Process all frames through loudnorm (no encoding - just measurement)
 	lenientHandler := func(err error) error { return nil }
-	loopErr := loudnormRunFilterGraph(reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
+	loopErr := loudnormRunFilterGraph(ctx, reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
 		OnPushError: lenientHandler,
 		OnPullError: lenientHandler,
 		OnInputFrame: func(inputFrame *ffmpeg.AVFrame) {
@@ -506,6 +507,7 @@ type NormalisationResult struct {
 //   - result: Normalisation outcome with before/after measurements
 //   - err: Error if normalisation failed
 func ApplyNormalisation(
+	ctx context.Context,
 	inputPath string,
 	config *EffectiveFilterConfig,
 	outputMeasurements *OutputMeasurements,
@@ -534,7 +536,7 @@ func ApplyNormalisation(
 	// Pass 3: Run loudnorm measurement pass on Pass 2 output.
 	// When a prefix is active, loudnorm measures the post-limiter signal,
 	// so its InputI/InputTP already reflect pre-gain and limiting.
-	measurement, err := measureWithLoudnorm(inputPath, config, limiter.pass3Prefix, progressCallback)
+	measurement, err := measureWithLoudnorm(ctx, inputPath, config, limiter.pass3Prefix, progressCallback)
 	if err != nil {
 		return nil, fmt.Errorf("loudnorm measurement pass failed: %w", err)
 	}
@@ -576,7 +578,7 @@ func ApplyNormalisation(
 	effectiveConfig.Loudnorm.TargetI = effectiveTargetI
 
 	// Pass 4: Apply loudnorm with linear=true and the measurements
-	application, err := applyLoudnormAndMeasure(loudnormApplicationRequest{
+	application, err := applyLoudnormAndMeasure(ctx, loudnormApplicationRequest{
 		inputPath:         inputPath,
 		config:            &effectiveConfig,
 		measurement:       measurement,
@@ -636,8 +638,8 @@ func ApplyNormalisation(
 //
 // Returns the measured integrated loudness, true peak, full output measurements,
 // and loudnorm diagnostic stats.
-func applyLoudnormAndMeasure(request loudnormApplicationRequest, log debugLogger) (*loudnormApplicationResult, error) {
-	prep, err := prepareLoudnormApplication(request)
+func applyLoudnormAndMeasure(ctx context.Context, request loudnormApplicationRequest, log debugLogger) (*loudnormApplicationResult, error) {
+	prep, err := prepareLoudnormApplication(ctx, request)
 	if err != nil {
 		return nil, err
 	}
@@ -661,17 +663,22 @@ func applyLoudnormAndMeasure(request loudnormApplicationRequest, log debugLogger
 		return stats
 	}
 
-	execution, err := executeAndPublishLoudnormApplication(prep, request, freeGraphAndReadStats, removeTemp)
+	execution, err := executeAndPublishLoudnormApplication(ctx, prep, request, freeGraphAndReadStats, removeTemp)
 	if err != nil {
 		return &loudnormApplicationResult{loudnormStats: execution.loudnormStats}, err
 	}
 
 	stats := freeGraphAndReadStats()
 
-	return finalizeLoudnormApplicationResult(request, execution, stats, log), nil
+	return finalizeLoudnormApplicationResult(ctx, request, execution, stats, log), nil
 }
 
-func prepareLoudnormApplication(request loudnormApplicationRequest) (*loudnormApplicationPreparation, error) {
+func prepareLoudnormApplication(ctx context.Context, request loudnormApplicationRequest) (*loudnormApplicationPreparation, error) {
+	// Abort before opening the input and allocating a filter graph if cancelled.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	reader, metadata, err := audio.OpenAudioFile(request.inputPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open input: %w", err)
@@ -727,6 +734,7 @@ func prepareLoudnormApplication(request loudnormApplicationRequest) (*loudnormAp
 }
 
 func executeAndPublishLoudnormApplication(
+	ctx context.Context,
 	prep *loudnormApplicationPreparation,
 	request loudnormApplicationRequest,
 	captureGraphStats func() *LoudnormStats,
@@ -755,7 +763,7 @@ func executeAndPublishLoudnormApplication(
 	const progressUpdateInterval = 100 // Send progress update every N frames
 
 	lenientHandler := func(err error) error { return nil }
-	loopErr := loudnormRunFilterGraph(prep.reader, prep.bufferSrcCtx, prep.bufferSinkCtx, FrameLoopConfig{
+	loopErr := loudnormRunFilterGraph(ctx, prep.reader, prep.bufferSrcCtx, prep.bufferSinkCtx, FrameLoopConfig{
 		OnPushError: lenientHandler,
 		OnPullError: lenientHandler,
 		OnInputFrame: func(inputFrame *ffmpeg.AVFrame) {
@@ -824,12 +832,14 @@ func executeAndPublishLoudnormApplication(
 }
 
 func finalizeLoudnormApplicationResult(
+	ctx context.Context,
 	request loudnormApplicationRequest,
 	execution *loudnormApplicationExecutionResult,
 	stats *LoudnormStats,
 	log debugLogger,
 ) *loudnormApplicationResult {
 	finalMeasurements, regionMeasurementTime := finalizeLoudnormOutputMeasurements(
+		ctx,
 		request.inputPath,
 		request.inputMeasurements,
 		&execution.acc,
@@ -846,6 +856,7 @@ func finalizeLoudnormApplicationResult(
 }
 
 func finalizeLoudnormOutputMeasurements(
+	ctx context.Context,
 	inputPath string,
 	inputMeasurements *AudioMeasurements,
 	acc *outputMetadataAccumulators,
@@ -864,7 +875,7 @@ func finalizeLoudnormOutputMeasurements(
 	}
 
 	regionStart := time.Now()
-	roomToneSample, spSample := MeasureOutputRegions(inputPath, roomToneRegion, spRegion, log)
+	roomToneSample, spSample := MeasureOutputRegions(ctx, inputPath, roomToneRegion, spRegion, log)
 	regionMeasurementTime = time.Since(regionStart)
 	finalMeasurements.RoomToneSample = roomToneSample
 	finalMeasurements.SpeechSample = spSample

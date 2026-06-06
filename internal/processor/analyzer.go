@@ -2,6 +2,7 @@
 package processor
 
 import (
+	stdcontext "context"
 	"fmt"
 	"math"
 	"time"
@@ -261,12 +262,12 @@ type OutputMeasurements struct {
 //
 // The noise floor and silence threshold are computed from interval data after the full pass,
 // avoiding the need for a separate pre-scan phase.
-func AnalyzeAudio(filename string, config *BaseFilterConfig, progressCallback ProgressCallback) (*AudioMeasurements, error) {
+func AnalyzeAudio(ctx stdcontext.Context, filename string, config *BaseFilterConfig, progressCallback ProgressCallback) (*AudioMeasurements, error) {
 	// Default fallback threshold if interval analysis yields insufficient data
 	const defaultNoiseFloor = -50.0
 
 	analysisContext := &ProcessingFilterContext{Pass: PassAnalysis}
-	collection, err := collectAnalysisFrames(filename, config, analysisContext, progressCallback)
+	collection, err := collectAnalysisFrames(ctx, filename, config, analysisContext, progressCallback)
 	if err != nil {
 		return nil, err
 	}
@@ -481,7 +482,7 @@ type analysisFrameCollection struct {
 	silenceMedians   silenceMedians
 }
 
-func collectAnalysisFrames(filename string, config *BaseFilterConfig, context *ProcessingFilterContext, progressCallback ProgressCallback) (*analysisFrameCollection, error) {
+func collectAnalysisFrames(ctx stdcontext.Context, filename string, config *BaseFilterConfig, context *ProcessingFilterContext, progressCallback ProgressCallback) (*analysisFrameCollection, error) {
 	reader, metadata, err := audio.OpenAudioFile(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open audio file: %w", err)
@@ -523,7 +524,7 @@ func collectAnalysisFrames(filename string, config *BaseFilterConfig, context *P
 	var inputSamplesProcessed int64
 	inputSampleRate := float64(reader.GetDecoderContext().SampleRate())
 
-	if err := runFilterGraph(reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
+	if err := runFilterGraph(ctx, reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
 		OnReadError: func(err error) error {
 			return fmt.Errorf("failed to read frame: %w", err)
 		},

@@ -1,6 +1,7 @@
 package processor
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -21,7 +22,7 @@ func measureOutputRoomToneRegion(outputPath string, region RoomToneRegion) (*Roo
 	}
 	defer reader.Close()
 
-	return measureOutputRoomToneRegionFromReader(reader, region, nil)
+	return measureOutputRoomToneRegionFromReader(context.Background(), reader, region, nil)
 }
 
 // measureOutputSpeechRegion analyses a speech region in the output file
@@ -37,7 +38,7 @@ func measureOutputSpeechRegion(outputPath string, region SpeechRegion) (*SpeechC
 	}
 	defer reader.Close()
 
-	return measureOutputSpeechRegionFromReader(reader, region, nil)
+	return measureOutputSpeechRegionFromReader(context.Background(), reader, region, nil)
 }
 
 func TestExtractRegionPair(t *testing.T) {

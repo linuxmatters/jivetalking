@@ -323,6 +323,17 @@ func (cfg *BaseFilterConfig) SetLogger(l func(format string, args ...any)) {
 	cfg.logger = debugLogger(l)
 }
 
+// CloneForWorker returns a per-worker config that shares no mutable state with
+// cfg. It shallow-copies the value, deep-copies the sole reference field
+// FilterOrder, and installs the per-worker logger. Concurrent workers may each
+// own and process their clone without racing on the base.
+func (cfg *BaseFilterConfig) CloneForWorker(logger func(format string, args ...any)) *BaseFilterConfig {
+	wc := *cfg
+	wc.FilterOrder = cloneFilterOrder(cfg.FilterOrder)
+	wc.SetLogger(logger)
+	return &wc
+}
+
 func defaultFilterConfigDefaults() filterConfigDefaults {
 	return assembleFilterDefaults(
 		defaultDownmixConfig(),
