@@ -886,9 +886,11 @@ func finalizeLoudnormOutputMeasurements(
 // - Applies linear gain when possible (more transparent, no adaptive EQ)
 // - Includes 100ms lookahead true peak limiter (upsamples to 192kHz internally)
 //
-// astats and aspectralstats are placed before ebur128 because ebur128 upsamples to
-// 192kHz and outputs f64. We want spectral measurements at the original sample rate
-// to match Pass 2's measurements for accurate comparison.
+// astats and aspectralstats are placed before ebur128 because ebur128 forces its
+// output format to f64/double (always, via query_formats). Its 192kHz true-peak
+// oversampling is internal-only and does not reach the output link, so the output
+// sample rate equals the input rate. We want spectral measurements at the original
+// sample rate to match Pass 2's measurements for accurate comparison.
 //
 // Per ffmpeg-loudnorm-helper: the offset parameter MUST come from loudnorm's own
 // first pass measurement, not from external calculations.
@@ -934,11 +936,14 @@ func buildLoudnormFilterSpec(config *EffectiveFilterConfig, measurement *Loudnor
 	}
 	filters = append(filters, loudnormFilter)
 
-	// 3. Resample back to the source rate before adeclick.
-	// loudnorm's linear-mode true-peak limiter upsamples to 192kHz internally and
-	// emits at 192kHz. Downstream filters (adeclick, astats, aspectralstats, ebur128)
-	// would otherwise run at 4x the sample count. Resampling here restores the rate
-	// adeclick and the analysis filters were tuned for in Pass 2.
+	// 3. Rate-normalisation barrier to the source rate before the rate-sensitive
+	// section. We request linear mode (which preserves the source rate), but loudnorm
+	// silently falls back to dynamic mode when its second-pass preconditions fail, and
+	// dynamic mode emits at 192kHz on the output. On those fallback files the downstream
+	// filters (adeclick, astats, aspectralstats, ebur128) would otherwise run at 4x the
+	// sample count. This aresample is a no-op passthrough when loudnorm already outputs
+	// the source rate (the linear case) and does the real downsample only on
+	// dynamic-fallback files.
 	if sourceSampleRate > 0 {
 		filters = append(filters, fmt.Sprintf("aresample=%d", sourceSampleRate))
 	}
@@ -962,11 +967,13 @@ func buildLoudnormFilterSpec(config *EffectiveFilterConfig, measurement *Loudnor
 
 	// 7. ebur128 for loudness validation (metadata only, no audio modification)
 	// dualmono=true ensures accurate mono loudness measurement
-	// Note: ebur128 upsamples to 192kHz internally and outputs f64
+	// Note: ebur128 forces its output format to f64/double (always); its 192kHz
+	// true-peak oversampling is internal-only and the output rate equals the input rate
 	filters = append(filters, "ebur128=metadata=1:peak=sample+true:dualmono=true")
 
 	// 8. Resample back to output format (44.1kHz/s16/mono)
-	// Required because ebur128 outputs f64 at 192kHz; encoder expects s16 at 44.1kHz
+	// Required for the f64->s16 conversion ebur128 forces (output format f64, not a
+	// rate change); encoder expects s16 at 44.1kHz
 	filters = append(filters, config.buildRequiredOutputFormatFilter())
 
 	return strings.Join(filters, ",")
