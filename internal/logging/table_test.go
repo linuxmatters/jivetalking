@@ -84,6 +84,52 @@ func TestFormatMetricWithUnit(t *testing.T) {
 	}
 }
 
+// tableLines splits rendered table output into trimmed-right lines, dropping the
+// trailing empty element from the final newline.
+//
+// lipgloss/table with a HiddenBorder renders as:
+//
+//	line 0  : header row
+//	line 1  : blank separator (the hidden border under the header)
+//	line 2+ : data rows
+func tableLines(output string) []string {
+	return strings.Split(strings.TrimRight(output, "\n"), "\n")
+}
+
+// headerLine returns the rendered header row (line 0).
+func headerLine(t *testing.T, output string) string {
+	t.Helper()
+	lines := tableLines(output)
+	if len(lines) < 1 {
+		t.Fatalf("expected at least a header line, got %q", output)
+	}
+	return lines[0]
+}
+
+// dataLines returns the rendered data rows (line 2 onward, after the blank
+// separator the hidden border emits under the header).
+func dataLines(t *testing.T, output string) []string {
+	t.Helper()
+	lines := tableLines(output)
+	if len(lines) < 3 {
+		t.Fatalf("expected header + blank separator + at least one data row, got %d lines: %q", len(lines), output)
+	}
+	return lines[2:]
+}
+
+// countMissingCells counts standalone MissingValue cells in a rendered row,
+// splitting on whitespace so a hyphen inside a negative value (e.g. "-10.0")
+// is not mistaken for a missing-value marker.
+func countMissingCells(row string) int {
+	n := 0
+	for field := range strings.FieldsSeq(row) {
+		if field == MissingValue {
+			n++
+		}
+	}
+	return n
+}
+
 func TestMetricTableString(t *testing.T) {
 	t.Run("basic_three_column", func(t *testing.T) {
 		table := NewMetricTable()
@@ -92,26 +138,35 @@ func TestMetricTableString(t *testing.T) {
 
 		output := table.String()
 
-		// Verify headers present
-		if !strings.Contains(output, "Input") {
-			t.Error("Output should contain 'Input' header")
+		// Header row carries the three value-column headers, in order, and no
+		// Interpretation column (no row has interpretation text).
+		header := headerLine(t, output)
+		for _, h := range []string{"Input", "Filtered", "Final"} {
+			if !strings.Contains(header, h) {
+				t.Errorf("header line %q should contain %q", header, h)
+			}
 		}
-		if !strings.Contains(output, "Filtered") {
-			t.Error("Output should contain 'Filtered' header")
+		if idxInput, idxFiltered, idxFinal := strings.Index(header, "Input"), strings.Index(header, "Filtered"), strings.Index(header, "Final"); idxInput >= idxFiltered || idxFiltered >= idxFinal {
+			t.Errorf("headers out of order in %q (Input=%d Filtered=%d Final=%d)", header, idxInput, idxFiltered, idxFinal)
 		}
-		if !strings.Contains(output, "Final") {
-			t.Error("Output should contain 'Final' header")
+		if strings.Contains(header, "Interpretation") {
+			t.Errorf("header should not contain Interpretation column when no row has one: %q", header)
 		}
 
-		// Verify data present
-		if !strings.Contains(output, "Integrated Loudness") {
-			t.Error("Output should contain row label")
+		// Data rows carry label, all values, and unit.
+		rows := dataLines(t, output)
+		if len(rows) != 2 {
+			t.Fatalf("expected 2 data rows, got %d: %q", len(rows), rows)
 		}
-		if !strings.Contains(output, "-16.0") {
-			t.Error("Output should contain value")
+		for _, want := range []string{"Integrated Loudness", "-23.0", "-18.5", "-16.0", "LUFS"} {
+			if !strings.Contains(rows[0], want) {
+				t.Errorf("first data row %q should contain %q", rows[0], want)
+			}
 		}
-		if !strings.Contains(output, "LUFS") {
-			t.Error("Output should contain unit")
+		for _, want := range []string{"True Peak", "-3.5", "-1.2", "-1.5", "dBTP"} {
+			if !strings.Contains(rows[1], want) {
+				t.Errorf("second data row %q should contain %q", rows[1], want)
+			}
 		}
 	})
 
@@ -121,11 +176,15 @@ func TestMetricTableString(t *testing.T) {
 
 		output := table.String()
 
-		if !strings.Contains(output, "Interpretation") {
-			t.Error("Output should contain 'Interpretation' header when rows have interpretations")
+		// Interpretation column header appears when any row has interpretation text.
+		header := headerLine(t, output)
+		if !strings.Contains(header, "Interpretation") {
+			t.Errorf("header should contain Interpretation column: %q", header)
 		}
-		if !strings.Contains(output, "Good noise reduction") {
-			t.Error("Output should contain interpretation text")
+
+		rows := dataLines(t, output)
+		if !strings.Contains(rows[0], "Good noise reduction") {
+			t.Errorf("data row %q should contain interpretation text", rows[0])
 		}
 	})
 
@@ -135,9 +194,14 @@ func TestMetricTableString(t *testing.T) {
 
 		output := table.String()
 
-		// Missing values should show as "-"
-		if !strings.Contains(output, " -  ") {
-			t.Error("Missing values should display as dash")
+		// Two columns are missing values (empty string and absent third value);
+		// both render as MissingValue. The present value remains.
+		rows := dataLines(t, output)
+		if !strings.Contains(rows[0], "-10.0") {
+			t.Errorf("data row %q should contain the present value -10.0", rows[0])
+		}
+		if got := countMissingCells(rows[0]); got != 2 {
+			t.Errorf("expected 2 missing-value markers %q in %q, got %d", MissingValue, rows[0], got)
 		}
 	})
 
@@ -156,14 +220,11 @@ func TestMetricTableString(t *testing.T) {
 
 		output := table.String()
 
-		if !strings.Contains(output, "-23.5") {
-			t.Error("AddMetricRow should format input value")
-		}
-		if !strings.Contains(output, "-18.2") {
-			t.Error("AddMetricRow should format filtered value")
-		}
-		if !strings.Contains(output, "-16.0") {
-			t.Error("AddMetricRow should format final value")
+		rows := dataLines(t, output)
+		for _, want := range []string{"Test", "-23.5", "-18.2", "-16.0", "LUFS"} {
+			if !strings.Contains(rows[0], want) {
+				t.Errorf("AddMetricRow data row %q should contain %q", rows[0], want)
+			}
 		}
 	})
 
@@ -173,15 +234,15 @@ func TestMetricTableString(t *testing.T) {
 
 		output := table.String()
 
-		// NaN should display as "-"
-		lines := strings.Split(output, "\n")
-		if len(lines) < 2 {
-			t.Fatal("Expected at least 2 lines (header + data)")
+		// NaN filtered value renders as MissingValue; the two valid values remain.
+		rows := dataLines(t, output)
+		for _, want := range []string{"Test", "-23.5", "-16.0", "LUFS"} {
+			if !strings.Contains(rows[0], want) {
+				t.Errorf("data row %q should contain %q", rows[0], want)
+			}
 		}
-		dataLine := lines[1]
-		// Count dashes - should have one for NaN value
-		if !strings.Contains(dataLine, " -  ") && !strings.Contains(dataLine, " - ") {
-			t.Errorf("NaN value should display as dash in: %q", dataLine)
+		if got := countMissingCells(rows[0]); got != 1 {
+			t.Errorf("expected exactly 1 missing-value marker %q for the NaN value in %q, got %d", MissingValue, rows[0], got)
 		}
 	})
 }
@@ -192,19 +253,31 @@ func TestMetricTableAlignment(t *testing.T) {
 	table.AddRow("Much Longer Label", []string{"100", "200", "300"}, "", "")
 
 	output := table.String()
-	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
 
-	if len(lines) < 3 {
-		t.Fatalf("Expected 3 lines (header + 2 data), got %d", len(lines))
+	rows := dataLines(t, output)
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 data rows, got %d: %q", len(rows), rows)
 	}
 
-	// All data lines should have same position for first value column
-	// (values are right-aligned, so the rightmost digit should align)
-	// This is a basic check that formatting is consistent
-	for i := 1; i < len(lines); i++ {
-		if len(lines[i]) < 20 {
-			t.Errorf("Line %d seems too short: %q", i, lines[i])
-		}
+	// Value columns are right-aligned: the rightmost digit of each value column
+	// lines up across rows. Check the first value column ("1" vs "100") by
+	// confirming the trailing position of each shares a column boundary.
+	idxShort := strings.Index(rows[0], "1")
+	idxLong := strings.Index(rows[1], "100")
+	// "100" is wider; right alignment means "1" sits to the right of where "100"
+	// starts, and both end at the same column.
+	endShort := idxShort + len("1")
+	endLong := idxLong + len("100")
+	if endShort != endLong {
+		t.Errorf("first value column not right-aligned: %q ends at %d, %q ends at %d", rows[0], endShort, rows[1], endLong)
+	}
+
+	// Labels are left-aligned: both rows start with their label at column 0.
+	if !strings.HasPrefix(rows[0], "Short") {
+		t.Errorf("label should be left-aligned at column 0: %q", rows[0])
+	}
+	if !strings.HasPrefix(rows[1], "Much Longer Label") {
+		t.Errorf("label should be left-aligned at column 0: %q", rows[1])
 	}
 }
 

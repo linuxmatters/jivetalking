@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/linuxmatters/jivetalking/internal/processor"
 )
 
@@ -62,6 +64,7 @@ func TestFileCompleteMsgIndexRouting(t *testing.T) {
 func TestUpdateOutOfRangeSafety(t *testing.T) {
 	m := NewModel([]string{"a.wav", "b.wav"})
 	want := append([]FileProgress(nil), m.Files...)
+	wantMeters := append([]meterState(nil), m.meters...)
 
 	indices := []int{-1, len(m.Files)}
 	for _, idx := range indices {
@@ -76,9 +79,37 @@ func TestUpdateOutOfRangeSafety(t *testing.T) {
 			t.Errorf("Files[%d] changed after out-of-range messages: got %+v, want %+v", i, m.Files[i], want[i])
 		}
 	}
+	for i := range wantMeters {
+		if m.meters[i] != wantMeters[i] {
+			t.Errorf("meters[%d] changed after out-of-range messages: got %+v, want %+v", i, m.meters[i], wantMeters[i])
+		}
+	}
 	if m.CompletedFiles != 0 || m.FailedFiles != 0 {
 		t.Errorf("counts changed: completed=%d failed=%d, want 0/0", m.CompletedFiles, m.FailedFiles)
 	}
+}
+
+func TestWindowSizeMsgPreservesRoutedFiles(t *testing.T) {
+	m := NewModel([]string{"a.wav", "b.wav"})
+
+	// Route progress before any resize: the seeded default width makes ViewAs safe.
+	updated, _ := m.Update(ProgressMsg{FileIndex: 0, Pass: processor.PassProcessing, Progress: 0.5})
+	m = updated.(Model)
+	want := append([]FileProgress(nil), m.Files...)
+	_ = m.progress.ViewAs(m.Files[0].Progress)
+
+	updated, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+
+	if m.Width != 120 || m.Height != 40 {
+		t.Errorf("dimensions not stored: Width=%d Height=%d, want 120/40", m.Width, m.Height)
+	}
+	for i := range want {
+		if m.Files[i] != want[i] {
+			t.Errorf("Files[%d] changed after WindowSizeMsg: got %+v, want %+v", i, m.Files[i], want[i])
+		}
+	}
+	_ = m.progress.ViewAs(m.Files[0].Progress)
 }
 
 func TestRenderOverallProgressFooter(t *testing.T) {
@@ -105,5 +136,76 @@ func TestRenderOverallProgressFooter(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(footer), "file 3 of") || strings.Contains(strings.ToLower(footer), "of 3") {
 		t.Errorf("footer must not contain a 'file N of M' cursor: %q", footer)
+	}
+}
+
+func TestInitStartsMeterTick(t *testing.T) {
+	m := NewModel([]string{"a.wav"})
+
+	cmd := m.Init()
+	if cmd == nil {
+		t.Fatal("Init() returned nil cmd, want a meter tick cmd")
+	}
+	if _, ok := cmd().(meterTickMsg); !ok {
+		t.Errorf("Init() cmd yielded %T, want meterTickMsg", cmd())
+	}
+}
+
+func TestMeterTickStepsSpringWithoutMutatingRoutedFields(t *testing.T) {
+	m := NewModel([]string{"a.wav"})
+
+	// Make the file active and give the meter a target above its start floor.
+	updated, _ := m.Update(ProgressMsg{FileIndex: 0, Pass: processor.PassProcessing, Progress: 0.5, Level: -12})
+	m = updated.(Model)
+
+	wantProgress := m.Files[0].Progress
+	wantStatus := m.Files[0].Status
+	startPos := m.meters[0].pos
+	target := m.Files[0].CurrentLevel
+
+	updated, cmd := m.Update(meterTickMsg{})
+	m = updated.(Model)
+
+	if cmd == nil {
+		t.Error("meterTickMsg returned nil cmd while a file is active, want re-scheduled tick")
+	}
+	// Eased: the meter moves toward the target but must not snap to it.
+	if m.meters[0].pos <= startPos {
+		t.Errorf("meters[0].pos = %v, want > start %v (should ease toward target)", m.meters[0].pos, startPos)
+	}
+	if m.meters[0].pos >= target {
+		t.Errorf("meters[0].pos = %v, want < target %v (must be eased, not instantaneous)", m.meters[0].pos, target)
+	}
+	// Routed data contract must stay untouched by presentation-only stepping.
+	if m.Files[0].Progress != wantProgress {
+		t.Errorf("Files[0].Progress = %v, want unchanged %v", m.Files[0].Progress, wantProgress)
+	}
+	if m.Files[0].Status != wantStatus {
+		t.Errorf("Files[0].Status = %v, want unchanged %v", m.Files[0].Status, wantStatus)
+	}
+}
+
+func TestMeterTickStopsAfterAllComplete(t *testing.T) {
+	m := NewModel([]string{"a.wav"})
+
+	// Activate the file so a tick would normally re-schedule.
+	updated, _ := m.Update(ProgressMsg{FileIndex: 0, Pass: processor.PassProcessing, Progress: 0.5, Level: -12})
+	m = updated.(Model)
+
+	updated, _ = m.Update(AllCompleteMsg{})
+	m = updated.(Model)
+	if !m.Done {
+		t.Fatal("AllCompleteMsg did not set m.Done")
+	}
+	posBefore := m.meters[0].pos
+
+	updated, cmd := m.Update(meterTickMsg{})
+	m = updated.(Model)
+
+	if cmd != nil {
+		t.Error("meterTickMsg returned non-nil cmd after m.Done, want loop termination")
+	}
+	if m.meters[0].pos != posBefore {
+		t.Errorf("meters[0].pos = %v, want unchanged %v after Done", m.meters[0].pos, posBefore)
 	}
 }

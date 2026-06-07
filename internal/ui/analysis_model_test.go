@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 )
 
@@ -23,6 +24,26 @@ func TestAnalysisProgressMsgIndexRouting(t *testing.T) {
 	if m.Files[0] != before {
 		t.Errorf("Files[0] changed: got %+v, want %+v", m.Files[0], before)
 	}
+}
+
+func TestAnalysisWindowSizeMsgPreservesRoutedFiles(t *testing.T) {
+	m := NewAnalysisModel([]string{"a.wav", "b.wav"})
+
+	// Route progress before any resize: the seeded default width makes ViewAs safe.
+	updated, _ := m.Update(AnalysisProgressMsg{FileIndex: 1, Progress: 0.75, Level: -12.5})
+	m = updated.(AnalysisModel)
+	want := append([]analysisFileState(nil), m.Files...)
+	_ = m.progress.ViewAs(m.Files[1].Progress)
+
+	updated, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(AnalysisModel)
+
+	for i := range want {
+		if m.Files[i] != want[i] {
+			t.Errorf("Files[%d] changed after WindowSizeMsg: got %+v, want %+v", i, m.Files[i], want[i])
+		}
+	}
+	_ = m.progress.ViewAs(m.Files[1].Progress)
 }
 
 func TestAnalysisCompleteMsgCounts(t *testing.T) {
@@ -80,6 +101,50 @@ func TestAnalysisQuitOnlyOnAllComplete(t *testing.T) {
 	}
 	if !m.Done {
 		t.Error("Done = false after AllCompleteMsg, want true")
+	}
+}
+
+func TestAnalysisInitStartsSpinner(t *testing.T) {
+	m := NewAnalysisModel([]string{"a.wav"})
+
+	cmd := m.Init()
+	if cmd == nil {
+		t.Fatal("Init returned nil cmd, want spinner tick cmd")
+	}
+	if isQuitCmd(cmd) {
+		t.Error("Init returned a quit cmd, want non-quit spinner tick")
+	}
+	if _, ok := cmd().(spinner.TickMsg); !ok {
+		t.Errorf("Init cmd yielded %T, want spinner.TickMsg", cmd())
+	}
+}
+
+func TestAnalysisSpinnerTickAdvancesWithoutQuitting(t *testing.T) {
+	m := NewAnalysisModel([]string{"a.wav"})
+	before := m.spinner.View()
+	files := append([]analysisFileState(nil), m.Files...)
+
+	// A zero-value TickMsg (ID 0, tag 0) is accepted by the spinner and
+	// advances one frame, returning a follow-up tick cmd.
+	updated, cmd := m.Update(spinner.TickMsg{})
+	m = updated.(AnalysisModel)
+
+	if isQuitCmd(cmd) {
+		t.Error("spinner.TickMsg returned a quit cmd, want non-quit follow-up tick")
+	}
+	if cmd == nil {
+		t.Error("spinner.TickMsg returned nil cmd, want follow-up tick")
+	}
+	if m.spinner.View() == before {
+		t.Errorf("spinner view unchanged after tick: %q", before)
+	}
+	for i := range files {
+		if m.Files[i] != files[i] {
+			t.Errorf("Files[%d] changed on spinner tick: got %+v, want %+v", i, m.Files[i], files[i])
+		}
+	}
+	if m.Done {
+		t.Error("Done = true after spinner tick, want false")
 	}
 }
 

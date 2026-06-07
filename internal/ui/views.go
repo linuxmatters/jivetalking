@@ -2,10 +2,13 @@ package ui
 
 import (
 	"fmt"
+	"image/color"
 	"path/filepath"
 	"strings"
 
+	"charm.land/bubbles/v2/progress"
 	"charm.land/lipgloss/v2"
+	"github.com/linuxmatters/jivetalking/internal/cli"
 	"github.com/linuxmatters/jivetalking/internal/processor"
 )
 
@@ -18,7 +21,7 @@ func renderProcessingView(m Model) string {
 	b.WriteString("\n\n")
 
 	// File queue
-	b.WriteString(renderFileQueue(m))
+	b.WriteString(renderFileQueue(m, m.progress))
 	b.WriteString("\n\n")
 
 	// Overall progress
@@ -31,11 +34,11 @@ func renderProcessingView(m Model) string {
 func renderHeader(m Model) string {
 	title := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("#A40000")).
+		Foreground(cli.ColorRed).
 		Render("Jivetalking 🕺")
 
 	subtitle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#888888")).
+		Foreground(cli.ColorMuted).
 		Italic(true).
 		Render(fmt.Sprintf("Processing %d file(s)", m.TotalFiles))
 
@@ -43,11 +46,17 @@ func renderHeader(m Model) string {
 }
 
 // renderFileQueue renders the list of files with their status
-func renderFileQueue(m Model) string {
+func renderFileQueue(m Model, prog progress.Model) string {
 	var b strings.Builder
 
-	for _, file := range m.Files {
-		b.WriteString(renderFileEntry(file))
+	for i := range m.Files {
+		// Use the eased meter position for the active level display; fall back
+		// to the raw level when no meter slot exists.
+		easedLevel := m.Files[i].CurrentLevel
+		if i < len(m.meters) {
+			easedLevel = m.meters[i].pos
+		}
+		b.WriteString(renderFileEntry(m.Files[i], prog, easedLevel))
 		b.WriteString("\n")
 	}
 
@@ -55,13 +64,13 @@ func renderFileQueue(m Model) string {
 }
 
 // renderFileEntry renders a single file entry in the queue
-func renderFileEntry(file FileProgress) string {
+func renderFileEntry(file FileProgress, prog progress.Model, easedLevel float64) string {
 	fileName := filepath.Base(file.InputPath)
 
 	switch file.Status {
 	case StatusComplete:
 		// 🗸 completed file with summary
-		icon := lipgloss.NewStyle().Foreground(lipgloss.Color("#00AA00")).Render("🗸")
+		icon := lipgloss.NewStyle().Foreground(cli.ColorGreen).Render("🗸")
 		delta := file.OutputLUFS - file.InputLUFS
 		summary := fmt.Sprintf("Input: %.1f LUFS | Output: %.1f LUFS | Δ %+.1f dB",
 			file.InputLUFS, file.OutputLUFS, delta)
@@ -69,28 +78,29 @@ func renderFileEntry(file FileProgress) string {
 
 	case StatusAnalyzing, StatusProcessing, StatusNormalising:
 		// 🞽 active file with detailed progress
-		icon := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFA500")).Render("🞽")
+		icon := lipgloss.NewStyle().Foreground(cli.ColorOrange).Render("🞽")
 		return fmt.Sprintf(" %s %s\n%s",
 			icon, fileName,
-			renderFileDetails(file))
+			renderFileDetails(file, prog, easedLevel))
 
 	case StatusError:
 		// ✗ failed file
-		icon := lipgloss.NewStyle().Foreground(lipgloss.Color("#A40000")).Render("✗")
+		icon := lipgloss.NewStyle().Foreground(cli.ColorRed).Render("✗")
 		return fmt.Sprintf(" %s %s\n   Error: %v", icon, fileName, file.Error)
 
 	default:
 		// ⧗ queued file
-		icon := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")).Render("⧗")
+		icon := lipgloss.NewStyle().Foreground(cli.ColorMuted).Render("⧗")
 		return fmt.Sprintf(" %s %s\n   Queued...", icon, fileName)
 	}
 }
 
-// renderFileDetails renders detailed progress for the active file
-func renderFileDetails(file FileProgress) string {
+// renderFileDetails renders detailed progress for the active file. easedLevel is
+// the spring-smoothed audio level used for the meter display.
+func renderFileDetails(file FileProgress, prog progress.Model, easedLevel float64) string {
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#A40000")).
+		BorderForeground(cli.ColorRed).
 		Padding(0, 1)
 
 	var content strings.Builder
@@ -112,7 +122,7 @@ func renderFileDetails(file FileProgress) string {
 	fmt.Fprintf(&content, "Pass %d/4: %s\n", file.CurrentPass, passName)
 
 	// Progress bar
-	content.WriteString(renderProgressBar(file.Progress, 40))
+	content.WriteString(prog.ViewAs(file.Progress))
 	content.WriteString("\n\n")
 
 	// Time estimates
@@ -123,24 +133,14 @@ func renderFileDetails(file FileProgress) string {
 	}
 	fmt.Fprintf(&content, "✇ Elapsed: %.1fs | Remaining: ~%.1fs\n", elapsed, remaining)
 
-	// Audio level visualization
+	// Audio level visualization. The displayed level eases toward the target
+	// via the spring; the peak marker stays driven by the measured peak.
 	if file.CurrentLevel != 0 {
 		content.WriteString("\n")
-		content.WriteString(renderAudioLevelMeter(file.CurrentLevel, file.PeakLevel))
+		content.WriteString(renderAudioLevelMeter(easedLevel, file.PeakLevel))
 	}
 
 	return box.Render(content.String())
-}
-
-// renderProgressBar renders a progress bar
-func renderProgressBar(progress float64, width int) string {
-	filled := int(progress * float64(width))
-	empty := width - filled
-
-	bar := strings.Repeat("█", filled) + strings.Repeat("░", empty)
-	percentage := int(progress * 100)
-
-	return fmt.Sprintf("%s %d%%", bar, percentage)
 }
 
 // renderAudioLevelMeter renders a live audio level meter with dB visualization
@@ -170,44 +170,58 @@ func renderAudioLevelMeter(currentLevel, peakLevel float64) string {
 	greenZone := int((((-16.0) - minDB) / (maxDB - minDB)) * float64(width))
 	orangeZone := int((((-6.0) - minDB) / (maxDB - minDB)) * float64(width))
 
-	// Build meter character by character with appropriate colors
-	// Using ANSI color codes directly to avoid lipgloss width calculation issues
-	greenColor := "\033[38;2;0;170;0m"    // #00AA00
-	orangeColor := "\033[38;2;255;165;0m" // #FFA500
-	redColor := "\033[38;2;164;0;0m"      // #A40000
-	resetColor := "\033[0m"
+	// Zone colours sourced from the centralised palette.
+	greenColor := cli.ColorGreen
+	orangeColor := cli.ColorOrange
+	redColor := cli.ColorRed
 
-	for i := range width {
-		// Determine color zone
-		var color string
+	zoneColor := func(i int) color.Color {
 		switch {
 		case i < greenZone:
-			color = greenColor
+			return greenColor
 		case i < orangeZone:
-			color = orangeColor
+			return orangeColor
 		default:
-			color = redColor
+			return redColor
 		}
+	}
 
-		// Determine character
-		var char rune
+	meterChar := func(i int) rune {
 		switch {
 		case i == peakPos && i > currentPos:
 			// Show peak marker only if it's ahead of current position
-			char = '|'
+			return '|'
 		case i < currentPos:
-			char = '▓' // Filled
+			return '▓' // Filled
 		case i == currentPos && currentPos == peakPos:
 			// When current level is at peak, show filled bar
-			char = '▓'
+			return '▓'
 		default:
-			char = '░' // Empty
+			return '░' // Empty
 		}
-
-		b.WriteString(color)
-		b.WriteRune(char)
 	}
-	b.WriteString(resetColor)
+
+	// Build contiguous same-colour runs and style each as one segment so
+	// lipgloss emits a single colour sequence per run rather than per rune.
+	var run strings.Builder
+	var runColor color.Color
+	flush := func() {
+		if run.Len() == 0 {
+			return
+		}
+		b.WriteString(lipgloss.NewStyle().Foreground(runColor).Render(run.String()))
+		run.Reset()
+	}
+
+	for i := range width {
+		color := zoneColor(i)
+		if run.Len() > 0 && color != runColor {
+			flush()
+		}
+		runColor = color
+		run.WriteRune(meterChar(i))
+	}
+	flush()
 
 	return b.String()
 }
@@ -216,7 +230,7 @@ func renderAudioLevelMeter(currentLevel, peakLevel float64) string {
 func renderOverallProgress(m Model) string {
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#888888")).
+		BorderForeground(cli.ColorMuted).
 		Padding(0, 1)
 
 	content := fmt.Sprintf("Processing %d files, %d complete, %d failed",
@@ -232,7 +246,7 @@ func renderCompletionSummary(m Model) string {
 	// Completion header
 	header := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("#00AA00")).
+		Foreground(cli.ColorGreen).
 		Render("✨ Processing Complete!")
 	b.WriteString(header)
 	b.WriteString("\n\n")
@@ -260,7 +274,7 @@ func renderCompletedFile(file FileProgress) string {
 	fileName := filepath.Base(file.InputPath)
 	outputName := filepath.Base(file.OutputPath)
 
-	icon := lipgloss.NewStyle().Foreground(lipgloss.Color("#00AA00")).Render("✓")
+	icon := lipgloss.NewStyle().Foreground(cli.ColorGreen).Render("✓")
 
 	quality := "★★★★★" // Always 5 stars
 

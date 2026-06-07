@@ -2,39 +2,41 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"charm.land/lipgloss/v2"
 	"github.com/alecthomas/kong"
+	"github.com/charmbracelet/colorprofile"
 )
 
 // Custom help styles
 var (
 	helpTitleStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#A40000")).
+			Foreground(ColorRed).
 			MarginBottom(1)
 
 	helpDescStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FFA500")).
+			Foreground(ColorOrange).
 			Italic(true).
 			MarginBottom(1)
 
 	helpSectionStyle = lipgloss.NewStyle().
 				Bold(true).
-				Foreground(lipgloss.Color("#FFA500")).
+				Foreground(ColorOrange).
 				MarginTop(1)
 
 	helpFlagStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#00AA00")).
+			Foreground(ColorGreen).
 			Bold(true)
 
 	helpArgStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#00AAAA")).
+			Foreground(ColorCyan).
 			Bold(true)
 
 	helpDefaultStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#888888")).
+				Foreground(ColorMuted).
 				Italic(true)
 )
 
@@ -94,7 +96,7 @@ func StyledHelpPrinter(options kong.HelpOptions) func(options kong.HelpOptions, 
 		}
 
 		sb.WriteString("\n")
-		fmt.Fprint(ctx.Stdout, sb.String())
+		fmt.Fprint(colorprofile.NewWriter(ctx.Stdout, os.Environ()), sb.String())
 		return nil
 	}
 }

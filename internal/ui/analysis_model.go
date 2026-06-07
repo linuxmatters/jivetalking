@@ -6,13 +6,19 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/progress"
+	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/linuxmatters/jivetalking/internal/cli"
 	"github.com/linuxmatters/jivetalking/internal/processor"
 )
 
-// Spinner frames for indeterminate progress
-var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+import (
+	// Temporary anchor import (Task 1.1): keep harmonica a direct require until
+	// Phase 4 consumes it. Remove this block when Phase 4 wires harmonica.
+	_ "github.com/charmbracelet/harmonica"
+)
 
 // analysisFileState tracks analysis progress and results for a single file
 type analysisFileState struct {
@@ -37,7 +43,10 @@ type AnalysisModel struct {
 	Done      bool
 
 	// Spinner state
-	spinnerIndex int
+	spinner spinner.Model
+
+	// Progress bar (owned by Update; rendered via ViewAs)
+	progress progress.Model
 
 	// Terminal dimensions
 	Width  int
@@ -67,9 +76,6 @@ type AnalysisCompleteMsg struct {
 	Error        error
 }
 
-// tickMsg is sent for spinner/timer animation
-type tickMsg time.Time
-
 // NewAnalysisModel creates a new analysis UI model with the given input files
 func NewAnalysisModel(files []string) AnalysisModel {
 	states := make([]analysisFileState, len(files))
@@ -83,19 +89,14 @@ func NewAnalysisModel(files []string) AnalysisModel {
 		Files:      states,
 		TotalFiles: len(files),
 		StartTime:  time.Now(),
+		spinner:    spinner.New(),
+		progress:   newProgressModel(),
 	}
 }
 
 // Init initializes the model
 func (m AnalysisModel) Init() tea.Cmd {
-	return tickCmd()
-}
-
-// tickCmd returns a command that sends a tick message every 100ms
-func tickCmd() tea.Cmd {
-	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
-		return tickMsg(t)
-	})
+	return m.spinner.Tick
 }
 
 // Update handles messages and updates the model
@@ -110,14 +111,14 @@ func (m AnalysisModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.Width = msg.Width
 		m.Height = msg.Height
-
-	case tickMsg:
-		if !m.Done {
-			// Advance spinner
-			m.spinnerIndex = (m.spinnerIndex + 1) % len(spinnerFrames)
-			return m, tickCmd()
+		if msg.Width > 0 {
+			m.progress.SetWidth(progressWidthFor(msg.Width, analysisBarOverhead))
 		}
-		return m, nil
+
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
 
 	case AnalysisStartMsg:
 		if msg.FileIndex >= 0 && msg.FileIndex < len(m.Files) {
@@ -165,11 +166,11 @@ func (m AnalysisModel) View() tea.View {
 	// Header
 	title := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("#A40000")).
+		Foreground(cli.ColorRed).
 		Render("Jivetalking")
 
 	subtitle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#888888")).
+		Foreground(cli.ColorMuted).
 		Italic(true).
 		Render("Analysis Mode")
 
@@ -182,12 +183,12 @@ func (m AnalysisModel) View() tea.View {
 	}
 
 	fileStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#FFFFFF")).
+		Foreground(cli.ColorText).
 		Bold(true)
-	spinnerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#A40000"))
-	doneStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#00AA00"))
-	errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#A40000"))
-	spinner := spinnerStyle.Render(spinnerFrames[m.spinnerIndex])
+	spinnerStyle := lipgloss.NewStyle().Foreground(cli.ColorRed)
+	doneStyle := lipgloss.NewStyle().Foreground(cli.ColorGreen)
+	errorStyle := lipgloss.NewStyle().Foreground(cli.ColorRed)
+	spinnerView := spinnerStyle.Render(m.spinner.View())
 	elapsed := time.Since(m.StartTime)
 
 	for i := range m.Files {
@@ -201,8 +202,8 @@ func (m AnalysisModel) View() tea.View {
 			icon := doneStyle.Render("🗸")
 			fmt.Fprintf(&b, " %s %s\n   Analysed\n", icon, fileStyle.Render(f.FileName))
 		default:
-			fmt.Fprintf(&b, " %s %s\n", spinner, fileStyle.Render(f.FileName))
-			fmt.Fprintf(&b, "   %s\n", renderAnalysisProgressBar(f.Progress, 40, elapsed))
+			fmt.Fprintf(&b, " %s %s\n", spinnerView, fileStyle.Render(f.FileName))
+			fmt.Fprintf(&b, "   %s [%s]\n", m.progress.ViewAs(f.Progress), formatElapsed(elapsed))
 			if f.Level != 0 {
 				fmt.Fprintf(&b, "   Level: %.1f dB\n", f.Level)
 			}
@@ -213,30 +214,13 @@ func (m AnalysisModel) View() tea.View {
 
 	footer := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#888888")).
+		BorderForeground(cli.ColorMuted).
 		Padding(0, 1).
 		Render(fmt.Sprintf("Analysing %d files, %d complete, %d failed",
 			m.TotalFiles, m.CompletedFiles, m.FailedFiles))
 	b.WriteString(footer)
 
 	return tea.NewView(b.String())
-}
-
-// renderAnalysisProgressBar renders a progress bar with percentage and elapsed time
-func renderAnalysisProgressBar(progress float64, width int, elapsed time.Duration) string {
-	filled := int(progress * float64(width))
-	empty := width - filled
-
-	// Use Unicode box drawing characters for a cleaner look
-	filledStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#A40000"))
-	emptyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#444444"))
-
-	bar := filledStyle.Render(strings.Repeat("━", filled)) +
-		emptyStyle.Render(strings.Repeat("━", empty))
-
-	percentage := int(progress * 100)
-
-	return fmt.Sprintf("%s %3d%% [%s]", bar, percentage, formatElapsed(elapsed))
 }
 
 // formatElapsed formats elapsed time as MM:SS or HH:MM:SS

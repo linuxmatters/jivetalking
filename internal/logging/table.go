@@ -7,7 +7,9 @@ package logging
 import (
 	"fmt"
 	"math"
-	"strings"
+
+	"charm.land/lipgloss/v2"
+	"charm.land/lipgloss/v2/table"
 )
 
 // MetricRow represents a single row in a comparison table.
@@ -36,93 +38,82 @@ func (t *MetricTable) String() string {
 		return ""
 	}
 
-	// Determine if we need an interpretation column
+	// Determine whether optional unit/interpretation columns are needed.
+	hasUnit := false
 	hasInterpretation := false
 	for _, row := range t.Rows {
+		if row.Unit != "" {
+			hasUnit = true
+		}
 		if row.Interpretation != "" {
 			hasInterpretation = true
-			break
 		}
 	}
 
-	// Calculate column widths
-	// Column 0: Label
-	// Columns 1-N: Values (one per header)
-	// Column N+1: Unit (if any rows have units)
-	// Column N+2: Interpretation (if any rows have interpretations)
-
-	labelWidth := 0
-	for _, row := range t.Rows {
-		if len(row.Label) > labelWidth {
-			labelWidth = len(row.Label)
-		}
-	}
-
-	// Value column widths (one per header)
-	valueWidths := make([]int, len(t.Headers))
-	for i, header := range t.Headers {
-		valueWidths[i] = len(header) // Start with header width
-	}
-	for _, row := range t.Rows {
-		for i, val := range row.Values {
-			if i < len(valueWidths) && len(val) > valueWidths[i] {
-				valueWidths[i] = len(val)
-			}
-		}
-	}
-
-	// Unit width (find max unit length)
-	unitWidth := 0
-	for _, row := range t.Rows {
-		if len(row.Unit) > unitWidth {
-			unitWidth = len(row.Unit)
-		}
-	}
-
-	// Build output
-	var sb strings.Builder
-
-	// Header row
-	sb.WriteString(strings.Repeat(" ", labelWidth+2)) // Label column + gap
-	for i, header := range t.Headers {
-		fmt.Fprintf(&sb, "%*s  ", valueWidths[i], header)
-	}
-	if unitWidth > 0 {
-		sb.WriteString(strings.Repeat(" ", unitWidth+1)) // Unit column placeholder
+	// Column layout:
+	//   col 0          : Label (left-aligned)
+	//   col 1..N       : value columns, one per header (right-aligned)
+	//   col N+1        : Unit (left-aligned, present only if hasUnit)
+	//   col N+2        : Interpretation (left-aligned, present only if hasInterpretation)
+	valueCols := len(t.Headers)
+	unitCol := -1
+	interpCol := -1
+	nextCol := 1 + valueCols
+	if hasUnit {
+		unitCol = nextCol
+		nextCol++
 	}
 	if hasInterpretation {
-		sb.WriteString("Interpretation")
+		interpCol = nextCol
 	}
-	sb.WriteString("\n")
 
-	// Data rows
+	headers := make([]string, 0, nextCol)
+	headers = append(headers, "")
+	headers = append(headers, t.Headers...)
+	if hasUnit {
+		headers = append(headers, "")
+	}
+	if hasInterpretation {
+		headers = append(headers, "Interpretation")
+	}
+
+	tbl := table.New().
+		Border(lipgloss.HiddenBorder()).
+		BorderTop(false).
+		BorderBottom(false).
+		BorderLeft(false).
+		BorderRight(false).
+		BorderColumn(false).
+		BorderRow(false).
+		Headers(headers...).
+		StyleFunc(func(_, col int) lipgloss.Style {
+			style := lipgloss.NewStyle().PaddingRight(2)
+			if col >= 1 && col <= valueCols {
+				return style.Align(lipgloss.Right)
+			}
+			return style.Align(lipgloss.Left)
+		})
+
 	for _, row := range t.Rows {
-		// Label (left-aligned)
-		fmt.Fprintf(&sb, "%-*s  ", labelWidth, row.Label)
-
-		// Values (right-aligned within their columns)
-		for i := 0; i < len(t.Headers); i++ {
-			val := "-" // Default for missing values
+		cells := make([]string, 0, nextCol)
+		cells = append(cells, row.Label)
+		for i := range valueCols {
+			val := MissingValue
 			if i < len(row.Values) && row.Values[i] != "" {
 				val = row.Values[i]
 			}
-			fmt.Fprintf(&sb, "%*s  ", valueWidths[i], val)
+			cells = append(cells, val)
 		}
-
-		// Unit (left-aligned, after values)
-		if unitWidth > 0 {
-			fmt.Fprintf(&sb, "%-*s ", unitWidth, row.Unit)
+		if unitCol >= 0 {
+			cells = append(cells, row.Unit)
 		}
-
-		// Interpretation (left-aligned, if present)
-		if hasInterpretation {
-			sb.WriteString(row.Interpretation)
+		if interpCol >= 0 {
+			cells = append(cells, row.Interpretation)
 		}
-
-		sb.WriteString("\n")
+		tbl.Row(cells...)
 	}
 
-	return sb.String()
+	return fmt.Sprintf("%s\n", tbl.Render())
 }
 
 // =============================================================================
