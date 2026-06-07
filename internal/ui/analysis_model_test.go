@@ -2,11 +2,19 @@ package ui
 
 import (
 	"errors"
+	"regexp"
+	"strings"
 	"testing"
 
-	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 )
+
+// ansiRE strips ANSI escape sequences so view assertions match on plain text.
+var ansiRE = regexp.MustCompile("\x1b\\[[0-9;]*m")
+
+func stripANSI(s string) string {
+	return ansiRE.ReplaceAllString(s, "")
+}
 
 func TestAnalysisProgressMsgIndexRouting(t *testing.T) {
 	m := NewAnalysisModel([]string{"a.wav", "b.wav"})
@@ -104,47 +112,89 @@ func TestAnalysisQuitOnlyOnAllComplete(t *testing.T) {
 	}
 }
 
-func TestAnalysisInitStartsSpinner(t *testing.T) {
+func TestAnalysisInitReturnsNil(t *testing.T) {
 	m := NewAnalysisModel([]string{"a.wav"})
 
-	cmd := m.Init()
-	if cmd == nil {
-		t.Fatal("Init returned nil cmd, want spinner tick cmd")
-	}
-	if isQuitCmd(cmd) {
-		t.Error("Init returned a quit cmd, want non-quit spinner tick")
-	}
-	if _, ok := cmd().(spinner.TickMsg); !ok {
-		t.Errorf("Init cmd yielded %T, want spinner.TickMsg", cmd())
+	if cmd := m.Init(); cmd != nil {
+		t.Errorf("Init returned non-nil cmd %T, want nil (spinner removed)", cmd())
 	}
 }
 
-func TestAnalysisSpinnerTickAdvancesWithoutQuitting(t *testing.T) {
+// Without a spinner tick loop, re-renders are driven by progress/complete
+// messages. Confirm those still update state and the rendered view.
+func TestAnalysisMessagesDriveViewWithoutSpinner(t *testing.T) {
 	m := NewAnalysisModel([]string{"a.wav"})
-	before := m.spinner.View()
-	files := append([]analysisFileState(nil), m.Files...)
-
-	// A zero-value TickMsg (ID 0, tag 0) is accepted by the spinner and
-	// advances one frame, returning a follow-up tick cmd.
-	updated, cmd := m.Update(spinner.TickMsg{})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = updated.(AnalysisModel)
 
-	if isQuitCmd(cmd) {
-		t.Error("spinner.TickMsg returned a quit cmd, want non-quit follow-up tick")
+	updated, _ = m.Update(AnalysisProgressMsg{FileIndex: 0, Progress: 0.5, Level: -12.5})
+	m = updated.(AnalysisModel)
+	if m.Files[0].Progress != 0.5 || m.Files[0].Level != -12.5 {
+		t.Errorf("progress msg did not update state: %+v", m.Files[0])
 	}
-	if cmd == nil {
-		t.Error("spinner.TickMsg returned nil cmd, want follow-up tick")
+
+	view := stripANSI(m.View().Content)
+	if !strings.Contains(view, "∿") {
+		t.Errorf("active row missing orange wave glyph ∿:\n%s", view)
 	}
-	if m.spinner.View() == before {
-		t.Errorf("spinner view unchanged after tick: %q", before)
+	if !strings.Contains(view, "Level: -12.5 ㏈") {
+		t.Errorf("level line missing ㏈ unit:\n%s", view)
 	}
-	for i := range files {
-		if m.Files[i] != files[i] {
-			t.Errorf("Files[%d] changed on spinner tick: got %+v, want %+v", i, m.Files[i], files[i])
-		}
+
+	updated, _ = m.Update(AnalysisCompleteMsg{FileIndex: 0})
+	m = updated.(AnalysisModel)
+	if !m.Files[0].Done {
+		t.Error("complete msg did not mark file done")
 	}
-	if m.Done {
-		t.Error("Done = true after spinner tick, want false")
+	view = stripANSI(m.View().Content)
+	if !strings.Contains(view, "Analysed") {
+		t.Errorf("completed row missing 'Analysed':\n%s", view)
+	}
+}
+
+// TestAnalysisViewLayout checks the header gradient title, absent subtitle, and
+// status box ordering above the file list.
+func TestAnalysisViewLayout(t *testing.T) {
+	m := NewAnalysisModel([]string{"a.wav", "b.wav", "c.wav"})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(AnalysisModel)
+
+	// a.wav active with a level; b.wav done; c.wav errored.
+	updated, _ = m.Update(AnalysisProgressMsg{FileIndex: 0, Progress: 0.4, Level: -9.0})
+	m = updated.(AnalysisModel)
+	updated, _ = m.Update(AnalysisCompleteMsg{FileIndex: 1})
+	m = updated.(AnalysisModel)
+	updated, _ = m.Update(AnalysisCompleteMsg{FileIndex: 2, Error: errors.New("boom")})
+	m = updated.(AnalysisModel)
+
+	view := stripANSI(m.View().Content)
+
+	if !strings.Contains(view, "Jivetalking") {
+		t.Errorf("view missing gradient title 'Jivetalking':\n%s", view)
+	}
+	if strings.Contains(view, "Analysis Mode") {
+		t.Errorf("view still contains dropped subtitle 'Analysis Mode':\n%s", view)
+	}
+
+	boxIdx := strings.Index(view, "Analysing")
+	listIdx := strings.Index(view, "a.wav")
+	if boxIdx < 0 {
+		t.Fatalf("status box text not found:\n%s", view)
+	}
+	if listIdx < 0 {
+		t.Fatalf("file list not found:\n%s", view)
+	}
+	if boxIdx > listIdx {
+		t.Errorf("status box (%d) renders after file list (%d), want before:\n%s", boxIdx, listIdx, view)
+	}
+	if !strings.Contains(view, "∿") {
+		t.Errorf("active row missing ∿ glyph:\n%s", view)
+	}
+	if !strings.Contains(view, "🗸") {
+		t.Errorf("done row missing 🗸 icon:\n%s", view)
+	}
+	if !strings.Contains(view, "✗") {
+		t.Errorf("error row missing ✗ icon:\n%s", view)
 	}
 }
 

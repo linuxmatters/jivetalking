@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/progress"
-	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/linuxmatters/jivetalking/internal/cli"
@@ -35,9 +34,6 @@ type AnalysisModel struct {
 	// Global state
 	StartTime time.Time
 	Done      bool
-
-	// Spinner state
-	spinner spinner.Model
 
 	// Progress bar (owned by Update; rendered via ViewAs)
 	progress progress.Model
@@ -83,14 +79,13 @@ func NewAnalysisModel(files []string) AnalysisModel {
 		Files:      states,
 		TotalFiles: len(files),
 		StartTime:  time.Now(),
-		spinner:    spinner.New(),
 		progress:   newProgressModel(),
 	}
 }
 
 // Init initializes the model
 func (m AnalysisModel) Init() tea.Cmd {
-	return m.spinner.Tick
+	return nil
 }
 
 // Update handles messages and updates the model
@@ -108,11 +103,6 @@ func (m AnalysisModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Width > 0 {
 			m.progress.SetWidth(progressWidthFor(msg.Width, analysisBarOverhead))
 		}
-
-	case spinner.TickMsg:
-		var cmd tea.Cmd
-		m.spinner, cmd = m.spinner.Update(msg)
-		return m, cmd
 
 	case AnalysisStartMsg:
 		if msg.FileIndex >= 0 && msg.FileIndex < len(m.Files) {
@@ -157,18 +147,17 @@ func (m AnalysisModel) View() tea.View {
 
 	var b strings.Builder
 
-	// Header
-	title := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(cli.ColorRed).
-		Render("Jivetalking")
+	// Header (title only), then the status box directly beneath it.
+	b.WriteString(cli.RenderTitle())
+	b.WriteString("\n\n")
 
-	subtitle := lipgloss.NewStyle().
-		Foreground(cli.ColorMuted).
-		Italic(true).
-		Render("Analysis Mode")
-
-	b.WriteString(title + " " + subtitle)
+	statusBox := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(cli.ColorMuted).
+		Padding(0, 1).
+		Render(fmt.Sprintf("Analysing %d files, %d complete, %d failed",
+			m.TotalFiles, m.CompletedFiles, m.FailedFiles))
+	b.WriteString(statusBox)
 	b.WriteString("\n\n")
 
 	if len(m.Files) == 0 {
@@ -179,10 +168,9 @@ func (m AnalysisModel) View() tea.View {
 	fileStyle := lipgloss.NewStyle().
 		Foreground(cli.ColorText).
 		Bold(true)
-	spinnerStyle := lipgloss.NewStyle().Foreground(cli.ColorRed)
+	activeIcon := lipgloss.NewStyle().Foreground(cli.ColorOrange).Render("∿")
 	doneStyle := lipgloss.NewStyle().Foreground(cli.ColorGreen)
 	errorStyle := lipgloss.NewStyle().Foreground(cli.ColorRed)
-	spinnerView := spinnerStyle.Render(m.spinner.View())
 	elapsed := time.Since(m.StartTime)
 
 	for i := range m.Files {
@@ -196,23 +184,15 @@ func (m AnalysisModel) View() tea.View {
 			icon := doneStyle.Render("🗸")
 			fmt.Fprintf(&b, " %s %s\n   Analysed\n", icon, fileStyle.Render(f.FileName))
 		default:
-			fmt.Fprintf(&b, " %s %s\n", spinnerView, fileStyle.Render(f.FileName))
+			fmt.Fprintf(&b, " %s %s\n", activeIcon, fileStyle.Render(f.FileName))
 			fmt.Fprintf(&b, "   %s [%s]\n", m.progress.ViewAs(f.Progress), formatElapsed(elapsed))
 			if f.Level != 0 {
-				fmt.Fprintf(&b, "   Level: %.1f dB\n", f.Level)
+				fmt.Fprintf(&b, "   Level: %.1f ㏈\n", f.Level)
 			}
 		}
 
 		b.WriteString("\n")
 	}
-
-	footer := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(cli.ColorMuted).
-		Padding(0, 1).
-		Render(fmt.Sprintf("Analysing %d files, %d complete, %d failed",
-			m.TotalFiles, m.CompletedFiles, m.FailedFiles))
-	b.WriteString(footer)
 
 	return tea.NewView(b.String())
 }
