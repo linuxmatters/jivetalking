@@ -576,9 +576,10 @@ func collectAnalysisFrames(ctx stdcontext.Context, filename string, config *Base
 		OnFrame: func(_, filteredFrame *ffmpeg.AVFrame) error {
 			metadata := filteredFrame.Metadata()
 			spectral := extractSpectralMetrics(metadata)
+			loudness := extractFrameLoudnessMetrics(metadata)
 
-			extractFrameMetadata(metadata, acc, spectral)
-			intervalAcc.add(extractIntervalFrameMetrics(metadata, spectral))
+			extractFrameMetadata(metadata, acc, spectral, loudness)
+			intervalAcc.add(extractIntervalFrameMetrics(spectral, loudness))
 
 			return nil
 		},

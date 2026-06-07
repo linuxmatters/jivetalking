@@ -664,6 +664,50 @@ type intervalAccumulator struct {
 	samplePeakMax    float64 // Maximum sample peak
 }
 
+// optionalFloat carries a pre-fetched metadata value together with its found
+// flag. fetched=false means the value was not pre-fetched and the consumer must
+// fetch it itself, preserving the original fetch-at-call-site behaviour.
+type optionalFloat struct {
+	value   float64
+	ok      bool
+	fetched bool
+}
+
+// frameLoudnessMetrics holds the ebur128 quad and astats Peak_level fetched
+// once per frame in the Pass 1 OnFrame callback. The same metadata dictionary
+// is consumed by both extractFrameMetadata and extractIntervalFrameMetrics, so
+// these keys are fetched once here and shared to avoid duplicate AVDictGet +
+// ParseFloat work. Each field carries its found flag to reproduce the exact
+// missing-key handling of the original per-consumer fetches: a present value is
+// applied, a missing value is skipped (accumulator) or treated as zero
+// (interval metrics) exactly as before.
+type frameLoudnessMetrics struct {
+	momentary       float64 // lavfi.r128.M (raw)
+	momentaryFound  bool
+	shortTerm       float64 // lavfi.r128.S (raw)
+	shortTermFound  bool
+	truePeak        float64 // lavfi.r128.true_peak (raw, pre-conversion)
+	truePeakFound   bool
+	samplePeak      float64 // lavfi.r128.sample_peak (raw, pre-conversion)
+	samplePeakFound bool
+	peakLevel       float64 // lavfi.astats.1.Peak_level (raw)
+	peakLevelFound  bool
+}
+
+// extractFrameLoudnessMetrics fetches the ebur128 quad and astats Peak_level
+// once from the frame metadata. Raw values match the original getFloatMetadata
+// returns; dB conversion stays at the consumer call sites to preserve exact
+// behaviour.
+func extractFrameLoudnessMetrics(metadata *ffmpeg.AVDictionary) frameLoudnessMetrics {
+	var m frameLoudnessMetrics
+	m.momentary, m.momentaryFound = getFloatMetadata(metadata, metaKeyEbur128M)
+	m.shortTerm, m.shortTermFound = getFloatMetadata(metadata, metaKeyEbur128S)
+	m.truePeak, m.truePeakFound = getFloatMetadata(metadata, metaKeyEbur128TruePeak)
+	m.samplePeak, m.samplePeakFound = getFloatMetadata(metadata, metaKeyEbur128SamplePeak)
+	m.peakLevel, m.peakLevelFound = getFloatMetadata(metadata, metaKeyPeakLevel)
+	return m
+}
+
 // intervalFrameMetrics holds per-frame metrics extracted from FFmpeg metadata.
 // Only includes metrics that are valid per-window (not cumulative astats).
 type intervalFrameMetrics struct {
@@ -965,7 +1009,11 @@ func (b *baseMetadataAccumulators) finalizeSpectral() SpectralMetrics {
 // extractAstatsMetadata extracts all astats measurements from FFmpeg metadata.
 // These are cumulative values, so we keep the latest from each frame.
 // Includes conversions: linearRatioToDB for CrestFactor, linearSampleToDBFS for MinLevel/MaxLevel.
-func (b *baseMetadataAccumulators) extractAstatsMetadata(metadata *ffmpeg.AVDictionary) {
+// peakLevel carries the optional pre-fetched lavfi.astats.1.Peak_level so the
+// Pass 1 hot loop fetches it once and shares it with extractIntervalFrameMetrics.
+// When peakLevel.fetched is false (Pass 2 output path) the value is fetched here
+// as before; the resulting accumulator state is identical either way.
+func (b *baseMetadataAccumulators) extractAstatsMetadata(metadata *ffmpeg.AVDictionary, peakLevel optionalFloat) {
 	if value, ok := getFloatMetadata(metadata, metaKeyDynamicRange); ok {
 		b.astatsDynamicRange = value
 		b.astatsFound = true
@@ -973,8 +1021,11 @@ func (b *baseMetadataAccumulators) extractAstatsMetadata(metadata *ffmpeg.AVDict
 	if value, ok := getFloatMetadata(metadata, metaKeyRMSLevel); ok {
 		b.astatsRMSLevel = value
 	}
-	if value, ok := getFloatMetadata(metadata, metaKeyPeakLevel); ok {
-		b.astatsPeakLevel = value
+	if !peakLevel.fetched {
+		peakLevel.value, peakLevel.ok = getFloatMetadata(metadata, metaKeyPeakLevel)
+	}
+	if peakLevel.ok {
+		b.astatsPeakLevel = peakLevel.value
 	}
 	if value, ok := getFloatMetadata(metadata, metaKeyRMSTrough); ok {
 		b.astatsRMSTrough = value
@@ -1248,25 +1299,29 @@ func extractSpectralMetrics(metadata *ffmpeg.AVDictionary) SpectralMetrics {
 // extractIntervalFrameMetrics extracts per-frame metrics for interval accumulation.
 // Only collects metrics that are valid per-window (aspectralstats, ebur128 windowed).
 // Excludes astats which provides cumulative values, not per-interval.
-func extractIntervalFrameMetrics(metadata *ffmpeg.AVDictionary, spectral SpectralMetrics) intervalFrameMetrics {
+// loudness carries the ebur128 quad and astats Peak_level pre-fetched once in
+// the OnFrame callback (see frameLoudnessMetrics). Missing keys map to the same
+// zero defaults the original per-key fetches produced.
+func extractIntervalFrameMetrics(spectral SpectralMetrics, loudness frameLoudnessMetrics) intervalFrameMetrics {
 	var m intervalFrameMetrics
 
 	// Peak level from astats (used for max tracking, which is valid per-interval)
-	m.PeakLevel, _ = getFloatMetadata(metadata, metaKeyPeakLevel)
+	// Pre-fetched; missing key yields zero, matching the original "_, _" fetch.
+	m.PeakLevel = loudness.peakLevel
 
 	// aspectralstats metrics (valid per-window measurements, pre-extracted by caller)
 	m.Spectral = spectral
 
-	// ebur128 windowed measurements
-	m.MomentaryLUFS, _ = getFloatMetadata(metadata, metaKeyEbur128M)
-	m.ShortTermLUFS, _ = getFloatMetadata(metadata, metaKeyEbur128S)
+	// ebur128 windowed measurements (pre-fetched; missing key yields zero)
+	m.MomentaryLUFS = loudness.momentary
+	m.ShortTermLUFS = loudness.shortTerm
 
 	// ebur128 peak values are linear ratios, convert to dB
-	if rawTP, ok := getFloatMetadata(metadata, metaKeyEbur128TruePeak); ok {
-		m.TruePeak = linearRatioToDB(rawTP)
+	if loudness.truePeakFound {
+		m.TruePeak = linearRatioToDB(loudness.truePeak)
 	}
-	if rawSP, ok := getFloatMetadata(metadata, metaKeyEbur128SamplePeak); ok {
-		m.SamplePeak = linearRatioToDB(rawSP)
+	if loudness.samplePeakFound {
+		m.SamplePeak = linearRatioToDB(loudness.samplePeak)
 	}
 
 	return m
@@ -1275,7 +1330,11 @@ func extractIntervalFrameMetrics(metadata *ffmpeg.AVDictionary, spectral Spectra
 // extractFrameMetadata extracts audio analysis metadata from a filtered frame.
 // Updates accumulators with spectral, astats, and ebur128 measurements.
 // Called from both the main processing loop and the flush loop.
-func extractFrameMetadata(metadata *ffmpeg.AVDictionary, acc *metadataAccumulators, spectral SpectralMetrics) {
+// loudness carries the ebur128 quad and astats Peak_level pre-fetched once in
+// the OnFrame callback so this function and extractIntervalFrameMetrics share a
+// single fetch per key. Each pre-fetched key reproduces the original "set on
+// found, skip on missing" accumulator semantics via its found flag.
+func extractFrameMetadata(metadata *ffmpeg.AVDictionary, acc *metadataAccumulators, spectral SpectralMetrics, loudness frameLoudnessMetrics) {
 	if metadata == nil {
 		return
 	}
@@ -1286,7 +1345,8 @@ func extractFrameMetadata(metadata *ffmpeg.AVDictionary, acc *metadataAccumulato
 
 	// Extract astats measurements (cumulative, so we keep the latest)
 	// For mono audio, stats are under channel .1
-	acc.extractAstatsMetadata(metadata)
+	// Peak_level is pre-fetched in the OnFrame callback and shared here.
+	acc.extractAstatsMetadata(metadata, optionalFloat{value: loudness.peakLevel, ok: loudness.peakLevelFound, fetched: true})
 
 	// Extract ebur128 measurements (cumulative loudness analysis)
 	// ebur128 provides: M (momentary 400ms), S (short-term 3s), I (integrated), LRA, sample_peak, true_peak
@@ -1297,21 +1357,21 @@ func extractFrameMetadata(metadata *ffmpeg.AVDictionary, acc *metadataAccumulato
 	}
 
 	// Momentary loudness (400ms window) - useful for interval-based silence detection
-	if value, ok := getFloatMetadata(metadata, metaKeyEbur128M); ok {
-		acc.ebur128InputM = value
+	if loudness.momentaryFound {
+		acc.ebur128InputM = loudness.momentary
 	}
 
 	// Short-term loudness (3s window)
-	if value, ok := getFloatMetadata(metadata, metaKeyEbur128S); ok {
-		acc.ebur128InputS = value
+	if loudness.shortTermFound {
+		acc.ebur128InputS = loudness.shortTerm
 	}
 
-	if value, ok := getFloatMetadata(metadata, metaKeyEbur128TruePeak); ok {
-		acc.ebur128InputTP = linearRatioToDB(value)
+	if loudness.truePeakFound {
+		acc.ebur128InputTP = linearRatioToDB(loudness.truePeak)
 	}
 
-	if value, ok := getFloatMetadata(metadata, metaKeyEbur128SamplePeak); ok {
-		acc.ebur128InputSP = linearRatioToDB(value)
+	if loudness.samplePeakFound {
+		acc.ebur128InputSP = linearRatioToDB(loudness.samplePeak)
 	}
 
 	if value, ok := getFloatMetadata(metadata, metaKeyEbur128LRA); ok {
@@ -1349,7 +1409,8 @@ func extractOutputFrameMetadata(metadata *ffmpeg.AVDictionary, acc *outputMetada
 	acc.accumulateSpectral(extractSpectralMetrics(metadata))
 
 	// Extract astats measurements (cumulative, so we keep the latest)
-	acc.extractAstatsMetadata(metadata)
+	// Peak_level is not pre-fetched on the output path; extractAstatsMetadata fetches it.
+	acc.extractAstatsMetadata(metadata, optionalFloat{})
 
 	// Extract ebur128 measurements
 	if value, ok := getFloatMetadata(metadata, metaKeyEbur128I); ok {
