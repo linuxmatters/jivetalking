@@ -12,14 +12,19 @@ import (
 	"github.com/linuxmatters/jivetalking/internal/processor"
 )
 
+// meterWidth is the cell width of the audio level meter. The progress bar caps
+// its rendered total at this width so its right edge aligns with the meter.
+const meterWidth = 40
+
 // defaultProgressWidth is the fallback bar width before a WindowSizeMsg arrives.
-const defaultProgressWidth = 40
+const defaultProgressWidth = meterWidth
 
 // minProgressWidth floors the bar so it stays usable on narrow terminals.
 const minProgressWidth = 10
 
-// maxProgressWidth caps the bar so it does not sprawl on wide terminals.
-const maxProgressWidth = 80
+// maxProgressWidth caps the bar's rendered total (fill + percentage label) so it
+// aligns with the meterWidth-cell audio level meter rather than sprawling.
+const maxProgressWidth = meterWidth
 
 // processingBarOverhead is the horizontal chrome around the processing-view
 // progress bar: RoundedBorder (2 cols) + Padding(0,1) (2 cols) plus a 2-col
@@ -56,20 +61,25 @@ const meterStartDB = -60.0
 type meterTickMsg struct{}
 
 // meterState holds the harmonica spring smoothing state for a single file's
-// audio level meter. It is parallel to Model.Files (keyed by file index) so the
-// routed FileProgress data contract stays free of presentation-only state.
+// audio level meter and its progress bar. It is parallel to Model.Files (keyed
+// by file index) so the routed FileProgress data contract stays free of
+// presentation-only state.
 type meterState struct {
-	pos float64 // eased display position in dB
-	vel float64 // spring velocity
+	pos     float64 // eased meter display position in dB
+	vel     float64 // meter spring velocity
+	progPos float64 // eased progress display position (0.0-1.0)
+	progVel float64 // progress spring velocity
 }
 
 // newProgressModel builds the shared gradient progress bar used by both the
 // processing and analysis models.
 func newProgressModel() progress.Model {
-	// Solid brand-red fill. A 2-stop dark-red gradient blends through blue in
-	// CIELAB space (lipgloss.Blend1D), so a single colour keeps the fill clean.
+	// Bright-cyan to violet gradient. WithScaled blends the two stops across the
+	// filled portion only, so the gradient is always visible regardless of fill.
+	// The CIELAB path between these endpoints stays vivid (no muddy midpoint).
 	p := progress.New(
-		progress.WithColors(cli.ColorRed),
+		progress.WithColors(cli.ColorAccentStart, cli.ColorAccentEnd),
+		progress.WithScaled(true),
 	)
 	p.EmptyColor = cli.ColorFill
 	p.SetWidth(defaultProgressWidth)
@@ -134,10 +144,12 @@ type Model struct {
 	// Progress bar (owned by Update; rendered via ViewAs)
 	progress progress.Model
 
-	// Eased audio level meter state, parallel to Files (keyed by file index).
-	// Owned and mutated only in Update; never touched by pool workers.
-	meters []meterState
-	spring harmonica.Spring
+	// Eased audio level meter and progress bar state, parallel to Files (keyed
+	// by file index). Owned and mutated only in Update; never touched by pool
+	// workers.
+	meters         []meterState
+	spring         harmonica.Spring // eases the audio level meter
+	progressSpring harmonica.Spring // eases the progress bar fill
 
 	// Terminal dimensions
 	Width  int
@@ -165,6 +177,9 @@ func NewModel(inputFiles []string) Model {
 		meters:     meters,
 		// Gentle under-damped spring: eases toward target without hard snapping.
 		spring: harmonica.NewSpring(harmonica.FPS(meterFPS), 6.0, 0.7),
+		// Snappier critically-damped spring for the bar fill: smooth motion that
+		// tracks progress promptly without overshoot.
+		progressSpring: harmonica.NewSpring(harmonica.FPS(meterFPS), 10.0, 1.0),
 	}
 }
 
@@ -269,6 +284,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			target := m.Files[i].CurrentLevel
 			m.meters[i].pos, m.meters[i].vel = m.spring.Update(
 				m.meters[i].pos, m.meters[i].vel, target)
+			m.meters[i].progPos, m.meters[i].progVel = m.progressSpring.Update(
+				m.meters[i].progPos, m.meters[i].progVel, m.Files[i].Progress)
 		}
 		if !m.anyActive() {
 			return m, nil

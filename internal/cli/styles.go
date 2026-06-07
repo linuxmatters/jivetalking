@@ -17,6 +17,11 @@ var (
 	ColorRed = compat.AdaptiveColor{Light: lipgloss.Color("#A40000"), Dark: lipgloss.Color("#A40000")}
 	// ColorRedDim is the dark end of the progress gradient.
 	ColorRedDim = compat.AdaptiveColor{Light: lipgloss.Color("#5A0000"), Dark: lipgloss.Color("#5A0000")}
+	// ColorAccentStart is the bright-cyan start of the progress bar gradient. Its
+	// CIELAB path to ColorAccentEnd stays vivid (no muddy midpoint).
+	ColorAccentStart = compat.AdaptiveColor{Light: lipgloss.Color("#00D4FF"), Dark: lipgloss.Color("#00D4FF")}
+	// ColorAccentEnd is the violet end of the progress bar gradient.
+	ColorAccentEnd = compat.AdaptiveColor{Light: lipgloss.Color("#9D4EDD"), Dark: lipgloss.Color("#9D4EDD")}
 	// ColorMuted is the muted grey for labels and secondary borders.
 	ColorMuted = compat.AdaptiveColor{Light: lipgloss.Color("#888888"), Dark: lipgloss.Color("#888888")}
 	// ColorText is the primary value text colour.

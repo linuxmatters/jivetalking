@@ -50,13 +50,15 @@ func renderFileQueue(m Model, prog progress.Model) string {
 	var b strings.Builder
 
 	for i := range m.Files {
-		// Use the eased meter position for the active level display; fall back
-		// to the raw level when no meter slot exists.
+		// Use the eased meter and progress positions for the active display;
+		// fall back to the raw values when no spring slot exists.
 		easedLevel := m.Files[i].CurrentLevel
+		easedProgress := m.Files[i].Progress
 		if i < len(m.meters) {
 			easedLevel = m.meters[i].pos
+			easedProgress = m.meters[i].progPos
 		}
-		b.WriteString(renderFileEntry(m.Files[i], prog, easedLevel))
+		b.WriteString(renderFileEntry(m.Files[i], prog, easedLevel, easedProgress))
 		b.WriteString("\n")
 	}
 
@@ -64,7 +66,7 @@ func renderFileQueue(m Model, prog progress.Model) string {
 }
 
 // renderFileEntry renders a single file entry in the queue
-func renderFileEntry(file FileProgress, prog progress.Model, easedLevel float64) string {
+func renderFileEntry(file FileProgress, prog progress.Model, easedLevel, easedProgress float64) string {
 	fileName := filepath.Base(file.InputPath)
 
 	switch file.Status {
@@ -81,7 +83,7 @@ func renderFileEntry(file FileProgress, prog progress.Model, easedLevel float64)
 		icon := lipgloss.NewStyle().Foreground(cli.ColorOrange).Render("🞽")
 		return fmt.Sprintf(" %s %s\n%s",
 			icon, fileName,
-			renderFileDetails(file, prog, easedLevel))
+			renderFileDetails(file, prog, easedLevel, easedProgress))
 
 	case StatusError:
 		// ✗ failed file
@@ -97,7 +99,7 @@ func renderFileEntry(file FileProgress, prog progress.Model, easedLevel float64)
 
 // renderFileDetails renders detailed progress for the active file. easedLevel is
 // the spring-smoothed audio level used for the meter display.
-func renderFileDetails(file FileProgress, prog progress.Model, easedLevel float64) string {
+func renderFileDetails(file FileProgress, prog progress.Model, easedLevel, easedProgress float64) string {
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(cli.ColorRed).
@@ -121,8 +123,8 @@ func renderFileDetails(file FileProgress, prog progress.Model, easedLevel float6
 	}
 	fmt.Fprintf(&content, "Pass %d/4: %s\n", file.CurrentPass, passName)
 
-	// Progress bar
-	content.WriteString(prog.ViewAs(file.Progress))
+	// Progress bar (spring-eased fill for smooth motion)
+	content.WriteString(prog.ViewAs(easedProgress))
 	content.WriteString("\n\n")
 
 	// Time estimates
@@ -152,8 +154,8 @@ func renderAudioLevelMeter(currentLevel, peakLevel float64) string {
 
 	// Create visual meter
 	// dB range: -60 dB (silence) to 0 dB (maximum)
-	// Map to 40-character width meter
-	width := 40
+	// Map to meterWidth-character width meter
+	width := meterWidth
 	minDB := -60.0
 	maxDB := 0.0
 

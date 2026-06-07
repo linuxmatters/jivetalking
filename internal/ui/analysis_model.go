@@ -14,12 +14,6 @@ import (
 	"github.com/linuxmatters/jivetalking/internal/processor"
 )
 
-import (
-	// Temporary anchor import (Task 1.1): keep harmonica a direct require until
-	// Phase 4 consumes it. Remove this block when Phase 4 wires harmonica.
-	_ "github.com/charmbracelet/harmonica"
-)
-
 // analysisFileState tracks analysis progress and results for a single file
 type analysisFileState struct {
 	FileName string
