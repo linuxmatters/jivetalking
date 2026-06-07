@@ -69,7 +69,7 @@ func ComputeQualityScore(result *ProcessingResult) QualityScore {
 		return QualityScore{Stars: 0, Label: "Poor"}
 	}
 
-	target := -16.0
+	target := NormTargetLUFS
 	if result.NormResult != nil && result.NormResult.RequestedTargetI != 0 {
 		target = result.NormResult.RequestedTargetI
 	}

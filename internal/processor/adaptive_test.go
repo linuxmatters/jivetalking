@@ -582,7 +582,7 @@ func TestTuneDS201HighPass(t *testing.T) {
 			NoiseProfile:     makeNoiseProfile(-50.0, 0.8),
 		})
 
-		if config.DS201HighPass.Poles != 1 || config.DS201HighPass.Width != ds201HPVeryWarmWidth || config.DS201HighPass.Mix != ds201HPVeryWarmMix {
+		if config.DS201HighPass.Poles != 1 || config.DS201HighPass.Width != ds201HPWarmWidth || config.DS201HighPass.Mix != ds201HPVeryWarmMix {
 			t.Fatalf("warm tuning did not enter gentle baseline: poles=%d width=%.3f mix=%.2f",
 				config.DS201HighPass.Poles, config.DS201HighPass.Width, config.DS201HighPass.Mix)
 		}

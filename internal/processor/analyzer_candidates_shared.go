@@ -98,6 +98,50 @@ func getIntervalsInRange(intervals []IntervalSample, start, end time.Duration) [
 	return result
 }
 
+// intervalAccumulatedMetrics holds the raw sums and extremes from a single pass over a
+// region's interval samples. Shared by the room tone and speech candidate measurement
+// functions, which build their type-specific results from these accumulated values.
+type intervalAccumulatedMetrics struct {
+	rmsSum        float64
+	peakMax       float64
+	truePeakMax   float64
+	samplePeakMax float64
+	spectralSum   SpectralMetrics
+	momentarySum  float64
+	shortTermSum  float64
+}
+
+// accumulateIntervalMetrics performs the shared single-pass accumulation over a region's
+// interval samples, summing averaging metrics and tracking peak extremes. Peak extremes
+// are initialised to -120.0 dBFS.
+func accumulateIntervalMetrics(regionIntervals []IntervalSample) intervalAccumulatedMetrics {
+	acc := intervalAccumulatedMetrics{
+		peakMax:       -120.0,
+		truePeakMax:   -120.0,
+		samplePeakMax: -120.0,
+	}
+
+	for _, interval := range regionIntervals {
+		acc.rmsSum += interval.RMSLevel
+		if interval.PeakLevel > acc.peakMax {
+			acc.peakMax = interval.PeakLevel
+		}
+
+		acc.spectralSum.add(interval.Spectral)
+
+		acc.momentarySum += interval.MomentaryLUFS
+		acc.shortTermSum += interval.ShortTermLUFS
+		if interval.TruePeak > acc.truePeakMax {
+			acc.truePeakMax = interval.TruePeak
+		}
+		if interval.SamplePeak > acc.samplePeakMax {
+			acc.samplePeakMax = interval.SamplePeak
+		}
+	}
+
+	return acc
+}
+
 // measureRoomToneCandidateFromIntervals computes metrics for a room tone region using pre-collected interval data.
 // This avoids re-reading the audio file - all measurements come from Pass 1's interval samples.
 // Returns nil if no intervals fall within the region (should not happen for valid candidates).
@@ -109,44 +153,23 @@ func measureRoomToneCandidateFromIntervals(region RoomToneRegion, intervals []In
 	}
 
 	// Accumulate metrics for averaging (sums) and extremes (max)
-	var rmsSum float64
-	peakMax, truePeakMax, samplePeakMax := -120.0, -120.0, -120.0
-	var spectralSum SpectralMetrics
-	var momentarySum, shortTermSum float64
-
-	for _, interval := range regionIntervals {
-		rmsSum += interval.RMSLevel
-		if interval.PeakLevel > peakMax {
-			peakMax = interval.PeakLevel
-		}
-
-		spectralSum.add(interval.Spectral)
-
-		momentarySum += interval.MomentaryLUFS
-		shortTermSum += interval.ShortTermLUFS
-		if interval.TruePeak > truePeakMax {
-			truePeakMax = interval.TruePeak
-		}
-		if interval.SamplePeak > samplePeakMax {
-			samplePeakMax = interval.SamplePeak
-		}
-	}
+	acc := accumulateIntervalMetrics(regionIntervals)
 
 	n := float64(len(regionIntervals))
-	avgRMS := rmsSum / n
-	avgSpectral := spectralSum.average(n)
+	avgRMS := acc.rmsSum / n
+	avgSpectral := acc.spectralSum.average(n)
 
 	return &RoomToneCandidateMetrics{
 		Region:      region,
 		RMSLevel:    avgRMS,
-		PeakLevel:   peakMax,
-		CrestFactor: peakMax - avgRMS,
+		PeakLevel:   acc.peakMax,
+		CrestFactor: acc.peakMax - avgRMS,
 		Spectral:    avgSpectral,
 
-		MomentaryLUFS: momentarySum / n,
-		ShortTermLUFS: shortTermSum / n,
-		TruePeak:      truePeakMax,
-		SamplePeak:    samplePeakMax,
+		MomentaryLUFS: acc.momentarySum / n,
+		ShortTermLUFS: acc.shortTermSum / n,
+		TruePeak:      acc.truePeakMax,
+		SamplePeak:    acc.samplePeakMax,
 
 		StabilityScore: calculateStabilityScore(regionIntervals),
 	}
@@ -311,32 +334,11 @@ func measureSpeechCandidateFromIntervals(region SpeechRegion, intervals []Interv
 	}
 
 	// Accumulate metrics for averaging (sums) and extremes (max)
-	var rmsSum float64
-	peakMax, truePeakMax, samplePeakMax := -120.0, -120.0, -120.0
-	var spectralSum SpectralMetrics
-	var momentarySum, shortTermSum float64
-
-	for _, interval := range regionIntervals {
-		rmsSum += interval.RMSLevel
-		if interval.PeakLevel > peakMax {
-			peakMax = interval.PeakLevel
-		}
-
-		spectralSum.add(interval.Spectral)
-
-		momentarySum += interval.MomentaryLUFS
-		shortTermSum += interval.ShortTermLUFS
-		if interval.TruePeak > truePeakMax {
-			truePeakMax = interval.TruePeak
-		}
-		if interval.SamplePeak > samplePeakMax {
-			samplePeakMax = interval.SamplePeak
-		}
-	}
+	acc := accumulateIntervalMetrics(regionIntervals)
 
 	n := float64(len(regionIntervals))
-	avgRMS := rmsSum / n
-	avgSpectral := spectralSum.average(n)
+	avgRMS := acc.rmsSum / n
+	avgSpectral := acc.spectralSum.average(n)
 
 	// Calculate voicing density for stability assessment
 	voicedCount := 0
@@ -350,14 +352,14 @@ func measureSpeechCandidateFromIntervals(region SpeechRegion, intervals []Interv
 	return &SpeechCandidateMetrics{
 		Region:      region,
 		RMSLevel:    avgRMS,
-		PeakLevel:   peakMax,
-		CrestFactor: peakMax - avgRMS,
+		PeakLevel:   acc.peakMax,
+		CrestFactor: acc.peakMax - avgRMS,
 		Spectral:    avgSpectral,
 
-		MomentaryLUFS: momentarySum / n,
-		ShortTermLUFS: shortTermSum / n,
-		TruePeak:      truePeakMax,
-		SamplePeak:    samplePeakMax,
+		MomentaryLUFS: acc.momentarySum / n,
+		ShortTermLUFS: acc.shortTermSum / n,
+		TruePeak:      acc.truePeakMax,
+		SamplePeak:    acc.samplePeakMax,
 
 		// Stability metrics
 		VoicingDensity: voicingDensity,

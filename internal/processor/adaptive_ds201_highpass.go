@@ -4,7 +4,7 @@ const (
 	ds201DefaultHPFreq = 80.0
 
 	// DS201 High-Pass frequency tuning
-	ds201HPMinFreq         = 60.0  // Hz - dark/warm voice cutoff
+	ds201HPMinFreq         = 60.0  // Hz - dark/warm voice cutoff; also the minimum cutoff for very warm voices
 	ds201HPDefaultFreq     = 80.0  // Hz - normal voice cutoff
 	ds201HPBrightFreq      = 100.0 // Hz - bright voice cutoff
 	ds201HPMaxFreq         = 120.0 // Hz - maximum to preserve voice fundamentals
@@ -13,12 +13,10 @@ const (
 
 	// DS201 High-Pass warm voice protection parameters
 	// Instead of disabling highpass for warm voices, we use gentler settings
-	ds201HPWarmFreq      = 70.0 // Hz - slightly reduced cutoff for warm voices
-	ds201HPVeryWarmFreq  = 60.0 // Hz - minimum cutoff for very warm voices
-	ds201HPWarmWidth     = 0.5  // Q - gentler rolloff than Butterworth (0.707)
-	ds201HPVeryWarmWidth = 0.5  // Q - gentler rolloff for very warm voices
-	ds201HPWarmMix       = 0.9  // Wet/dry mix for warm voices (90% filtered)
-	ds201HPVeryWarmMix   = 0.8  // Wet/dry mix for very warm voices (80% filtered)
+	ds201HPWarmFreq    = 70.0 // Hz - slightly reduced cutoff for warm voices
+	ds201HPWarmWidth   = 0.5  // Q - gentler rolloff than Butterworth (0.707); shared by warm and very warm voices
+	ds201HPWarmMix     = 0.9  // Wet/dry mix for warm voices (90% filtered)
+	ds201HPVeryWarmMix = 0.8  // Wet/dry mix for very warm voices (80% filtered)
 
 	// Spectral decrease thresholds for LF voice content protection
 	spectralDecreaseVeryWarm = -0.10 // Below: very warm voice, needs maximum LF protection
@@ -157,8 +155,8 @@ func tuneDS201HighPass(config *EffectiveFilterConfig, measurements *AudioMeasure
 	case decrease < spectralDecreaseVeryWarm:
 		// Very warm voice
 		// Use minimal settings: 60Hz cutoff, gentle Q, 80% mix
-		config.DS201HighPass.Frequency = ds201HPVeryWarmFreq
-		config.DS201HighPass.Width = ds201HPVeryWarmWidth
+		config.DS201HighPass.Frequency = ds201HPMinFreq
+		config.DS201HighPass.Width = ds201HPWarmWidth
 		config.DS201HighPass.Mix = ds201HPVeryWarmMix
 		config.DS201HighPass.Poles = 1 // Gentle 6dB/oct slope
 	case skewness > spectralSkewnessLFEmphasis:

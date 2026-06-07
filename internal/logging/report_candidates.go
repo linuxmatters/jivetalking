@@ -27,12 +27,8 @@ func writeReportRoomToneCandidateMetrics(f io.Writer, index int, c processor.Roo
 		return
 	}
 
-	electedLabel := ""
-	if elected {
-		electedLabel = ", elected"
-	}
-	fmt.Fprintf(f, "  Candidate %d:       %.1fs at %.1fs (score: %.3f%s)\n",
-		index+1, c.Region.Duration.Seconds(), c.Region.Start.Seconds(), c.Score, electedLabel)
+	fmt.Fprintf(f, "  Candidate %d:       %.1fs at %.1fs (score: %.3f, elected)\n",
+		index+1, c.Region.Duration.Seconds(), c.Region.Start.Seconds(), c.Score)
 
 	if c.WasRefined {
 		fmt.Fprintf(f, "    Refined:         %.1fs at %.1fs -> %.1fs at %.1fs (golden sub-region)\n",
@@ -103,12 +99,8 @@ func writeReportSpeechCandidateMetrics(f io.Writer, index int, c processor.Speec
 		return
 	}
 
-	electedLabel := ""
-	if elected {
-		electedLabel = ", elected"
-	}
-	fmt.Fprintf(f, "  Candidate %d:       %.1fs at %.1fs (score: %.3f%s)\n",
-		index+1, c.Region.Duration.Seconds(), c.Region.Start.Seconds(), c.Score, electedLabel)
+	fmt.Fprintf(f, "  Candidate %d:       %.1fs at %.1fs (score: %.3f, elected)\n",
+		index+1, c.Region.Duration.Seconds(), c.Region.Start.Seconds(), c.Score)
 
 	if c.WasRefined {
 		fmt.Fprintf(f, "    Refined:         %.1fs at %.1fs -> %.1fs at %.1fs (golden sub-region)\n",

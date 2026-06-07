@@ -56,8 +56,7 @@ const (
 	ds201GateMaxDiffMod       = 10.0 // % - moderate transients
 	ds201GateMaxDiffExtreme   = 40.0 // % - threshold for ultra-fast attack
 	ds201GateCrestExtreme     = 40.0 // dB - threshold for ultra-fast attack
-	ds201GateAttackUltraFast  = 10.0 // ms - minimum attack to avoid click artifacts
-	ds201GateAttackFast       = 10.0 // ms - for sharp transients (minimum to avoid clicks)
+	ds201GateAttackMin        = 10.0 // ms - minimum attack: fastest tier for extreme/sharp transients and the clamp floor that prevents click artifacts
 	ds201GateAttackMod        = 12.0 // ms - standard speech
 	ds201GateAttackSlow       = 17.0 // ms - soft onsets
 	ds201GateFluxDynamicThres = 0.05 // SpectralFlux threshold for dynamic content
@@ -426,10 +425,10 @@ func calculateDS201GateAttack(maxDiff, spectralFlux, spectralCrest float64) floa
 	switch {
 	case maxDiffPercent > ds201GateMaxDiffExtreme || spectralCrest > ds201GateCrestExtreme:
 		// Extreme transients - fastest attack, with 10ms floor to prevent click artifacts
-		baseAttack = ds201GateAttackUltraFast
+		baseAttack = ds201GateAttackMin
 	case maxDiffPercent > ds201GateMaxDiffHigh || spectralCrest > 30.0:
 		// Sharp transients - fast opening
-		baseAttack = ds201GateAttackFast
+		baseAttack = ds201GateAttackMin
 	case maxDiffPercent > ds201GateMaxDiffMod:
 		// Standard speech
 		baseAttack = ds201GateAttackMod
@@ -443,7 +442,7 @@ func calculateDS201GateAttack(maxDiff, spectralFlux, spectralCrest float64) floa
 		baseAttack *= 0.8
 	}
 
-	return max(ds201GateAttackUltraFast, min(baseAttack, 25.0))
+	return max(ds201GateAttackMin, min(baseAttack, 25.0))
 }
 
 // calculateDS201GateRelease determines release time based on content and noise character.

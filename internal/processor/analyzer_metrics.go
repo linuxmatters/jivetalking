@@ -120,12 +120,12 @@ func (s *IntervalSample) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
-	s.Spectral.Found = intervalJSONHasSpectral(raw)
+	s.Spectral.Found = hasSpectralKeys(raw)
 
 	return nil
 }
 
-func intervalJSONHasSpectral(raw map[string]json.RawMessage) bool {
+func hasSpectralKeys(raw map[string]json.RawMessage) bool {
 	for _, key := range []string{
 		"spectral_mean",
 		"spectral_variance",
@@ -210,7 +210,7 @@ func (b *BaseMeasurements) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
-	b.Spectral.Found = flatJSONHasSpectral(raw)
+	b.Spectral.Found = hasSpectralKeys(raw)
 
 	return nil
 }
@@ -639,29 +639,6 @@ func setJSONFieldOmitEmptyPtr[T any](object map[string]json.RawMessage, name str
 		return nil
 	}
 	return setJSONField(object, name, value)
-}
-
-func flatJSONHasSpectral(raw map[string]json.RawMessage) bool {
-	for _, key := range []string{
-		"spectral_mean",
-		"spectral_variance",
-		"spectral_centroid",
-		"spectral_spread",
-		"spectral_skewness",
-		"spectral_kurtosis",
-		"spectral_entropy",
-		"spectral_flatness",
-		"spectral_crest",
-		"spectral_flux",
-		"spectral_slope",
-		"spectral_decrease",
-		"spectral_rolloff",
-	} {
-		if _, ok := raw[key]; ok {
-			return true
-		}
-	}
-	return false
 }
 
 // intervalAccumulator holds accumulated values for a 250ms interval window.

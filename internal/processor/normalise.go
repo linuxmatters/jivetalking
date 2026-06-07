@@ -37,6 +37,9 @@ const (
 	minLimiterCeilingDB = -24.0 // dBTP
 )
 
+// MinLimiterCeilingDB exports minLimiterCeilingDB so the logging package can reference the ceiling without duplicating the literal.
+const MinLimiterCeilingDB = minLimiterCeilingDB
+
 // LoudnormStats contains the JSON output from the loudnorm filter.
 // This is used to diagnose whether loudnorm is using linear or dynamic mode.
 type LoudnormStats struct {
@@ -616,7 +619,7 @@ func ApplyNormalisation(
 
 	// Validate result is within tolerance of the EFFECTIVE target (not the requested one)
 	finalDeviation := math.Abs(application.finalLUFS - effectiveTargetI)
-	withinTarget := finalDeviation <= 0.5
+	withinTarget := finalDeviation <= NormToleranceLU
 
 	return &NormalisationResult{
 		InputLUFS:             measurement.InputI,

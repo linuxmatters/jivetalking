@@ -245,12 +245,6 @@ type BaseFilterConfig struct {
 	logger debugLogger
 }
 
-// AdaptiveFilterResult holds a complete per-file set of tunable filter values.
-// It excludes diagnostics and pass execution state.
-type AdaptiveFilterResult struct {
-	filterConfigDefaults
-}
-
 // AdaptiveDiagnostics holds report-only adaptation explanations.
 type AdaptiveDiagnostics struct {
 	DS201LPContentType  ContentType
@@ -500,16 +494,16 @@ func deriveEffectiveFilterConfig(base *BaseFilterConfig) *EffectiveFilterConfig 
 	return assembleEffectiveFilterConfig(base, deriveAdaptiveFilterResult(base))
 }
 
-func deriveAdaptiveFilterResult(base *BaseFilterConfig) *AdaptiveFilterResult {
+func deriveAdaptiveFilterResult(base *BaseFilterConfig) *filterConfigDefaults {
 	if base == nil {
 		return nil
 	}
 
 	defaults := cloneFilterDefaults(&base.filterConfigDefaults)
-	return &AdaptiveFilterResult{filterConfigDefaults: defaults}
+	return &defaults
 }
 
-func assembleEffectiveFilterConfig(base *BaseFilterConfig, adaptive *AdaptiveFilterResult) *EffectiveFilterConfig {
+func assembleEffectiveFilterConfig(base *BaseFilterConfig, adaptive *filterConfigDefaults) *EffectiveFilterConfig {
 	if base == nil {
 		return nil
 	}
@@ -517,7 +511,7 @@ func assembleEffectiveFilterConfig(base *BaseFilterConfig, adaptive *AdaptiveFil
 	effective := &EffectiveFilterConfig{}
 	copyFilterDefaults(effective, &base.filterConfigDefaults)
 	if adaptive != nil {
-		copyFilterDefaults(effective, &adaptive.filterConfigDefaults)
+		copyFilterDefaults(effective, adaptive)
 	}
 	effective.FilterOrder = cloneFilterOrder(base.FilterOrder)
 

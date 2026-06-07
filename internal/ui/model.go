@@ -57,10 +57,6 @@ const meterFPS = 60
 // Shared so the meter display (views.go) and these start values never drift apart.
 const meterFloorDB = -70.0
 
-// meterStartDB is the initial eased position for a file's meter, matching the
-// PeakLevel silence floor so the meter eases up from silence on first sample.
-const meterStartDB = meterFloorDB
-
 // meterTickMsg drives the spring step for the eased audio level meter. The loop
 // is self-scheduling while any file is active and stops once m.Done is set.
 type meterTickMsg struct{}
@@ -181,7 +177,7 @@ func NewModel(inputFiles []string) Model {
 			Status:    StatusQueued,
 			PeakLevel: meterFloorDB, // Initialize to silence threshold
 		}
-		meters[i] = meterState{pos: meterStartDB, peakPos: meterFloorDB}
+		meters[i] = meterState{pos: meterFloorDB, peakPos: meterFloorDB}
 	}
 
 	return Model{
