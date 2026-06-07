@@ -118,6 +118,10 @@ type FileProgress struct {
 	StartTime   time.Time
 	ElapsedTime time.Duration
 
+	// Duration is the total audio length in seconds (constant per file; the
+	// first non-zero value is kept). Drives the realtime-speed badge.
+	Duration float64
+
 	// Analysis results (from Pass 1)
 	Measurements *processor.AudioMeasurements
 
@@ -337,6 +341,11 @@ func updateFileProgress(fp FileProgress, msg ProgressMsg) FileProgress {
 	fp.CurrentPass = msg.Pass
 	fp.PassName = msg.PassName
 	fp.ElapsedTime = time.Since(fp.StartTime)
+
+	// Duration is constant per file; keep the first non-zero value seen.
+	if msg.Duration > 0 && fp.Duration == 0 {
+		fp.Duration = msg.Duration
+	}
 
 	if msg.Measurements != nil {
 		fp.Measurements = msg.Measurements

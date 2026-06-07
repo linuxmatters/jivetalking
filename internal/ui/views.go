@@ -129,13 +129,10 @@ func renderFileDetails(file FileProgress, prog progress.Model, easedLevel, eased
 	content.WriteString(prog.ViewAs(easedProgress))
 	content.WriteString("\n\n")
 
-	// Time estimates
-	elapsed := file.ElapsedTime.Seconds()
-	var remaining float64
-	if file.Progress > 0 {
-		remaining = (elapsed / file.Progress) - elapsed
-	}
-	fmt.Fprintf(&content, "Time: %.1fs | ETA: ~%.1fs\n", elapsed, remaining)
+	// Time block: elapsed clock, mini dot timeline, projected total clock, and a
+	// realtime-speed badge.
+	content.WriteString(renderTimeline(file))
+	content.WriteByte('\n')
 
 	// Audio level visualization. The displayed level eases toward the target
 	// via the spring; the peak marker stays driven by the measured peak.
@@ -147,6 +144,52 @@ func renderFileDetails(file FileProgress, prog progress.Model, easedLevel, eased
 	return box.Render(content.String())
 }
 
+// timelineWidth is the cell count of the mini dot timeline in the Time block.
+// Kept small (8) so the whole "⏱ MM:SS ▰… MM:SS · ⚡ N×" line stays within the
+// meterWidth-cell box inner width.
+const timelineWidth = 8
+
+// renderTimeline renders the Time block: an elapsed clock, a mini dot timeline
+// filled to the pass progress, a projected total-pass clock, and a realtime
+// speed badge. The whole line stays within the box inner width (~meterWidth).
+func renderTimeline(file FileProgress) string {
+	elapsed := file.ElapsedTime
+	elapsedSecs := elapsed.Seconds()
+
+	// Projected total pass time = elapsed / progress (consistent with the prior
+	// ETA derivation). Show placeholder until progress is meaningful.
+	rightClock := "--:--"
+	if file.Progress > 0 {
+		rightClock = formatElapsed(time.Duration(elapsedSecs / file.Progress * float64(time.Second)))
+	}
+
+	// Mini dot timeline filled to progress. Filled dots muted, empty dots use the
+	// meter empty-track colour, so the timeline reads as secondary to the main
+	// gradient bar above.
+	filled := int(file.Progress*float64(timelineWidth) + 0.5)
+	filled = max(0, min(filled, timelineWidth))
+	filledStyle := lipgloss.NewStyle().Foreground(cli.ColorMuted)
+	emptyStyle := lipgloss.NewStyle().Foreground(cli.ColorFill)
+	timeline := filledStyle.Render(strings.Repeat("▰", filled)) +
+		emptyStyle.Render(strings.Repeat("▱", timelineWidth-filled))
+
+	// Realtime speed badge: (progress × duration) / elapsed. Guard against
+	// start-up garbage and missing duration.
+	badge := "⚡ —×"
+	if file.Duration > 0 && file.Progress > 0.02 && elapsedSecs > 0.3 {
+		rt := (file.Progress * file.Duration) / elapsedSecs
+		badge = fmt.Sprintf("⚡ %.1f×", rt)
+	}
+
+	muted := lipgloss.NewStyle().Foreground(cli.ColorMuted)
+	return fmt.Sprintf("⏱ %s %s %s  %s  %s",
+		formatElapsed(elapsed),
+		timeline,
+		rightClock,
+		muted.Render("·"),
+		muted.Render(badge))
+}
+
 // renderAudioLevelMeter renders a live audio level meter with dB visualization.
 // elapsed drives the gentle pulse of the peak-hold marker; it is the file's
 // running elapsed time, advanced once per meter tick, so no second tick loop is
@@ -154,8 +197,8 @@ func renderFileDetails(file FileProgress, prog progress.Model, easedLevel, eased
 func renderAudioLevelMeter(currentLevel, peakLevel float64, elapsed time.Duration) string {
 	var b strings.Builder
 
-	// Display current and peak levels
-	fmt.Fprintf(&b, "Level: %.1f ㏈ | Peak: %.1f ㏈\n", currentLevel, peakLevel)
+	// Display current level only; the peak value is tethered to its marker below.
+	fmt.Fprintf(&b, "Level: %.1f ㏈\n", currentLevel)
 
 	// Create visual meter
 	// dB range: -70 dB (silence) to 0 dB (maximum)
@@ -218,13 +261,37 @@ func renderAudioLevelMeter(currentLevel, peakLevel float64, elapsed time.Duratio
 	}
 	flush()
 
-	// Peak-hold marker: a coloured triangle on its own line beneath the bar,
-	// aligned to the peak column. Skip it when there is no meaningful peak yet
-	// (peak still at the silence floor), so no stray triangle sits at column 0.
+	// Peak-hold marker: a pulsing triangle on its own line beneath the bar,
+	// aligned to the peak column, plus an elbow connector line that tethers the
+	// peak value to the marker. Skip both when there is no meaningful peak yet
+	// (peak still at the silence floor), so no stray marker sits at column 0.
 	if peakLevel > minDB {
+		pulseColor := peakMarkerColor(elapsed)
+		elbowStyle := lipgloss.NewStyle().Foreground(pulseColor)
+		valueStyle := lipgloss.NewStyle().Foreground(cli.ColorOrange)
+		value := fmt.Sprintf("%.1f ㏈", peakLevel)
+
 		b.WriteByte('\n')
 		b.WriteString(strings.Repeat(" ", peakPos))
-		b.WriteString(lipgloss.NewStyle().Foreground(peakMarkerColor(elapsed)).Render("▲"))
+		b.WriteString(elbowStyle.Render("▲"))
+
+		b.WriteByte('\n')
+		// Default: elbow drops to the right (└ value). When the right-elbow form
+		// would overflow the bar, flip to the left (value ┘) so the label stays
+		// within meterWidth.
+		if peakPos+len(" "+value)+1 <= width {
+			b.WriteString(strings.Repeat(" ", peakPos))
+			b.WriteString(elbowStyle.Render("└"))
+			b.WriteByte(' ')
+			b.WriteString(valueStyle.Render(value))
+		} else {
+			// value then a right-elbow ┘ ending under the peak column.
+			lead := max(peakPos-(len(value)+1), 0)
+			b.WriteString(strings.Repeat(" ", lead))
+			b.WriteString(valueStyle.Render(value))
+			b.WriteByte(' ')
+			b.WriteString(elbowStyle.Render("┘"))
+		}
 	}
 
 	return b.String()

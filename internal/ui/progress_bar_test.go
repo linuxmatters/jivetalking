@@ -226,6 +226,94 @@ func TestMeterPeakTriangleAlignsBeneathBar(t *testing.T) {
 	}
 }
 
+// TestMeterHeaderShowsLevelNotPeak asserts the meter header line carries the
+// current level only; the peak value moved down to the elbow connector line.
+func TestMeterHeaderShowsLevelNotPeak(t *testing.T) {
+	out := ansi.Strip(renderAudioLevelMeter(-20.0, -10.0, 0))
+	header := strings.SplitN(out, "\n", 2)[0]
+	if !strings.Contains(header, "Level:") {
+		t.Errorf("header missing 'Level:': %q", header)
+	}
+	if strings.Contains(header, "Peak:") {
+		t.Errorf("header still contains 'Peak:': %q", header)
+	}
+}
+
+// TestMeterPeakElbowTethersValue asserts an elbow connector line beneath the
+// triangle carries the peak dB value, the elbow glyph aligns at the peak column
+// (└ to the right under ▲, or ┘ flipped left at the column), and the line stays
+// within the bar width in both orientations.
+func TestMeterPeakElbowTethersValue(t *testing.T) {
+	cases := []struct {
+		peak     float64
+		peakPos  int
+		wantLeft bool // true => left-flip form "value ┘", false => "└ value"
+	}{
+		{-30.0, 22, false}, // room to the right: └ -30.0 dB
+		{-10.0, 34, true},  // near right edge: flips to -10.0 dB ┘
+	}
+	for _, tc := range cases {
+		out := renderAudioLevelMeter(-40.0, tc.peak, 0)
+		plain := ansi.Strip(out)
+		lines := strings.Split(plain, "\n")
+
+		var triLine, elbowLine string
+		for i, line := range lines {
+			if strings.TrimSpace(line) == "▲" {
+				triLine = line
+				if i+1 < len(lines) {
+					elbowLine = lines[i+1]
+				}
+				break
+			}
+		}
+		if triLine == "" || elbowLine == "" {
+			t.Fatalf("peak=%g: missing triangle/elbow lines in:\n%q", tc.peak, plain)
+		}
+
+		wantValue := strconv.FormatFloat(tc.peak, 'f', 1, 64) + " ㏈"
+		if !strings.Contains(elbowLine, wantValue) {
+			t.Errorf("peak=%g: elbow line missing value %q: %q", tc.peak, wantValue, elbowLine)
+		}
+
+		// Elbow glyph aligns at the peak column (same as the triangle).
+		triCol := strings.IndexRune(triLine, '▲')
+		var elbowCol int
+		if tc.wantLeft {
+			elbowCol = strings.IndexRune(elbowLine, '┘')
+			if !strings.HasSuffix(strings.TrimRight(elbowLine, " "), "┘") {
+				t.Errorf("peak=%g: left-flip elbow not ending in '┘': %q", tc.peak, elbowLine)
+			}
+		} else {
+			elbowCol = strings.IndexRune(elbowLine, '└')
+		}
+		if elbowCol != triCol {
+			t.Errorf("peak=%g: elbow column %d != triangle column %d\n%q\n%q",
+				tc.peak, elbowCol, triCol, triLine, elbowLine)
+		}
+
+		// Both lines must stay within the bar width.
+		if w := ansi.StringWidth(triLine); w > meterWidth {
+			t.Errorf("peak=%g: triangle line width %d > meterWidth %d", tc.peak, w, meterWidth)
+		}
+		if w := ansi.StringWidth(elbowLine); w > meterWidth {
+			t.Errorf("peak=%g: elbow line width %d > meterWidth %d", tc.peak, w, meterWidth)
+		}
+	}
+}
+
+// TestMeterNoPeakElbowAtFloor asserts neither the triangle nor the elbow line
+// renders when the peak is still at the silence floor.
+func TestMeterNoPeakElbowAtFloor(t *testing.T) {
+	out := ansi.Strip(renderAudioLevelMeter(-40.0, meterFloorDB, 0))
+	if strings.ContainsRune(out, '▲') {
+		t.Errorf("triangle rendered at silence floor:\n%q", out)
+	}
+	if strings.ContainsRune(out, '└') || strings.ContainsRune(out, '┘') {
+		t.Errorf("elbow rendered at silence floor:\n%q", out)
+	}
+}
+
 // TestMeterPeakTriangleIsOrange asserts the marker triangle is styled in an
 // orange shade (red > green > blue, with a substantial green component so it
 // reads as orange rather than pure red).
@@ -259,6 +347,94 @@ func TestMeterPeakTrianglePulses(t *testing.T) {
 		if c[0] <= c[1] || c[1] <= c[2] {
 			t.Errorf("pulse shade %v is not an orange shade (want r>g>b)", *c)
 		}
+	}
+}
+
+// TestTimelineClocksAndBadge asserts the Time block renders the elapsed clock,
+// projected total clock, a dot timeline filled to progress, and the realtime
+// speed badge with the expected value for a known input.
+func TestTimelineClocksAndBadge(t *testing.T) {
+	fp := FileProgress{
+		Status:      StatusProcessing,
+		CurrentPass: 2,
+		Progress:    0.5,
+		Duration:    60.0,
+		ElapsedTime: 10 * time.Second,
+	}
+	line := ansi.Strip(renderTimeline(fp))
+
+	// Elapsed clock 00:10, projected total = 10/0.5 = 20s -> 00:20.
+	if !strings.Contains(line, "00:10") {
+		t.Errorf("missing elapsed clock 00:10: %q", line)
+	}
+	if !strings.Contains(line, "00:20") {
+		t.Errorf("missing projected clock 00:20: %q", line)
+	}
+
+	// realtime × = (0.5 × 60) / 10 = 3.0×.
+	if !strings.Contains(line, "⚡ 3.0×") {
+		t.Errorf("missing realtime badge '⚡ 3.0×': %q", line)
+	}
+
+	// Dot timeline filled to progress: 0.5 of 8 cells = 4 filled, 4 empty.
+	filled := strings.Count(line, "▰")
+	empty := strings.Count(line, "▱")
+	if filled != 4 || empty != 4 {
+		t.Errorf("timeline fill %d/%d, want 4/4 for progress 0.5: %q", filled, empty, line)
+	}
+}
+
+// TestTimelineBadgeGuards asserts the realtime badge shows the placeholder when
+// duration, progress, or elapsed are below the display thresholds, and a number
+// once all three clear them.
+func TestTimelineBadgeGuards(t *testing.T) {
+	cases := []struct {
+		name    string
+		fp      FileProgress
+		wantNum bool
+	}{
+		{"no duration", FileProgress{Progress: 0.5, Duration: 0, ElapsedTime: 10 * time.Second}, false},
+		{"progress too low", FileProgress{Progress: 0.01, Duration: 60, ElapsedTime: 10 * time.Second}, false},
+		{"elapsed too short", FileProgress{Progress: 0.5, Duration: 60, ElapsedTime: 200 * time.Millisecond}, false},
+		{"all clear", FileProgress{Progress: 0.5, Duration: 60, ElapsedTime: 10 * time.Second}, true},
+	}
+	for _, tc := range cases {
+		line := ansi.Strip(renderTimeline(tc.fp))
+		hasPlaceholder := strings.Contains(line, "⚡ —×")
+		hasNumber := strings.Contains(line, "×") && !hasPlaceholder
+		if tc.wantNum && !hasNumber {
+			t.Errorf("%s: expected a numeric badge, got: %q", tc.name, line)
+		}
+		if !tc.wantNum && !hasPlaceholder {
+			t.Errorf("%s: expected placeholder '⚡ —×', got: %q", tc.name, line)
+		}
+	}
+}
+
+// TestTimelineFillTracksProgress asserts the dot timeline fill count tracks the
+// pass progress across the full range and never overflows the timeline width.
+func TestTimelineFillTracksProgress(t *testing.T) {
+	for _, p := range []float64{0.0, 0.25, 0.5, 0.99, 1.0} {
+		fp := FileProgress{Progress: p, Duration: 60, ElapsedTime: 5 * time.Second}
+		line := ansi.Strip(renderTimeline(fp))
+		filled := strings.Count(line, "▰")
+		want := min(int(p*float64(timelineWidth)+0.5), timelineWidth)
+		if filled != want {
+			t.Errorf("progress %g: filled %d, want %d: %q", p, filled, want, line)
+		}
+		if filled+strings.Count(line, "▱") != timelineWidth {
+			t.Errorf("progress %g: total dots != %d: %q", p, timelineWidth, line)
+		}
+	}
+}
+
+// TestTimelineProjectedClockPlaceholder asserts the projected total clock shows
+// the --:-- placeholder until progress is meaningful.
+func TestTimelineProjectedClockPlaceholder(t *testing.T) {
+	fp := FileProgress{Progress: 0, Duration: 60, ElapsedTime: 2 * time.Second}
+	line := ansi.Strip(renderTimeline(fp))
+	if !strings.Contains(line, "--:--") {
+		t.Errorf("expected projected clock placeholder '--:--': %q", line)
 	}
 }
 

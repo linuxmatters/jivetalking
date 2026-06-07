@@ -284,6 +284,7 @@ func (ph *progressHandler) callback(update processor.ProgressUpdate) {
 		PassName:     update.PassName,
 		Progress:     update.Progress,
 		Level:        update.Level,
+		Duration:     update.Duration,
 		Measurements: update.Measurements,
 	})
 }

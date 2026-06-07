@@ -183,6 +183,11 @@ type AudioMeasurements struct {
 	// Embed shared measurement fields
 	BaseMeasurements
 
+	// Duration is the total audio length in seconds, captured at file open. It is
+	// in-memory UI plumbing only and excluded from the report JSON contract (the
+	// custom MarshalJSON/UnmarshalJSON pair serialises named fields explicitly).
+	Duration float64 `json:"-"`
+
 	// Input-specific loudness measurements from ebur128
 	InputI           float64 `json:"input_i"`            // Integrated loudness (LUFS)
 	InputTP          float64 `json:"input_tp"`           // True peak (dBTP)
@@ -368,6 +373,7 @@ func buildInputMeasurements(filename string, collection *analysisFrameCollection
 	}
 
 	measurements := &AudioMeasurements{
+		Duration:            collection.totalDuration,
 		PreScanNoiseFloor:   noiseFloorEstimate,
 		RoomToneDetectLevel: silenceThreshold,
 		IntervalSamples:     collection.intervals,
@@ -480,6 +486,7 @@ type analysisFrameCollection struct {
 	intervals        []IntervalSample
 	silenceIntervals []IntervalSample
 	silenceMedians   silenceMedians
+	totalDuration    float64 // total audio length, seconds (from input metadata)
 }
 
 func collectAnalysisFrames(ctx stdcontext.Context, filename string, config *BaseFilterConfig, context *ProcessingFilterContext, progressCallback ProgressCallback) (*analysisFrameCollection, error) {
@@ -561,6 +568,7 @@ func collectAnalysisFrames(ctx stdcontext.Context, filename string, config *Base
 					PassName: "Analyzing",
 					Progress: progress,
 					Level:    currentLevel,
+					Duration: totalDuration,
 				})
 			}
 			frameCount++
@@ -598,6 +606,7 @@ func collectAnalysisFrames(ctx stdcontext.Context, filename string, config *Base
 		intervals:        intervals,
 		silenceIntervals: silenceIntervals,
 		silenceMedians:   computeSilenceMedians(silenceIntervals),
+		totalDuration:    totalDuration,
 	}, nil
 }
 

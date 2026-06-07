@@ -49,6 +49,7 @@ func AnalyzeOnlyDetailed(ctx context.Context, inputPath string, config *BaseFilt
 			Pass:         PassAnalysis,
 			PassName:     "Analyzing",
 			Progress:     1.0,
+			Duration:     measurements.Duration,
 			Measurements: measurements,
 		})
 	}
@@ -93,6 +94,7 @@ func ProcessAudio(ctx context.Context, inputPath string, config *BaseFilterConfi
 			Pass:         PassAnalysis,
 			PassName:     "Analyzing",
 			Progress:     1.0,
+			Duration:     measurements.Duration,
 			Measurements: measurements,
 		})
 	}
@@ -108,6 +110,7 @@ func ProcessAudio(ctx context.Context, inputPath string, config *BaseFilterConfi
 		progressCallback(ProgressUpdate{
 			Pass:         PassProcessing,
 			PassName:     "Processing",
+			Duration:     measurements.Duration,
 			Measurements: measurements,
 		})
 	}
@@ -144,6 +147,7 @@ func ProcessAudio(ctx context.Context, inputPath string, config *BaseFilterConfi
 			Pass:         PassProcessing,
 			PassName:     "Processing",
 			Progress:     1.0,
+			Duration:     measurements.Duration,
 			Measurements: measurements,
 		})
 	}
@@ -324,6 +328,7 @@ func processWithFilters(ctx context.Context, inputPath, outputPath string, confi
 					PassName:     "Processing",
 					Progress:     progress,
 					Level:        currentLevel,
+					Duration:     measurements.Duration,
 					Measurements: measurements,
 				})
 			}

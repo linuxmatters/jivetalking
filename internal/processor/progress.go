@@ -7,6 +7,7 @@ type ProgressUpdate struct {
 	PassName     string
 	Progress     float64
 	Level        float64
+	Duration     float64 // total audio length, seconds
 	Measurements *AudioMeasurements
 }
 

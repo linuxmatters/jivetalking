@@ -15,6 +15,16 @@ import (
 	"github.com/linuxmatters/jivetalking/internal/audio"
 )
 
+// normaliseDuration returns the total audio length in seconds from the Pass 1
+// measurements, or 0 when they are unavailable. Used to carry Duration through
+// the Pass 3/4 progress callbacks without re-opening the input.
+func normaliseDuration(m *AudioMeasurements) float64 {
+	if m == nil {
+		return 0
+	}
+	return m.Duration
+}
+
 // Limiter ceiling constants used by calculateLimiterCeiling and pre-gain deficit
 // calculation.
 const (
@@ -180,6 +190,7 @@ func measureWithLoudnorm(ctx context.Context, inputPath string, config *Effectiv
 					Pass:     PassMeasuring,
 					PassName: "Measuring",
 					Progress: progress,
+					Duration: metadata.Duration,
 				})
 			}
 		},
@@ -525,6 +536,7 @@ func ApplyNormalisation(
 		progressCallback(ProgressUpdate{
 			Pass:     PassMeasuring,
 			PassName: "Measuring",
+			Duration: normaliseDuration(inputMeasurements),
 		})
 	}
 
@@ -552,10 +564,12 @@ func ApplyNormalisation(
 			Pass:     PassMeasuring,
 			PassName: "Measuring",
 			Progress: 1.0,
+			Duration: normaliseDuration(inputMeasurements),
 		})
 		progressCallback(ProgressUpdate{
 			Pass:     PassNormalising,
 			PassName: "Normalising",
+			Duration: normaliseDuration(inputMeasurements),
 		})
 	}
 
@@ -596,6 +610,7 @@ func ApplyNormalisation(
 			Pass:     PassNormalising,
 			PassName: "Normalising",
 			Progress: 1.0,
+			Duration: normaliseDuration(inputMeasurements),
 		})
 	}
 
@@ -781,6 +796,7 @@ func executeAndPublishLoudnormApplication(
 					PassName: "Normalising",
 					Progress: progress,
 					Level:    result.acc.ebur128OutputI,
+					Duration: prep.metadata.Duration,
 				})
 			}
 		},
