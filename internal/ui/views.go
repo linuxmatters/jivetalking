@@ -18,33 +18,28 @@ import (
 func renderProcessingView(m Model) string {
 	var b strings.Builder
 
-	// Header
-	b.WriteString(renderHeader(m))
+	// Header (title only)
+	b.WriteString(renderHeader())
+	b.WriteString("\n\n")
+
+	// Overall progress box, directly under the title
+	b.WriteString(renderOverallProgress(m))
 	b.WriteString("\n\n")
 
 	// File queue
 	b.WriteString(renderFileQueue(m, m.progress))
-	b.WriteString("\n\n")
-
-	// Overall progress
-	b.WriteString(renderOverallProgress(m))
 
 	return b.String()
 }
 
 // renderHeader renders the application header
-func renderHeader(m Model) string {
+func renderHeader() string {
 	title := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(cli.ColorRed).
 		Render("Jivetalking 🕺")
 
-	subtitle := lipgloss.NewStyle().
-		Foreground(cli.ColorMuted).
-		Italic(true).
-		Render(fmt.Sprintf("Processing %d file(s)", m.TotalFiles))
-
-	return title + "\n" + subtitle
+	return title
 }
 
 // renderFileQueue renders the list of files with their status
@@ -145,7 +140,7 @@ func renderFileDetails(file FileProgress, prog progress.Model, easedLevel, eased
 }
 
 // timelineWidth is the cell count of the mini dot timeline in the Time block.
-// Kept small (8) so the whole "⏱ MM:SS ▰… MM:SS · ⚡ N×" line stays within the
+// Kept small (8) so the whole "MM:SS ▰… MM:SS · ⚡ N×" line stays within the
 // meterWidth-cell box inner width.
 const timelineWidth = 8
 
@@ -182,13 +177,17 @@ func renderTimeline(file FileProgress) string {
 	}
 
 	muted := lipgloss.NewStyle().Foreground(cli.ColorMuted)
-	return fmt.Sprintf("⏱ %s %s %s  %s  %s",
+	return fmt.Sprintf("%s %s %s  %s  %s",
 		formatElapsed(elapsed),
 		timeline,
 		rightClock,
 		muted.Render("·"),
 		muted.Render(badge))
 }
+
+// peakMarkerGlyph is the peak-hold marker drawn on its own line beneath the bar,
+// its point meeting the elbow corner directly below at the peak column.
+const peakMarkerGlyph = "🭯"
 
 // renderAudioLevelMeter renders a live audio level meter with dB visualization.
 // elapsed drives the gentle pulse of the peak-hold marker; it is the file's
@@ -261,10 +260,12 @@ func renderAudioLevelMeter(currentLevel, peakLevel float64, elapsed time.Duratio
 	}
 	flush()
 
-	// Peak-hold marker: a pulsing triangle on its own line beneath the bar,
-	// aligned to the peak column, plus an elbow connector line that tethers the
-	// peak value to the marker. Skip both when there is no meaningful peak yet
-	// (peak still at the silence floor), so no stray marker sits at column 0.
+	// Peak-hold marker: a pulsing 🭯 on its own line beneath the bar, aligned to
+	// the peak column, plus an elbow connector line that tethers the peak value to
+	// the marker. Skip both when there is no meaningful peak yet (peak still at the
+	// silence floor), so no stray marker sits at column 0. Alignment uses
+	// lipgloss.Width (display columns), not byte length, so the wide ㏈ glyph in
+	// the value does not shift the elbow corner off the marker column.
 	if peakLevel > minDB {
 		pulseColor := peakMarkerColor(elapsed)
 		elbowStyle := lipgloss.NewStyle().Foreground(pulseColor)
@@ -273,20 +274,21 @@ func renderAudioLevelMeter(currentLevel, peakLevel float64, elapsed time.Duratio
 
 		b.WriteByte('\n')
 		b.WriteString(strings.Repeat(" ", peakPos))
-		b.WriteString(elbowStyle.Render("▲"))
-
+		b.WriteString(elbowStyle.Render(peakMarkerGlyph))
 		b.WriteByte('\n')
 		// Default: elbow drops to the right (└ value). When the right-elbow form
 		// would overflow the bar, flip to the left (value ┘) so the label stays
-		// within meterWidth.
-		if peakPos+len(" "+value)+1 <= width {
+		// within meterWidth. The right form renders as `<peakPos spaces>└ <value>`
+		// = peakPos + 1 (└) + 1 (space) + lipgloss.Width(value) columns.
+		if peakPos+lipgloss.Width(value)+2 <= width {
 			b.WriteString(strings.Repeat(" ", peakPos))
 			b.WriteString(elbowStyle.Render("└"))
 			b.WriteByte(' ')
 			b.WriteString(valueStyle.Render(value))
 		} else {
-			// value then a right-elbow ┘ ending under the peak column.
-			lead := max(peakPos-(len(value)+1), 0)
+			// value then a right-elbow ┘ ending under the peak column. The form is
+			// `<lead spaces><value> ┘`, so lead + width(value) + 1 == peakPos.
+			lead := max(peakPos-(lipgloss.Width(value)+1), 0)
 			b.WriteString(strings.Repeat(" ", lead))
 			b.WriteString(valueStyle.Render(value))
 			b.WriteByte(' ')
@@ -297,7 +299,7 @@ func renderAudioLevelMeter(currentLevel, peakLevel float64, elapsed time.Duratio
 	return b.String()
 }
 
-// peakMarkerColor returns the peak-hold triangle colour for the current pulse
+// peakMarkerColor returns the peak-hold marker colour for the current pulse
 // phase. It oscillates gently between a deep orange and the full orange at about
 // 1.2 Hz, driven by elapsed wall-clock time so it reuses the existing meter tick
 // cadence. The interpolation runs straight in sRGB between two oranges so the
@@ -333,6 +335,13 @@ func renderOverallProgress(m Model) string {
 		m.TotalFiles, m.CompletedFiles, m.FailedFiles)
 
 	return box.Render(content)
+}
+
+// FinalSummary returns the completion-summary string for persisting to the
+// normal screen after the alt-screen program exits. Callers gate on Model.Done
+// so an early user quit does not print a misleading "complete" summary.
+func FinalSummary(m Model) string {
+	return renderCompletionSummary(m)
 }
 
 // renderCompletionSummary renders the final completion summary

@@ -11,6 +11,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/alecthomas/kong"
+	"github.com/charmbracelet/colorprofile"
 	ffmpeg "github.com/linuxmatters/ffmpeg-statigo"
 	"github.com/linuxmatters/jivetalking/internal/audio"
 	"github.com/linuxmatters/jivetalking/internal/cli"
@@ -144,7 +145,7 @@ func main() {
 
 	poolDone := launchWorkerPool(runCtx, p, cliArgs.Files, config, log, jobs, reportWarnings)
 
-	_, runErr := p.Run()
+	finalModel, runErr := p.Run()
 
 	// p.Run() blocks until tea.Quit, fired on q/ctrl+c and on AllCompleteMsg.
 	// Fire cancel() unconditionally: a no-op on natural completion (workers
@@ -168,6 +169,14 @@ func main() {
 			debugLog.Close()
 		}
 		os.Exit(1) //nolint:gocritic // exitAfterDefer: debugLog explicitly closed above
+	}
+
+	// Persist the completion summary to the normal screen so it survives the
+	// alt-screen restore on exit. Only on natural completion (Done == true); an
+	// early user quit (q/ctrl+c) leaves Done == false and must skip the print to
+	// avoid a misleading "complete" summary. A non-ui.Model also skips.
+	if m, ok := finalModel.(ui.Model); ok && m.Done {
+		fmt.Fprintln(colorprofile.NewWriter(os.Stdout, os.Environ()), ui.FinalSummary(m))
 	}
 
 	for {
