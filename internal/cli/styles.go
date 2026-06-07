@@ -2,6 +2,7 @@ package cli
 
 import (
 	"os"
+	"strings"
 
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/compat"
@@ -17,11 +18,9 @@ var (
 	ColorRed = compat.AdaptiveColor{Light: lipgloss.Color("#A40000"), Dark: lipgloss.Color("#A40000")}
 	// ColorRedDim is the dark end of the progress gradient.
 	ColorRedDim = compat.AdaptiveColor{Light: lipgloss.Color("#5A0000"), Dark: lipgloss.Color("#5A0000")}
-	// ColorAccentStart is the bright-cyan start of the progress bar gradient. Its
-	// CIELAB path to ColorAccentEnd stays vivid (no muddy midpoint).
-	ColorAccentStart = compat.AdaptiveColor{Light: lipgloss.Color("#00D4FF"), Dark: lipgloss.Color("#00D4FF")}
-	// ColorAccentEnd is the violet end of the progress bar gradient.
-	ColorAccentEnd = compat.AdaptiveColor{Light: lipgloss.Color("#9D4EDD"), Dark: lipgloss.Color("#9D4EDD")}
+	// ColorCyanBright is the bright cyan start of the header letter gradient. Its
+	// CIELAB path to ColorSkyBlue stays vivid (no muddy midpoint).
+	ColorCyanBright = compat.AdaptiveColor{Light: lipgloss.Color("#00D4FF"), Dark: lipgloss.Color("#00D4FF")}
 	// ColorMuted is the muted grey for labels and secondary borders.
 	ColorMuted = compat.AdaptiveColor{Light: lipgloss.Color("#888888"), Dark: lipgloss.Color("#888888")}
 	// ColorText is the primary value text colour.
@@ -40,6 +39,8 @@ var (
 	ColorLightGrey = compat.AdaptiveColor{Light: lipgloss.Color("#666666"), Dark: lipgloss.Color("#CCCCCC")}
 	// ColorSkyBlue is the sky-blue used for panel borders.
 	ColorSkyBlue = compat.AdaptiveColor{Light: lipgloss.Color("#0284C7"), Dark: lipgloss.Color("#38BDF8")}
+	// ColorIndigo is the indigo end of the progress bar gradient.
+	ColorIndigo = compat.AdaptiveColor{Light: lipgloss.Color("#6366F1"), Dark: lipgloss.Color("#6366F1")}
 	// ColorOrangeDim is the deep-orange trough of the peak-marker pulse.
 	ColorOrangeDim = compat.AdaptiveColor{Light: lipgloss.Color("#B35F00"), Dark: lipgloss.Color("#B35F00")}
 )
@@ -53,12 +54,6 @@ var (
 
 // Styles
 var (
-	// Title style - bold red with microphone emoji
-	TitleStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(primaryColor).
-			MarginBottom(1)
-
 	// Error message style
 	ErrorStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -78,9 +73,29 @@ var (
 			Foreground(textColor)
 )
 
+// RenderTitle returns the "Jivetalking 🕺" wordmark drawn as a per-letter
+// cyan→sky-blue Blend1D gradient (bold per letter), with the 🕺 emoji appended
+// outside the gradient so it keeps its own colours. Shared by the version banner
+// and the processing-TUI header so both render the wordmark identically.
+func RenderTitle() string {
+	letters := []rune("Jivetalking")
+	ramp := lipgloss.Blend1D(len(letters), ColorCyanBright, ColorSkyBlue)
+
+	var b strings.Builder
+	for i, r := range letters {
+		b.WriteString(lipgloss.NewStyle().
+			Bold(true).
+			Foreground(ramp[i]).
+			Render(string(r)))
+	}
+	b.WriteString(" 🕺")
+
+	return b.String()
+}
+
 // PrintVersion prints version information
 func PrintVersion(version string) {
-	lipgloss.Println(TitleStyle.Render("Jivetalking 🕺"))
+	lipgloss.Println(RenderTitle())
 	lipgloss.Printf("%s %s\n", KeyStyle.Render("Version:"), ValueStyle.Render(version))
 	lipgloss.Println()
 }

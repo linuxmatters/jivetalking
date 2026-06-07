@@ -79,11 +79,11 @@ type meterState struct {
 // newProgressModel builds the shared gradient progress bar used by both the
 // processing and analysis models.
 func newProgressModel() progress.Model {
-	// Bright-cyan to violet gradient. WithScaled blends the two stops across the
+	// Sky-blue to indigo gradient. WithScaled blends the two stops across the
 	// filled portion only, so the gradient is always visible regardless of fill.
 	// The CIELAB path between these endpoints stays vivid (no muddy midpoint).
 	p := progress.New(
-		progress.WithColors(cli.ColorAccentStart, cli.ColorAccentEnd),
+		progress.WithColors(cli.ColorSkyBlue, cli.ColorIndigo),
 		progress.WithScaled(true),
 	)
 	p.EmptyColor = cli.ColorFill

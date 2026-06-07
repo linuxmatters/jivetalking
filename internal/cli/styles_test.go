@@ -2,10 +2,13 @@ package cli
 
 import (
 	"bytes"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/charmbracelet/colorprofile"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // renderThrough writes the styled string through a colorprofile.Writer pinned to
@@ -57,6 +60,73 @@ func TestStyledOutputStripsColorButKeepsTextWhenNoTTY(t *testing.T) {
 	}
 	if !strings.Contains(out, "Error:") {
 		t.Errorf("NoTTY profile dropped text: %q", out)
+	}
+}
+
+// titleColors extracts the distinct RGB foreground triples from a styled
+// string. Letters carry a bold prefix (1;38;2;r;g;b), so match the 38;2;r;g;b
+// foreground regardless of any leading SGR attributes.
+func titleColors(s string) [][3]int {
+	var out [][3]int
+	seen := map[[3]int]bool{}
+	for seg := range strings.SplitSeq(s, "\x1b[") {
+		_, after, found := strings.Cut(seg, "38;2;")
+		if !found {
+			continue
+		}
+		body, _, _ := strings.Cut(after, "m")
+		parts := strings.Split(body, ";")
+		if len(parts) < 3 {
+			continue
+		}
+		var c [3]int
+		ok := true
+		for i := range 3 {
+			n, err := strconv.Atoi(parts[i])
+			if err != nil {
+				ok = false
+				break
+			}
+			c[i] = n
+		}
+		if ok && !seen[c] {
+			seen[c] = true
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// TestRenderTitleIsGradient confirms the shared wordmark is drawn as a
+// multi-colour per-letter gradient (more than one distinct foreground) and
+// never uses the brand red foreground.
+func TestRenderTitleIsGradient(t *testing.T) {
+	title := RenderTitle()
+
+	if !strings.Contains(ansi.Strip(title), "Jivetalking") {
+		t.Fatalf("title missing wordmark: %q", title)
+	}
+
+	colors := titleColors(title)
+	if len(colors) < 2 {
+		t.Errorf("expected a multi-colour title gradient, got %d colours: %v", len(colors), colors)
+	}
+	// Brand red (#A40000 -> 164,0,0) must not colour the title.
+	if slices.Contains(colors, [3]int{164, 0, 0}) {
+		t.Errorf("title contains brand red 164,0,0:\n%q", title)
+	}
+}
+
+// TestRenderTitleDownsamplesNoColor confirms the wordmark emits zero colour SGR
+// codes when written through a NoTTY (NO_COLOR-equivalent) profile, matching the
+// colorprofile-aware output path used by PrintVersion.
+func TestRenderTitleDownsamplesNoColor(t *testing.T) {
+	out := renderThrough(colorprofile.NoTTY, RenderTitle())
+	if strings.Contains(out, "\x1b[") {
+		t.Errorf("NoTTY profile left escape sequences: %q", out)
+	}
+	if !strings.Contains(out, "Jivetalking") {
+		t.Errorf("NoTTY profile dropped wordmark: %q", out)
 	}
 }
 
