@@ -48,11 +48,13 @@ func renderFileQueue(m Model, prog progress.Model) string {
 		// fall back to the raw values when no spring slot exists.
 		easedLevel := m.Files[i].CurrentLevel
 		easedProgress := m.Files[i].Progress
+		easedPeak := m.Files[i].PeakLevel
 		if i < len(m.meters) {
 			easedLevel = m.meters[i].pos
 			easedProgress = m.meters[i].progPos
+			easedPeak = m.meters[i].peakPos
 		}
-		b.WriteString(renderFileEntry(m.Files[i], prog, easedLevel, easedProgress))
+		b.WriteString(renderFileEntry(m.Files[i], prog, easedLevel, easedProgress, easedPeak))
 		b.WriteString("\n")
 	}
 
@@ -60,7 +62,7 @@ func renderFileQueue(m Model, prog progress.Model) string {
 }
 
 // renderFileEntry renders a single file entry in the queue
-func renderFileEntry(file FileProgress, prog progress.Model, easedLevel, easedProgress float64) string {
+func renderFileEntry(file FileProgress, prog progress.Model, easedLevel, easedProgress, easedPeak float64) string {
 	fileName := filepath.Base(file.InputPath)
 
 	switch file.Status {
@@ -77,7 +79,7 @@ func renderFileEntry(file FileProgress, prog progress.Model, easedLevel, easedPr
 		icon := lipgloss.NewStyle().Foreground(cli.ColorOrange).Render("∿")
 		return fmt.Sprintf(" %s %s\n%s",
 			icon, fileName,
-			renderFileDetails(file, prog, easedLevel, easedProgress))
+			renderFileDetails(file, prog, easedLevel, easedProgress, easedPeak))
 
 	case StatusError:
 		// ✗ failed file
@@ -93,7 +95,7 @@ func renderFileEntry(file FileProgress, prog progress.Model, easedLevel, easedPr
 
 // renderFileDetails renders detailed progress for the active file. easedLevel is
 // the spring-smoothed audio level used for the meter display.
-func renderFileDetails(file FileProgress, prog progress.Model, easedLevel, easedProgress float64) string {
+func renderFileDetails(file FileProgress, prog progress.Model, easedLevel, easedProgress, easedPeak float64) string {
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(cli.ColorSkyBlue).
@@ -126,11 +128,12 @@ func renderFileDetails(file FileProgress, prog progress.Model, easedLevel, eased
 	content.WriteString(renderTimeline(file))
 	content.WriteByte('\n')
 
-	// Audio level visualization. The displayed level eases toward the target
-	// via the spring; the peak marker stays driven by the measured peak.
+	// Audio level visualization. Both the displayed level and the peak marker ease
+	// toward their targets via springs; the critically-damped peak spring keeps the
+	// eased peak from ever exceeding the measured peak-hold value.
 	if file.CurrentLevel != 0 {
 		content.WriteString("\n")
-		content.WriteString(renderAudioLevelMeter(easedLevel, file.PeakLevel, file.ElapsedTime))
+		content.WriteString(renderAudioLevelMeter(easedLevel, easedPeak, file.ElapsedTime))
 	}
 
 	return box.Render(content.String())

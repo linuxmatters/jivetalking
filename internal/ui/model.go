@@ -74,6 +74,8 @@ type meterState struct {
 	vel     float64 // meter spring velocity
 	progPos float64 // eased progress display position (0.0-1.0)
 	progVel float64 // progress spring velocity
+	peakPos float64 // eased peak-hold marker position in dB
+	peakVel float64 // peak spring velocity
 }
 
 // newProgressModel builds the shared gradient progress bar used by both the
@@ -159,6 +161,7 @@ type Model struct {
 	meters         []meterState
 	spring         harmonica.Spring // eases the audio level meter
 	progressSpring harmonica.Spring // eases the progress bar fill
+	peakSpring     harmonica.Spring // eases the peak-hold marker
 
 	// Terminal dimensions
 	Width  int
@@ -175,7 +178,7 @@ func NewModel(inputFiles []string) Model {
 			Status:    StatusQueued,
 			PeakLevel: meterFloorDB, // Initialize to silence threshold
 		}
-		meters[i] = meterState{pos: meterStartDB}
+		meters[i] = meterState{pos: meterStartDB, peakPos: meterFloorDB}
 	}
 
 	return Model{
@@ -189,6 +192,10 @@ func NewModel(inputFiles []string) Model {
 		// Snappier critically-damped spring for the bar fill: smooth motion that
 		// tracks progress promptly without overshoot.
 		progressSpring: harmonica.NewSpring(harmonica.FPS(meterFPS), 10.0, 1.0),
+		// Critically-damped spring for the peak marker: damping ratio 1.0 guarantees
+		// a monotonic, no-overshoot approach so the eased marker/label never report a
+		// value louder than the measured peak-hold.
+		peakSpring: harmonica.NewSpring(harmonica.FPS(meterFPS), 8.0, 1.0),
 	}
 }
 
@@ -295,6 +302,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.meters[i].pos, m.meters[i].vel, target)
 			m.meters[i].progPos, m.meters[i].progVel = m.progressSpring.Update(
 				m.meters[i].progPos, m.meters[i].progVel, m.Files[i].Progress)
+			m.meters[i].peakPos, m.meters[i].peakVel = m.peakSpring.Update(
+				m.meters[i].peakPos, m.meters[i].peakVel, m.Files[i].PeakLevel)
 		}
 		if !m.anyActive() {
 			return m, nil
