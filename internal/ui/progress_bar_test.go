@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -542,7 +543,7 @@ func TestProcessingRowFitsTerminal(t *testing.T) {
 		updated, _ = m.Update(ProgressMsg{FileIndex: 0, Pass: 2, PassName: "Processing", Progress: 0.5})
 		m = updated.(Model)
 
-		row := renderFileDetails(m.Files[0], m.progress, -20.0, 0.5)
+		row := renderFileDetails(m.Files[0], m.progress, -20.0, 0.5, -12.0)
 		for line := range strings.SplitSeq(row, "\n") {
 			if w := ansi.StringWidth(line); w > term {
 				t.Errorf("term=%d line width %d overflows:\n%q", term, w, line)
@@ -604,5 +605,133 @@ func TestProgressSpringIgnoresOutOfRange(t *testing.T) {
 
 	if got := m.meters[0].progPos; got != before {
 		t.Errorf("out-of-range message disturbed spring state: %v != %v", got, before)
+	}
+}
+
+// TestPeakSpringInitialisesAtFloor asserts each file's eased peak starts at the
+// silence floor so the marker eases up from silence rather than from zero.
+func TestPeakSpringInitialisesAtFloor(t *testing.T) {
+	m := NewModel([]string{"a.wav", "b.wav"})
+	for i := range m.meters {
+		if got := m.meters[i].peakPos; got != meterFloorDB {
+			t.Errorf("meters[%d].peakPos = %v, want floor %v", i, got, meterFloorDB)
+		}
+	}
+}
+
+// TestPeakSpringEases asserts the peak marker eases toward a higher target after
+// one tick (moves, but does not snap), and that ticking stops once all files
+// complete.
+func TestPeakSpringEases(t *testing.T) {
+	m := NewModel([]string{"a.wav"})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = updated.(Model)
+
+	// Activate the file and raise the peak-hold well above the silence floor.
+	updated, _ = m.Update(ProgressMsg{FileIndex: 0, Pass: 2, PassName: "Processing", Progress: 0.5, Level: -12})
+	m = updated.(Model)
+
+	start := meterFloorDB
+	target := m.Files[0].PeakLevel
+	if got := m.meters[0].peakPos; got != start {
+		t.Fatalf("initial peakPos = %v, want %v", got, start)
+	}
+
+	updated, cmd := m.Update(meterTickMsg{})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Error("tick returned nil cmd while a file is active; loop must continue")
+	}
+
+	eased := m.meters[0].peakPos
+	if !(start < eased && eased < target) {
+		t.Errorf("eased peakPos %v not strictly between start %v and target %v", eased, start, target)
+	}
+
+	updated, _ = m.Update(AllCompleteMsg{})
+	m = updated.(Model)
+	_, cmd = m.Update(meterTickMsg{})
+	if cmd != nil {
+		t.Error("tick rescheduled after AllCompleteMsg; loop must terminate")
+	}
+}
+
+// TestPeakSpringNoOvershoot asserts the critically-damped peak spring converges
+// to a stepped target without ever exceeding it. Peak-hold is monotonic, so any
+// overshoot would momentarily render a value louder than the measured peak.
+func TestPeakSpringNoOvershoot(t *testing.T) {
+	m := NewModel([]string{"a.wav"})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = updated.(Model)
+
+	updated, _ = m.Update(ProgressMsg{FileIndex: 0, Pass: 2, PassName: "Processing", Progress: 0.5, Level: -10})
+	m = updated.(Model)
+
+	target := m.Files[0].PeakLevel
+	prev := m.meters[0].peakPos
+	for tick := range 600 {
+		updated, _ = m.Update(meterTickMsg{})
+		m = updated.(Model)
+		cur := m.meters[0].peakPos
+		if cur > target {
+			t.Fatalf("tick %d: peakPos %v overshot target %v", tick, cur, target)
+		}
+		if cur < prev-1e-9 {
+			t.Fatalf("tick %d: peakPos %v moved backward from %v (non-monotonic)", tick, cur, prev)
+		}
+		prev = cur
+	}
+	if math.Abs(m.meters[0].peakPos-target) > 0.01 {
+		t.Errorf("peakPos %v did not converge to target %v", m.meters[0].peakPos, target)
+	}
+}
+
+// TestPeakSpringRisingTargets feeds a rising series of peak-hold targets and
+// confirms the eased peak glides monotonically to each without overshoot.
+func TestPeakSpringRisingTargets(t *testing.T) {
+	m := NewModel([]string{"a.wav"})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = updated.(Model)
+	updated, _ = m.Update(ProgressMsg{FileIndex: 0, Pass: 2, PassName: "Processing", Progress: 0.5, Level: -40})
+	m = updated.(Model)
+
+	prev := m.meters[0].peakPos
+	for _, level := range []float64{-30, -20, -12, -6} {
+		updated, _ = m.Update(ProgressMsg{FileIndex: 0, Pass: 2, PassName: "Processing", Progress: 0.5, Level: level})
+		m = updated.(Model)
+		target := m.Files[0].PeakLevel
+		for tick := range 600 {
+			updated, _ = m.Update(meterTickMsg{})
+			m = updated.(Model)
+			cur := m.meters[0].peakPos
+			if cur > target+1e-9 {
+				t.Fatalf("level %v tick %d: peakPos %v exceeded target %v", level, tick, cur, target)
+			}
+			if cur < prev-1e-9 {
+				t.Fatalf("level %v tick %d: peakPos %v moved backward from %v", level, tick, cur, prev)
+			}
+			prev = cur
+		}
+		if math.Abs(prev-target) > 0.01 {
+			t.Errorf("level %v: peakPos %v did not converge to target %v", level, prev, target)
+		}
+	}
+}
+
+// TestPeakSpringIgnoresOutOfRange asserts out-of-range messages do not disturb
+// peak spring state.
+func TestPeakSpringIgnoresOutOfRange(t *testing.T) {
+	m := NewModel([]string{"a.wav"})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = updated.(Model)
+
+	before := m.meters[0].peakPos
+	updated, _ = m.Update(ProgressMsg{FileIndex: 5, Pass: 2, Progress: 0.9, Level: -6})
+	m = updated.(Model)
+	updated, _ = m.Update(ProgressMsg{FileIndex: -1, Pass: 2, Progress: 0.9, Level: -6})
+	m = updated.(Model)
+
+	if got := m.meters[0].peakPos; got != before {
+		t.Errorf("out-of-range message disturbed peak spring state: %v != %v", got, before)
 	}
 }
