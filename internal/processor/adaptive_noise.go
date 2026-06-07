@@ -36,7 +36,7 @@ func tuneNoiseRemove(config *EffectiveFilterConfig, m *AudioMeasurements) {
 	// Threshold: 5dB above noise floor (catches breaths but not speech)
 	threshold := noiseFloor + 5.0
 	// Clamp to reasonable range
-	threshold = clamp(threshold, -70.0, -40.0)
+	threshold = max(-70.0, min(threshold, -40.0))
 
 	// Expansion: scale with noise severity
 	expansion := scaleExpansion(noiseFloor)

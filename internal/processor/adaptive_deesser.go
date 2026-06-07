@@ -1,7 +1,5 @@
 package processor
 
-import "math"
-
 const (
 	defaultDeessIntensity = 0.0
 
@@ -89,7 +87,7 @@ func tuneDeesserFull(config *EffectiveFilterConfig, measurements *AudioMeasureme
 
 	case rolloff > rolloffExtensive:
 		// Extensive HF content - likely sibilance
-		config.Deesser.Intensity = math.Min(baseIntensity*1.2, deessIntensityMax)
+		config.Deesser.Intensity = min(baseIntensity*1.2, deessIntensityMax)
 
 	default:
 		// Normal HF extension (8-12 kHz)

@@ -326,8 +326,8 @@ func calculateStabilityScore(intervals []IntervalSample) float64 {
 	}
 	avgFlux := fluxSum / n
 
-	rmsStabilityScore := clamp(1.0-(rmsVariance/9.0), 0.0, 1.0)
-	fluxStabilityScore := clamp(1.0-(avgFlux/0.02), 0.0, 1.0)
+	rmsStabilityScore := max(0.0, min(1.0-(rmsVariance/9.0), 1.0))
+	fluxStabilityScore := max(0.0, min(1.0-(avgFlux/0.02), 1.0))
 
 	return rmsStabilityScore*0.6 + fluxStabilityScore*0.4
 }
@@ -396,7 +396,7 @@ func calculateSpectralScore(centroid, flatness, kurtosis float64) float64 {
 		flatnessScore = 0.0
 	}
 
-	kurtosisScore := 1.0 - clamp(kurtosis/20.0, 0.0, 1.0)
+	kurtosisScore := 1.0 - max(0.0, min(kurtosis/20.0, 1.0))
 
 	return centroidScore*0.5 + flatnessScore*0.3 + kurtosisScore*0.2
 }
@@ -407,7 +407,7 @@ func calculateSpectralScore(centroid, flatness, kurtosis float64) float64 {
 // See docs/SILENCE-DETECTION-PLAN.md for empirical derivation.
 func applyCrestFactorPenalty(score, crestFactor, peak, rms float64) float64 {
 	if crestFactor > crestFactorSoftThreshold {
-		softPenalty := math.Min(0.2, (crestFactor-crestFactorSoftThreshold)/50)
+		softPenalty := min(0.2, (crestFactor-crestFactorSoftThreshold)/50)
 		score *= (1 - softPenalty)
 	}
 

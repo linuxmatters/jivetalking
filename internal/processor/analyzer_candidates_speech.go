@@ -2,7 +2,7 @@ package processor
 
 import (
 	"math"
-	"sort"
+	"slices"
 	"time"
 )
 
@@ -51,7 +51,7 @@ func computeSpeechRMSMinimum(rmsLevel, noiseFloor float64) float64 {
 	if rmsLevel == 0 || noiseFloor == 0 || math.IsInf(rmsLevel, -1) || math.IsInf(noiseFloor, -1) {
 		return speechRMSMinimumDefault
 	}
-	return math.Max(rmsLevel-speechRMSMinimumOffset, noiseFloor+speechRMSMinimumNoiseMargin)
+	return max(rmsLevel-speechRMSMinimumOffset, noiseFloor+speechRMSMinimumNoiseMargin)
 }
 
 // Speech window stability scoring constants
@@ -196,7 +196,7 @@ func calculateFluxScore(flux float64) float64 {
 // Density at or above voicingDensityThreshold (60%) scores 1.0.
 // Lower densities score proportionally less.
 func calculateVoicingScore(voicingDensity float64) float64 {
-	return clamp(voicingDensity/voicingDensityThreshold, 0.0, 1.0)
+	return max(0.0, min(voicingDensity/voicingDensityThreshold, 1.0))
 }
 
 // refineToGoldenSpeechSubregion finds the most representative sub-region within a speech candidate.
@@ -241,7 +241,7 @@ func speechScore(interval IntervalSample, rmsP50 float64, speechRMSMin float64) 
 	if interval.RMSLevel >= rmsP50 {
 		// Above median: score increases up to +6dB
 		boost := interval.RMSLevel - rmsP50
-		ampScore = clamp(boost/6.0, 0.0, 1.0)
+		ampScore = max(0.0, min(boost/6.0, 1.0))
 	}
 
 	// Centroid score: voice range (200-4500 Hz) = good
@@ -306,7 +306,7 @@ func findSpeechCandidatesFromIntervals(intervals []IntervalSample, roomToneEnd t
 	for i, interval := range searchIntervals {
 		rmsLevels[i] = interval.RMSLevel
 	}
-	sort.Float64s(rmsLevels)
+	slices.Sort(rmsLevels)
 
 	rmsP50 := rmsLevels[len(rmsLevels)/2]
 
@@ -430,7 +430,7 @@ func findBestSpeechRegion(regions []SpeechRegion, intervals []IntervalSample, no
 				// Apply penalty factor rather than rejecting outright
 				// This allows selection if no better candidates exist
 				snrPenalty := snrMargin / minSNRMargin // 0.0 to 1.0
-				score *= clamp(snrPenalty, 0.1, 1.0)
+				score *= max(0.1, min(snrPenalty, 1.0))
 				metrics.Score = score
 			}
 		} else {
@@ -508,7 +508,7 @@ func scoreSpeechCandidate(m *SpeechCandidateMetrics) float64 {
 	// Amplitude score: louder speech = better sample
 	ampScore := 0.0
 	if m.RMSLevel > -30.0 {
-		ampScore = clamp((m.RMSLevel-(-30.0))/18.0, 0.0, 1.0)
+		ampScore = max(0.0, min((m.RMSLevel-(-30.0))/18.0, 1.0))
 	}
 
 	// Centroid score: voice range = good
@@ -523,11 +523,11 @@ func scoreSpeechCandidate(m *SpeechCandidateMetrics) float64 {
 	if m.CrestFactor >= crestFactorMin && m.CrestFactor <= crestFactorMax {
 		distFromIdeal := math.Abs(m.CrestFactor - crestFactorIdeal)
 		maxDist := max(crestFactorIdeal-crestFactorMin, crestFactorMax-crestFactorIdeal)
-		crestScore = clamp(1.0-(distFromIdeal/maxDist), 0.0, 1.0)
+		crestScore = max(0.0, min(1.0-(distFromIdeal/maxDist), 1.0))
 	}
 
 	// Duration score: longer = better (up to 60s, then plateau)
-	durScore := clamp(m.Region.Duration.Seconds()/60.0, 0.0, 1.0)
+	durScore := max(0.0, min(m.Region.Duration.Seconds()/60.0, 1.0))
 
 	// Voicing density score: prefer high voiced content proportion
 	// Uses shared helper function for consistency with scoreSpeechIntervalWindow

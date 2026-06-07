@@ -160,7 +160,7 @@ func applyHighCrestOverrides(config *EffectiveFilterConfig, diagnostics *Adaptiv
 		return la2aOverrides{}
 	}
 
-	severity := clamp(deficit/la2aHighCrestMaxDeficit, 0.0, 1.0)
+	severity := max(0.0, min(deficit/la2aHighCrestMaxDeficit, 1.0))
 	if diagnostics != nil {
 		diagnostics.LA2AHighCrestActive = true
 		diagnostics.LA2AHighCrestSeverity = severity
@@ -240,10 +240,10 @@ func tuneLA2ARelease(config *EffectiveFilterConfig, measurements *AudioMeasureme
 		switch {
 		case flux > la2aFluxDynamic:
 			// Dynamic/expressive content - add release time
-			release = math.Max(release, la2aReleaseExpressive)
+			release = max(release, la2aReleaseExpressive)
 		case flux < la2aFluxStatic:
 			// Static/monotone content - can use shorter release
-			release = math.Min(release, la2aReleaseCompact)
+			release = min(release, la2aReleaseCompact)
 		}
 	}
 
@@ -264,7 +264,7 @@ func tuneLA2ARelease(config *EffectiveFilterConfig, measurements *AudioMeasureme
 
 	// Enforce high-crest override floor when active
 	if overrides.ReleaseFloor != 0 {
-		release = math.Max(release, overrides.ReleaseFloor)
+		release = max(release, overrides.ReleaseFloor)
 	}
 
 	config.LA2A.Release = release
@@ -311,18 +311,18 @@ func tuneLA2ARatio(config *EffectiveFilterConfig, measurements *AudioMeasurement
 	if measurements.InputTP >= la2aHotInputTPThreshold {
 		severity := (measurements.InputTP - la2aHotInputTPThreshold) /
 			(la2aHotInputTPSevere - la2aHotInputTPThreshold)
-		severity = clamp(severity, 0.0, 1.0)
+		severity = max(0.0, min(severity, 1.0))
 		severity = math.Sqrt(severity)
 		ratio -= la2aHotInputRatioReduction * severity
 	}
 
 	// Clamp to reasonable range
-	ratio = clamp(ratio, 2.0, 5.0)
+	ratio = max(2.0, min(ratio, 5.0))
 
 	// Enforce high-crest override floor when active
 	if overrides.RatioFloor != 0 {
-		ratio = math.Max(ratio, overrides.RatioFloor)
-		ratio = clamp(ratio, 2.0, 5.0)
+		ratio = max(ratio, overrides.RatioFloor)
+		ratio = max(2.0, min(ratio, 5.0))
 	}
 
 	config.LA2A.Ratio = ratio
@@ -358,7 +358,7 @@ func tuneLA2AThreshold(config *EffectiveFilterConfig, measurements *AudioMeasure
 	if measurements.InputTP >= la2aHotInputTPThreshold {
 		severity := (measurements.InputTP - la2aHotInputTPThreshold) /
 			(la2aHotInputTPSevere - la2aHotInputTPThreshold)
-		severity = clamp(severity, 0.0, 1.0)
+		severity = max(0.0, min(severity, 1.0))
 		severity = math.Sqrt(severity)
 		headroom -= la2aHotInputHeadroomReduction * severity
 	}
@@ -369,11 +369,11 @@ func tuneLA2AThreshold(config *EffectiveFilterConfig, measurements *AudioMeasure
 	threshold := measurements.PeakLevel - headroom
 
 	// Clamp to safe range
-	threshold = clamp(threshold, la2aThresholdMin, la2aThresholdMax)
+	threshold = max(la2aThresholdMin, min(threshold, la2aThresholdMax))
 
 	// Enforce high-crest override floor when active (lower threshold = more compression)
 	if overrides.ThresholdFloor != 0 {
-		threshold = math.Min(threshold, overrides.ThresholdFloor)
+		threshold = min(threshold, overrides.ThresholdFloor)
 	}
 
 	config.LA2A.Threshold = threshold
@@ -417,12 +417,12 @@ func tuneLA2AKnee(config *EffectiveFilterConfig, measurements *AudioMeasurements
 	}
 
 	// Clamp to FFmpeg's range
-	knee = clamp(knee, 1.0, 8.0)
+	knee = max(1.0, min(knee, 8.0))
 
 	// Enforce high-crest override floor when active
 	if overrides.KneeFloor != 0 {
-		knee = math.Max(knee, overrides.KneeFloor)
-		knee = clamp(knee, 1.0, 8.0)
+		knee = max(knee, overrides.KneeFloor)
+		knee = max(1.0, min(knee, 8.0))
 	}
 
 	config.LA2A.Knee = knee

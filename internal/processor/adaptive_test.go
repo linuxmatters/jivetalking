@@ -1994,8 +1994,8 @@ func TestTuneLA2AThresholdFallsBackForInvalidPeak(t *testing.T) {
 }
 
 func TestClamp(t *testing.T) {
-	// Tests for the clamp helper function
-	// clamp(val, min, max) returns val constrained to [min, max]
+	// Tests for the min/max builtin clamp pattern
+	// max(lo, min(val, hi)) returns val constrained to [lo, hi]
 
 	tests := []struct {
 		name string
@@ -2152,10 +2152,10 @@ func TestClamp(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := clamp(tt.val, tt.min, tt.max)
+			got := max(tt.min, min(tt.val, tt.max))
 			if got != tt.want {
-				t.Errorf("clamp(%v, %v, %v) = %v, want %v",
-					tt.val, tt.min, tt.max, got, tt.want)
+				t.Errorf("max(%v, min(%v, %v)) = %v, want %v",
+					tt.min, tt.val, tt.max, got, tt.want)
 			}
 		})
 	}

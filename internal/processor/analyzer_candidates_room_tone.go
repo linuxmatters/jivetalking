@@ -1,8 +1,9 @@
 package processor
 
 import (
+	"cmp"
 	"fmt"
-	"sort"
+	"slices"
 	"time"
 )
 
@@ -106,8 +107,8 @@ func computeSilenceMedians(searchIntervals []IntervalSample) silenceMedians {
 		rmsLevels[i] = interval.RMSLevel
 		fluxValues[i] = interval.Spectral.Flux
 	}
-	sort.Float64s(rmsLevels)
-	sort.Float64s(fluxValues)
+	slices.Sort(rmsLevels)
+	slices.Sort(fluxValues)
 
 	return silenceMedians{
 		rmsP50:  rmsLevels[len(rmsLevels)/2],
@@ -150,8 +151,8 @@ func estimateNoiseFloorAndThreshold(intervals []IntervalSample, medians silenceM
 	}
 
 	// Sort by score descending to find high-confidence room tone intervals
-	sort.Slice(scored, func(i, j int) bool {
-		return scored[i].score > scored[j].score
+	slices.SortFunc(scored, func(a, b scoredInterval) int {
+		return cmp.Compare(b.score, a.score)
 	})
 
 	// Take the top 20% of scored intervals as room tone candidates

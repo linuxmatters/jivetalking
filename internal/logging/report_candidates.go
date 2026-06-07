@@ -3,10 +3,11 @@
 package logging
 
 import (
+	"cmp"
 	"fmt"
 	"io"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -176,13 +177,11 @@ func rankedCandidateEntries[T any](candidates []T, isSelected func(T) bool, star
 		entries = append(entries, entry)
 	}
 
-	sort.SliceStable(entries, func(i, j int) bool {
-		leftStart := start(entries[i].candidate)
-		rightStart := start(entries[j].candidate)
-		if leftStart == rightStart {
-			return entries[i].index < entries[j].index
-		}
-		return leftStart < rightStart
+	slices.SortStableFunc(entries, func(a, b candidateDisplayEntry[T]) int {
+		return cmp.Or(
+			cmp.Compare(start(a.candidate), start(b.candidate)),
+			cmp.Compare(a.index, b.index),
+		)
 	})
 
 	return elected, selectCandidateEntries(entries)
