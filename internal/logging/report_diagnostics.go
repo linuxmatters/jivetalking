@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"sort"
+	"slices"
 
 	"github.com/linuxmatters/jivetalking/internal/processor"
 )
@@ -37,7 +37,7 @@ func writeDiagnosticRoomTone(f *os.File, measurements *processor.AudioMeasuremen
 		if len(rmsValues) >= 10 {
 			sorted := make([]float64, len(rmsValues))
 			copy(sorted, rmsValues)
-			sort.Float64s(sorted)
+			slices.Sort(sorted)
 
 			fmt.Fprintf(f, "  RMSLevel Dist:     min %.1f, p10 %.1f, p25 %.1f, p50 %.1f, p75 %.1f, p90 %.1f, max %.1f dBFS\n",
 				sorted[0],

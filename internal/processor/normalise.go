@@ -185,7 +185,7 @@ func measureWithLoudnorm(ctx context.Context, inputPath string, config *Effectiv
 			samplesProcessed += int64(inputFrame.NbSamples())
 			frameCount++
 			if progressCallback != nil && frameCount%progressUpdateInterval == 0 {
-				progress := math.Min(0.99, float64(samplesProcessed)/float64(totalSamples))
+				progress := min(0.99, float64(samplesProcessed)/float64(totalSamples))
 				progressCallback(ProgressUpdate{
 					Pass:     PassMeasuring,
 					PassName: "Measuring",
@@ -790,7 +790,7 @@ func executeAndPublishLoudnormApplication(
 			inputFramesRead++
 
 			if request.progress != nil && inputFramesRead%progressUpdateInterval == 0 {
-				progress := math.Min(0.99, float64(samplesProcessed)/float64(totalSamples))
+				progress := min(0.99, float64(samplesProcessed)/float64(totalSamples))
 				request.progress(ProgressUpdate{
 					Pass:     PassNormalising,
 					PassName: "Normalising",

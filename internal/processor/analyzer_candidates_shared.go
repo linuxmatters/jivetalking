@@ -1,8 +1,9 @@
 package processor
 
 import (
+	"cmp"
 	"math"
-	"sort"
+	"slices"
 	"time"
 )
 
@@ -74,8 +75,8 @@ func getIntervalsInRange(intervals []IntervalSample, start, end time.Duration) [
 
 	// Find first interval at or after start time using binary search
 	// (intervals are sorted by timestamp from the collection loop in AnalyzeAudio)
-	startIdx := sort.Search(len(intervals), func(i int) bool {
-		return intervals[i].Timestamp >= start
+	startIdx, _ := slices.BinarySearchFunc(intervals, start, func(iv IntervalSample, target time.Duration) int {
+		return cmp.Compare(iv.Timestamp, target)
 	})
 	if startIdx >= len(intervals) {
 		return nil
@@ -238,11 +239,11 @@ func scoreSpeechIntervalWindow(intervals []IntervalSample) float64 {
 	// Kurtosis score: higher kurtosis = clearer harmonics
 	// Typical speech kurtosis ranges 5-10; score peaks around 7.5 (mid-point)
 	// Reference: Gaussian kurtosis=3; speech harmonic structure produces 5-10
-	kurtosisScore := clamp(avgKurtosis/7.5, 0.0, 1.0)
+	kurtosisScore := max(0.0, min(avgKurtosis/7.5, 1.0))
 
 	// Flatness score: lower flatness = more tonal = better speech
 	// Flatness 0 = pure tone, 1 = white noise; speech typically 0.1-0.4
-	flatnessScore := clamp(1.0-avgFlatness, 0.0, 1.0)
+	flatnessScore := max(0.0, min(1.0-avgFlatness, 1.0))
 
 	// Centroid score: peak at voice centre, decay toward edges
 	// Voice range: speechCentroidMin (200 Hz) to speechCentroidMax (4500 Hz)
@@ -258,13 +259,13 @@ func scoreSpeechIntervalWindow(intervals []IntervalSample) float64 {
 
 	// Consistency score: low kurtosis variance = stable voicing
 	// Variance > 100 is very inconsistent; clamp score at that point
-	consistencyScore := clamp(1.0-(kurtosisVariance/100.0), 0.0, 1.0)
+	consistencyScore := max(0.0, min(1.0-(kurtosisVariance/100.0), 1.0))
 
 	// RMS score: louder = more active speech
 	// Range: -30 dBFS (worst) to -12 dBFS (best)
 	rmsScore := 0.0
 	if avgRMS > -30.0 {
-		rmsScore = clamp((avgRMS-(-30.0))/18.0, 0.0, 1.0)
+		rmsScore = max(0.0, min((avgRMS-(-30.0))/18.0, 1.0))
 	}
 
 	// Rolloff score: prefer regions with rolloff in typical voiced speech range.

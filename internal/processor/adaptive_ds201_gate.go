@@ -249,7 +249,7 @@ func tuneDS201Gate(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagnosti
 	rangeDB := calculateDS201GateRangeDB(roomToneEntropy, measurements.NoiseFloor)
 
 	// Clamp range and convert to linear
-	rangeDB = clamp(rangeDB, float64(ds201GateRangeMinDB), float64(ds201GateRangeMaxDB))
+	rangeDB = max(float64(ds201GateRangeMinDB), min(rangeDB, float64(ds201GateRangeMaxDB)))
 	config.DS201Gate.Range = Decibels(rangeDB).LinearAmplitude().Float64()
 
 	// 6. Knee: based on spectral crest - soft knee for natural transitions
@@ -308,7 +308,7 @@ func calculateAggression(separation, lra float64) float64 {
 		lraAdjustment = (lra - ds201GateAggressionLRAThreshold) * ds201GateAggressionLRAScale
 	}
 
-	return clamp(baseAggression-lraAdjustment, ds201GateAggressionMin, ds201GateAggressionMax)
+	return max(ds201GateAggressionMin, min(baseAggression-lraAdjustment, ds201GateAggressionMax))
 }
 
 // calculateDS201GateThresholdLegacy uses the original noise-floor-based approach
@@ -332,7 +332,7 @@ func calculateDS201GateThresholdLegacy(
 		thresholdDB = max(minGapThreshold, ds201GateTargetThresholdDB)
 	}
 
-	thresholdDB = clamp(thresholdDB, ds201GateThresholdMinDB, ds201GateThresholdMaxDB)
+	thresholdDB = max(ds201GateThresholdMinDB, min(thresholdDB, ds201GateThresholdMaxDB))
 
 	return Decibels(thresholdDB).LinearAmplitude().Float64()
 }
@@ -387,7 +387,7 @@ func calculateDS201GateThreshold(
 		}
 
 		// Additional safety: respect global limits
-		thresholdDB = clamp(thresholdDB, ds201GateThresholdMinDB, ds201GateThresholdMaxDB)
+		thresholdDB = max(ds201GateThresholdMinDB, min(thresholdDB, ds201GateThresholdMaxDB))
 
 		return Decibels(thresholdDB).LinearAmplitude().Float64()
 	}
@@ -443,7 +443,7 @@ func calculateDS201GateAttack(maxDiff, spectralFlux, spectralCrest float64) floa
 		baseAttack *= 0.8
 	}
 
-	return clamp(baseAttack, ds201GateAttackUltraFast, 25.0)
+	return max(ds201GateAttackUltraFast, min(baseAttack, 25.0))
 }
 
 // calculateDS201GateRelease determines release time based on content and noise character.
@@ -517,7 +517,7 @@ func calculateDS201GateRelease(spectralFlux, zcr, roomToneEntropy, lra float64) 
 		baseRelease += ds201GateReleaseLRAExtension * extensionScale
 	}
 
-	return clamp(baseRelease, float64(ds201GateReleaseMin), float64(ds201GateReleaseMax))
+	return max(float64(ds201GateReleaseMin), min(baseRelease, float64(ds201GateReleaseMax)))
 }
 
 // calculateDS201GateRangeDB determines maximum attenuation depth in dB based on noise character.
