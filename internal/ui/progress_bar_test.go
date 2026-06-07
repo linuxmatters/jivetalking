@@ -101,6 +101,47 @@ func TestProgressFillIsGradient(t *testing.T) {
 	}
 }
 
+// TestMeterIsGradient asserts the audio level meter colours its filled cells as
+// a smooth green→yellow→orange→red ramp rather than three flat zones: green-ish
+// at the first cell, red-ish at the last, and more than 3 distinct fill colours.
+func TestMeterIsGradient(t *testing.T) {
+	// Drive the level to the hot end so every cell is filled and coloured.
+	out := renderAudioLevelMeter(-1.0, 0.0)
+
+	colors := fillColors(out)
+	if len(colors) <= 3 {
+		t.Fatalf("expected a gradient (>3 distinct fill colours), got %d: %v", len(colors), colors)
+	}
+
+	first := colors[0]
+	last := colors[len(colors)-1]
+
+	// First cell green-ish: green channel dominant over red and blue.
+	greenDominant := first[1] > first[0] && first[1] > first[2]
+	if !greenDominant {
+		t.Errorf("first cell %v is not green-dominant", first)
+	}
+	// Last cell red-ish: red channel dominant over green and blue.
+	redDominant := last[0] > last[1] && last[0] > last[2]
+	if !redDominant {
+		t.Errorf("last cell %v is not red-dominant", last)
+	}
+
+	// No muddy/grey midpoint: at least one mid colour stays vivid.
+	vivid := false
+	for _, c := range colors {
+		lo := min(c[0], min(c[1], c[2]))
+		hi := max(c[0], max(c[1], c[2]))
+		if hi-lo > 40 {
+			vivid = true
+			break
+		}
+	}
+	if !vivid {
+		t.Errorf("meter gradient looks muddy (no vivid colour): %v", colors)
+	}
+}
+
 func TestProcessingProgressWidthFitsTerminal(t *testing.T) {
 	for _, term := range []int{20, 40, 80, 120, 200} {
 		m := NewModel([]string{"a.wav"})
