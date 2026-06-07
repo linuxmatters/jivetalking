@@ -30,6 +30,8 @@ var (
 	ColorOrange = compat.AdaptiveColor{Light: lipgloss.Color("#FFA500"), Dark: lipgloss.Color("#FFA500")}
 	// ColorGreen is the success / safe zone colour.
 	ColorGreen = compat.AdaptiveColor{Light: lipgloss.Color("#00AA00"), Dark: lipgloss.Color("#00AA00")}
+	// ColorYellow is the mid-warm VU-meter stop between green and orange.
+	ColorYellow = compat.AdaptiveColor{Light: lipgloss.Color("#E6E600"), Dark: lipgloss.Color("#E6E600")}
 	// ColorCyan is the accent colour used in help output.
 	ColorCyan = compat.AdaptiveColor{Light: lipgloss.Color("#00AAAA"), Dark: lipgloss.Color("#00AAAA")}
 	// ColorFill is the empty/unfilled fill colour for meters and progress.

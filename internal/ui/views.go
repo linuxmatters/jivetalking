@@ -165,27 +165,23 @@ func renderAudioLevelMeter(currentLevel, peakLevel float64) string {
 	// Calculate position for peak marker
 	peakPos := max(0, min(int(((peakLevel-minDB)/(maxDB-minDB))*float64(width)), width))
 
-	// Build the meter bar with color zones
-	// Green: -60 to -16 dB (safe)
-	// Orange: -16 to -6 dB (approaching loud)
-	// Red: -6 to 0 dB (loud/clipping risk)
+	// Build a continuous green→yellow→orange→red colour ramp once per render.
+	// Real VU meters keep green dominant across the low range and compress the
+	// warm colours into the hot end, so the ramp is built from two piecewise
+	// Blend1D segments keyed to the -16 dB threshold: green→yellow fills the low
+	// zone, then yellow→orange→red is squeezed into the top ~16 dB.
 	greenZone := int((((-16.0) - minDB) / (maxDB - minDB)) * float64(width))
-	orangeZone := int((((-6.0) - minDB) / (maxDB - minDB)) * float64(width))
+	greenZone = max(0, min(greenZone, width))
 
-	// Zone colours sourced from the centralised palette.
-	greenColor := cli.ColorGreen
-	orangeColor := cli.ColorOrange
-	redColor := cli.ColorRed
+	ramp := make([]color.Color, 0, width)
+	ramp = append(ramp, lipgloss.Blend1D(greenZone, cli.ColorGreen, cli.ColorYellow)...)
+	ramp = append(ramp, lipgloss.Blend1D(width-greenZone, cli.ColorYellow, cli.ColorOrange, cli.ColorRed)...)
 
-	zoneColor := func(i int) color.Color {
-		switch {
-		case i < greenZone:
-			return greenColor
-		case i < orangeZone:
-			return orangeColor
-		default:
-			return redColor
+	cellColor := func(i int) color.Color {
+		if i < 0 || i >= len(ramp) {
+			return cli.ColorRed
 		}
+		return ramp[i]
 	}
 
 	meterChar := func(i int) rune {
@@ -216,7 +212,7 @@ func renderAudioLevelMeter(currentLevel, peakLevel float64) string {
 	}
 
 	for i := range width {
-		color := zoneColor(i)
+		color := cellColor(i)
 		if run.Len() > 0 && color != runColor {
 			flush()
 		}
