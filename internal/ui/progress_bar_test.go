@@ -85,8 +85,8 @@ func triangleColor(s string) *[3]int {
 }
 
 // TestProgressFillIsGradient asserts the fill is a multi-colour gradient that
-// starts at the cyan accent, ends at the violet accent, never uses the red brand
-// colour, and has no muddy/grey midpoint.
+// starts at the sky-blue accent, ends at the indigo accent, never uses the red
+// brand colour, and has no muddy/grey midpoint.
 func TestProgressFillIsGradient(t *testing.T) {
 	p := newProgressModel()
 	p.SetWidth(meterWidth)
@@ -104,18 +104,18 @@ func TestProgressFillIsGradient(t *testing.T) {
 		t.Errorf("progress fill contains brand red 38;2;164;0;0:\n%q", out)
 	}
 
-	// Start endpoint: bright cyan #00D4FF must appear exactly.
-	if !hasColor(out, 0, 212, 255) {
-		t.Errorf("progress fill missing cyan start #00D4FF (0,212,255):\n%v", colors)
+	// Start endpoint: sky-blue #38BDF8 must appear exactly.
+	if !hasColor(out, 56, 189, 248) {
+		t.Errorf("progress fill missing sky-blue start #38BDF8 (56,189,248):\n%v", colors)
 	}
 	// End endpoint: at a partial fill the last cell approaches but need not equal
-	// the violet stop #9D4EDD (157,78,221). Assert the final fill colour is close
-	// (each channel within 12) and clearly violet (blue dominant, low green).
+	// the indigo stop #6366F1 (99,102,241). Assert the final fill colour is close
+	// (each channel within 12) and clearly indigo (blue dominant).
 	fill := colors[:len(colors)-1] // drop trailing empty-track colour
 	last := fill[len(fill)-1]
-	near := abs(last[0]-157) <= 12 && abs(last[1]-78) <= 12 && abs(last[2]-221) <= 12
+	near := abs(last[0]-99) <= 12 && abs(last[1]-102) <= 12 && abs(last[2]-241) <= 12
 	if !near {
-		t.Errorf("final fill colour %v not near violet end (157,78,221)", last)
+		t.Errorf("final fill colour %v not near indigo end (99,102,241)", last)
 	}
 
 	// Midpoint sanity: at least one mid-gradient colour must stay vivid (channel

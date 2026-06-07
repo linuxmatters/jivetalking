@@ -32,14 +32,11 @@ func renderProcessingView(m Model) string {
 	return b.String()
 }
 
-// renderHeader renders the application header
+// renderHeader renders the application header. The title word is drawn as a
+// per-letter cyan→sky-blue gradient via the shared cli.RenderTitle() helper, so
+// the TUI and the --version banner share one wordmark implementation.
 func renderHeader() string {
-	title := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(cli.ColorRed).
-		Render("Jivetalking 🕺")
-
-	return title
+	return cli.RenderTitle()
 }
 
 // renderFileQueue renders the list of files with their status

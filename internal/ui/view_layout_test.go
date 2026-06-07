@@ -1,22 +1,78 @@
 package ui
 
 import (
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/linuxmatters/jivetalking/internal/processor"
 )
 
 // TestHeaderHasNoSubtitle confirms the redundant "Processing N file(s)"
-// subtitle was removed from the header while the title stays.
+// subtitle was removed from the header while the title stays. The per-letter
+// gradient inserts ANSI escapes between letters, so strip them before matching
+// the contiguous title word.
 func TestHeaderHasNoSubtitle(t *testing.T) {
 	header := renderHeader()
+	plain := ansi.Strip(header)
 
-	if !strings.Contains(header, "Jivetalking") {
+	if !strings.Contains(plain, "Jivetalking") {
 		t.Errorf("header missing title: %q", header)
 	}
-	if strings.Contains(header, "file(s)") {
+	if strings.Contains(plain, "file(s)") {
 		t.Errorf("header still contains subtitle: %q", header)
+	}
+}
+
+// headerColors extracts the distinct RGB foreground triples from the styled
+// header. Title letters carry a bold prefix (1;38;2;r;g;b), so match the
+// 38;2;r;g;b foreground regardless of any leading SGR attributes.
+func headerColors(s string) [][3]int {
+	var out [][3]int
+	seen := map[[3]int]bool{}
+	for seg := range strings.SplitSeq(s, "\x1b[") {
+		_, after, found := strings.Cut(seg, "38;2;")
+		if !found {
+			continue
+		}
+		body, _, _ := strings.Cut(after, "m")
+		parts := strings.Split(body, ";")
+		if len(parts) < 3 {
+			continue
+		}
+		var c [3]int
+		ok := true
+		for i := range 3 {
+			n, err := strconv.Atoi(parts[i])
+			if err != nil {
+				ok = false
+				break
+			}
+			c[i] = n
+		}
+		if ok && !seen[c] {
+			seen[c] = true
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// TestHeaderIsGradient confirms the title word is drawn as a multi-colour
+// per-letter gradient (more than one distinct foreground across the letters)
+// and never uses the brand red foreground.
+func TestHeaderIsGradient(t *testing.T) {
+	header := renderHeader()
+
+	colors := headerColors(header)
+	if len(colors) < 2 {
+		t.Errorf("expected a multi-colour header gradient, got %d colours: %v", len(colors), colors)
+	}
+	// Brand red (#A40000 -> 164,0,0) must not colour the title.
+	if slices.Contains(colors, [3]int{164, 0, 0}) {
+		t.Errorf("header contains brand red 164,0,0:\n%q", header)
 	}
 }
 
@@ -27,7 +83,7 @@ func TestProcessingViewSectionOrder(t *testing.T) {
 	m.Width = 120
 	m.Height = 40
 
-	view := renderProcessingView(m)
+	view := ansi.Strip(renderProcessingView(m))
 
 	if strings.Contains(view, "file(s)") {
 		t.Errorf("processing view still contains subtitle: %q", view)
