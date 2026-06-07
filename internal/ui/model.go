@@ -134,7 +134,10 @@ type FileProgress struct {
 	// Completion results
 	InputLUFS  float64
 	OutputLUFS float64
-	NoiseFloor float64
+	// FinalNoiseFloor is the output room-tone noise floor in dBFS (lower = cleaner),
+	// shown in the done box and aligned with the quality score's noise component.
+	FinalNoiseFloor float64
+	Quality         processor.QualityScore
 
 	// Error tracking
 	Error error
@@ -270,8 +273,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.Files[msg.FileIndex].Status = StatusComplete
 			m.Files[msg.FileIndex].InputLUFS = msg.InputLUFS
 			m.Files[msg.FileIndex].OutputLUFS = msg.OutputLUFS
-			m.Files[msg.FileIndex].NoiseFloor = msg.NoiseFloor
+			m.Files[msg.FileIndex].FinalNoiseFloor = msg.FinalNoiseFloor
 			m.Files[msg.FileIndex].OutputPath = msg.OutputPath
+			m.Files[msg.FileIndex].Quality = msg.Quality
 			m.Files[msg.FileIndex].Error = msg.Error
 
 			if msg.Error != nil {

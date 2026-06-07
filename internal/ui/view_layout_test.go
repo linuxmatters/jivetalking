@@ -120,31 +120,147 @@ func TestProcessingViewOverallProgressContent(t *testing.T) {
 	}
 }
 
-// TestFinalSummaryReturnsCompletionContent confirms FinalSummary returns the
-// per-file results and overall summary for a completed model.
+// TestFinalSummaryReturnsCompletionContent confirms FinalSummary renders the
+// title, the overall-progress status box, and a done box per completed file,
+// with the old green banner and Audacity lines removed.
 func TestFinalSummaryReturnsCompletionContent(t *testing.T) {
 	m := NewModel([]string{"a.wav", "b.wav"})
 
 	updated, _ := m.Update(ProgressMsg{FileIndex: 0, Pass: processor.PassProcessing, Progress: 0.5, Level: -12})
 	m = updated.(Model)
-	updated, _ = m.Update(FileCompleteMsg{FileIndex: 0, OutputPath: "a-out.wav", InputLUFS: -23.0, OutputLUFS: -16.0, NoiseFloor: 12.0})
+	updated, _ = m.Update(FileCompleteMsg{
+		FileIndex: 0, OutputPath: "a-out.wav", InputLUFS: -30.9, OutputLUFS: -15.9, FinalNoiseFloor: -80.0,
+		Quality: processor.QualityScore{Stars: 4, Label: "Great"},
+	})
 	m = updated.(Model)
-	updated, _ = m.Update(FileCompleteMsg{FileIndex: 1, OutputPath: "b-out.wav", InputLUFS: -20.0, OutputLUFS: -16.0, NoiseFloor: 8.0})
+	updated, _ = m.Update(FileCompleteMsg{
+		FileIndex: 1, OutputPath: "b-out.wav", InputLUFS: -20.0, OutputLUFS: -16.0, FinalNoiseFloor: -65.0,
+		Quality: processor.QualityScore{Stars: 5, Label: "Excellent"},
+	})
 	m = updated.(Model)
 	m.Done = true
 
-	summary := FinalSummary(m)
+	summary := ansi.Strip(FinalSummary(m))
 
-	if !strings.Contains(summary, "Processing Complete") {
-		t.Errorf("summary missing completion header: %q", summary)
+	// Title and overall-progress status box appear, matching the live view.
+	if !strings.Contains(summary, "Jivetalking") {
+		t.Errorf("summary missing title: %q", summary)
 	}
+	if !strings.Contains(summary, "2 files") || !strings.Contains(summary, "complete") {
+		t.Errorf("summary missing overall-progress status box: %q", summary)
+	}
+
+	// Per-file done boxes.
 	if !strings.Contains(summary, "a-out.wav") || !strings.Contains(summary, "b-out.wav") {
 		t.Errorf("summary missing per-file results: %q", summary)
 	}
-	if !strings.Contains(summary, "-16.0 LUFS") {
-		t.Errorf("summary missing output LUFS: %q", summary)
+
+	// Removed strings must be gone.
+	for _, gone := range []string{"Processing Complete", "Audacity", "normalized to -16", "level-matched"} {
+		if strings.Contains(summary, gone) {
+			t.Errorf("summary still contains removed string %q: %q", gone, summary)
+		}
 	}
-	if !strings.Contains(summary, "-16 LUFS and level-matched") {
-		t.Errorf("summary missing overall footer: %q", summary)
+}
+
+// TestDoneBoxRendersIndigoLabelledRows confirms a completed file renders as an
+// indigo-bordered box with the three labelled rows (Loudness/Noise/Quality), the
+// ㏈ glyph, the signed Δ, and the stars + word label.
+func TestDoneBoxRendersIndigoLabelledRows(t *testing.T) {
+	file := FileProgress{
+		InputPath:       "LMP-81-mark.flac",
+		OutputPath:      "LMP-81-mark-LUFS-16-processed.flac",
+		Status:          StatusComplete,
+		InputLUFS:       -30.9,
+		OutputLUFS:      -15.9,
+		FinalNoiseFloor: -80.0,
+		Quality:         processor.QualityScore{Stars: 4, Label: "Excellent"},
+	}
+
+	raw := renderDoneBox(file)
+	plain := ansi.Strip(raw)
+
+	// Indigo border (#6366F1 -> 99,102,241) must colour the box.
+	if !slices.Contains(headerColors(raw), [3]int{99, 102, 241}) {
+		t.Errorf("done box border is not indigo (99,102,241):\n%q", raw)
+	}
+
+	// Labelled rows.
+	for _, label := range []string{"Loudness", "Noise floor", "Quality"} {
+		if !strings.Contains(plain, label) {
+			t.Errorf("done box missing %q row:\n%s", label, plain)
+		}
+	}
+
+	// Loudness row: Input → Output with ㏈ glyph and signed Δ.
+	if !strings.Contains(plain, "-30.9 → -15.9 ㏈") {
+		t.Errorf("done box missing loudness values:\n%s", plain)
+	}
+	if !strings.Contains(plain, "Δ +15.0") {
+		t.Errorf("done box missing signed Δ:\n%s", plain)
+	}
+
+	// Noise row shows the output noise floor in dBFS, not an amount "reduced".
+	if !strings.Contains(plain, "-80 ㏈") {
+		t.Errorf("done box missing noise floor value:\n%s", plain)
+	}
+	if strings.Contains(plain, "reduced") {
+		t.Errorf("done box still labels the noise floor as 'reduced':\n%s", plain)
+	}
+
+	// Quality row: filled + empty stars and the word label.
+	if !strings.Contains(plain, "★★★★☆") {
+		t.Errorf("done box missing 4-of-5 star bar:\n%s", plain)
+	}
+	if !strings.Contains(plain, "Excellent") {
+		t.Errorf("done box missing quality label:\n%s", plain)
+	}
+
+	// No leftover hardcoded full-star bar.
+	if strings.Contains(plain, "★★★★★") {
+		t.Errorf("done box renders hardcoded 5 stars for a 4-star file:\n%s", plain)
+	}
+}
+
+// TestDoneBoxNoiseAndStarsMoveTogether confirms the rendered Noise floor metric
+// and the star count point the same direction: a cleaner file (lower dBFS floor)
+// must show both a more-negative floor and at least as many stars as a noisier
+// file. This locks the display against the prior contradiction where the better
+// number sat next to fewer stars.
+func TestDoneBoxNoiseAndStarsMoveTogether(t *testing.T) {
+	clean := FileProgress{
+		InputPath:       "clean.flac",
+		OutputPath:      "clean-out.flac",
+		Status:          StatusComplete,
+		OutputLUFS:      -16.0,
+		FinalNoiseFloor: -80.0,
+		Quality:         processor.QualityScore{Stars: 5, Label: "Excellent"},
+	}
+	noisy := FileProgress{
+		InputPath:       "noisy.flac",
+		OutputPath:      "noisy-out.flac",
+		Status:          StatusComplete,
+		OutputLUFS:      -16.0,
+		FinalNoiseFloor: -55.0,
+		Quality:         processor.QualityScore{Stars: 4, Label: "Great"},
+	}
+
+	cleanPlain := ansi.Strip(renderDoneBox(clean))
+	noisyPlain := ansi.Strip(renderDoneBox(noisy))
+
+	if !strings.Contains(cleanPlain, "-80 ㏈") {
+		t.Errorf("clean done box missing -80 floor:\n%s", cleanPlain)
+	}
+	if !strings.Contains(noisyPlain, "-55 ㏈") {
+		t.Errorf("noisy done box missing -55 floor:\n%s", noisyPlain)
+	}
+
+	// Cleaner file: more-negative floor AND more stars. The number and the stars
+	// move together, so the display can never contradict the score.
+	if !strings.Contains(cleanPlain, "★★★★★") {
+		t.Errorf("clean (cleaner floor) should show 5 stars:\n%s", cleanPlain)
+	}
+	if !strings.Contains(noisyPlain, "★★★★☆") {
+		t.Errorf("noisy (higher floor) should show 4 stars:\n%s", noisyPlain)
 	}
 }

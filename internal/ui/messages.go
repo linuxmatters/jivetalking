@@ -26,9 +26,13 @@ type FileCompleteMsg struct {
 	FileIndex  int
 	InputLUFS  float64
 	OutputLUFS float64
-	NoiseFloor float64
-	OutputPath string
-	Error      error
+	// FinalNoiseFloor is the output room-tone noise floor in dBFS (lower = cleaner),
+	// the same quantity the quality score rewards, so the done box's Noise row and
+	// the star count move together.
+	FinalNoiseFloor float64
+	OutputPath      string
+	Quality         processor.QualityScore
+	Error           error
 }
 
 // AllCompleteMsg indicates all files have been processed

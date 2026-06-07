@@ -67,12 +67,7 @@ func renderFileEntry(file FileProgress, prog progress.Model, easedLevel, easedPr
 
 	switch file.Status {
 	case StatusComplete:
-		// 🗸 completed file with summary
-		icon := lipgloss.NewStyle().Foreground(cli.ColorGreen).Render("🗸")
-		delta := file.OutputLUFS - file.InputLUFS
-		summary := fmt.Sprintf("Input: %.1f LUFS | Output: %.1f LUFS | Δ %+.1f dB",
-			file.InputLUFS, file.OutputLUFS, delta)
-		return fmt.Sprintf(" %s %s → %s\n   %s", icon, fileName, filepath.Base(file.OutputPath), summary)
+		return renderDoneBox(file)
 
 	case StatusAnalyzing, StatusProcessing, StatusNormalising:
 		// active file with detailed progress
@@ -344,49 +339,96 @@ func FinalSummary(m Model) string {
 	return renderCompletionSummary(m)
 }
 
-// renderCompletionSummary renders the final completion summary
+// renderCompletionSummary renders the persisted completion view: the same title
+// and overall-progress status box as the live view, followed by the stack of
+// indigo done boxes. Completed files render through renderDoneBox so they look
+// identical to the live processing view at completion.
 func renderCompletionSummary(m Model) string {
 	var b strings.Builder
 
-	// Completion header
-	header := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(cli.ColorGreen).
-		Render("✨ Processing Complete!")
-	b.WriteString(header)
+	b.WriteString(renderHeader())
 	b.WriteString("\n\n")
 
-	// Summary for each file
-	for _, file := range m.Files {
-		if file.Status == StatusComplete {
-			b.WriteString(renderCompletedFile(file))
+	b.WriteString(renderOverallProgress(m))
+	b.WriteString("\n\n")
+
+	for i := range m.Files {
+		if m.Files[i].Status == StatusError {
+			b.WriteString(renderFileEntry(m.Files[i], m.progress, 0, 0, 0))
+			b.WriteString("\n")
+			continue
+		}
+		if m.Files[i].Status == StatusComplete {
+			b.WriteString(renderDoneBox(m.Files[i]))
 			b.WriteString("\n")
 		}
 	}
 
-	// Overall summary
-	b.WriteString("\n")
-	b.WriteString(strings.Repeat("─", 60))
-	b.WriteString("\n")
-	b.WriteString("All files normalized to -16 LUFS and level-matched ✓\n")
-	b.WriteString("Ready for import into Audacity - no additional processing needed!\n")
-
 	return b.String()
 }
 
-// renderCompletedFile renders a summary for a completed file
-func renderCompletedFile(file FileProgress) string {
+// doneBoxLabelWidth is the column width reserved for the leading label in each
+// done-box row so the values align in a column. Wide enough for the longest
+// label ("Noise floor" = 11 cols) plus a trailing space.
+const doneBoxLabelWidth = 12
+
+// renderDoneBox renders a completed file as a filename line above an
+// indigo-bordered box with three labelled rows: Loudness, Noise, and Quality.
+// Shared by the live processing view (StatusComplete) and the persisted final
+// summary so completed files look identical in both. The box matches the active
+// processing box (RoundedBorder, Padding(0,1), meterWidth inner width) but uses
+// an indigo border to mark "done" against the active sky-blue.
+func renderDoneBox(file FileProgress) string {
 	fileName := filepath.Base(file.InputPath)
 	outputName := filepath.Base(file.OutputPath)
 
-	icon := lipgloss.NewStyle().Foreground(cli.ColorGreen).Render("✓")
+	icon := lipgloss.NewStyle().Foreground(cli.ColorGreen).Render("🗸")
+	heading := fmt.Sprintf(" %s %s → %s", icon, fileName, outputName)
 
-	quality := "★★★★★" // Always 5 stars
+	labelStyle := lipgloss.NewStyle().Foreground(cli.ColorMuted).Width(doneBoxLabelWidth)
+	valueStyle := lipgloss.NewStyle().Foreground(cli.ColorText)
+	starStyle := lipgloss.NewStyle().Foreground(cli.ColorOrange)
 
-	return fmt.Sprintf(" %s %s → %s\n"+
-		"   Before: %.1f LUFS | After: %.1f LUFS | Quality: %s\n"+
-		"   Noise Reduced: %.0f dB",
-		icon, fileName, outputName,
-		file.InputLUFS, file.OutputLUFS, quality,
-		file.NoiseFloor)
+	// Match the active processing box frame width: meterWidth content + Padding(0,1)
+	// (2 cols) + RoundedBorder (2 cols) = meterWidth + 4 total columns.
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(cli.ColorIndigo).
+		Padding(0, 1).
+		Width(meterWidth + 4)
+
+	var content strings.Builder
+
+	// Loudness row: Input → Output ㏈ with signed Δ.
+	delta := file.OutputLUFS - file.InputLUFS
+	loudnessValue := fmt.Sprintf("%.1f → %.1f ㏈  Δ %+.1f",
+		file.InputLUFS, file.OutputLUFS, delta)
+	fmt.Fprintf(&content, "%s%s\n",
+		labelStyle.Render("Loudness"), valueStyle.Render(loudnessValue))
+
+	// Noise row: the output room-tone noise floor in dBFS. A lower (more negative)
+	// floor is cleaner, the same direction the quality stars move, so the number and
+	// the stars stay consistent. This is a floor, not an amount removed, so it is
+	// labelled "Noise floor", never "reduced".
+	noiseValue := fmt.Sprintf("%.0f ㏈", file.FinalNoiseFloor)
+	fmt.Fprintf(&content, "%s%s\n",
+		labelStyle.Render("Noise floor"), valueStyle.Render(noiseValue))
+
+	// Quality row: objective stars + word label.
+	stars := starStyle.Render(qualityStars(file.Quality.Stars))
+	fmt.Fprintf(&content, "%s%s  %s",
+		labelStyle.Render("Quality"), stars, valueStyle.Render(file.Quality.Label))
+
+	return heading + "\n" + box.Render(content.String())
+}
+
+// qualityStars renders an n-of-5 star bar as filled ★ followed by empty ☆.
+func qualityStars(n int) string {
+	if n < 0 {
+		n = 0
+	}
+	if n > 5 {
+		n = 5
+	}
+	return strings.Repeat("★", n) + strings.Repeat("☆", 5-n)
 }

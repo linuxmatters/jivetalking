@@ -105,13 +105,16 @@ func runWorkerPool(ctx context.Context, p *tea.Program, files []string, base *pr
 				reportWarnings <- fmt.Sprintf("Report was not written for %s: %v", inputPath, err)
 			}
 
+			finalNoiseFloor, _ := processor.FinalNoiseFloor(result)
+
 			wlog("[POOL] Sending FileCompleteMsg for file %d", i)
 			p.Send(ui.FileCompleteMsg{
-				FileIndex:  i,
-				InputLUFS:  result.InputLUFS,
-				OutputLUFS: result.OutputLUFS,
-				NoiseFloor: result.NoiseFloor,
-				OutputPath: result.OutputPath,
+				FileIndex:       i,
+				InputLUFS:       result.InputLUFS,
+				OutputLUFS:      result.OutputLUFS,
+				FinalNoiseFloor: finalNoiseFloor,
+				OutputPath:      result.OutputPath,
+				Quality:         processor.ComputeQualityScore(result),
 			})
 		}(i, inputPath)
 	}
