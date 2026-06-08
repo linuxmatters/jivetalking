@@ -20,6 +20,7 @@ import (
 	"github.com/linuxmatters/jivetalking/internal/logging"
 	"github.com/linuxmatters/jivetalking/internal/processor"
 	"github.com/linuxmatters/jivetalking/internal/ui"
+	"github.com/mattn/go-runewidth"
 )
 
 // version is injected via ldflags at build time. Local dev builds keep "dev";
@@ -82,6 +83,12 @@ func main() {
 	// Suppress FFmpeg info/verbose logging so astats and other filters do not
 	// print summaries to stderr and clutter the console.
 	ffmpeg.AVLogSetLevel(ffmpeg.AVLogError)
+
+	// Pin display-width measurement to non-East-Asian so the peak-marker
+	// superscript '·' decimal separator (U+00B7, East-Asian ambiguous) measures
+	// as one column under any locale. Without this it widens to two columns under
+	// a CJK locale and shifts the peak-marker arrow off its column.
+	runewidth.DefaultCondition.EastAsianWidth = false
 
 	cliArgs := &CLI{}
 	ctx := kong.Parse(

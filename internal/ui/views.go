@@ -180,9 +180,30 @@ func renderTimeline(file FileProgress) string {
 		muted.Render(badge))
 }
 
-// peakMarkerGlyph is the peak-hold marker drawn on its own line beneath the bar,
-// its point meeting the elbow corner directly below at the peak column.
-const peakMarkerGlyph = "🭯"
+// superscriptValue converts a numeric peak value to Unicode superscript so the
+// peak label collapses onto a single marker line. The "Level:" header already
+// names the unit, so the marker shows only the value. The mapping is: '-' → '⁻'
+// (U+207B), digits 0-9 → ⁰¹²³⁴⁵⁶⁷⁸⁹ (U+2070, U+00B9, U+00B2, U+00B3,
+// U+2074-U+2079; 1/2/3 are the Latin-1 superscripts, the rest the Superscripts
+// and Subscripts block), and '.' → '·' (U+00B7 middle dot).
+func superscriptValue(value string) string {
+	const supDigits = "⁰¹²³⁴⁵⁶⁷⁸⁹"
+	digits := []rune(supDigits)
+	var b strings.Builder
+	for _, r := range value {
+		switch {
+		case r == '-':
+			b.WriteRune('⁻')
+		case r == '.':
+			b.WriteRune('·')
+		case r >= '0' && r <= '9':
+			b.WriteRune(digits[r-'0'])
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
 
 // renderAudioLevelMeter renders a live audio level meter with dB visualization.
 // elapsed drives the gentle pulse of the peak-hold marker; it is the file's
@@ -258,39 +279,41 @@ func renderAudioLevelMeter(currentLevel, peakLevel float64, elapsed time.Duratio
 	}
 	flush()
 
-	// Peak-hold marker: a pulsing 🭯 on its own line beneath the bar, aligned to
-	// the peak column, plus an elbow connector line that tethers the peak value to
-	// the marker. Skip both when there is no meaningful peak yet (peak still at the
-	// silence floor), so no stray marker sits at column 0. Alignment uses
-	// lipgloss.Width (display columns), not byte length, so the wide ㏈ glyph in
-	// the value does not shift the elbow corner off the marker column.
+	// Peak-hold marker: a single pulsing line beneath the bar that tethers the
+	// peak value to its column via an up-tip arrow, with the value in Unicode
+	// superscript so the label and its pointer share one row. The "Level:" header
+	// already names the unit, so the marker carries only the value. Skip it when
+	// there is no meaningful peak yet (peak still at the silence floor), so no
+	// stray marker sits at column 0. Alignment uses lipgloss.Width (display
+	// columns), not byte length: every superscript rune is width 1, including the
+	// '·' decimal separator pinned to width 1 at startup (see main.go), so the
+	// arrow lands exactly under the peak column.
 	if peakLevel > minDB {
 		pulseColor := peakMarkerColor(elapsed)
-		elbowStyle := lipgloss.NewStyle().Foreground(pulseColor)
+		arrowStyle := lipgloss.NewStyle().Foreground(pulseColor)
 		valueStyle := lipgloss.NewStyle().Foreground(cli.ColorOrange)
-		value := fmt.Sprintf("%.1f ㏈", peakLevel)
+		supValue := superscriptValue(fmt.Sprintf("%.1f", peakLevel))
 
 		b.WriteByte('\n')
-		b.WriteString(strings.Repeat(" ", peakPos))
-		b.WriteString(elbowStyle.Render(peakMarkerGlyph))
-		b.WriteByte('\n')
-		// Default: elbow drops to the right (└ value). When the right-elbow form
-		// would overflow the bar, flip to the left (value ┘) so the label stays
-		// within meterWidth. The right form renders as `<peakPos spaces>└ <value>`
-		// = peakPos + 1 (└) + 1 (space) + lipgloss.Width(value) columns.
-		if peakPos+lipgloss.Width(value)+2 <= width {
+		// Default: arrow leads, value to its right (⬑ value). When that form would
+		// overflow the bar, flip so the value leads and the arrow trails (value ⬏),
+		// keeping the label within meterWidth. The right form renders as
+		// `<peakPos spaces>⬑ <supValue>` = peakPos + 1 (⬑) + 1 (space) +
+		// lipgloss.Width(supValue) columns; the arrow sits at the peak column.
+		if peakPos+lipgloss.Width(supValue)+2 <= width {
 			b.WriteString(strings.Repeat(" ", peakPos))
-			b.WriteString(elbowStyle.Render("└"))
+			b.WriteString(arrowStyle.Render("⬑"))
 			b.WriteByte(' ')
-			b.WriteString(valueStyle.Render(value))
+			b.WriteString(valueStyle.Render(supValue))
 		} else {
-			// value then a right-elbow ┘ ending under the peak column. The form is
-			// `<lead spaces><value> ┘`, so lead + width(value) + 1 == peakPos.
-			lead := max(peakPos-(lipgloss.Width(value)+1), 0)
+			// value then a right-up arrow ⬏ ending under the peak column. The form
+			// is `<lead spaces><supValue> ⬏`, so lead + width(supValue) + 1 ==
+			// peakPos places the arrow at the peak column.
+			lead := max(peakPos-(lipgloss.Width(supValue)+1), 0)
 			b.WriteString(strings.Repeat(" ", lead))
-			b.WriteString(valueStyle.Render(value))
+			b.WriteString(valueStyle.Render(supValue))
 			b.WriteByte(' ')
-			b.WriteString(elbowStyle.Render("┘"))
+			b.WriteString(arrowStyle.Render("⬏"))
 		}
 	}
 

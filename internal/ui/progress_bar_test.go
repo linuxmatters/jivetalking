@@ -58,16 +58,15 @@ func durSec(s float64) time.Duration {
 	return time.Duration(s * float64(time.Second))
 }
 
-// triangleColor extracts the RGB foreground applied to the '🭯' peak marker, or
-// nil if no marker is present.
-func triangleColor(s string) *[3]int {
-	marker := []rune(peakMarkerGlyph)[0]
+// arrowColor extracts the RGB foreground applied to whichever up-tip peak-marker
+// arrow (⬑ leading or ⬏ trailing) is present, or nil if neither is.
+func arrowColor(s string) *[3]int {
 	for seg := range strings.SplitSeq(s, "\x1b[") {
 		if !strings.HasPrefix(seg, "38;2;") {
 			continue
 		}
 		head, rest, _ := strings.Cut(seg, "m")
-		if !strings.ContainsRune(rest, marker) {
+		if !strings.ContainsRune(rest, '⬑') && !strings.ContainsRune(rest, '⬏') {
 			continue
 		}
 		parts := strings.Split(head, ";")
@@ -199,37 +198,32 @@ func TestMeterHasNoInBarPeakGlyph(t *testing.T) {
 	}
 }
 
-// TestMeterPeakTriangleAlignsBeneathBar asserts a '🭯' marker appears on its own
-// line beneath the bar with exactly peakPos leading spaces, for two peak levels.
-func TestMeterPeakTriangleAlignsBeneathBar(t *testing.T) {
-	marker := []rune(peakMarkerGlyph)[0]
-	cases := []struct {
-		peak    float64
-		peakPos int
-	}{
-		{-10.0, 34}, // ((-10+70)/70)*40 = 34.3 -> 34
-		{-30.0, 22}, // ((-30+70)/70)*40 = 22.9 -> 22
+// markerLine returns the single peak-marker line (the one carrying an up-tip
+// arrow ⬑ or ⬏) from a rendered, ansi-stripped meter, plus the total line count.
+func markerLine(plain string) (string, int) {
+	lines := strings.Split(plain, "\n")
+	for _, line := range lines {
+		if strings.ContainsRune(line, '⬑') || strings.ContainsRune(line, '⬏') {
+			return line, len(lines)
+		}
 	}
-	for _, tc := range cases {
-		out := renderAudioLevelMeter(-40.0, tc.peak, 0)
-		plain := ansi.Strip(out)
-		var markerLine string
-		for line := range strings.SplitSeq(plain, "\n") {
-			if strings.ContainsRune(line, marker) {
-				markerLine = line
-				break
-			}
+	return "", len(lines)
+}
+
+// TestMeterPeakMarkerIsSingleLine asserts the peak label collapses to exactly one
+// line beneath the bar (header + bar + marker = 3 lines), carrying an up-tip
+// arrow, for two peak levels.
+func TestMeterPeakMarkerIsSingleLine(t *testing.T) {
+	for _, peak := range []float64{-10.0, -30.0} {
+		plain := ansi.Strip(renderAudioLevelMeter(-40.0, peak, 0))
+		line, n := markerLine(plain)
+		if line == "" {
+			t.Fatalf("peak=%g: no arrow marker line found in:\n%q", peak, plain)
 		}
-		if markerLine == "" {
-			t.Fatalf("peak=%g: no '%c' marker line found in:\n%q", tc.peak, marker, plain)
-		}
-		lead := len(markerLine) - len(strings.TrimLeft(markerLine, " "))
-		if lead != tc.peakPos {
-			t.Errorf("peak=%g: marker leading spaces %d, want peakPos %d\n%q",
-				tc.peak, lead, tc.peakPos, markerLine)
-		}
-		if strings.TrimLeft(markerLine, " ") != peakMarkerGlyph {
-			t.Errorf("peak=%g: marker line is not a lone marker: %q", tc.peak, markerLine)
+		// header (Level:) + bar + one marker line = 3 lines, no trailing newline.
+		if n != 3 {
+			t.Errorf("peak=%g: meter has %d lines, want 3 (header+bar+marker):\n%q",
+				peak, n, plain)
 		}
 	}
 }
@@ -238,7 +232,7 @@ func TestMeterPeakTriangleAlignsBeneathBar(t *testing.T) {
 // current level only; the peak value moved down to the elbow connector line.
 func TestMeterHeaderShowsLevelNotPeak(t *testing.T) {
 	out := ansi.Strip(renderAudioLevelMeter(-20.0, -10.0, 0))
-	header := strings.SplitN(out, "\n", 2)[0]
+	header, _, _ := strings.Cut(out, "\n")
 	if !strings.Contains(header, "Level:") {
 		t.Errorf("header missing 'Level:': %q", header)
 	}
@@ -248,8 +242,8 @@ func TestMeterHeaderShowsLevelNotPeak(t *testing.T) {
 }
 
 // displayCol returns the display column (cell offset) of the first occurrence of
-// r in s, measuring the prefix with ansi.StringWidth so wide glyphs like ㏈ count
-// as two columns. It returns -1 when r is absent.
+// r in s, measuring the prefix with ansi.StringWidth so multi-byte superscript
+// glyphs count their true display columns. It returns -1 when r is absent.
 func displayCol(s string, r rune) int {
 	idx := strings.IndexRune(s, r)
 	if idx < 0 {
@@ -258,149 +252,149 @@ func displayCol(s string, r rune) int {
 	return ansi.StringWidth(s[:idx])
 }
 
-// TestMeterPeakElbowTethersValue asserts an elbow connector line beneath the
-// marker carries the peak ㏈ value, the elbow glyph aligns at the peak display
-// column (└ to the right under 🭯, or ┘ flipped left at the column), and the line
-// stays within the bar width in both orientations.
-func TestMeterPeakElbowTethersValue(t *testing.T) {
-	marker := []rune(peakMarkerGlyph)[0]
+// TestMeterPeakArrowTethersValue asserts the single marker line carries the peak
+// value in superscript with no trailing unit, the up-tip arrow aligns at the peak
+// display column (⬑ leading under the peak, or ⬏ trailing at the column when
+// flipped), and the line stays within the bar width in both orientations.
+func TestMeterPeakArrowTethersValue(t *testing.T) {
 	cases := []struct {
 		peak     float64
 		peakPos  int
-		wantLeft bool // true => left-flip form "value ┘", false => "└ value"
+		wantLeft bool // true => left-flip form "value ⬏", false => "⬑ value"
 	}{
-		{-30.0, 22, false}, // room to the right: └ -30.0 ㏈
-		{-10.0, 34, true},  // near right edge: flips to -10.0 ㏈ ┘
+		{-30.0, 22, false}, // room to the right: ⬑ ⁻³⁰·⁰
+		{-10.0, 34, true},  // near right edge: flips to ⁻¹⁰·⁰ ⬏
 	}
 	for _, tc := range cases {
-		out := renderAudioLevelMeter(-40.0, tc.peak, 0)
-		plain := ansi.Strip(out)
-		lines := strings.Split(plain, "\n")
-
-		var triLine, elbowLine string
-		for i, line := range lines {
-			if strings.TrimSpace(line) == peakMarkerGlyph {
-				triLine = line
-				if i+1 < len(lines) {
-					elbowLine = lines[i+1]
-				}
-				break
-			}
-		}
-		if triLine == "" || elbowLine == "" {
-			t.Fatalf("peak=%g: missing marker/elbow lines in:\n%q", tc.peak, plain)
+		plain := ansi.Strip(renderAudioLevelMeter(-40.0, tc.peak, 0))
+		line, _ := markerLine(plain)
+		if line == "" {
+			t.Fatalf("peak=%g: no arrow marker line in:\n%q", tc.peak, plain)
 		}
 
-		wantValue := strconv.FormatFloat(tc.peak, 'f', 1, 64) + " ㏈"
-		if !strings.Contains(elbowLine, wantValue) {
-			t.Errorf("peak=%g: elbow line missing value %q: %q", tc.peak, wantValue, elbowLine)
+		// Value renders as superscript digits only, with no ㏈ unit appended.
+		wantValue := superscriptValue(strconv.FormatFloat(tc.peak, 'f', 1, 64))
+		if !strings.Contains(line, wantValue) {
+			t.Errorf("peak=%g: marker line missing superscript value %q: %q",
+				tc.peak, wantValue, line)
+		}
+		if strings.Contains(line, "㏈") {
+			t.Errorf("peak=%g: marker line should carry no ㏈ unit: %q", tc.peak, line)
 		}
 
-		// Elbow glyph aligns at the peak display column (same as the marker). The
-		// flipped line carries the wide ㏈ before ┘, so measure columns by display
-		// width, not byte index.
-		triCol := displayCol(triLine, marker)
-		var elbowCol int
+		// Arrow aligns at the peak display column. Measure columns by display
+		// width, not byte index, since superscript runes are multi-byte.
+		var arrowCol int
 		if tc.wantLeft {
-			elbowCol = displayCol(elbowLine, '┘')
-			if !strings.HasSuffix(strings.TrimRight(elbowLine, " "), "┘") {
-				t.Errorf("peak=%g: left-flip elbow not ending in '┘': %q", tc.peak, elbowLine)
+			arrowCol = displayCol(line, '⬏')
+			if !strings.HasSuffix(strings.TrimRight(line, " "), "⬏") {
+				t.Errorf("peak=%g: left-flip line not ending in '⬏': %q", tc.peak, line)
 			}
 		} else {
-			elbowCol = displayCol(elbowLine, '└')
+			arrowCol = displayCol(line, '⬑')
 		}
-		if elbowCol != tc.peakPos {
-			t.Errorf("peak=%g: elbow display column %d != peakPos %d\n%q\n%q",
-				tc.peak, elbowCol, tc.peakPos, triLine, elbowLine)
-		}
-		if triCol != tc.peakPos {
-			t.Errorf("peak=%g: marker display column %d != peakPos %d\n%q",
-				tc.peak, triCol, tc.peakPos, triLine)
+		if arrowCol != tc.peakPos {
+			t.Errorf("peak=%g: arrow display column %d != peakPos %d\n%q",
+				tc.peak, arrowCol, tc.peakPos, line)
 		}
 
-		// Both lines must stay within the bar width.
-		if w := ansi.StringWidth(triLine); w > meterWidth {
-			t.Errorf("peak=%g: triangle line width %d > meterWidth %d", tc.peak, w, meterWidth)
+		if w := ansi.StringWidth(line); w > meterWidth {
+			t.Errorf("peak=%g: marker line width %d > meterWidth %d", tc.peak, w, meterWidth)
 		}
-		if w := ansi.StringWidth(elbowLine); w > meterWidth {
-			t.Errorf("peak=%g: elbow line width %d > meterWidth %d", tc.peak, w, meterWidth)
+	}
+}
+
+// TestSuperscriptValue asserts the numeric superscript conversion: minus to ⁻,
+// digits to their superscript forms, '.' to '·', and that the result carries no
+// ㏈ unit and no residual ASCII numerals.
+func TestSuperscriptValue(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"-20.3", "⁻²⁰·³"},
+		{"6.0", "⁶·⁰"},
+		{"-7", "⁻⁷"},
+		{"123456789.0", "¹²³⁴⁵⁶⁷⁸⁹·⁰"},
+	}
+	for _, tc := range cases {
+		got := superscriptValue(tc.in)
+		if got != tc.want {
+			t.Errorf("superscriptValue(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+		if strings.Contains(got, "㏈") {
+			t.Errorf("superscriptValue(%q) = %q, should carry no ㏈ unit", tc.in, got)
+		}
+		if strings.ContainsAny(got, "-.0123456789") {
+			t.Errorf("superscriptValue(%q) = %q still carries ASCII numerals", tc.in, got)
 		}
 	}
 }
 
 // TestMeterPeakAtCeilingStaysInBounds asserts a peak at (and near) the 0 dB
-// ceiling places the marker at the last in-bounds column (width-1), not one cell
-// beyond the bar, and that no rendered line exceeds the meter width.
+// ceiling places the arrow at the last in-bounds column (width-1), not one cell
+// beyond the bar, and that no rendered line exceeds the meter width. Near the
+// ceiling the label flips to the trailing-arrow form, so the arrow ends the line.
 func TestMeterPeakAtCeilingStaysInBounds(t *testing.T) {
-	marker := []rune(peakMarkerGlyph)[0]
 	for _, peak := range []float64{0.0, -0.5, -1.0} {
-		out := renderAudioLevelMeter(-40.0, peak, 0)
-		plain := ansi.Strip(out)
-
-		var markerLine string
-		for line := range strings.SplitSeq(plain, "\n") {
-			if strings.ContainsRune(line, marker) {
-				markerLine = line
-				break
-			}
+		plain := ansi.Strip(renderAudioLevelMeter(-40.0, peak, 0))
+		line, _ := markerLine(plain)
+		if line == "" {
+			t.Fatalf("peak=%g: no arrow marker line found in:\n%q", peak, plain)
 		}
-		if markerLine == "" {
-			t.Fatalf("peak=%g: no marker line found in:\n%q", peak, plain)
-		}
-		lead := len(markerLine) - len(strings.TrimLeft(markerLine, " "))
-		if lead != meterWidth-1 {
-			t.Errorf("peak=%g: marker at column %d, want last in-bounds column %d",
-				peak, lead, meterWidth-1)
+		// At the ceiling the value leads and the trailing ⬏ lands at the peak
+		// column; assert that column is the last in-bounds cell.
+		col := displayCol(line, '⬏')
+		if col != meterWidth-1 {
+			t.Errorf("peak=%g: arrow at column %d, want last in-bounds column %d:\n%q",
+				peak, col, meterWidth-1, line)
 		}
 
 		// No rendered line may spill past the meter width.
-		for line := range strings.SplitSeq(plain, "\n") {
-			if w := ansi.StringWidth(line); w > meterWidth {
-				t.Errorf("peak=%g: line width %d > meterWidth %d:\n%q", peak, w, meterWidth, line)
+		for l := range strings.SplitSeq(plain, "\n") {
+			if w := ansi.StringWidth(l); w > meterWidth {
+				t.Errorf("peak=%g: line width %d > meterWidth %d:\n%q", peak, w, meterWidth, l)
 			}
 		}
 	}
 }
 
-// TestMeterNoPeakElbowAtFloor asserts neither the marker nor the elbow line
+// TestMeterNoPeakMarkerAtFloor asserts no marker line (neither arrow form)
 // renders when the peak is still at the silence floor.
-func TestMeterNoPeakElbowAtFloor(t *testing.T) {
+func TestMeterNoPeakMarkerAtFloor(t *testing.T) {
 	out := ansi.Strip(renderAudioLevelMeter(-40.0, meterFloorDB, 0))
-	if strings.ContainsRune(out, []rune(peakMarkerGlyph)[0]) {
-		t.Errorf("marker rendered at silence floor:\n%q", out)
-	}
-	if strings.ContainsRune(out, '└') || strings.ContainsRune(out, '┘') {
-		t.Errorf("elbow rendered at silence floor:\n%q", out)
+	if strings.ContainsRune(out, '⬑') || strings.ContainsRune(out, '⬏') {
+		t.Errorf("peak marker rendered at silence floor:\n%q", out)
 	}
 }
 
-// TestMeterPeakTriangleIsOrange asserts the marker triangle is styled in an
-// orange shade (red > green > blue, with a substantial green component so it
-// reads as orange rather than pure red).
-func TestMeterPeakTriangleIsOrange(t *testing.T) {
+// TestMeterPeakArrowIsOrange asserts the marker arrow is styled in an orange
+// shade (red > green > blue, with a substantial green component so it reads as
+// orange rather than pure red).
+func TestMeterPeakArrowIsOrange(t *testing.T) {
 	out := renderAudioLevelMeter(-40.0, -10.0, 0)
-	c := triangleColor(out)
+	c := arrowColor(out)
 	if c == nil {
-		t.Fatalf("no triangle colour found in:\n%q", out)
+		t.Fatalf("no arrow colour found in:\n%q", out)
 	}
 	if c[0] <= c[1] || c[1] <= c[2] {
-		t.Errorf("triangle colour %v is not an orange shade (want r>g>b)", c)
+		t.Errorf("arrow colour %v is not an orange shade (want r>g>b)", c)
 	}
 }
 
-// TestMeterPeakTrianglePulses asserts the marker oscillates between two distinct
-// orange shades across pulse phases.
-func TestMeterPeakTrianglePulses(t *testing.T) {
+// TestMeterPeakArrowPulses asserts the marker arrow oscillates between two
+// distinct orange shades across pulse phases.
+func TestMeterPeakArrowPulses(t *testing.T) {
 	// Trough and crest of the 1.2 Hz sine: t=0 sits mid-rise; pick phases that
 	// land near the dim trough and the bright peak.
 	// durSec(0.625): sin = -1 -> dim trough. durSec(0.208): sin ≈ +1 -> bright crest.
-	dim := triangleColor(renderAudioLevelMeter(-40.0, -10.0, durSec(0.625)))
-	bright := triangleColor(renderAudioLevelMeter(-40.0, -10.0, durSec(0.208)))
+	dim := arrowColor(renderAudioLevelMeter(-40.0, -10.0, durSec(0.625)))
+	bright := arrowColor(renderAudioLevelMeter(-40.0, -10.0, durSec(0.208)))
 	if dim == nil || bright == nil {
-		t.Fatalf("missing triangle colour: dim=%v bright=%v", dim, bright)
+		t.Fatalf("missing arrow colour: dim=%v bright=%v", dim, bright)
 	}
 	if *dim == *bright {
-		t.Errorf("triangle colour did not change across pulse phases: %v", *dim)
+		t.Errorf("arrow colour did not change across pulse phases: %v", *dim)
 	}
 	// Both endpoints must stay clearly orange so the marker never vanishes.
 	for _, c := range []*[3]int{dim, bright} {
