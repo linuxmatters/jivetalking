@@ -249,14 +249,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case ProgressMsg:
-		// Update the current file's progress
 		if msg.FileIndex >= 0 && msg.FileIndex < len(m.Files) {
 			m.Files[msg.FileIndex] = updateFileProgress(m.Files[msg.FileIndex], msg)
 		}
 		return m, nil
 
 	case FileStartMsg:
-		// Start processing next file
 		if msg.FileIndex >= 0 && msg.FileIndex < len(m.Files) {
 			m.Files[msg.FileIndex].Status = StatusAnalyzing
 			m.Files[msg.FileIndex].StartTime = time.Now()
@@ -264,7 +262,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case FileCompleteMsg:
-		// Mark file as complete
 		if msg.FileIndex >= 0 && msg.FileIndex < len(m.Files) {
 			m.Files[msg.FileIndex].Status = StatusComplete
 			m.Files[msg.FileIndex].InputLUFS = msg.InputLUFS
@@ -311,7 +308,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, meterTick()
 
 	case AllCompleteMsg:
-		// All files processed
 		m.Done = true
 		return m, tea.Quit
 	}
@@ -321,14 +317,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View renders the UI
 func (m Model) View() tea.View {
-	// Debug: Show basic info even before window size is set
+	// Render a placeholder until the first WindowSizeMsg sets m.Width.
 	if m.Width == 0 {
 		view := tea.NewView(fmt.Sprintf("Initializing...\nFiles: %d\n", len(m.Files)))
 		view.AltScreen = true
 		return view
 	}
 
-	// Build the view based on current state
 	var view tea.View
 	if m.Done {
 		view = tea.NewView(renderCompletionSummary(m))
@@ -367,7 +362,6 @@ func updateFileProgress(fp FileProgress, msg ProgressMsg) FileProgress {
 		}
 	}
 
-	// Update status based on pass
 	switch msg.Pass {
 	case processor.PassAnalysis:
 		fp.Status = StatusAnalyzing

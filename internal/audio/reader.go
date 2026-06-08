@@ -30,10 +30,9 @@ type Metadata struct {
 
 // OpenAudioFile opens an audio file for reading
 func OpenAudioFile(filename string) (*Reader, *Metadata, error) {
-	// Format context will be allocated by AVFormatOpenInput
+	// AVFormatOpenInput allocates fmtCtx when passed a nil pointer.
 	var fmtCtx *ffmpeg.AVFormatContext
 
-	// Open input file
 	filenameC := ffmpeg.ToCStr(filename)
 	defer filenameC.Free()
 
@@ -41,13 +40,11 @@ func OpenAudioFile(filename string) (*Reader, *Metadata, error) {
 		return nil, nil, fmt.Errorf("failed to open input file: %w", err)
 	}
 
-	// Read stream info
 	if _, err := ffmpeg.AVFormatFindStreamInfo(fmtCtx, nil); err != nil {
 		ffmpeg.AVFormatCloseInput(&fmtCtx)
 		return nil, nil, fmt.Errorf("failed to find stream info: %w", err)
 	}
 
-	// Find audio stream
 	streamIdx := -1
 	var audioStream *ffmpeg.AVStream
 	streams := fmtCtx.Streams()
@@ -65,7 +62,6 @@ func OpenAudioFile(filename string) (*Reader, *Metadata, error) {
 		return nil, nil, fmt.Errorf("no audio stream found in file: %s", filename)
 	}
 
-	// Find decoder
 	codecPar := audioStream.Codecpar()
 	decoder := ffmpeg.AVCodecFindDecoder(codecPar.CodecId())
 	if decoder == nil {
@@ -73,31 +69,26 @@ func OpenAudioFile(filename string) (*Reader, *Metadata, error) {
 		return nil, nil, fmt.Errorf("decoder not found for codec ID %d in file: %s", codecPar.CodecId(), filename)
 	}
 
-	// Allocate decoder context
 	decCtx := ffmpeg.AVCodecAllocContext3(decoder)
 	if decCtx == nil {
 		ffmpeg.AVFormatCloseInput(&fmtCtx)
 		return nil, nil, fmt.Errorf("failed to allocate decoder context for file: %s", filename)
 	}
 
-	// Copy codec parameters to decoder context
 	if _, err := ffmpeg.AVCodecParametersToContext(decCtx, codecPar); err != nil {
 		ffmpeg.AVCodecFreeContext(&decCtx)
 		ffmpeg.AVFormatCloseInput(&fmtCtx)
 		return nil, nil, fmt.Errorf("failed to copy codec parameters: %w", err)
 	}
 
-	// Open decoder
 	if _, err := ffmpeg.AVCodecOpen2(decCtx, decoder, nil); err != nil {
 		ffmpeg.AVCodecFreeContext(&decCtx)
 		ffmpeg.AVFormatCloseInput(&fmtCtx)
 		return nil, nil, fmt.Errorf("failed to open decoder: %w", err)
 	}
 
-	// Extract metadata
 	duration := float64(fmtCtx.Duration()) / float64(ffmpeg.AVTimeBase)
 
-	// Get channel layout description
 	layoutPtr := ffmpeg.AllocCStr(64)
 	defer layoutPtr.Free()
 
@@ -164,7 +155,6 @@ func (r *Reader) ReadFrame() (*ffmpeg.AVFrame, error) {
 			continue
 		}
 
-		// Send packet to decoder
 		if _, err := ffmpeg.AVCodecSendPacket(r.decCtx, r.packet); err != nil {
 			ffmpeg.AVPacketUnref(r.packet)
 			return nil, fmt.Errorf("failed to send packet: %w", err)
