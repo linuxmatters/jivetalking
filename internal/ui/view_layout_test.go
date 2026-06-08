@@ -1,10 +1,12 @@
 package ui
 
 import (
+	"math"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/linuxmatters/jivetalking/internal/processor"
@@ -164,8 +166,9 @@ func TestFinalSummaryReturnsCompletionContent(t *testing.T) {
 }
 
 // TestDoneBoxRendersIndigoLabelledRows confirms a completed file renders as an
-// indigo-bordered box with the three labelled rows (Loudness/Noise/Quality), the
-// ㏈ glyph, the signed Δ, and the stars + word label.
+// indigo-bordered box with the four labelled rows (Time/Loudness/Noise/Quality),
+// the ㏈ glyph, the signed Δ, and the stars + word label. The heading shows only
+// the processed (output) filename, never the input name nor a "→".
 func TestDoneBoxRendersIndigoLabelledRows(t *testing.T) {
 	file := FileProgress{
 		InputPath:       "LMP-81-mark.flac",
@@ -185,8 +188,21 @@ func TestDoneBoxRendersIndigoLabelledRows(t *testing.T) {
 		t.Errorf("done box border is not indigo (99,102,241):\n%q", raw)
 	}
 
+	// Heading (first line) shows only the processed filename, never the input
+	// name nor a "→". The Loudness row's "→" must not leak into this check.
+	headingLine, _, _ := strings.Cut(plain, "\n")
+	if !strings.Contains(headingLine, "LMP-81-mark-LUFS-16-processed.flac") {
+		t.Errorf("done box heading missing processed filename:\n%s", headingLine)
+	}
+	if strings.Contains(headingLine, "→") {
+		t.Errorf("done box heading still shows '→':\n%s", headingLine)
+	}
+	if strings.Contains(headingLine, "LMP-81-mark.flac ") || strings.HasSuffix(headingLine, "LMP-81-mark.flac") {
+		t.Errorf("done box heading still shows the input filename:\n%s", headingLine)
+	}
+
 	// Labelled rows.
-	for _, label := range []string{"Loudness", "Noise floor", "Quality"} {
+	for _, label := range []string{"Time", "Loudness", "Noise floor", "Quality"} {
 		if !strings.Contains(plain, label) {
 			t.Errorf("done box missing %q row:\n%s", label, plain)
 		}
@@ -262,5 +278,75 @@ func TestDoneBoxNoiseAndStarsMoveTogether(t *testing.T) {
 	}
 	if !strings.Contains(noisyPlain, "★★★★☆") {
 		t.Errorf("noisy (higher floor) should show 4 stars:\n%s", noisyPlain)
+	}
+}
+
+// TestDoneBoxTimeRow confirms the Time row renders the full-processing elapsed
+// clock and a realtime-speed badge. With a known Duration/ProcessingTime pair the
+// badge reads "⚡ N×" (audioDuration / processingSeconds); when ProcessingTime is
+// zero the placeholder "⚡ —×" shows alongside a 00:00 clock.
+func TestDoneBoxTimeRow(t *testing.T) {
+	known := FileProgress{
+		OutputPath:     "a-out.flac",
+		Status:         StatusComplete,
+		Duration:       120.0,
+		ProcessingTime: 48 * time.Second,
+		Quality:        processor.QualityScore{Stars: 4, Label: "Great"},
+	}
+	plain := ansi.Strip(renderDoneBox(known))
+
+	if !strings.Contains(plain, "Time") {
+		t.Errorf("done box missing Time row:\n%s", plain)
+	}
+	if !strings.Contains(plain, "00:48") {
+		t.Errorf("Time row missing elapsed clock 00:48:\n%s", plain)
+	}
+	// 120s audio / 48s processing = 2.5× realtime.
+	if !strings.Contains(plain, "⚡ 2.5×") {
+		t.Errorf("Time row missing realtime badge ⚡ 2.5×:\n%s", plain)
+	}
+
+	zero := FileProgress{
+		OutputPath: "b-out.flac",
+		Status:     StatusComplete,
+		Duration:   120.0,
+		Quality:    processor.QualityScore{Stars: 4, Label: "Great"},
+	}
+	zeroPlain := ansi.Strip(renderDoneBox(zero))
+
+	if !strings.Contains(zeroPlain, "⚡ —×") {
+		t.Errorf("Time row missing placeholder badge ⚡ —× for zero ProcessingTime:\n%s", zeroPlain)
+	}
+	if !strings.Contains(zeroPlain, "00:00") {
+		t.Errorf("Time row missing 00:00 clock for zero ProcessingTime:\n%s", zeroPlain)
+	}
+}
+
+// TestDoneBoxNoiseFloorClamp confirms the Noise row clamps a floor at or below the
+// 16-bit noise floor (~-96 dBFS), including digital-silence -Inf, to "< -96 ㏈",
+// while a normal floor keeps the numeric "%.0f ㏈" form.
+func TestDoneBoxNoiseFloorClamp(t *testing.T) {
+	cases := []struct {
+		name  string
+		floor float64
+		want  string
+	}{
+		{"negative infinity", math.Inf(-1), "< -96 ㏈"},
+		{"below 16-bit floor", -120.0, "< -96 ㏈"},
+		{"normal floor", -89.0, "-89 ㏈"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			file := FileProgress{
+				OutputPath:      "x-out.flac",
+				Status:          StatusComplete,
+				FinalNoiseFloor: tc.floor,
+				Quality:         processor.QualityScore{Stars: 4, Label: "Great"},
+			}
+			plain := ansi.Strip(renderDoneBox(file))
+			if !strings.Contains(plain, tc.want) {
+				t.Errorf("noise floor %v: want %q in:\n%s", tc.floor, tc.want, plain)
+			}
+		})
 	}
 }

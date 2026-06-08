@@ -376,17 +376,16 @@ func renderCompletionSummary(m Model) string {
 const doneBoxLabelWidth = 12
 
 // renderDoneBox renders a completed file as a filename line above an
-// indigo-bordered box with three labelled rows: Loudness, Noise, and Quality.
-// Shared by the live processing view (StatusComplete) and the persisted final
-// summary so completed files look identical in both. The box matches the active
-// processing box (RoundedBorder, Padding(0,1), meterWidth inner width) but uses
-// an indigo border to mark "done" against the active sky-blue.
+// indigo-bordered box with four labelled rows: Time, Loudness, Noise, and
+// Quality. Shared by the live processing view (StatusComplete) and the persisted
+// final summary so completed files look identical in both. The box matches the
+// active processing box (RoundedBorder, Padding(0,1), meterWidth inner width) but
+// uses an indigo border to mark "done" against the active sky-blue.
 func renderDoneBox(file FileProgress) string {
-	fileName := filepath.Base(file.InputPath)
 	outputName := filepath.Base(file.OutputPath)
 
 	icon := lipgloss.NewStyle().Foreground(cli.ColorGreen).Render("🗸")
-	heading := fmt.Sprintf(" %s %s → %s", icon, fileName, outputName)
+	heading := fmt.Sprintf(" %s %s", icon, outputName)
 
 	labelStyle := lipgloss.NewStyle().Foreground(cli.ColorMuted).Width(doneBoxLabelWidth)
 	valueStyle := lipgloss.NewStyle().Foreground(cli.ColorText)
@@ -402,6 +401,19 @@ func renderDoneBox(file FileProgress) string {
 
 	var content strings.Builder
 
+	// Time row: full-processing elapsed clock, a middot, then a realtime-speed
+	// badge, reusing renderTimeline's visual grammar. ProcessingTime spans all four
+	// passes (plumbed from the pool), so it reflects the whole file, not one pass.
+	muted := lipgloss.NewStyle().Foreground(cli.ColorMuted)
+	speedBadge := "⚡ —×"
+	if file.ProcessingTime > 0 && file.Duration > 0 {
+		rt := file.Duration / file.ProcessingTime.Seconds()
+		speedBadge = fmt.Sprintf("⚡ %.1f×", rt)
+	}
+	timeValue := fmt.Sprintf("%s  %s  %s",
+		formatElapsed(file.ProcessingTime), muted.Render("·"), muted.Render(speedBadge))
+	fmt.Fprintf(&content, "%s%s\n", labelStyle.Render("Time"), timeValue)
+
 	// Loudness row: Input → Output ㏈ with signed Δ.
 	delta := file.OutputLUFS - file.InputLUFS
 	loudnessValue := fmt.Sprintf("%.1f → %.1f ㏈  Δ %+.1f",
@@ -412,8 +424,13 @@ func renderDoneBox(file FileProgress) string {
 	// Noise row: the output room-tone noise floor in dBFS. A lower (more negative)
 	// floor is cleaner, the same direction the quality stars move, so the number and
 	// the stars stay consistent. This is a floor, not an amount removed, so it is
-	// labelled "Noise floor", never "reduced".
+	// labelled "Noise floor", never "reduced". A floor at or below the 16-bit noise
+	// floor (~-96 dBFS), including digital-silence -Inf, displays as "< -96 ㏈"
+	// rather than a misleading raw figure.
 	noiseValue := fmt.Sprintf("%.0f ㏈", file.FinalNoiseFloor)
+	if math.IsInf(file.FinalNoiseFloor, -1) || file.FinalNoiseFloor <= -96 {
+		noiseValue = "< -96 ㏈"
+	}
 	fmt.Fprintf(&content, "%s%s\n",
 		labelStyle.Render("Noise floor"), valueStyle.Render(noiseValue))
 
