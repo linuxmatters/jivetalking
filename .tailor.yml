@@ -103,7 +103,7 @@ swatches:
     alteration: first-fit
 
   - path: .github/pull_request_template.md
-    alteration: always
+    alteration: never
 
   - path: SECURITY.md
     alteration: always
