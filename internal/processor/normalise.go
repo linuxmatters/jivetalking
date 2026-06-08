@@ -139,6 +139,8 @@ func measureWithLoudnorm(ctx context.Context, inputPath string, config *Effectiv
 	totalSamples := int64(metadata.Duration * float64(metadata.SampleRate))
 	var samplesProcessed int64
 	var frameCount int
+	// currentLevel holds the instantaneous per-frame level for the live VU meter.
+	var currentLevel float64
 	const progressUpdateInterval = 100 // Send progress update every N frames
 
 	// Per-call stats file: loudnorm writes its JSON to this path in uninit() on
@@ -185,6 +187,10 @@ func measureWithLoudnorm(ctx context.Context, inputPath string, config *Effectiv
 		OnPushError: lenientHandler,
 		OnPullError: lenientHandler,
 		OnInputFrame: func(inputFrame *ffmpeg.AVFrame) {
+			// Measure the instantaneous level of the Pass-2 output being read so the
+			// VU meter animates consistently with Passes 1-2.
+			currentLevel = calculateFrameLevel(inputFrame)
+
 			samplesProcessed += int64(inputFrame.NbSamples())
 			frameCount++
 			if progressCallback != nil && frameCount%progressUpdateInterval == 0 {
@@ -193,6 +199,7 @@ func measureWithLoudnorm(ctx context.Context, inputPath string, config *Effectiv
 					Pass:     PassMeasuring,
 					PassName: "Measuring",
 					Progress: progress,
+					Level:    currentLevel,
 					Duration: metadata.Duration,
 				})
 			}
@@ -778,6 +785,8 @@ func executeAndPublishLoudnormApplication(
 	totalSamples := int64(prep.metadata.Duration * float64(prep.metadata.SampleRate))
 	var samplesProcessed int64
 	var inputFramesRead int64
+	// currentLevel holds the instantaneous per-frame output level for the live VU meter.
+	var currentLevel float64
 	const progressUpdateInterval = 100 // Send progress update every N frames
 
 	lenientHandler := func(err error) error { return nil }
@@ -798,12 +807,16 @@ func executeAndPublishLoudnormApplication(
 					Pass:     PassNormalising,
 					PassName: "Normalising",
 					Progress: progress,
-					Level:    result.acc.ebur128OutputI,
+					Level:    currentLevel,
 					Duration: prep.metadata.Duration,
 				})
 			}
 		},
 		OnFrame: func(inputFrame, filteredFrame *ffmpeg.AVFrame) error {
+			// Measure the instantaneous level of the final normalised output frame
+			// so the VU meter shows the processed result, consistent with Pass 2.
+			currentLevel = calculateFrameLevel(filteredFrame)
+
 			// Extract validation measurements using Pass 2's function
 			extractOutputFrameMetadata(filteredFrame.Metadata(), &result.acc)
 
