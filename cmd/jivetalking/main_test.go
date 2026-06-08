@@ -829,39 +829,23 @@ func TestResolveRoomToneScanDuration_NeitherSetReturnsZero(t *testing.T) {
 
 func TestResolveJobs(t *testing.T) {
 	tests := []struct {
-		name   string
-		jobs   int
-		numCPU int
-		want   int
+		name     string
+		numFiles int
+		numCPU   int
+		want     int
 	}{
-		{name: "auto caps at 4 on 8 CPUs", jobs: 0, numCPU: 8, want: 4},
-		{name: "auto follows CPU count below 4", jobs: 0, numCPU: 2, want: 2},
-		{name: "explicit one stays one", jobs: 1, numCPU: 8, want: 1},
-		{name: "explicit huge value honoured uncapped", jobs: 1000, numCPU: 8, want: 1000},
-		{name: "negative floors to one", jobs: -3, numCPU: 8, want: 1},
+		{name: "fewer files than CPUs uses file count", numFiles: 3, numCPU: 8, want: 3},
+		{name: "more files than CPUs caps at CPU count", numFiles: 16, numCPU: 8, want: 8},
+		{name: "files equal CPUs uses that count", numFiles: 8, numCPU: 8, want: 8},
+		{name: "single file stays one", numFiles: 1, numCPU: 8, want: 1},
+		{name: "zero files floors to one", numFiles: 0, numCPU: 8, want: 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := resolveJobs(tt.jobs, tt.numCPU); got != tt.want {
-				t.Fatalf("resolveJobs(%d, %d) = %d, want %d", tt.jobs, tt.numCPU, got, tt.want)
+			if got := resolveJobs(tt.numFiles, tt.numCPU); got != tt.want {
+				t.Fatalf("resolveJobs(%d, %d) = %d, want %d", tt.numFiles, tt.numCPU, got, tt.want)
 			}
 		})
-	}
-}
-
-func TestCLI_JobsFlag_ParsesIntoStructField(t *testing.T) {
-	fixture := makeFixtureFile(t)
-	cliArgs := parseCLIArgs(t, "--jobs", "8", fixture)
-	if cliArgs.Jobs != 8 {
-		t.Fatalf("Jobs = %d, want 8", cliArgs.Jobs)
-	}
-}
-
-func TestCLI_JobsFlag_OmittedDefaultsToZero(t *testing.T) {
-	fixture := makeFixtureFile(t)
-	cliArgs := parseCLIArgs(t, fixture)
-	if cliArgs.Jobs != 0 {
-		t.Fatalf("Jobs = %d, want 0", cliArgs.Jobs)
 	}
 }
 

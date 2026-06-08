@@ -25,7 +25,7 @@ func renderThrough(profile colorprofile.Profile, styled string) string {
 
 func TestStyledOutputDownsamplesNoTruecolorLeak(t *testing.T) {
 	styled := helpTitleStyle.Render("Jivetalking") +
-		helpFlagStyle.Render("--jobs") +
+		helpFlagStyle.Render("--debug") +
 		ErrorStyle.Render("Error:")
 
 	if !strings.Contains(styled, "38;2;") {

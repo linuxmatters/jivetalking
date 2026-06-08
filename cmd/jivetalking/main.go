@@ -38,7 +38,6 @@ type CLI struct {
 	AnalysisOnly         bool          `short:"a" help:"Run analysis only (Pass 1), display results, skip processing"`
 	RoomToneScanDuration time.Duration `name:"room-tone-scan-duration" help:"Cap room-tone-candidate scan to the first DURATION of input (e.g. 30s, 1m30s). Faster on long files at the cost of coverage; loudness, true peak, LRA, spectral, and speech analysis remain whole-file. Fewer room-tone candidates also reach voice-activated detection when capped. 0s means scan the whole file." placeholder:"DURATION" default:"0s"`
 	SilenceScanDuration  time.Duration `name:"silence-scan-duration" help:"[deprecated alias for --room-tone-scan-duration] Cap room-tone-candidate scan to the first DURATION of input. Supplying both flags with different non-zero values is rejected. 0s means scan the whole file." placeholder:"DURATION" default:"0s"`
-	Jobs                 int           `name:"jobs" help:"Number of files to process concurrently. 0 means auto (min(4, NumCPU)); an explicit value is honoured with no upper cap." default:"0"`
 	Files                []string      `arg:"" name:"files" help:"Audio files to process" type:"existingfile" optional:""`
 }
 
@@ -67,16 +66,11 @@ func resolveRoomToneScanDuration(roomTone, silence time.Duration, deprecationOut
 	return silence, nil
 }
 
-// resolveJobs resolves the effective worker count from the --jobs flag value
-// and the available CPU count. The flag default of 0 (unset) selects auto mode:
-// min(4, numCPU). Any other value is explicit, clamped to a floor of 1 and
-// honoured with no upper cap, so --jobs above NumCPU is respected. numCPU is a
+// resolveJobs derives the worker count from the number of input files, capped
+// at numCPU so we never spawn more workers than CPUs, floored at 1. numCPU is a
 // parameter so the function is pure and table-testable.
-func resolveJobs(jobs, numCPU int) int {
-	if jobs == 0 {
-		return min(4, numCPU)
-	}
-	return max(1, jobs)
+func resolveJobs(numFiles, numCPU int) int {
+	return max(1, min(numFiles, numCPU))
 }
 
 func main() {
@@ -139,7 +133,7 @@ func main() {
 	config.SetLogger(log)
 
 	if cliArgs.AnalysisOnly {
-		runAnalysisOnly(cliArgs.Files, config, log, resolveJobs(cliArgs.Jobs, runtime.NumCPU()))
+		runAnalysisOnly(cliArgs.Files, config, log, resolveJobs(len(cliArgs.Files), runtime.NumCPU()))
 		return
 	}
 
@@ -150,7 +144,7 @@ func main() {
 
 	runCtx, cancel := context.WithCancel(context.Background())
 
-	jobs := resolveJobs(cliArgs.Jobs, runtime.NumCPU())
+	jobs := resolveJobs(len(cliArgs.Files), runtime.NumCPU())
 
 	poolDone := launchWorkerPool(runCtx, p, cliArgs.Files, config, log, jobs, reportWarnings)
 
