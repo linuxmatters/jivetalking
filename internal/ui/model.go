@@ -116,6 +116,11 @@ type FileProgress struct {
 	StartTime   time.Time
 	ElapsedTime time.Duration
 
+	// ProcessingTime is the total wall-clock time across all four passes, plumbed
+	// from the pool via FileCompleteMsg. ElapsedTime resets per pass, so the
+	// done-box Time row uses this instead.
+	ProcessingTime time.Duration
+
 	// Duration is the total audio length in seconds (constant per file; the
 	// first non-zero value is kept). Drives the realtime-speed badge.
 	Duration float64
@@ -269,6 +274,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.Files[msg.FileIndex].FinalNoiseFloor = msg.FinalNoiseFloor
 			m.Files[msg.FileIndex].OutputPath = msg.OutputPath
 			m.Files[msg.FileIndex].Quality = msg.Quality
+			m.Files[msg.FileIndex].ProcessingTime = msg.ProcessingTime
 			m.Files[msg.FileIndex].Error = msg.Error
 
 			if msg.Error != nil {

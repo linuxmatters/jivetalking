@@ -115,6 +115,7 @@ func runWorkerPool(ctx context.Context, p *tea.Program, files []string, base *pr
 				FinalNoiseFloor: finalNoiseFloor,
 				OutputPath:      result.OutputPath,
 				Quality:         processor.ComputeQualityScore(result),
+				ProcessingTime:  time.Since(fileStartTime),
 			})
 		}(i, inputPath)
 	}

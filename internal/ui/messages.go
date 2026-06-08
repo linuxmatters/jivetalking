@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"time"
+
 	"github.com/linuxmatters/jivetalking/internal/processor"
 )
 
@@ -32,7 +34,11 @@ type FileCompleteMsg struct {
 	FinalNoiseFloor float64
 	OutputPath      string
 	Quality         processor.QualityScore
-	Error           error
+	// ProcessingTime is the total wall-clock time across all four passes; it drives
+	// the done-box Time row. FileProgress.ElapsedTime cannot be used because it
+	// resets per pass.
+	ProcessingTime time.Duration
+	Error          error
 }
 
 // AllCompleteMsg indicates all files have been processed
