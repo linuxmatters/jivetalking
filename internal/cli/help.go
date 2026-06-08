@@ -12,11 +12,6 @@ import (
 
 // Custom help styles
 var (
-	helpTitleStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(ColorRed).
-			MarginBottom(1)
-
 	helpDescStyle = lipgloss.NewStyle().
 			Foreground(ColorOrange).
 			Italic(true).
@@ -46,7 +41,7 @@ func StyledHelpPrinter(options kong.HelpOptions) func(options kong.HelpOptions, 
 		var sb strings.Builder
 
 		// Title and description
-		sb.WriteString(helpTitleStyle.Render("Jivetalking 🎙"))
+		sb.WriteString(RenderTitle())
 		sb.WriteString("\n")
 		sb.WriteString(helpDescStyle.Render("Professional podcast audio preprocessor"))
 		sb.WriteString("\n")

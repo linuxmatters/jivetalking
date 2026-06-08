@@ -24,8 +24,7 @@ func renderThrough(profile colorprofile.Profile, styled string) string {
 }
 
 func TestStyledOutputDownsamplesNoTruecolorLeak(t *testing.T) {
-	styled := helpTitleStyle.Render("Jivetalking") +
-		helpFlagStyle.Render("--debug") +
+	styled := helpFlagStyle.Render("--debug") +
 		ErrorStyle.Render("Error:")
 
 	if !strings.Contains(styled, "38;2;") {
@@ -131,7 +130,7 @@ func TestRenderTitleDownsamplesNoColor(t *testing.T) {
 }
 
 func TestStyledOutputPreservesTruecolor(t *testing.T) {
-	styled := helpTitleStyle.Render("Jivetalking")
+	styled := helpFlagStyle.Render("Jivetalking")
 	out := renderThrough(colorprofile.TrueColor, styled)
 	if !strings.Contains(out, "38;2;") {
 		t.Errorf("TrueColor profile dropped truecolor: %q", out)
