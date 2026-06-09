@@ -283,12 +283,28 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	filteredIsDigitalSilence := isDigitalSilence(filteredRMS)
 	finalIsDigitalSilence := isDigitalSilence(finalRMS)
 
+	// Gain-normalise the Final noise floor for honest cross-stage comparison.
+	// Pass 4 rides loudnorm makeup gain (~+25 dB), so the raw Final floor reads higher
+	// than the input even when the gap to speech widened. RMS is in dBFS, so the gain
+	// compensation is a subtraction (not the linear-amplitude division normaliseForGain
+	// applies to spectral metrics). The Filtered column is Pass 2, pre-normalisation, so
+	// it carries no makeup gain and is left raw.
+	finalRMSDisplay := finalRMS
+	if gainNormalise && !finalIsDigitalSilence && !math.IsNaN(finalRMS) {
+		finalRMSDisplay = finalRMS - effectiveGainDB
+	}
+
+	rmsLabel := "RMS Level"
+	if gainNormalise {
+		rmsLabel = "RMS Level †"
+	}
+
 	// Use special formatting for dB values that handles digital silence
-	table.AddRow("RMS Level",
+	table.AddRow(rmsLabel,
 		[]string{
 			formatMetricDB(inputRMS, 1),
 			formatMetricDB(filteredRMS, 1),
-			formatMetricDB(finalRMS, 1),
+			formatMetricDB(finalRMSDisplay, 1),
 		},
 		"dBFS", "")
 
@@ -318,10 +334,13 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	if filteredIsDigitalSilence || finalIsDigitalSilence {
 		reductionInterp = "noise eliminated"
 	} else if !math.IsNaN(inputRMS) && !math.IsNaN(filteredRMS) {
+		// Compare against the Pass 2 (Filtered) floor: it carries no makeup gain, so its
+		// delta is the true reduction the filter chain achieved. The Pass 4 floor rides
+		// loudnorm makeup gain and is gain-normalised in the Reduction column below.
 		filteredDelta := inputRMS - filteredRMS
 		switch {
 		case filteredDelta < 0:
-			reductionInterp = "noise increased"
+			reductionInterp = "floor rides program gain"
 		case filteredDelta < 3:
 			reductionInterp = "minimal reduction"
 		case filteredDelta < 10:
@@ -335,9 +354,40 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 		[]string{
 			MissingValue,
 			formatNoiseReduction(inputRMS, filteredRMS, filteredIsDigitalSilence),
-			formatNoiseReduction(inputRMS, finalRMS, finalIsDigitalSilence),
+			formatNoiseReduction(inputRMS, finalRMSDisplay, finalIsDigitalSilence),
 		},
 		"dB", reductionInterp)
+
+	// Floor-to-speech SNR: speech-region RMS minus noise-floor RMS, per stage. SNR is
+	// gain-invariant (makeup gain lifts speech and floor equally), so it answers the
+	// truthful question the raw floor obscures: did the gap to speech widen? A larger
+	// number means a deeper floor relative to programme.
+	inputSNR := math.NaN()
+	filteredSNR := math.NaN()
+	finalSNR := math.NaN()
+	if inputMeasurements.SpeechProfile != nil && !math.IsNaN(inputRMS) {
+		inputSNR = inputMeasurements.SpeechProfile.RMSLevel - inputRMS
+	}
+	if filteredMeasurements != nil && filteredMeasurements.SpeechSample != nil && !math.IsNaN(filteredRMS) {
+		filteredSNR = filteredMeasurements.SpeechSample.RMSLevel - filteredRMS
+	}
+	if finalMeasurements != nil && finalMeasurements.SpeechSample != nil && !math.IsNaN(finalRMS) {
+		finalSNR = finalMeasurements.SpeechSample.RMSLevel - finalRMS
+	}
+
+	var snrInterp string
+	if !math.IsNaN(inputSNR) && !math.IsNaN(finalSNR) {
+		switch {
+		case finalSNR-inputSNR >= 3:
+			snrInterp = "gap widened"
+		case finalSNR-inputSNR <= -3:
+			snrInterp = "gap narrowed"
+		default:
+			snrInterp = "gap held"
+		}
+	}
+
+	table.AddMetricRow("Floor-Speech SNR", inputSNR, filteredSNR, finalSNR, 1, "dB", snrInterp)
 
 	// Peak Level
 	var inputPeak float64
@@ -449,7 +499,7 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 
 	fmt.Fprint(f, table.String())
 	if gainNormalise {
-		fmt.Fprintf(f, "† Final values gain-normalised (÷ %.1f dB) for cross-stage comparison\n", effectiveGainDB)
+		fmt.Fprintf(f, "† Final values gain-normalised (−%.1f dB program makeup) for cross-stage comparison\n", effectiveGainDB)
 	}
 	fmt.Fprintln(f, "")
 }
