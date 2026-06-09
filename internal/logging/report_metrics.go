@@ -340,7 +340,7 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 		filteredDelta := inputRMS - filteredRMS
 		switch {
 		case filteredDelta < 0:
-			reductionInterp = "floor rides program gain"
+			reductionInterp = "noise increased"
 		case filteredDelta < 3:
 			reductionInterp = "minimal reduction"
 		case filteredDelta < 10:
@@ -499,7 +499,7 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 
 	fmt.Fprint(f, table.String())
 	if gainNormalise {
-		fmt.Fprintf(f, "† Final values gain-normalised (−%.1f dB program makeup) for cross-stage comparison\n", effectiveGainDB)
+		fmt.Fprintf(f, "† Final values gain-normalised (%+.1f dB program makeup removed) for cross-stage comparison\n", -effectiveGainDB)
 	}
 	fmt.Fprintln(f, "")
 }

@@ -300,16 +300,10 @@ func buildFullbenchPass2WithoutAnlmdnSpec(config *EffectiveFilterConfig) string 
 	for _, id := range order {
 		if id == FilterNoiseRemove {
 			// Drop anlmdn; keep only the afftdn tail of the noise block.
-			if ablated.NoiseRemove.Enabled && ablated.NoiseRemove.AfftdnEnabled {
-				tn := 0
-				if ablated.NoiseRemove.AfftdnTrackNoise {
-					tn = 1
+			if ablated.NoiseRemove.Enabled {
+				if spec := ablated.NoiseRemove.buildAfftdnFilter(); spec != "" {
+					filters = append(filters, spec)
 				}
-				filters = append(filters, fmt.Sprintf("afftdn=nr=%g:nt=%s:tn=%d",
-					ablated.NoiseRemove.AfftdnNoiseReduction,
-					ablated.NoiseRemove.AfftdnNoiseType,
-					tn,
-				))
 			}
 			continue
 		}
