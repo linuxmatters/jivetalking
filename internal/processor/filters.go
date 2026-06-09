@@ -774,19 +774,29 @@ func (cfg *EffectiveFilterConfig) buildNoiseRemoveFilter() string {
 
 	// afftdn FFT spectral denoise tail, validated at .bench/afftdn-ep83.
 	// Fixed nr=12 (not adaptive); tn=1 tracks noise so no sample region is needed.
-	if noiseRemove.AfftdnEnabled {
-		tn := 0
-		if noiseRemove.AfftdnTrackNoise {
-			tn = 1
-		}
-		filters = append(filters, fmt.Sprintf("afftdn=nr=%g:nt=%s:tn=%d",
-			noiseRemove.AfftdnNoiseReduction,
-			noiseRemove.AfftdnNoiseType,
-			tn,
-		))
+	if spec := noiseRemove.buildAfftdnFilter(); spec != "" {
+		filters = append(filters, spec)
 	}
 
 	return strings.Join(filters, ",")
+}
+
+// buildAfftdnFilter builds the afftdn FFT spectral denoise tail of the noise block.
+// Returns empty string when afftdn is disabled. Shared by buildNoiseRemoveFilter and
+// the ablation benchmark so the benchmark cannot drift from the production spec.
+func (cfg *NoiseRemoveConfig) buildAfftdnFilter() string {
+	if !cfg.AfftdnEnabled {
+		return ""
+	}
+	tn := 0
+	if cfg.AfftdnTrackNoise {
+		tn = 1
+	}
+	return fmt.Sprintf("afftdn=nr=%g:nt=%s:tn=%d",
+		cfg.AfftdnNoiseReduction,
+		cfg.AfftdnNoiseType,
+		tn,
+	)
 }
 
 // buildDS201GateFilter builds the DS201-inspired gate filter specification.
