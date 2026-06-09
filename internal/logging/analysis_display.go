@@ -166,7 +166,7 @@ func writeAnalysisFilterAdaptation(w io.Writer, measurements *processor.AudioMea
 			gateThresholdDB := processor.LinearToDb(config.DS201Gate.Threshold)
 			gateDesc := "(from noise floor)"
 			if measurements.SpeechProfile != nil {
-				gateDesc = "(with breath reduction)"
+				gateDesc = "(speech-aware)"
 			}
 			writeAnalysisMetricRows(w, "  ", 15, []analysisMetricSpec{
 				{"Gate Threshold", fmt.Sprintf("%.1f dB %s", gateThresholdDB, gateDesc)},
