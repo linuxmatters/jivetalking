@@ -27,8 +27,8 @@ const (
 	FilterDS201LowPass  FilterID = "ds201_lowpass"  // LP for ultrasonic rejection (adaptive)
 	FilterDS201Gate     FilterID = "ds201_gate"     // Soft expander inspired by DS201
 
-	// NoiseRemove - anlmdn + compand noise reduction (Pass 2 only)
-	// Non-Local Means denoiser with a compand for residual suppression
+	// NoiseRemove - anlmdn + afftdn noise reduction (Pass 2 only)
+	// Non-Local Means denoiser followed by an FFT spectral denoiser
 	FilterNoiseRemove FilterID = "noiseremove"
 
 	// Processing filters (Pass 2 only)
@@ -50,7 +50,7 @@ var Pass1FilterOrder = []FilterID{
 // - Downmix first: ensures all downstream filters work with mono
 // - DS201HighPass: removes subsonic rumble before other filters
 // - DS201LowPass: unconditional 20.5 kHz band-limit (removes inaudible ultrasonics)
-// - NoiseRemove: primary noise reduction using anlmdn + compand
+// - NoiseRemove: primary noise reduction using anlmdn + afftdn
 // - DS201Gate: soft expander for inter-speech cleanup (after denoising lowers floor)
 // - LA2ACompressor: LA-2A style optical compression evens dynamics before normalisation
 // - Deesser: after compression (which emphasises sibilance)
@@ -159,17 +159,21 @@ type DS201LowPassConfig struct {
 }
 
 type NoiseRemoveConfig struct {
-	Enabled          bool
-	CompandEnabled   bool
-	Strength         float64
-	PatchSec         float64
-	ResearchSec      float64
-	Smooth           float64
-	CompandThreshold float64
-	CompandExpansion float64
-	CompandAttack    float64
-	CompandDecay     float64
-	CompandKnee      float64
+	Enabled     bool
+	Strength    float64
+	PatchSec    float64
+	ResearchSec float64
+	Smooth      float64
+	// afftdn FFT spectral denoise, appended after anlmdn. Targets broadband
+	// noise under speech that anlmdn and the gate do not reach. It replaced the
+	// former compand residual-suppression stage, which resolved to its gentlest
+	// 4 dB expansion on every stem and added floor pumping. Reduction is fixed
+	// (nr=12) and validated; not adaptively tuned, because the noisiest voice
+	// must be capped at ~12 to avoid warble.
+	AfftdnEnabled        bool
+	AfftdnNoiseReduction float64
+	AfftdnNoiseType      string
+	AfftdnTrackNoise     bool
 }
 
 type DS201GateConfig struct {
@@ -413,17 +417,16 @@ func defaultDS201LowPassConfig() DS201LowPassConfig {
 
 func defaultNoiseRemoveConfig() NoiseRemoveConfig {
 	return NoiseRemoveConfig{
-		Enabled:          true,
-		CompandEnabled:   true,
-		Strength:         noiseRemoveProductionStrength,
-		PatchSec:         noiseRemoveProductionPatchSec,
-		ResearchSec:      noiseRemoveProductionResearchSec,
-		Smooth:           noiseRemoveProductionSmooth,
-		CompandThreshold: -55.0,
-		CompandExpansion: 6.0,
-		CompandAttack:    0.005,
-		CompandDecay:     0.100,
-		CompandKnee:      6.0,
+		Enabled:     true,
+		Strength:    noiseRemoveProductionStrength,
+		PatchSec:    noiseRemoveProductionPatchSec,
+		ResearchSec: noiseRemoveProductionResearchSec,
+		Smooth:      noiseRemoveProductionSmooth,
+		// Fixed afftdn FFT denoise tail; nr is not adaptively tuned.
+		AfftdnEnabled:        true,
+		AfftdnNoiseReduction: 12,
+		AfftdnNoiseType:      "w",
+		AfftdnTrackNoise:     true,
 	}
 }
 
@@ -738,8 +741,8 @@ func (cfg *EffectiveFilterConfig) buildDS201LowPassFilter() string {
 	return lpSpec
 }
 
-// buildNoiseRemoveFilter builds the anlmdn+compand noise reduction filter.
-// Non-Local Means denoiser followed by a compand for residual suppression.
+// buildNoiseRemoveFilter builds the anlmdn+afftdn noise reduction filter.
+// Non-Local Means denoiser followed by an FFT spectral denoiser.
 // Runs at the source sample rate; downstream filters (gate, LA-2A, de-esser,
 // analysis) operate at the same rate.
 //
@@ -749,12 +752,12 @@ func (cfg *EffectiveFilterConfig) buildDS201LowPassFilter() string {
 // - r: research radius in seconds (2.0ms = 0.0020s, r_min)
 // - m: smoothing factor (3 = m_strict)
 //
-// compand parameters:
-// - FLAT reduction curve: uniform expansion below threshold
-// - threshold/expansion: derived from Pass 1 measurements in tuneNoiseRemove
-// - attack: 5ms (fixed, empirically validated for speech)
-// - decay: 100ms (fixed, empirically validated for speech)
-// - soft-knee: 6dB (fixed, transparent)
+// afftdn replaced the former compand residual-suppression stage. Sweeps at
+// .bench/noiseblock-ep83 and .bench/afftdn-ep83 showed anlmdn → afftdn matches
+// or beats anlmdn → compand on under-speech noise while keeping gaps clean with
+// less floor modulation. nr is FIXED at 12: a per-presenter sweep showed the
+// noisiest voice must be capped at ~12 to avoid warble, so adaptive nr would be
+// counter-productive.
 func (cfg *EffectiveFilterConfig) buildNoiseRemoveFilter() string {
 	noiseRemove := cfg.NoiseRemove
 	if !noiseRemove.Enabled {
@@ -769,37 +772,21 @@ func (cfg *EffectiveFilterConfig) buildNoiseRemoveFilter() string {
 		noiseRemove.Smooth,
 	))
 
-	if noiseRemove.CompandEnabled {
-		filters = append(filters, cfg.buildNoiseRemoveCompandFilter())
+	// afftdn FFT spectral denoise tail, validated at .bench/afftdn-ep83.
+	// Fixed nr=12 (not adaptive); tn=1 tracks noise so no sample region is needed.
+	if noiseRemove.AfftdnEnabled {
+		tn := 0
+		if noiseRemove.AfftdnTrackNoise {
+			tn = 1
+		}
+		filters = append(filters, fmt.Sprintf("afftdn=nr=%g:nt=%s:tn=%d",
+			noiseRemove.AfftdnNoiseReduction,
+			noiseRemove.AfftdnNoiseType,
+			tn,
+		))
 	}
 
 	return strings.Join(filters, ",")
-}
-
-// buildNoiseRemoveCompandFilter builds the compand filter for residual noise suppression.
-// Compand uses FLAT reduction curve with uniform expansion below threshold.
-// Parameters are derived from Pass 1 measurements in tuneNoiseRemove (adaptive.go).
-func (cfg *EffectiveFilterConfig) buildNoiseRemoveCompandFilter() string {
-	noiseRemove := cfg.NoiseRemove
-	// Build FLAT reduction curve
-	// Every point below threshold gets the same expansion (reduction)
-	// Points: -90 → (-90 - exp), -75 → (-75 - exp), threshold → threshold, -30 → -30, 0 → 0
-	exp := noiseRemove.CompandExpansion
-	thresh := noiseRemove.CompandThreshold
-
-	out90 := -90.0 - exp
-	out75 := -75.0 - exp
-
-	// Format: attacks:decays:soft-knee:points
-	// Points format: in1/out1|in2/out2|...
-	return fmt.Sprintf(
-		"compand=attacks=%.3f:decays=%.3f:soft-knee=%.1f:points=-90/%.0f|-75/%.0f|%.0f/%.0f|-30/-30|0/0",
-		noiseRemove.CompandAttack,
-		noiseRemove.CompandDecay,
-		noiseRemove.CompandKnee,
-		out90, out75,
-		thresh, thresh,
-	)
 }
 
 // buildDS201GateFilter builds the DS201-inspired gate filter specification.

@@ -268,11 +268,11 @@ func fullbenchPass2AblationVariants() []fullbenchPass2AblationVariant {
 			BuildSpec:           buildFullbenchPass2WithoutAnlmdnSpec,
 		},
 		{
-			Name:                "without_compand",
+			Name:                "without_afftdn",
 			ExtractMeasurements: true,
 			BuildSpec: func(config *EffectiveFilterConfig) string {
 				ablated := *config
-				ablated.NoiseRemove.CompandEnabled = false
+				ablated.NoiseRemove.AfftdnEnabled = false
 				return ablated.BuildFilterSpec()
 			},
 		},
@@ -299,8 +299,17 @@ func buildFullbenchPass2WithoutAnlmdnSpec(config *EffectiveFilterConfig) string 
 	filters := make([]string, 0, len(order))
 	for _, id := range order {
 		if id == FilterNoiseRemove {
-			if ablated.NoiseRemove.Enabled && ablated.NoiseRemove.CompandEnabled {
-				filters = append(filters, ablated.buildNoiseRemoveCompandFilter())
+			// Drop anlmdn; keep only the afftdn tail of the noise block.
+			if ablated.NoiseRemove.Enabled && ablated.NoiseRemove.AfftdnEnabled {
+				tn := 0
+				if ablated.NoiseRemove.AfftdnTrackNoise {
+					tn = 1
+				}
+				filters = append(filters, fmt.Sprintf("afftdn=nr=%g:nt=%s:tn=%d",
+					ablated.NoiseRemove.AfftdnNoiseReduction,
+					ablated.NoiseRemove.AfftdnNoiseType,
+					tn,
+				))
 			}
 			continue
 		}
@@ -419,7 +428,7 @@ func TestFullbenchPass2AblationSpecs(t *testing.T) {
 	config.DS201HighPass.Enabled = true
 	config.DS201LowPass.Enabled = true
 	config.NoiseRemove.Enabled = true
-	config.NoiseRemove.CompandEnabled = true
+	config.NoiseRemove.AfftdnEnabled = true
 	config.DS201Gate.Enabled = true
 	config.LA2A.Enabled = true
 	config.Deesser.Enabled = true
@@ -437,7 +446,7 @@ func TestFullbenchPass2AblationSpecs(t *testing.T) {
 		"full_chain",
 		"without_output_analysis",
 		"without_anlmdn",
-		"without_compand",
+		"without_afftdn",
 		"without_gate_compressor",
 	}
 	if len(variantByName) != len(expectedNames) {
@@ -458,32 +467,33 @@ func TestFullbenchPass2AblationSpecs(t *testing.T) {
 		{
 			name: "full_chain",
 			wantPresent: []string{
-				"anlmdn=", "compand=", "agate=", "acompressor=",
+				"anlmdn=", "afftdn=", "agate=", "acompressor=",
 				"astats=", "aspectralstats=", "ebur128=",
 				"aformat=sample_rates=44100", "asetnsamples=",
 			},
-			extractMeasurements: true,
-		},
-		{
-			name:        "without_output_analysis",
-			wantPresent: []string{"anlmdn=", "compand=", "agate=", "acompressor=", "aformat=sample_rates=44100", "asetnsamples="},
-			wantAbsent:  []string{"astats=", "aspectralstats=", "ebur128="},
-		},
-		{
-			name:                "without_anlmdn",
-			wantPresent:         []string{"compand=", "agate=", "acompressor=", "astats=", "aspectralstats=", "ebur128=", "aformat=sample_rates=44100", "asetnsamples="},
-			wantAbsent:          []string{"anlmdn="},
-			extractMeasurements: true,
-		},
-		{
-			name:                "without_compand",
-			wantPresent:         []string{"anlmdn=", "agate=", "acompressor=", "astats=", "aspectralstats=", "ebur128=", "aformat=sample_rates=44100", "asetnsamples="},
 			wantAbsent:          []string{"compand="},
 			extractMeasurements: true,
 		},
 		{
+			name:        "without_output_analysis",
+			wantPresent: []string{"anlmdn=", "afftdn=", "agate=", "acompressor=", "aformat=sample_rates=44100", "asetnsamples="},
+			wantAbsent:  []string{"astats=", "aspectralstats=", "ebur128="},
+		},
+		{
+			name:                "without_anlmdn",
+			wantPresent:         []string{"afftdn=", "agate=", "acompressor=", "astats=", "aspectralstats=", "ebur128=", "aformat=sample_rates=44100", "asetnsamples="},
+			wantAbsent:          []string{"anlmdn="},
+			extractMeasurements: true,
+		},
+		{
+			name:                "without_afftdn",
+			wantPresent:         []string{"anlmdn=", "agate=", "acompressor=", "astats=", "aspectralstats=", "ebur128=", "aformat=sample_rates=44100", "asetnsamples="},
+			wantAbsent:          []string{"afftdn=", "compand="},
+			extractMeasurements: true,
+		},
+		{
 			name:                "without_gate_compressor",
-			wantPresent:         []string{"anlmdn=", "compand=", "astats=", "aspectralstats=", "ebur128=", "aformat=sample_rates=44100", "asetnsamples="},
+			wantPresent:         []string{"anlmdn=", "afftdn=", "astats=", "aspectralstats=", "ebur128=", "aformat=sample_rates=44100", "asetnsamples="},
 			wantAbsent:          []string{"agate=", "acompressor="},
 			extractMeasurements: true,
 		},
@@ -508,7 +518,7 @@ func TestFullbenchPass2WithoutAnlmdnPreservesOrder(t *testing.T) {
 	config.DS201HighPass.Enabled = true
 	config.DS201LowPass.Enabled = true
 	config.NoiseRemove.Enabled = true
-	config.NoiseRemove.CompandEnabled = true
+	config.NoiseRemove.AfftdnEnabled = true
 	config.DS201Gate.Enabled = true
 	config.LA2A.Enabled = true
 	config.Deesser.Enabled = true
@@ -519,13 +529,13 @@ func TestFullbenchPass2WithoutAnlmdnPreservesOrder(t *testing.T) {
 
 	spec := buildFullbenchPass2WithoutAnlmdnSpec(config)
 
-	assertFullbenchSpecExcludes(t, spec, []string{"anlmdn="})
-	assertFullbenchSpecContains(t, spec, []string{"compand="})
+	assertFullbenchSpecExcludes(t, spec, []string{"anlmdn=", "compand="})
+	assertFullbenchSpecContains(t, spec, []string{"afftdn="})
 	assertFullbenchSpecOrder(t, spec, []string{
 		"aformat=channel_layouts=mono",
 		"highpass=",
 		"lowpass=",
-		"compand=",
+		"afftdn=",
 		"agate=",
 		"acompressor=",
 		"deesser=",

@@ -33,7 +33,7 @@ type RoomToneRegion struct {
 
 // NoiseProfile contains measurements from the elected room tone region.
 // These measurements serve as a reference baseline for adaptive filter tuning:
-//   - MeasuredNoiseFloor → compand expansion threshold (NoiseRemove)
+//   - MeasuredNoiseFloor → gate threshold and highpass adaptation (DS201)
 //   - Entropy → gate release timing and range adaptation (DS201Gate)
 //     (See docs/Spectral-Metrics-Reference.md for entropy value interpretations:
 //     low entropy 0.08-0.30 = ordered/voiced; high entropy > 0.50 = disordered/noise)

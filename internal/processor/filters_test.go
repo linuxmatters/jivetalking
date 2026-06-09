@@ -33,17 +33,15 @@ func newTestBaseConfig() *BaseFilterConfig {
 			Mix:       1.0,
 		},
 		NoiseRemoveConfig{
-			Enabled:          false,
-			CompandEnabled:   true,
-			Strength:         0.00001,
-			PatchSec:         0.006,
-			ResearchSec:      0.0058,
-			Smooth:           11.0,
-			CompandThreshold: -50.0,
-			CompandExpansion: 10.0,
-			CompandAttack:    0.005,
-			CompandDecay:     0.100,
-			CompandKnee:      6.0,
+			Enabled:              false,
+			Strength:             0.00001,
+			PatchSec:             0.006,
+			ResearchSec:          0.0058,
+			Smooth:               11.0,
+			AfftdnEnabled:        true,
+			AfftdnNoiseReduction: 12,
+			AfftdnNoiseType:      "w",
+			AfftdnTrackNoise:     true,
 		},
 		DS201GateConfig{
 			Enabled:   false,
@@ -347,7 +345,7 @@ func TestBuildFilterSpecBehaviourBaseline(t *testing.T) {
 				"highpass=f=80:poles=2:width_type=q:width=0.707:normalize=1:a=tdii," +
 				"lowpass=f=20500:poles=2:width_type=q:width=0.707:normalize=1:a=tdii," +
 				"anlmdn=s=0.00001:p=0.0060:r=0.0020:m=3," +
-				"compand=attacks=0.005:decays=0.100:soft-knee=6.0:points=-90/-96|-75/-81|-55/-55|-30/-30|0/0," +
+				"afftdn=nr=12:nt=w:tn=1," +
 				"agate=threshold=0.010000:ratio=2.0:attack=12.00:release=350:range=0.0625:knee=3.0:detection=rms:makeup=1.0," +
 				"acompressor=threshold=0.125893:ratio=3.0:attack=10:release=200:makeup=1.00:knee=4.0:detection=rms:mix=1.00," +
 				"astats=metadata=1:measure_perchannel=all," +
@@ -416,29 +414,27 @@ func TestBuildFilterSpecBehaviourBaseline(t *testing.T) {
 			want: "acompressor=threshold=0.031623:ratio=4.0:attack=10:release=60:makeup=1.00:knee=6.0:detection=rms:mix=0.85",
 		},
 		{
-			name: "noise-remove compand disabled",
+			name: "noise-remove afftdn disabled",
 			config: func() *EffectiveFilterConfig {
 				config := newTestConfig()
 				config.NoiseRemove.Enabled = true
-				config.NoiseRemove.CompandEnabled = false
+				config.NoiseRemove.AfftdnEnabled = false
 				config.FilterOrder = []FilterID{FilterNoiseRemove}
 				return config
 			}(),
 			want: "anlmdn=s=0.00001:p=0.0060:r=0.0058:m=11",
 		},
 		{
-			name: "noise-remove compand enabled",
+			name: "noise-remove afftdn enabled",
 			config: func() *EffectiveFilterConfig {
 				config := newTestConfig()
 				config.NoiseRemove.Enabled = true
-				config.NoiseRemove.CompandEnabled = true
-				config.NoiseRemove.CompandThreshold = -48.0
-				config.NoiseRemove.CompandExpansion = 12.0
+				config.NoiseRemove.AfftdnEnabled = true
 				config.FilterOrder = []FilterID{FilterNoiseRemove}
 				return config
 			}(),
 			want: "anlmdn=s=0.00001:p=0.0060:r=0.0058:m=11," +
-				"compand=attacks=0.005:decays=0.100:soft-knee=6.0:points=-90/-102|-75/-87|-48/-48|-30/-30|0/0",
+				"afftdn=nr=12:nt=w:tn=1",
 		},
 		{
 			name: "de-esser disabled",
@@ -797,7 +793,7 @@ func TestBuildNoiseRemoveFilter(t *testing.T) {
 		}
 	})
 
-	t.Run("enabled produces anlmdn+compand chain", func(t *testing.T) {
+	t.Run("enabled produces anlmdn+afftdn chain", func(t *testing.T) {
 		config := newTestConfig()
 		config.NoiseRemove.Enabled = true
 
@@ -808,16 +804,21 @@ func TestBuildNoiseRemoveFilter(t *testing.T) {
 			t.Errorf("buildNoiseRemoveFilter() missing anlmdn filter, got: %s", spec)
 		}
 
-		// Must contain compand filter
-		if !strings.Contains(spec, "compand=") {
-			t.Errorf("buildNoiseRemoveFilter() missing compand filter, got: %s", spec)
+		// Must contain afftdn filter
+		if !strings.Contains(spec, "afftdn=") {
+			t.Errorf("buildNoiseRemoveFilter() missing afftdn filter, got: %s", spec)
 		}
 
-		// anlmdn must come before compand
+		// Must NOT contain compand
+		if strings.Contains(spec, "compand=") {
+			t.Errorf("buildNoiseRemoveFilter() must not contain compand, got: %s", spec)
+		}
+
+		// anlmdn must come before afftdn
 		anlmdnIdx := strings.Index(spec, "anlmdn=")
-		compandIdx := strings.Index(spec, "compand=")
-		if compandIdx < anlmdnIdx {
-			t.Errorf("compand must come after anlmdn in filter chain\nGot: %s", spec)
+		afftdnIdx := strings.Index(spec, "afftdn=")
+		if afftdnIdx < anlmdnIdx {
+			t.Errorf("afftdn must come after anlmdn in filter chain\nGot: %s", spec)
 		}
 	})
 
@@ -845,99 +846,47 @@ func TestBuildNoiseRemoveFilter(t *testing.T) {
 		}
 	})
 
-	t.Run("compand parameters include threshold and expansion", func(t *testing.T) {
+	t.Run("afftdn clause fixed at nr=12", func(t *testing.T) {
 		config := newTestConfig()
 		config.NoiseRemove.Enabled = true
-		config.NoiseRemove.CompandThreshold = -50.0
-		config.NoiseRemove.CompandExpansion = 10.0
-		config.NoiseRemove.CompandAttack = 0.005
-		config.NoiseRemove.CompandDecay = 0.100
-		config.NoiseRemove.CompandKnee = 6.0
+		config.NoiseRemove.AfftdnEnabled = true
 
 		spec := config.buildNoiseRemoveFilter()
 
-		expected := []string{
-			"attacks=0.005",
-			"decays=0.100",
-			"soft-knee=6.0",
-			"-50/-50", // threshold point in curve
-		}
-
-		for _, e := range expected {
-			if !strings.Contains(spec, e) {
-				t.Errorf("buildNoiseRemoveFilter() missing %q\nGot: %s", e, spec)
-			}
-		}
-
-		// Verify FLAT curve expansion: -90 should map to (-90 - expansion) = -100
-		if !strings.Contains(spec, "-90/-100") {
-			t.Errorf("buildNoiseRemoveFilter() missing FLAT curve point -90/-100 for 10dB expansion\nGot: %s", spec)
-		}
-		if !strings.Contains(spec, "-75/-85") {
-			t.Errorf("buildNoiseRemoveFilter() missing FLAT curve point -75/-85 for 10dB expansion\nGot: %s", spec)
+		if !strings.Contains(spec, "afftdn=nr=12:nt=w:tn=1") {
+			t.Errorf("buildNoiseRemoveFilter() missing fixed afftdn clause\nGot: %s", spec)
 		}
 	})
 
-	t.Run("compand enabled produces anlmdn+compand chain", func(t *testing.T) {
+	t.Run("afftdn disabled produces anlmdn-only spec", func(t *testing.T) {
 		config := newTestConfig()
 		config.NoiseRemove.Enabled = true
-		config.NoiseRemove.CompandEnabled = true
+		config.NoiseRemove.AfftdnEnabled = false
 
 		spec := config.buildNoiseRemoveFilter()
 
 		if !strings.Contains(spec, "anlmdn=") {
-			t.Errorf("compand-enabled spec missing anlmdn, got: %s", spec)
+			t.Errorf("afftdn-disabled spec missing anlmdn, got: %s", spec)
 		}
-		if !strings.Contains(spec, "compand=") {
-			t.Errorf("compand-enabled spec missing compand, got: %s", spec)
-		}
-	})
-
-	t.Run("compand disabled produces anlmdn-only spec", func(t *testing.T) {
-		config := newTestConfig()
-		config.NoiseRemove.Enabled = true
-		config.NoiseRemove.CompandEnabled = false
-
-		spec := config.buildNoiseRemoveFilter()
-
-		if !strings.Contains(spec, "anlmdn=") {
-			t.Errorf("compand-disabled spec missing anlmdn, got: %s", spec)
+		if strings.Contains(spec, "afftdn=") {
+			t.Errorf("afftdn-disabled spec should not contain afftdn, got: %s", spec)
 		}
 		if strings.Contains(spec, "compand=") {
-			t.Errorf("compand-disabled spec should not contain compand, got: %s", spec)
+			t.Errorf("afftdn-disabled spec should not contain compand, got: %s", spec)
 		}
 	})
 
-	t.Run("anlmdn appears before compand", func(t *testing.T) {
+	t.Run("anlmdn appears before afftdn", func(t *testing.T) {
 		config := newTestConfig()
 		config.NoiseRemove.Enabled = true
-		config.NoiseRemove.CompandEnabled = true
+		config.NoiseRemove.AfftdnEnabled = true
 
 		spec := config.buildNoiseRemoveFilter()
 
-		assertFullbenchSpecContains(t, spec, []string{"anlmdn=", "compand="})
-		assertFullbenchSpecOrder(t, spec, []string{"anlmdn=", "compand="})
+		assertFullbenchSpecContains(t, spec, []string{"anlmdn=", "afftdn="})
+		assertFullbenchSpecOrder(t, spec, []string{"anlmdn=", "afftdn="})
 		if strings.Contains(spec, "aformat=sample_rates=") {
 			t.Errorf("noise-removal sub-block should not emit any aformat sample-rate clauses\nSpec: %s", spec)
-		}
-	})
-
-	t.Run("different expansion levels", func(t *testing.T) {
-		expansions := []float64{6.0, 15.0, 40.0}
-		for _, exp := range expansions {
-			config := newTestConfig()
-			config.NoiseRemove.Enabled = true
-			config.NoiseRemove.CompandThreshold = -55.0
-			config.NoiseRemove.CompandExpansion = exp
-
-			spec := config.buildNoiseRemoveFilter()
-
-			// Verify expansion is applied to curve points
-			// -90 should map to (-90 - exp)
-			expectedPoint := fmt.Sprintf("-90/%.0f", -90-exp)
-			if !strings.Contains(spec, expectedPoint) {
-				t.Errorf("buildNoiseRemoveFilter() with %.0fdB expansion missing curve point %s\nGot: %s", exp, expectedPoint, spec)
-			}
 		}
 	})
 }
@@ -1073,7 +1022,7 @@ func TestDeriveAdaptiveFilterResultDeepCopiesFilterOrder(t *testing.T) {
 func TestCloneFilterDefaultsCopiesTypedFamilies(t *testing.T) {
 	base := DefaultFilterConfig()
 	base.Analysis.RoomToneScanDuration = 3 * time.Second
-	base.NoiseRemove.CompandEnabled = false
+	base.NoiseRemove.AfftdnEnabled = false
 	base.FilterOrder = []FilterID{FilterAnalysis, FilterDeesser}
 
 	clone := cloneFilterDefaults(&base.filterConfigDefaults)
@@ -1081,9 +1030,9 @@ func TestCloneFilterDefaultsCopiesTypedFamilies(t *testing.T) {
 		t.Errorf("Analysis.RoomToneScanDuration = %s, want %s",
 			clone.Analysis.RoomToneScanDuration, base.Analysis.RoomToneScanDuration)
 	}
-	if clone.NoiseRemove.CompandEnabled != base.NoiseRemove.CompandEnabled {
-		t.Errorf("NoiseRemove.CompandEnabled = %v, want %v",
-			clone.NoiseRemove.CompandEnabled, base.NoiseRemove.CompandEnabled)
+	if clone.NoiseRemove.AfftdnEnabled != base.NoiseRemove.AfftdnEnabled {
+		t.Errorf("NoiseRemove.AfftdnEnabled = %v, want %v",
+			clone.NoiseRemove.AfftdnEnabled, base.NoiseRemove.AfftdnEnabled)
 	}
 	if !reflect.DeepEqual(clone.FilterOrder, base.FilterOrder) {
 		t.Errorf("FilterOrder = %v, want %v", clone.FilterOrder, base.FilterOrder)
@@ -1103,7 +1052,7 @@ func TestAssembleEffectiveFilterConfig(t *testing.T) {
 
 	adaptive := deriveAdaptiveFilterResult(base)
 	adaptive.DS201HighPass.Frequency = 65.0
-	adaptive.NoiseRemove.CompandEnabled = false
+	adaptive.NoiseRemove.AfftdnEnabled = false
 	adaptive.FilterOrder = []FilterID{FilterDownmix}
 
 	effective := assembleEffectiveFilterConfig(base, adaptive)
@@ -1114,8 +1063,8 @@ func TestAssembleEffectiveFilterConfig(t *testing.T) {
 		t.Errorf("DS201HighPass.Frequency = %.1f, want adaptive %.1f",
 			effective.DS201HighPass.Frequency, adaptive.DS201HighPass.Frequency)
 	}
-	if effective.NoiseRemove.CompandEnabled {
-		t.Error("NoiseRemove.CompandEnabled = true, want adaptive false")
+	if effective.NoiseRemove.AfftdnEnabled {
+		t.Error("NoiseRemove.AfftdnEnabled = true, want adaptive false")
 	}
 	if effective.Loudnorm.TargetI != base.Loudnorm.TargetI {
 		t.Errorf("Loudnorm.TargetI = %.1f, want base %.1f", effective.Loudnorm.TargetI, base.Loudnorm.TargetI)
@@ -1144,7 +1093,7 @@ func TestDeriveEffectiveFilterConfig(t *testing.T) {
 	base.FilterOrder = []FilterID{FilterDeesser, FilterAnalysis}
 	base.Loudnorm.TargetI = -18.0
 	base.Analysis.RoomToneScanDuration = 2 * time.Second
-	base.NoiseRemove.CompandThreshold = -48.0
+	base.NoiseRemove.AfftdnNoiseReduction = 9.0
 
 	derived := deriveEffectiveFilterConfig(base)
 	if derived == nil {
@@ -1166,15 +1115,15 @@ func TestDeriveEffectiveFilterConfig(t *testing.T) {
 		t.Errorf("Analysis.RoomToneScanDuration = %s, want %s",
 			derived.Analysis.RoomToneScanDuration, base.Analysis.RoomToneScanDuration)
 	}
-	if derived.NoiseRemove.CompandThreshold != base.NoiseRemove.CompandThreshold {
-		t.Errorf("NoiseRemove.CompandThreshold = %.1f, want %.1f",
-			derived.NoiseRemove.CompandThreshold, base.NoiseRemove.CompandThreshold)
+	if derived.NoiseRemove.AfftdnNoiseReduction != base.NoiseRemove.AfftdnNoiseReduction {
+		t.Errorf("NoiseRemove.AfftdnNoiseReduction = %.1f, want %.1f",
+			derived.NoiseRemove.AfftdnNoiseReduction, base.NoiseRemove.AfftdnNoiseReduction)
 	}
 
 	if !reflect.DeepEqual(base.FilterOrder, []FilterID{FilterDeesser, FilterAnalysis}) ||
 		base.Loudnorm.TargetI != -18.0 ||
 		base.Analysis.RoomToneScanDuration != 2*time.Second ||
-		base.NoiseRemove.CompandThreshold != -48.0 {
+		base.NoiseRemove.AfftdnNoiseReduction != 9.0 {
 		t.Error("deriveEffectiveFilterConfig mutated caller-owned defaults")
 	}
 }

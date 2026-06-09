@@ -11,7 +11,7 @@ import (
 //
 // The "noise profile" is not afftdn training data (anlmdn is self-adapting).
 // These measurements serve as:
-// 1. Reference baseline for adaptive filter tuning (gate, compand, highpass)
+// 1. Reference baseline for adaptive filter tuning (gate, highpass)
 // 2. Comparative measurement point (same region re-measured in later passes)
 //
 // Scoring weights are tuned to prefer regions that are:

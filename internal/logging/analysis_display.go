@@ -178,14 +178,9 @@ func writeAnalysisFilterAdaptation(w io.Writer, measurements *processor.AudioMea
 				})
 			}
 		}
-		if config.NoiseRemove.CompandEnabled {
+		if config.NoiseRemove.AfftdnEnabled {
 			writeAnalysisMetricRows(w, "  ", 15, []analysisMetricSpec{
-				{"NR Threshold", fmt.Sprintf("%.0f dB", config.NoiseRemove.CompandThreshold)},
-				{"NR Expansion", fmt.Sprintf("%.0f dB", config.NoiseRemove.CompandExpansion)},
-			})
-		} else {
-			writeAnalysisMetricRows(w, "  ", 15, []analysisMetricSpec{
-				{"NR Compander", "disabled"},
+				{"NR FFT denoise", fmt.Sprintf("%g dB (fixed)", config.NoiseRemove.AfftdnNoiseReduction)},
 			})
 		}
 		if config.Deesser.Intensity > 0 {

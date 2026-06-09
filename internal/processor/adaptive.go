@@ -124,8 +124,8 @@ func AdaptConfig(config *BaseFilterConfig, measurements *AudioMeasurements) (*Ef
 	tuneDS201HighPass(effectiveConfig, measurements)             // Composite: highpass + hum notch
 	tuneDS201LowPass(effectiveConfig, diagnostics, measurements) // Unconditional 20.5 kHz band-limit
 
-	// NoiseRemove: anlmdn + compand (primary noise reduction)
-	tuneNoiseRemove(effectiveConfig, measurements)
+	// NoiseRemove (anlmdn + afftdn) has no adaptive tuning: anlmdn is fixed from
+	// spike validation and afftdn nr is fixed at 12 to avoid warble.
 
 	tuneDS201Gate(effectiveConfig, diagnostics, measurements) // DS201-style soft expander gate
 	tuneDeesser(effectiveConfig, measurements)
@@ -166,11 +166,7 @@ func sanitizeNoiseRemoveConfig(config *NoiseRemoveConfig) {
 	config.PatchSec = sanitizeFloat(config.PatchSec, defaults.PatchSec)
 	config.ResearchSec = sanitizeFloat(config.ResearchSec, defaults.ResearchSec)
 	config.Smooth = sanitizeFloat(config.Smooth, defaults.Smooth)
-	config.CompandThreshold = sanitizeFloat(config.CompandThreshold, defaults.CompandThreshold)
-	config.CompandExpansion = sanitizeFloat(config.CompandExpansion, defaults.CompandExpansion)
-	config.CompandAttack = sanitizeFloat(config.CompandAttack, defaults.CompandAttack)
-	config.CompandDecay = sanitizeFloat(config.CompandDecay, defaults.CompandDecay)
-	config.CompandKnee = sanitizeFloat(config.CompandKnee, defaults.CompandKnee)
+	config.AfftdnNoiseReduction = sanitizeFloat(config.AfftdnNoiseReduction, defaults.AfftdnNoiseReduction)
 }
 
 func sanitizeDS201GateConfig(config *DS201GateConfig) {

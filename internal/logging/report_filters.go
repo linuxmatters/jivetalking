@@ -168,8 +168,8 @@ func formatDS201LowPassFilter(f *os.File, cfg *processor.EffectiveFilterConfig, 
 	}
 }
 
-// formatNoiseRemoveFilter outputs NoiseRemove (anlmdn + compand) filter details
-// Uses Non-Local Means denoiser followed by compand for residual suppression
+// formatNoiseRemoveFilter outputs NoiseRemove (anlmdn + afftdn) filter details
+// Uses Non-Local Means denoiser followed by an FFT spectral denoiser
 func formatNoiseRemoveFilter(f *os.File, cfg *processor.EffectiveFilterConfig, m *processor.AudioMeasurements, prefix string) {
 	noiseRemove := cfg.NoiseRemove
 	if !noiseRemove.Enabled {
@@ -178,7 +178,7 @@ func formatNoiseRemoveFilter(f *os.File, cfg *processor.EffectiveFilterConfig, m
 	}
 
 	// Header: filter name and algorithm
-	fmt.Fprintf(f, "%snoiseremove: anlmdn + compand (Non-Local Means denoiser)\n", prefix)
+	fmt.Fprintf(f, "%snoiseremove: anlmdn + afftdn (Non-Local Means + FFT spectral denoiser)\n", prefix)
 
 	// anlmdn parameters (matrix spike defaults: r_min + m_strict at source rate)
 	fmt.Fprintf(f, "        anlmdn: s=%.5f, p=%.4fs, r=%.4fs, m=%.0f\n",
@@ -187,22 +187,19 @@ func formatNoiseRemoveFilter(f *os.File, cfg *processor.EffectiveFilterConfig, m
 		noiseRemove.ResearchSec,
 		noiseRemove.Smooth)
 
-	// compand parameters and rationale - show noise floor source
+	// Noise floor context from the elected room tone, when available.
 	if m != nil && m.NoiseProfile != nil && m.NoiseProfile.MeasuredNoiseFloor < 0 {
 		fmt.Fprintf(f, "        noise floor: %.1f dBFS (from room tone)\n",
 			m.NoiseProfile.MeasuredNoiseFloor)
-		fmt.Fprintf(f, "        compand: threshold %.0f dB (floor + 5dB), expansion %.0f dB\n",
-			noiseRemove.CompandThreshold,
-			noiseRemove.CompandExpansion)
-	} else {
-		fmt.Fprintf(f, "        compand: threshold %.0f dB, expansion %.0f dB (defaults - no noise profile)\n",
-			noiseRemove.CompandThreshold,
-			noiseRemove.CompandExpansion)
 	}
-	fmt.Fprintf(f, "        timing: attack %.0fms, decay %.0fms, knee %.0f dB\n",
-		noiseRemove.CompandAttack*1000,
-		noiseRemove.CompandDecay*1000,
-		noiseRemove.CompandKnee)
+
+	// afftdn parameters - fixed nr (not adaptive)
+	if noiseRemove.AfftdnEnabled {
+		fmt.Fprintf(f, "        afftdn: nr=%g dB (fixed), nt=%s, tn=%t\n",
+			noiseRemove.AfftdnNoiseReduction,
+			noiseRemove.AfftdnNoiseType,
+			noiseRemove.AfftdnTrackNoise)
+	}
 }
 
 // formatDS201GateFilter outputs DS201-inspired gate filter details

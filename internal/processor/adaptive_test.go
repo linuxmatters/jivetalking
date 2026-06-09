@@ -79,9 +79,6 @@ func TestAdaptConfigOrderIndependence(t *testing.T) {
 	if !firstDiagnostics.DS201GateGentleMode {
 		t.Fatal("file A setup failed: expected gentle gate mode")
 	}
-	if firstEffective.NoiseRemove.CompandEnabled {
-		t.Fatal("file A setup failed: expected compand disabled without a noise profile")
-	}
 	if !firstDiagnostics.LA2AHighCrestActive {
 		t.Fatal("file A setup failed: expected high-crest diagnostics active")
 	}
@@ -97,10 +94,6 @@ func TestAdaptConfigOrderIndependence(t *testing.T) {
 
 	assertOrderIndependentAdaptiveFields(t, afterA, alone)
 	assertOrderIndependentAdaptiveDiagnostics(t, afterADiagnostics, aloneDiagnostics)
-
-	if !sharedSeed.NoiseRemove.CompandEnabled {
-		t.Fatal("shared seed retained file A compand disabled state")
-	}
 }
 
 func TestAdaptConfigFilterSpecBehaviourBaseline(t *testing.T) {
@@ -115,6 +108,7 @@ func TestAdaptConfigFilterSpecBehaviourBaseline(t *testing.T) {
 			want: "highpass=f=60:poles=1:width_type=q:width=0.500:normalize=1:a=tdii:m=0.80," +
 				"lowpass=f=20500:poles=2:width_type=q:width=0.707:normalize=1," +
 				"anlmdn=s=0.00001:p=0.0060:r=0.0058:m=11," +
+				"afftdn=nr=12:nt=w:tn=1," +
 				"agate=threshold=0.012589:ratio=1.2:attack=17.00:release=400:range=0.0447:knee=2.0:detection=rms:makeup=1.0," +
 				"acompressor=threshold=0.011839:ratio=4.9:attack=10:release=340:makeup=1.00:knee=5.9:detection=rms:mix=0.93",
 		},
@@ -124,7 +118,7 @@ func TestAdaptConfigFilterSpecBehaviourBaseline(t *testing.T) {
 			want: "highpass=f=110:poles=2:width_type=q:width=0.707:normalize=1:a=tdii," +
 				"lowpass=f=20500:poles=2:width_type=q:width=0.707:normalize=1," +
 				"anlmdn=s=0.00001:p=0.0060:r=0.0058:m=11," +
-				"compand=attacks=0.005:decays=0.100:soft-knee=6.0:points=-90/-96|-75/-81|-55/-55|-30/-30|0/0," +
+				"afftdn=nr=12:nt=w:tn=1," +
 				"agate=threshold=0.019953:ratio=2.0:attack=10.00:release=250:range=0.0447:knee=5.0:detection=rms:makeup=1.0," +
 				"acompressor=threshold=0.050119:ratio=3.0:attack=10:release=150:makeup=1.00:knee=4.0:detection=rms:mix=0.93",
 		},
@@ -227,9 +221,8 @@ func assertOrderIndependentAdaptiveFields(t *testing.T, got, want *EffectiveFilt
 		{"DS201HighPass.Width", got.DS201HighPass.Width, want.DS201HighPass.Width},
 		{"DS201HighPass.Mix", got.DS201HighPass.Mix, want.DS201HighPass.Mix},
 		{"DS201HighPass.Transform", got.DS201HighPass.Transform, want.DS201HighPass.Transform},
-		{"NoiseRemove.CompandEnabled", got.NoiseRemove.CompandEnabled, want.NoiseRemove.CompandEnabled},
-		{"NoiseRemove.CompandThreshold", got.NoiseRemove.CompandThreshold, want.NoiseRemove.CompandThreshold},
-		{"NoiseRemove.CompandExpansion", got.NoiseRemove.CompandExpansion, want.NoiseRemove.CompandExpansion},
+		{"NoiseRemove.AfftdnEnabled", got.NoiseRemove.AfftdnEnabled, want.NoiseRemove.AfftdnEnabled},
+		{"NoiseRemove.AfftdnNoiseReduction", got.NoiseRemove.AfftdnNoiseReduction, want.NoiseRemove.AfftdnNoiseReduction},
 		{"DS201LowPass.Enabled", got.DS201LowPass.Enabled, want.DS201LowPass.Enabled},
 		{"DS201LowPass.Frequency", got.DS201LowPass.Frequency, want.DS201LowPass.Frequency},
 		{"LA2A.Threshold", got.LA2A.Threshold, want.LA2A.Threshold},
@@ -1685,15 +1678,11 @@ func TestSanitizeConfig(t *testing.T) {
 			DS201HighPass: DS201HighPassConfig{Frequency: 100.0, Width: 0.5, Mix: 0.8},
 			DS201LowPass:  DS201LowPassConfig{Frequency: 14000.0, Width: 0.7, Mix: 0.9},
 			NoiseRemove: NoiseRemoveConfig{
-				Strength:         0.00001,
-				PatchSec:         0.006,
-				ResearchSec:      0.0058,
-				Smooth:           11.0,
-				CompandThreshold: -50.0,
-				CompandExpansion: 10.0,
-				CompandAttack:    0.005,
-				CompandDecay:     0.100,
-				CompandKnee:      6.0,
+				Strength:             0.00001,
+				PatchSec:             0.006,
+				ResearchSec:          0.0058,
+				Smooth:               11.0,
+				AfftdnNoiseReduction: 12.0,
 			},
 			DS201Gate: DS201GateConfig{
 				Threshold: 0.02,
@@ -1721,15 +1710,11 @@ func TestSanitizeConfig(t *testing.T) {
 			DS201HighPass: DS201HighPassConfig{Frequency: math.NaN(), Width: math.Inf(1), Mix: math.Inf(-1)},
 			DS201LowPass:  DS201LowPassConfig{Frequency: math.Inf(1), Width: math.NaN(), Mix: math.Inf(-1)},
 			NoiseRemove: NoiseRemoveConfig{
-				Strength:         math.NaN(),
-				PatchSec:         math.Inf(1),
-				ResearchSec:      math.Inf(-1),
-				Smooth:           math.NaN(),
-				CompandThreshold: math.Inf(1),
-				CompandExpansion: math.Inf(-1),
-				CompandAttack:    math.NaN(),
-				CompandDecay:     math.Inf(1),
-				CompandKnee:      math.Inf(-1),
+				Strength:             math.NaN(),
+				PatchSec:             math.Inf(1),
+				ResearchSec:          math.Inf(-1),
+				Smooth:               math.NaN(),
+				AfftdnNoiseReduction: math.Inf(1),
 			},
 			DS201Gate: DS201GateConfig{
 				Threshold: math.NaN(),
@@ -1761,9 +1746,14 @@ func TestSanitizeConfig(t *testing.T) {
 			t.Errorf("DS201LowPass sanitised to %+v, want frequency %.1f width 0.707 mix 1.0", config.DS201LowPass, ds201LPBandLimitFreq)
 		}
 
+		// sanitizeConfig only repairs the non-finite float fields (Strength,
+		// PatchSec, ResearchSec, Smooth, AfftdnNoiseReduction); the boolean and
+		// string afftdn fields keep the zero values from the input literal.
 		defaultNoise := defaultNoiseRemoveConfig()
 		defaultNoise.Enabled = false
-		defaultNoise.CompandEnabled = false
+		defaultNoise.AfftdnEnabled = false
+		defaultNoise.AfftdnNoiseType = ""
+		defaultNoise.AfftdnTrackNoise = false
 		if config.NoiseRemove != defaultNoise {
 			t.Errorf("NoiseRemove sanitised to %+v, want %+v", config.NoiseRemove, defaultNoise)
 		}
@@ -2035,254 +2025,6 @@ func TestClamp(t *testing.T) {
 			if got != tt.want {
 				t.Errorf("max(%v, min(%v, %v)) = %v, want %v",
 					tt.min, tt.val, tt.max, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestTuneNoiseRemove(t *testing.T) {
-	// Tests the NoiseRemove (anlmdn+compand) configuration.
-	// Compand parameters now adapt to measured noise floor:
-	// - Threshold: noise floor + 5dB (catches breaths but not speech)
-	// - Expansion: scales with noise severity (gentle for clean, aggressive for noisy)
-	// - anlmdn parameters remain constant (validated in spike testing)
-
-	t.Run("disabled filter returns early", func(t *testing.T) {
-		config := newTestConfig()
-		config.NoiseRemove.Enabled = false
-		originalThreshold := config.NoiseRemove.CompandThreshold
-
-		measurements := &AudioMeasurements{
-			NoiseProfile: &NoiseProfile{
-				Duration:           2.0,
-				MeasuredNoiseFloor: -60.0,
-			},
-		}
-
-		tuneNoiseRemove(config, measurements)
-
-		// Should not modify config when disabled
-		if config.NoiseRemove.CompandThreshold != originalThreshold {
-			t.Errorf("tuneNoiseRemove should not modify disabled config")
-		}
-	})
-
-	t.Run("missing NoiseProfile disables compand", func(t *testing.T) {
-		config := newTestConfig()
-		config.NoiseRemove.Enabled = true
-		config.NoiseRemove.CompandEnabled = true
-
-		measurements := &AudioMeasurements{
-			NoiseProfile: nil,
-		}
-
-		tuneNoiseRemove(config, measurements)
-
-		// anlmdn should remain enabled
-		if !config.NoiseRemove.Enabled {
-			t.Errorf("tuneNoiseRemove should keep filter enabled")
-		}
-		// Compand should be disabled (no calibration data)
-		if config.NoiseRemove.CompandEnabled {
-			t.Errorf("NoiseRemove.CompandEnabled should be false when NoiseProfile is nil")
-		}
-	})
-
-	t.Run("positive noise floor disables compand", func(t *testing.T) {
-		config := newTestConfig()
-		config.NoiseRemove.Enabled = true
-		config.NoiseRemove.CompandEnabled = true
-
-		measurements := &AudioMeasurements{
-			NoiseProfile: &NoiseProfile{
-				Duration:           2.0,
-				MeasuredNoiseFloor: 0.0, // Invalid - noise floor should be negative
-			},
-		}
-
-		tuneNoiseRemove(config, measurements)
-
-		// Compand should be disabled when noise floor is invalid
-		if config.NoiseRemove.CompandEnabled {
-			t.Errorf("NoiseRemove.CompandEnabled should be false when noise floor is non-negative")
-		}
-	})
-
-	t.Run("valid NoiseProfile keeps compand enabled", func(t *testing.T) {
-		config := newTestConfig()
-		config.NoiseRemove.Enabled = true
-		config.NoiseRemove.CompandEnabled = true
-
-		measurements := &AudioMeasurements{
-			NoiseProfile: &NoiseProfile{
-				Duration:           2.0,
-				MeasuredNoiseFloor: -55.0,
-			},
-		}
-
-		tuneNoiseRemove(config, measurements)
-
-		if !config.NoiseRemove.CompandEnabled {
-			t.Errorf("NoiseRemove.CompandEnabled should remain true when NoiseProfile is valid")
-		}
-	})
-
-	t.Run("valid profile re-enables compand after previous disable", func(t *testing.T) {
-		config := newTestConfig()
-		config.NoiseRemove.Enabled = true
-
-		// Simulate first file with no noise profile (disables compand)
-		config.NoiseRemove.CompandEnabled = true
-		tuneNoiseRemove(config, &AudioMeasurements{NoiseProfile: nil})
-		if config.NoiseRemove.CompandEnabled {
-			t.Fatalf("NoiseRemove.CompandEnabled should be false after nil NoiseProfile")
-		}
-
-		// Simulate second file with valid noise profile (should re-enable)
-		tuneNoiseRemove(config, &AudioMeasurements{
-			NoiseProfile: &NoiseProfile{
-				Duration:           2.0,
-				MeasuredNoiseFloor: -55.0,
-			},
-		})
-		if !config.NoiseRemove.CompandEnabled {
-			t.Errorf("NoiseRemove.CompandEnabled should be re-enabled for valid NoiseProfile after previous disable")
-		}
-	})
-
-	t.Run("adaptive threshold based on noise floor", func(t *testing.T) {
-		// Threshold = noise floor + 5dB, clamped to [-70, -40]
-		// Expansion tiers: > -45 → 12, > -55 → 8, > -65 → 6, else → 4
-		tests := []struct {
-			name              string
-			noiseFloor        float64
-			expectedThreshold float64
-			expectedExpansion float64
-		}{
-			{"typical podcast (-55 dB)", -55.0, -50.0, 6.0},    // -55 + 5 = -50, > -65 → 6
-			{"clean studio (-70 dB)", -70.0, -65.0, 4.0},       // -70 + 5 = -65, <= -65 → 4
-			{"very clean (-80 dB)", -80.0, -70.0, 4.0},         // -80 + 5 = -75, clamped to -70, <= -65 → 4
-			{"ultra-clean (-90 dB)", -90.0, -70.0, 4.0},        // -90 + 5 = -85, clamped to -70, <= -65 → 4
-			{"noisy recording (-35 dB)", -35.0, -40.0, 12.0},   // -35 + 5 = -30, clamped to -40, > -45 → 12
-			{"moderately noisy (-50 dB)", -50.0, -45.0, 8.0},   // -50 + 5 = -45, > -55 → 8
-			{"typical room noise (-60 dB)", -60.0, -55.0, 6.0}, // -60 + 5 = -55, > -65 → 6
-		}
-
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				config := newTestConfig()
-				config.NoiseRemove.Enabled = true
-
-				measurements := &AudioMeasurements{
-					NoiseProfile: &NoiseProfile{
-						Duration:           2.0,
-						MeasuredNoiseFloor: tt.noiseFloor,
-					},
-				}
-
-				tuneNoiseRemove(config, measurements)
-
-				// Check threshold is noise floor + 5dB (clamped)
-				if config.NoiseRemove.CompandThreshold != tt.expectedThreshold {
-					t.Errorf("NoiseRemove.CompandThreshold = %.1f, want %.1f (floor %.1f + 5dB, clamped)",
-						config.NoiseRemove.CompandThreshold, tt.expectedThreshold, tt.noiseFloor)
-				}
-
-				// Check expansion scales with noise severity
-				if config.NoiseRemove.CompandExpansion != tt.expectedExpansion {
-					t.Errorf("NoiseRemove.CompandExpansion = %.1f, want %.1f",
-						config.NoiseRemove.CompandExpansion, tt.expectedExpansion)
-				}
-			})
-		}
-	})
-
-	t.Run("anlmdn parameters unchanged", func(t *testing.T) {
-		config := newTestConfig()
-		config.NoiseRemove.Enabled = true
-		// Record original anlmdn values
-		originalStrength := config.NoiseRemove.Strength
-		originalPatch := config.NoiseRemove.PatchSec
-		originalResearch := config.NoiseRemove.ResearchSec
-		originalSmooth := config.NoiseRemove.Smooth
-
-		measurements := &AudioMeasurements{
-			NoiseProfile: &NoiseProfile{
-				Duration:           2.0,
-				MeasuredNoiseFloor: -55.0,
-			},
-		}
-
-		tuneNoiseRemove(config, measurements)
-
-		// anlmdn parameters should remain constant
-		if config.NoiseRemove.Strength != originalStrength {
-			t.Errorf("NoiseRemove.Strength changed from %v to %v", originalStrength, config.NoiseRemove.Strength)
-		}
-		if config.NoiseRemove.PatchSec != originalPatch {
-			t.Errorf("NoiseRemove.PatchSec changed from %v to %v", originalPatch, config.NoiseRemove.PatchSec)
-		}
-		if config.NoiseRemove.ResearchSec != originalResearch {
-			t.Errorf("NoiseRemove.ResearchSec changed from %v to %v", originalResearch, config.NoiseRemove.ResearchSec)
-		}
-		if config.NoiseRemove.Smooth != originalSmooth {
-			t.Errorf("NoiseRemove.Smooth changed from %v to %v", originalSmooth, config.NoiseRemove.Smooth)
-		}
-	})
-
-	t.Run("attack/decay/knee unchanged", func(t *testing.T) {
-		config := newTestConfig()
-		config.NoiseRemove.Enabled = true
-		originalAttack := config.NoiseRemove.CompandAttack
-		originalDecay := config.NoiseRemove.CompandDecay
-		originalKnee := config.NoiseRemove.CompandKnee
-
-		measurements := &AudioMeasurements{
-			NoiseProfile: &NoiseProfile{
-				Duration:           2.0,
-				MeasuredNoiseFloor: -55.0,
-			},
-		}
-
-		tuneNoiseRemove(config, measurements)
-
-		if config.NoiseRemove.CompandAttack != originalAttack {
-			t.Errorf("NoiseRemove.CompandAttack changed from %v to %v", originalAttack, config.NoiseRemove.CompandAttack)
-		}
-		if config.NoiseRemove.CompandDecay != originalDecay {
-			t.Errorf("NoiseRemove.CompandDecay changed from %v to %v", originalDecay, config.NoiseRemove.CompandDecay)
-		}
-		if config.NoiseRemove.CompandKnee != originalKnee {
-			t.Errorf("NoiseRemove.CompandKnee changed from %v to %v", originalKnee, config.NoiseRemove.CompandKnee)
-		}
-	})
-}
-
-func TestScaleExpansion(t *testing.T) {
-	// Tests the scaleExpansion helper that determines expansion depth
-	// based on noise floor severity.
-	// Thresholds: > -45 → 12, > -55 → 8, > -65 → 6, else → 4
-	tests := []struct {
-		name       string
-		noiseFloor float64
-		want       float64
-	}{
-		{"very noisy (> -45 dB)", -40.0, 12.0},
-		{"at -45 boundary", -45.0, 8.0}, // -45 is NOT > -45, so falls to > -55 → 8
-		{"moderate noise (> -55 dB)", -50.0, 8.0},
-		{"at -55 boundary", -55.0, 6.0}, // -55 is NOT > -55, so falls to > -65 → 6
-		{"typical (> -65 dB)", -60.0, 6.0},
-		{"at -65 boundary", -65.0, 4.0}, // -65 is NOT > -65, so falls to default → 4
-		{"very clean (<= -65 dB)", -70.0, 4.0},
-		{"ultra clean", -90.0, 4.0},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := scaleExpansion(tt.noiseFloor)
-			if got != tt.want {
-				t.Errorf("scaleExpansion(%.1f) = %.1f, want %.1f",
-					tt.noiseFloor, got, tt.want)
 			}
 		})
 	}

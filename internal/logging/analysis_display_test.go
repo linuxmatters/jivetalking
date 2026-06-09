@@ -193,9 +193,8 @@ func TestDisplayAnalysisResults_VoiceActivated_NoElectedCandidate(t *testing.T) 
 func TestDisplayAnalysisResults_FullOutputFixture(t *testing.T) {
 	m := makeFullAnalysisMeasurements()
 	config := processor.DefaultEffectiveFilterConfig()
-	config.NoiseRemove.CompandEnabled = true
-	config.NoiseRemove.CompandThreshold = -53
-	config.NoiseRemove.CompandExpansion = 7
+	config.NoiseRemove.AfftdnEnabled = true
+	config.NoiseRemove.AfftdnNoiseReduction = 12
 	config.Deesser.Intensity = 0.35
 	config.LA2A.Threshold = -21
 	config.LA2A.Ratio = 2.5
@@ -281,8 +280,7 @@ FILTER ADAPTATION
   Lowpass:        20500 Hz
   Gate Threshold: -51.2 dB (with breath reduction)
   Gate Ratio:     3.0:1
-  NR Threshold:   -53 dB
-  NR Expansion:   7 dB
+  NR FFT denoise: 12 dB (fixed)
   De-esser:       35% intensity
   LA-2A Thresh:   -21 dB
   LA-2A Ratio:    2.5:1
@@ -403,45 +401,32 @@ func TestDisplayAnalysisResults_Normal_NoVoiceActivated(t *testing.T) {
 	}
 }
 
-func TestDisplayAnalysisResults_CompanderDisabled(t *testing.T) {
+func TestDisplayAnalysisResults_AfftdnDisabled(t *testing.T) {
 	m := makeMinimalMeasurements()
 	config := processor.DefaultEffectiveFilterConfig()
-	config.NoiseRemove.CompandEnabled = false
+	config.NoiseRemove.AfftdnEnabled = false
 
 	var buf bytes.Buffer
 	DisplayAnalysisResults(&buf, "/tmp/test.wav", makeMinimalMetadata(), m, config)
 	output := buf.String()
 
-	if !strings.Contains(output, "NR Compander:   disabled") {
-		t.Error("expected 'NR Compander: disabled' when compander is disabled")
-	}
-	if strings.Contains(output, "NR Threshold:") {
-		t.Error("expected no 'NR Threshold' line when compander is disabled")
-	}
-	if strings.Contains(output, "NR Expansion:") {
-		t.Error("expected no 'NR Expansion' line when compander is disabled")
+	if strings.Contains(output, "NR FFT denoise:") {
+		t.Error("expected no 'NR FFT denoise' line when afftdn is disabled")
 	}
 }
 
-func TestDisplayAnalysisResults_CompanderEnabled(t *testing.T) {
+func TestDisplayAnalysisResults_AfftdnEnabled(t *testing.T) {
 	m := makeMinimalMeasurements()
 	config := processor.DefaultEffectiveFilterConfig()
-	config.NoiseRemove.CompandEnabled = true
-	config.NoiseRemove.CompandThreshold = -55
-	config.NoiseRemove.CompandExpansion = 6
+	config.NoiseRemove.AfftdnEnabled = true
+	config.NoiseRemove.AfftdnNoiseReduction = 12
 
 	var buf bytes.Buffer
 	DisplayAnalysisResults(&buf, "/tmp/test.wav", makeMinimalMetadata(), m, config)
 	output := buf.String()
 
-	if !strings.Contains(output, "NR Threshold:") {
-		t.Error("expected 'NR Threshold' when compander is enabled")
-	}
-	if !strings.Contains(output, "NR Expansion:") {
-		t.Error("expected 'NR Expansion' when compander is enabled")
-	}
-	if strings.Contains(output, "NR Compander:") {
-		t.Error("expected no 'NR Compander: disabled' when compander is enabled")
+	if !strings.Contains(output, "NR FFT denoise: 12 dB (fixed)") {
+		t.Error("expected 'NR FFT denoise: 12 dB (fixed)' when afftdn is enabled")
 	}
 }
 

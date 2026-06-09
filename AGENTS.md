@@ -67,12 +67,12 @@ internal/
 
 **Filter chain order (Pass 2):**
 ```
-downmix → ds201_highpass → ds201_lowpass → noiseremove (anlmdn at source rate, r=0.0020, m=3 + compand) → ds201_gate → la2a_compressor → deesser → analysis → resample
+downmix → ds201_highpass → ds201_lowpass → noiseremove (anlmdn at source rate, r=0.0020, m=3 → afftdn FFT spectral denoise, fixed nr=12) → ds201_gate → la2a_compressor → deesser → analysis → resample
 ```
 
 Order rationale: downmix to mono first; HP/LP removes frequency extremes before gate (DS201 frequency-conscious side-chain pattern); denoising before gating (lowers noise floor for gate); compression before de-essing (compression emphasises sibilance); analysis measures processed signal; final resample standardises output format last.
 
-**Noise removal default:** Production uses `anlmdn_production_current`: `anlmdn` runs at the source sample rate with `r=0.0020` (`r_min`) and `m=3` (`m_strict`), followed by `compand` for residual suppression when a noise profile is available. No sample-rate cap or exit restore - downstream filters (gate, LA-2A, de-esser, analysis) operate at the source rate throughout. The matrix spike at `.bench/anlmdn-matrix-spike` validated this path against the previous 32 kHz cap default (`r=0.0045`, `m=11`) at ~35 % faster Pass 2 with metric-equivalent quality. In benchmark context, refer to the 0.3.1 historical path as `anlmdn_legacy_default`.
+**Noise removal default:** Production runs `anlmdn → afftdn`. `anlmdn` runs at the source sample rate with `r=0.0020` (`r_min`) and `m=3` (`m_strict`); `afftdn` (FFT spectral denoise, `nr=12:nt=w:tn=1`) follows as the residual-suppression stage. No sample-rate cap or exit restore - downstream filters (gate, LA-2A, de-esser, analysis) operate at the source rate throughout. The matrix spike at `.bench/anlmdn-matrix-spike` validated the anlmdn path against the previous 32 kHz cap default (`r=0.0045`, `m=11`) at ~35 % faster Pass 2 with metric-equivalent quality; in that context the 0.3.1 historical path is `anlmdn_legacy_default`. afftdn replaced the former `compand` residual-suppression stage: sweeps at `.bench/noiseblock-ep83` and `.bench/afftdn-ep83` showed `anlmdn → afftdn` matches or beats `anlmdn → compand` on under-speech noise across all three test stems while keeping gaps clean with less floor modulation. The compand was a blunt downward expander that resolved to its gentlest 4 dB expansion on every stem and added floor pumping. `nr` is FIXED at 12 (not adaptive): a per-presenter sweep showed the noisiest voice must be capped at ~12 to avoid warble.
 
 **Adeclick default:** Production uses `adeclick=t=2.0:w=55:o=50:m=s` (spline interpolation, halved overlap vs prior default) for ~75% Pass 4 runtime reduction at metric-parity quality; the gentle limiter attack keeps source clicks below the relaxed threshold. In benchmark context, refer to the production path as `adeclick_current_t_2_0_w_55_o_50_m_s`. No legacy variant is retained in the matrix. Note: adeclick runs at the source sample rate via an `aresample` inserted before it; loudnorm emits at 192 kHz when it falls back to dynamic mode (linear mode preserves the source rate), and running adeclick at that rate quadrupled its sample count - the dominant Pass 4 cost on long files until the resample was added.
 
@@ -128,7 +128,6 @@ Two separate message sets exist for the two TUI modes.
 
 - **DS201 highpass frequency:** 60-120Hz based on spectral decrease (warm/thin voice detection) and room-tone noise floor; warm voices use gentler Q (0.5) and reduced wet/dry mix
 - **DS201 lowpass:** Unconditional 20.5 kHz band-limit (12 dB/oct) for all content, giving downstream AAC/Opus/MP3 encoders a consistent bandwidth. Not adaptive: no content detection and no HF-noise tuning. 20.5 kHz is at the top of human hearing, so the band-limit is audibly transparent and only removes inaudible ultrasonics the lossy encoders discard anyway
-- **NoiseRemove compand:** Adaptive threshold (noise floor + 5 dB, clamped [-70, -40]); expansion scales 4-12 dB based on noise severity
 - **DS201 gate threshold:** Derived from measured noise floor; with breath reduction, positioned at 60% of gap between noise floor and quiet speech level (`SpeechProfile.RMSLevel - CrestFactor`); firmer ratio (1.5x, clamped 2.0-4.0) and deeper range (+6 dB) when breath reduction active
 - **LA-2A ratio/release:** Adapts based on kurtosis and flux from `SpeechProfile` when available
 - **De-esser intensity:** 0.0-0.6 based on spectral centroid + rolloff; prefers `SpeechProfile` metrics

@@ -102,7 +102,7 @@ downmix → ds201_highpass → ds201_lowpass → noiseremove → ds201_gate → 
 |--------|---------------------|-------|
 | **DS201 Highpass** | Frequency (60-120Hz), poles, mix | Spectral centroid, spectral decrease, noise floor |
 | **DS201 Lowpass** | Cutoff frequency, enable/disable | Content type detection (speech/music/mixed), rolloff, ZCR |
-| **NoiseRemove** | Compand threshold, expansion depth (disabled when no noise profile) | Measured noise floor + 5 dB, noise severity; compand requires an elected room tone region; production `anlmdn` runs at the source sample rate with `r=0.0020` and `m=3` |
+| **NoiseRemove** | None (fixed) | Not adaptive: `anlmdn` runs at the source sample rate with `r=0.0020` and `m=3`, followed by `afftdn` FFT spectral denoise with a fixed `nr=12` (capped to avoid warble on the noisiest voice) |
 | **DS201 Gate** | Threshold, ratio, attack, release, range, knee | LRA, noise floor, quiet speech estimate, spectral flux, entropy |
 | **LA-2A Compressor** | Threshold, ratio, attack, release, knee, mix | Kurtosis, flux, dynamic range, spectral centroid |
 | **De-esser** | Intensity (0.0-0.6) | Spectral centroid + rolloff |
@@ -143,7 +143,7 @@ Jivetalking employs speech profile extraction for adaptive tuning:
 | **Look-ahead Capability** | Yes—infinite look-ahead via multiple passes | Yes—infinite look-ahead via Pass 1 analysis |
 | **Target Loudness Standard** | -18 dB RMS (custom RMS calculation) | -16 LUFS |
 | **Silence Detection** | Fixed: 50ms subsegments > -44 dB | Adaptive: spectral analysis + room tone scoring |
-| **Noise Reduction** | None | `anlmdn` (Non-Local Means, source-rate denoising at `r=0.0020`, `m=3`) + compand |
+| **Noise Reduction** | None | `anlmdn` (Non-Local Means, source-rate denoising at `r=0.0020`, `m=3`) + `afftdn` (FFT spectral denoise, fixed `nr=12`) |
 | **Dynamics Processing** | Implicit in leveling algorithm | Explicit LA-2A-style compressor + CBS Volumax limiter |
 | **Gating/Expansion** | None | DS201-inspired soft expander (2:1-4:1 ratio) |
 | **Highpass Filtering** | None | Adaptive 60-120Hz with warm voice protection |
@@ -220,7 +220,7 @@ Jivetalking employs speech profile extraction for adaptive tuning:
 
 ### Capabilities Jivetalking Has That Levelator Lacked
 
-1. **Noise Reduction:** Non-Local Means denoising (`anlmdn`) always active, running at the source sample rate with a small research radius (`r=0.0020`) and a tight LUT decay (`m=3`) for sharp rejection of distant patches. Adaptive compand applies when a room tone region is elected as the noise profile
+1. **Noise Reduction:** Non-Local Means denoising (`anlmdn`) always active, running at the source sample rate with a small research radius (`r=0.0020`) and a tight LUT decay (`m=3`) for sharp rejection of distant patches, followed by `afftdn` FFT spectral denoise (fixed `nr=12`) for residual under-speech suppression
 2. **Gating:** Soft expander for inter-speech cleanup
 3. **True Peak Limiting:** Prevents inter-sample peaks
 4. **De-essing:** Automatic sibilance control
