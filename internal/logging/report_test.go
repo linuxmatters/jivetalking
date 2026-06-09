@@ -263,9 +263,7 @@ func TestGenerateReport_SpectralRowCounts(t *testing.T) {
 func TestGenerateReport_FilterChainUsesProcessingDiagnostics(t *testing.T) {
 	data := makeReportData(t)
 	data.Result.Diagnostics = &processor.AdaptiveDiagnostics{
-		DS201LPContentType:  processor.ContentSpeech,
-		DS201LPReason:       "rolloff/centroid gap",
-		DS201LPRolloffRatio: 3.10,
+		DS201LPReason: "20.5 kHz band-limit (always on)",
 
 		DS201GateAggression:          0.72,
 		DS201GateDynamicRange:        18.4,
@@ -285,9 +283,7 @@ func TestGenerateReport_FilterChainUsesProcessingDiagnostics(t *testing.T) {
 	output := generateReportText(t, data)
 
 	for _, want := range []string{
-		"Rationale: rolloff/centroid gap",
-		"Content type: speech",
-		"Rolloff/centroid ratio: 3.10 > 2.5",
+		"Rationale: 20.5 kHz band-limit (always on)",
 		"DS201 gate: threshold",
 		"[gentle mode]",
 		"Aggression: 0.72 (separation 17.1 dB)",
@@ -304,8 +300,6 @@ func TestGenerateReport_FilterChainUsesProcessingDiagnostics(t *testing.T) {
 
 	for _, stale := range []string{
 		"stale config lowpass reason",
-		"Content type: music",
-		"Rolloff/centroid ratio: 9.99",
 		"stale config clamp",
 		"High-crest override: not needed (deficit 0.1 dB)",
 	} {

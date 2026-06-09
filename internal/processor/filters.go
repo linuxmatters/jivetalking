@@ -49,7 +49,7 @@ var Pass1FilterOrder = []FilterID{
 // Order rationale:
 // - Downmix first: ensures all downstream filters work with mono
 // - DS201HighPass: removes subsonic rumble before other filters
-// - DS201LowPass: removes ultrasonic content that could trigger false gates (adaptive)
+// - DS201LowPass: unconditional 20.5 kHz band-limit (removes inaudible ultrasonics)
 // - NoiseRemove: primary noise reduction using anlmdn + compand
 // - DS201Gate: soft expander for inter-speech cleanup (after denoising lowers floor)
 // - LA2ACompressor: LA-2A style optical compression evens dynamics before normalisation
@@ -247,9 +247,7 @@ type BaseFilterConfig struct {
 
 // AdaptiveDiagnostics holds report-only adaptation explanations.
 type AdaptiveDiagnostics struct {
-	DS201LPContentType  ContentType
-	DS201LPReason       string
-	DS201LPRolloffRatio float64
+	DS201LPReason string
 
 	DS201GateAggression          float64
 	DS201GateDynamicRange        float64
@@ -405,7 +403,7 @@ func defaultDS201HighPassConfig() DS201HighPassConfig {
 func defaultDS201LowPassConfig() DS201LowPassConfig {
 	return DS201LowPassConfig{
 		Enabled:   true,
-		Frequency: 16000.0,
+		Frequency: 20500.0,
 		Poles:     2,
 		Width:     0.707,
 		Mix:       1.0,
@@ -468,7 +466,7 @@ func defaultDeesserConfig() DeesserConfig {
 func defaultAdeclickConfig() AdeclickConfig {
 	return AdeclickConfig{
 		Enabled:   true,
-		Threshold: 2.0,
+		Threshold: 1.7,
 		Window:    55.0,
 		Overlap:   50.0,
 		Method:    "s",

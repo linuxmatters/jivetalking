@@ -58,11 +58,8 @@ func TestAdaptConfigReturnsEffectiveConfig(t *testing.T) {
 	if effective.DS201HighPass.Frequency == 95.0 {
 		t.Fatal("effective DS201HighPass.Frequency did not adapt from base seed value")
 	}
-	if diagnostics.DS201LPContentType != ContentMusic {
-		t.Errorf("diagnostics DS201LPContentType = %v, want %v", diagnostics.DS201LPContentType, ContentMusic)
-	}
-	if diagnostics.DS201LPReason != "music content detected" {
-		t.Errorf("diagnostics DS201LPReason = %q, want music content detected", diagnostics.DS201LPReason)
+	if diagnostics.DS201LPReason != "20.5 kHz band-limit (always on)" {
+		t.Errorf("diagnostics DS201LPReason = %q, want 20.5 kHz band-limit (always on)", diagnostics.DS201LPReason)
 	}
 	assertNoStaleEffectiveConfigFields(t)
 }
@@ -116,6 +113,7 @@ func TestAdaptConfigFilterSpecBehaviourBaseline(t *testing.T) {
 			name:         "warm voice without noise profile",
 			measurements: orderIndependenceWarmNoProfileMeasurements(),
 			want: "highpass=f=60:poles=1:width_type=q:width=0.500:normalize=1:a=tdii:m=0.80," +
+				"lowpass=f=20500:poles=2:width_type=q:width=0.707:normalize=1," +
 				"anlmdn=s=0.00001:p=0.0060:r=0.0058:m=11," +
 				"agate=threshold=0.012589:ratio=1.2:attack=17.00:release=400:range=0.0447:knee=2.0:detection=rms:makeup=1.0," +
 				"acompressor=threshold=0.011839:ratio=4.9:attack=10:release=340:makeup=1.00:knee=5.9:detection=rms:mix=0.93",
@@ -124,7 +122,7 @@ func TestAdaptConfigFilterSpecBehaviourBaseline(t *testing.T) {
 			name:         "bright speech with noise profile",
 			measurements: orderIndependenceBrightSpeechMeasurements(),
 			want: "highpass=f=110:poles=2:width_type=q:width=0.707:normalize=1:a=tdii," +
-				"lowpass=f=17000:poles=1:width_type=q:width=0.707:normalize=1," +
+				"lowpass=f=20500:poles=2:width_type=q:width=0.707:normalize=1," +
 				"anlmdn=s=0.00001:p=0.0060:r=0.0058:m=11," +
 				"compand=attacks=0.005:decays=0.100:soft-knee=6.0:points=-90/-96|-75/-81|-55/-55|-30/-30|0/0," +
 				"agate=threshold=0.019953:ratio=2.0:attack=10.00:release=250:range=0.0447:knee=5.0:detection=rms:makeup=1.0," +
@@ -255,9 +253,7 @@ func assertOrderIndependentAdaptiveDiagnostics(t *testing.T, got, want *Adaptive
 		got  any
 		want any
 	}{
-		{"DS201LPContentType", got.DS201LPContentType, want.DS201LPContentType},
 		{"DS201LPReason", got.DS201LPReason, want.DS201LPReason},
-		{"DS201LPRolloffRatio", got.DS201LPRolloffRatio, want.DS201LPRolloffRatio},
 		{"DS201GateGentleMode", got.DS201GateGentleMode, want.DS201GateGentleMode},
 		{"DS201GateAggression", got.DS201GateAggression, want.DS201GateAggression},
 		{"DS201GateDynamicRange", got.DS201GateDynamicRange, want.DS201GateDynamicRange},
@@ -693,170 +689,57 @@ func TestDetectContentType(t *testing.T) {
 }
 
 func TestTuneDS201LowPass(t *testing.T) {
-	// Constants from adaptive.go for reference:
-	// Content detection: speech needs kurtosis>6, flatness<0.45, flux<0.003, crest>30 (3+ matches)
-	// HF noise triggers (speech only):
-	//   - Rolloff > 14kHz → cutoff = rolloff + 2kHz
-	//   - Rolloff < 8kHz → disabled because the voice is already dark
-	//   - ZCR > 0.10 AND centroid < 4000 → cutoff = 12000
-	// Cutoff capped at 20000
-
+	// The DS201 low-pass is an unconditional 20.5 kHz band-limit: always enabled
+	// at 20500 Hz with 12 dB/oct (poles=2), regardless of content type or HF-noise
+	// measurements. These cases span speech, music, mixed, dark-voice, ultrasonic,
+	// and HF-noise measurement profiles to prove no adaptive branch survives.
 	tests := []struct {
-		name            string
-		kurtosis        float64
-		flatness        float64
-		flux            float64
-		crest           float64
-		rolloff         float64
-		centroid        float64
-		slope           float64
-		zcr             float64
-		wantEnabled     bool
-		wantContentType ContentType
-		wantReason      string
-		wantFreqMin     float64 // 0 = don't check
-		wantFreqMax     float64
-		desc            string
+		name     string
+		kurtosis float64
+		flatness float64
+		flux     float64
+		crest    float64
+		rolloff  float64
+		centroid float64
+		slope    float64
+		zcr      float64
+		desc     string
 	}{
-		// Test case 1: Clean podcast speech → ultrasonic cleanup (always-on)
 		{
-			name:            "clean podcast speech - ultrasonic cleanup",
-			kurtosis:        9.2,
-			flatness:        0.38,
-			flux:            0.002,
-			crest:           45.0,
-			rolloff:         8809,
-			centroid:        3736,
-			slope:           -5.66e-05,
-			zcr:             0.052,
-			wantEnabled:     false, // Per spec: default disabled, rolloff 8809 < 14000 so no ultrasonic trigger
-			wantContentType: ContentSpeech,
-			wantReason:      "no HF issues detected",
-			wantFreqMin:     0, // Not checked when disabled
-			wantFreqMax:     0,
-			desc:            "typical podcast: rolloff < 14kHz, no triggers, LP disabled per spec",
+			name:     "clean podcast speech",
+			kurtosis: 9.2, flatness: 0.38, flux: 0.002, crest: 45.0,
+			rolloff: 8809, centroid: 3736, slope: -5.66e-05, zcr: 0.052,
+			desc: "typical podcast speech profile",
 		},
-		// Test case 2: Speech with high rolloff (>14kHz) → ultrasonic cleanup
 		{
-			name:            "speech with ultrasonic content",
-			kurtosis:        8.0,
-			flatness:        0.40,
-			flux:            0.002,
-			crest:           40.0,
-			rolloff:         15000, // > 14000 threshold
-			centroid:        5000,
-			slope:           -3e-05,
-			zcr:             0.05,
-			wantEnabled:     true,
-			wantContentType: ContentSpeech,
-			wantReason:      "ultrasonic cleanup (rolloff > 14kHz)",
-			wantFreqMin:     17000, // 15000 + 2000 = 17000
-			wantFreqMax:     17000,
-			desc:            "rolloff > 14kHz, enables LP at rolloff + 2kHz",
+			name:     "speech with ultrasonic content",
+			kurtosis: 8.0, flatness: 0.40, flux: 0.002, crest: 40.0,
+			rolloff: 15000, centroid: 5000, slope: -3e-05, zcr: 0.05,
+			desc: "high rolloff no longer down-tunes the cutoff",
 		},
-		// Test case 3: Music characteristics → disabled
 		{
-			name:            "music sting",
-			kurtosis:        3.5,
-			flatness:        0.61,
-			flux:            0.008,
-			crest:           18.0,
-			rolloff:         16000, // Would trigger LP if speech
-			centroid:        5500,
-			slope:           -2e-05,
-			zcr:             0.08,
-			wantEnabled:     false,
-			wantContentType: ContentMusic,
-			wantReason:      "music content detected",
-			desc:            "music detected, LP disabled to preserve full spectrum",
+			name:     "music sting",
+			kurtosis: 3.5, flatness: 0.61, flux: 0.008, crest: 18.0,
+			rolloff: 16000, centroid: 5500, slope: -2e-05, zcr: 0.08,
+			desc: "music profile still emits the band-limit",
 		},
-		// Test case 4: Mixed characteristics → disabled (conservative)
 		{
-			name:            "speech over music bed",
-			kurtosis:        5.2,
-			flatness:        0.52,
-			flux:            0.004,
-			crest:           27.0,
-			rolloff:         12000,
-			centroid:        4200,
-			slope:           -2e-05,
-			zcr:             0.06,
-			wantEnabled:     false,
-			wantContentType: ContentMixed,
-			wantReason:      "mixed content, conservative",
-			desc:            "ambiguous content, LP disabled to be safe",
+			name:     "speech over music bed",
+			kurtosis: 5.2, flatness: 0.52, flux: 0.004, crest: 27.0,
+			rolloff: 12000, centroid: 4200, slope: -2e-05, zcr: 0.06,
+			desc: "mixed content still emits the band-limit",
 		},
-		// Test case 5: Dark voice (rolloff < 8kHz) → disabled per spec
 		{
-			name:            "dark voice - already limited HF",
-			kurtosis:        7.5,
-			flatness:        0.42,
-			flux:            0.002,
-			crest:           35.0,
-			rolloff:         7000, // < 8kHz dark voice threshold
-			centroid:        3500,
-			slope:           -8e-06,
-			zcr:             0.05,
-			wantEnabled:     false,
-			wantContentType: ContentSpeech,
-			wantReason:      "voice already dark (rolloff < 8kHz)",
-			wantFreqMin:     0,
-			wantFreqMax:     0,
-			desc:            "rolloff < 8kHz means voice is naturally dark, no LP needed",
+			name:     "dark voice - already limited HF",
+			kurtosis: 7.5, flatness: 0.42, flux: 0.002, crest: 35.0,
+			rolloff: 7000, centroid: 3500, slope: -8e-06, zcr: 0.05,
+			desc: "dark voice still emits the band-limit",
 		},
-		// Test case 6: High ZCR with low centroid trigger
 		{
-			name:            "speech with HF noise pattern",
-			kurtosis:        8.0,
-			flatness:        0.38,
-			flux:            0.002,
-			crest:           40.0,
-			rolloff:         9000, // > 8kHz (not dark), < 14kHz (no ultrasonic)
-			centroid:        3500, // < 4000
-			slope:           -4e-05,
-			zcr:             0.12, // > 0.10 (will trigger ZCR)
-			wantEnabled:     true,
-			wantContentType: ContentSpeech,
-			wantReason:      "high ZCR with low centroid (HF noise)",
-			wantFreqMin:     12000,
-			wantFreqMax:     12000,
-			desc:            "ZCR>0.10 AND centroid<4000 indicates HF noise, enable at 12kHz per spec",
-		},
-		// Test case 7: High ZCR but high centroid (sibilance, not noise) → disabled
-		{
-			name:            "speech with high ZCR high centroid",
-			kurtosis:        8.0,
-			flatness:        0.38,
-			flux:            0.002,
-			crest:           40.0,
-			rolloff:         9000,
-			centroid:        5000, // > 4000, so ZCR trigger doesn't fire
-			slope:           -4e-05,
-			zcr:             0.12,  // > 0.10 but centroid too high
-			wantEnabled:     false, // Per spec: default disabled, no triggers matched
-			wantContentType: ContentSpeech,
-			wantReason:      "no HF issues detected",
-			wantFreqMin:     0,
-			wantFreqMax:     0,
-			desc:            "high ZCR with high centroid is sibilance (not noise), LP disabled",
-		},
-		// Test case 8: Very high rolloff (>18kHz) - capped at 20kHz
-		{
-			name:            "speech with very high rolloff",
-			kurtosis:        7.0,
-			flatness:        0.40,
-			flux:            0.002,
-			crest:           35.0,
-			rolloff:         19000, // > 14kHz threshold
-			centroid:        5000,
-			slope:           -3e-05,
-			zcr:             0.05,
-			wantEnabled:     true,
-			wantContentType: ContentSpeech,
-			wantReason:      "ultrasonic cleanup (rolloff > 14kHz)",
-			wantFreqMin:     20000, // 19000 + 2000 = 21000, capped at 20000
-			wantFreqMax:     20000,
-			desc:            "rolloff + 2kHz capped at 20kHz",
+			name:     "speech with HF noise pattern",
+			kurtosis: 8.0, flatness: 0.38, flux: 0.002, crest: 40.0,
+			rolloff: 9000, centroid: 3500, slope: -4e-05, zcr: 0.12,
+			desc: "high ZCR with low centroid no longer triggers a down-tune",
 		},
 	}
 
@@ -870,29 +753,25 @@ func TestTuneDS201LowPass(t *testing.T) {
 
 			tuneDS201LowPass(config, diagnostics, m)
 
-			if config.DS201LowPass.Enabled != tt.wantEnabled {
-				t.Errorf("DS201LowPass.Enabled = %v, want %v [%s]",
-					config.DS201LowPass.Enabled, tt.wantEnabled, tt.desc)
+			if !config.DS201LowPass.Enabled {
+				t.Errorf("DS201LowPass.Enabled = false, want true [%s]", tt.desc)
 			}
-
-			if diagnostics.DS201LPContentType != tt.wantContentType {
-				t.Errorf("DS201LPContentType = %v, want %v [%s]",
-					diagnostics.DS201LPContentType, tt.wantContentType, tt.desc)
+			if config.DS201LowPass.Frequency != ds201LPBandLimitFreq {
+				t.Errorf("DS201LowPass.Frequency = %.0f Hz, want %.0f Hz [%s]",
+					config.DS201LowPass.Frequency, ds201LPBandLimitFreq, tt.desc)
 			}
-
-			if diagnostics.DS201LPReason != tt.wantReason {
-				t.Errorf("DS201LPReason = %q, want %q [%s]",
-					diagnostics.DS201LPReason, tt.wantReason, tt.desc)
+			if config.DS201LowPass.Poles != 2 {
+				t.Errorf("DS201LowPass.Poles = %d, want 2 [%s]", config.DS201LowPass.Poles, tt.desc)
+			}
+			if config.DS201LowPass.Mix != 1.0 {
+				t.Errorf("DS201LowPass.Mix = %.2f, want 1.0 [%s]", config.DS201LowPass.Mix, tt.desc)
+			}
+			if diagnostics.DS201LPReason != "20.5 kHz band-limit (always on)" {
+				t.Errorf("DS201LPReason = %q, want 20.5 kHz band-limit (always on) [%s]",
+					diagnostics.DS201LPReason, tt.desc)
 			}
 
 			assertNoStaleEffectiveConfigFields(t)
-
-			if tt.wantEnabled && tt.wantFreqMin > 0 {
-				if config.DS201LowPass.Frequency < tt.wantFreqMin || config.DS201LowPass.Frequency > tt.wantFreqMax {
-					t.Errorf("DS201LowPass.Frequency = %.0f Hz, want %.0f-%.0f Hz [%s]",
-						config.DS201LowPass.Frequency, tt.wantFreqMin, tt.wantFreqMax, tt.desc)
-				}
-			}
 		})
 	}
 }
@@ -1878,8 +1757,8 @@ func TestSanitizeConfig(t *testing.T) {
 		if config.DS201HighPass.Frequency != ds201DefaultHPFreq || config.DS201HighPass.Width != 0.707 || config.DS201HighPass.Mix != 1.0 {
 			t.Errorf("DS201HighPass sanitised to %+v, want frequency %.1f width 0.707 mix 1.0", config.DS201HighPass, ds201DefaultHPFreq)
 		}
-		if config.DS201LowPass.Frequency != ds201LPDefaultFreq || config.DS201LowPass.Width != 0.707 || config.DS201LowPass.Mix != 1.0 {
-			t.Errorf("DS201LowPass sanitised to %+v, want frequency %.1f width 0.707 mix 1.0", config.DS201LowPass, ds201LPDefaultFreq)
+		if config.DS201LowPass.Frequency != ds201LPBandLimitFreq || config.DS201LowPass.Width != 0.707 || config.DS201LowPass.Mix != 1.0 {
+			t.Errorf("DS201LowPass sanitised to %+v, want frequency %.1f width 0.707 mix 1.0", config.DS201LowPass, ds201LPBandLimitFreq)
 		}
 
 		defaultNoise := defaultNoiseRemoveConfig()

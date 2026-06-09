@@ -121,7 +121,7 @@ func formatDS201HighpassFilter(f *os.File, cfg *processor.EffectiveFilterConfig,
 }
 
 // formatDS201LowPassFilter outputs DS201-inspired low-pass filter details
-func formatDS201LowPassFilter(f *os.File, cfg *processor.EffectiveFilterConfig, diagnostics *processor.AdaptiveDiagnostics, m *processor.AudioMeasurements, prefix string) {
+func formatDS201LowPassFilter(f *os.File, cfg *processor.EffectiveFilterConfig, diagnostics *processor.AdaptiveDiagnostics, _ *processor.AudioMeasurements, prefix string) {
 	lowpass := cfg.DS201LowPass
 	if !lowpass.Enabled {
 		// Show reason for being disabled (pass-through mode)
@@ -165,34 +165,6 @@ func formatDS201LowPassFilter(f *os.File, cfg *processor.EffectiveFilterConfig, 
 	// Show rationale
 	if diagnostics != nil && diagnostics.DS201LPReason != "" {
 		fmt.Fprintf(f, "        Rationale: %s\n", diagnostics.DS201LPReason)
-	}
-
-	// Show content type detection metrics
-	if m != nil {
-		contentType := processor.ContentType(-1)
-		if diagnostics != nil {
-			contentType = diagnostics.DS201LPContentType
-		}
-		fmt.Fprintf(f, "        Content type: %s (kurtosis %.1f, flatness %.3f, flux %.4f)\n",
-			contentType.String(), m.Spectral.Kurtosis, m.Spectral.Flatness, m.Spectral.Flux)
-
-		// Show the triggering metric details
-		lpReason := ""
-		rolloffRatio := 0.0
-		if diagnostics != nil {
-			lpReason = diagnostics.DS201LPReason
-			rolloffRatio = diagnostics.DS201LPRolloffRatio
-		}
-		switch lpReason {
-		case "rolloff/centroid gap":
-			fmt.Fprintf(f, "        Rolloff/centroid ratio: %.2f > 2.5 (rolloff %.0f Hz, centroid %.0f Hz)\n",
-				rolloffRatio, m.Spectral.Rolloff, m.Spectral.Centroid)
-		case "flat spectral slope":
-			fmt.Fprintf(f, "        Spectral slope: %.2e > -1e-05 (unusual HF emphasis)\n", m.Spectral.Slope)
-		case "high ZCR with low centroid":
-			fmt.Fprintf(f, "        ZCR: %.4f > 0.10, centroid %.0f Hz < 4000 Hz (HF noise pattern)\n",
-				m.ZeroCrossingsRate, m.Spectral.Centroid)
-		}
 	}
 }
 

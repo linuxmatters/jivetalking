@@ -345,7 +345,7 @@ func TestBuildFilterSpecBehaviourBaseline(t *testing.T) {
 			config: DefaultEffectiveFilterConfig(),
 			want: "aformat=channel_layouts=mono," +
 				"highpass=f=80:poles=2:width_type=q:width=0.707:normalize=1:a=tdii," +
-				"lowpass=f=16000:poles=2:width_type=q:width=0.707:normalize=1:a=tdii," +
+				"lowpass=f=20500:poles=2:width_type=q:width=0.707:normalize=1:a=tdii," +
 				"anlmdn=s=0.00001:p=0.0060:r=0.0020:m=3," +
 				"compand=attacks=0.005:decays=0.100:soft-knee=6.0:points=-90/-96|-75/-81|-55/-55|-30/-30|0/0," +
 				"agate=threshold=0.010000:ratio=2.0:attack=12.00:release=350:range=0.0625:knee=3.0:detection=rms:makeup=1.0," +
@@ -502,9 +502,7 @@ func perFileStateFieldNames() []string {
 		"Pass",
 		"Measurements",
 		"OutputAnalysisEnabled",
-		"DS201LPContentType",
 		"DS201LPReason",
-		"DS201LPRolloffRatio",
 		"DS201GateGentleMode",
 		"DS201GateAggression",
 		"DS201GateDynamicRange",
@@ -950,7 +948,7 @@ func TestBuildAdeclickFilter(t *testing.T) {
 
 		spec := config.buildAdeclickFilter()
 
-		const want = "adeclick=t=2.0:w=55:o=50:m=s"
+		const want = "adeclick=t=1.7:w=55:o=50:m=s"
 		if spec != want {
 			t.Errorf("buildAdeclickFilter() = %q, want %q", spec, want)
 		}

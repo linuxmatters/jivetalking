@@ -278,7 +278,7 @@ DERIVED MEASUREMENTS
 
 FILTER ADAPTATION
   Highpass:       85 Hz (from spectral analysis)
-  Lowpass:        16000 Hz
+  Lowpass:        20500 Hz
   Gate Threshold: -51.2 dB (with breath reduction)
   Gate Ratio:     3.0:1
   NR Threshold:   -53 dB

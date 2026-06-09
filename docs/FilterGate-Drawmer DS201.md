@@ -35,10 +35,10 @@ FFmpeg lacks native side-chain filtering, so we apply frequency shaping to the a
 | DS201 Feature | Jivetalking Equivalent |
 |---------------|------------------------|
 | HP side-chain (25Hz–4kHz) | High-pass filter (60–120Hz adaptive) + mains hum notch |
-| LP side-chain (250Hz–35kHz) | Low-pass filter (8–16kHz adaptive, disabled by default) |
+| LP side-chain (250Hz–35kHz) | Low-pass filter (unconditional 20.5kHz band-limit) |
 | Key Listen | Pass 1 [spectral analysis](Spectral%20Analysis.md) guides all decisions |
 
-The high-pass removes subsonic rumble that would hold a gate open. The notch filter surgically removes 50/60Hz mains hum and up to four harmonics. The low-pass—enabled only when spectral analysis detects ultrasonic noise—prevents false triggers from high-frequency interference.
+The high-pass removes subsonic rumble that would hold a gate open. The notch filter surgically removes 50/60Hz mains hum and up to four harmonics. The low-pass sits in circuit at an unconditional 20.5kHz band-limit (12dB/oct) for all content, giving every file a consistent bandwidth into the downstream AAC/Opus/MP3 encoders. 20.5kHz is at the top of human hearing, so the band-limit is audibly transparent on voice, music, and singing; it only removes inaudible ultrasonics that the lossy encoders discard anyway. There is no content detection and no adaptive tuning.
 
 ### Soft Expander Philosophy
 

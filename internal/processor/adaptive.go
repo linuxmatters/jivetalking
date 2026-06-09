@@ -10,16 +10,33 @@ type ContentType int
 
 const (
 	// ContentSpeech indicates speech-dominant content (podcast, voice recording).
-	// Lowpass may enable if HF noise indicators are present.
 	ContentSpeech ContentType = iota
 
 	// ContentMusic indicates music-dominant content (bumpers, stings, jingles).
-	// Lowpass is always disabled to preserve full spectrum.
 	ContentMusic
 
 	// ContentMixed indicates unclear or mixed content (speech over music bed).
-	// Conservative approach: lowpass disabled to avoid audible HF loss.
 	ContentMixed
+)
+
+const (
+	// Content-classification thresholds used by detectContentType.
+	// These classify content as speech, music, or mixed from spectral characteristics.
+
+	// Speech characteristics: peaked, tonal, stable
+	lpContentKurtosisSpeech = 6.0   // Above: energy peaked at voice harmonics
+	lpContentFlatnessSpeech = 0.45  // Below: tonal, not noise-like
+	lpContentFluxSpeech     = 0.003 // Below: stable sustained phonation
+	lpContentCrestSpeech    = 30.0  // Above: dominant voice peaks
+
+	// Music characteristics: spread, uniform, varied
+	lpContentKurtosisMusic = 5.0   // Below: energy spread across instruments
+	lpContentFlatnessMusic = 0.55  // Above: more uniform spectral energy
+	lpContentFluxMusic     = 0.005 // Above: rhythmic variation
+	lpContentCrestMusic    = 25.0  // Below: multiple sources averaging out
+
+	// Content type decision threshold
+	lpContentScoreThreshold = 3 // Score needed to classify as speech or music
 )
 
 // String returns a human-readable name for the content type.
@@ -105,7 +122,7 @@ func AdaptConfig(config *BaseFilterConfig, measurements *AudioMeasurements) (*Ef
 	// Tune each filter adaptively based on measurements
 	// Order matters: gate threshold calculated BEFORE denoise filters
 	tuneDS201HighPass(effectiveConfig, measurements)             // Composite: highpass + hum notch
-	tuneDS201LowPass(effectiveConfig, diagnostics, measurements) // Ultrasonic rejection (adaptive)
+	tuneDS201LowPass(effectiveConfig, diagnostics, measurements) // Unconditional 20.5 kHz band-limit
 
 	// NoiseRemove: anlmdn + compand (primary noise reduction)
 	tuneNoiseRemove(effectiveConfig, measurements)
@@ -138,7 +155,7 @@ func sanitizeDS201HighPassConfig(config *DS201HighPassConfig) {
 }
 
 func sanitizeDS201LowPassConfig(config *DS201LowPassConfig) {
-	config.Frequency = sanitizeFloat(config.Frequency, ds201LPDefaultFreq)
+	config.Frequency = sanitizeFloat(config.Frequency, ds201LPBandLimitFreq)
 	config.Width = sanitizeFloat(config.Width, 0.707)
 	config.Mix = sanitizeFloat(config.Mix, 1.0)
 }
