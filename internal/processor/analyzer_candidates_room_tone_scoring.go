@@ -38,9 +38,28 @@ const (
 	voiceCentroidMax = 4500.0 // Upper bound of voice frequency range
 
 	// Scoring thresholds
-	crosstalkKurtosisThreshold    = 10.0 // Above this + voice centroid = likely crosstalk
-	crosstalkCrestFactorThreshold = 15.0 // Above this + voice centroid = likely crosstalk
-	crosstalkPeakRMSGap           = 45.0 // dB - catches severe transient contamination regardless of spectral content
+	crosstalkKurtosisThreshold = 10.0 // Above this + voice centroid = likely crosstalk
+	crosstalkPeakRMSGap        = 45.0 // dB - catches severe transient contamination regardless of spectral content
+
+	// roomToneCrosstalkCrestMADs is the crest-outlier (MAD) crosstalk multiplier. An in-band
+	// candidate is flagged crosstalk when its crest factor exceeds the candidate-population
+	// crest median by more than this many MADs (median absolute deviations). This replaces the
+	// former fixed crosstalkCrestFactorThreshold = 15 dB cap, which wrongly rejected healthy
+	// quiet room tone: crest inflates as a region quietens, so a 15 dB cap rejected on merit-
+	// independent absolute crest. The population-relative test only rejects a candidate whose
+	// crest is anomalous *for its own population*. Dimensionless statistical multiplier, mirrors
+	// roomToneDispersionMADs. The sweep at .bench/crosstalk-crest-sweep found k = 4 the
+	// validated plateau: EP68-popey flips from electing an out-of-band region by luck to
+	// electing an in-band region on merit, while EP83 stays bit-identical and genuine crosstalk
+	// is still rejected by the kurtosis and 45 dB co-signals.
+	roomToneCrosstalkCrestMADs = 4.0
+
+	// roomToneCrosstalkCrestMADEpsilon floors the candidate crest MAD before applying the
+	// crest-outlier gate. A uniform-crest population has MAD ~= 0, so an unfloored gate would
+	// reject every above-median candidate; treating a near-zero MAD as "uniform, no outlier"
+	// keeps such populations passing. With the floor, only genuine outliers trip the gate.
+	// Mirrors roomToneDispersionMADEpsilon; value is well below any meaningful crest dispersion (dB).
+	roomToneCrosstalkCrestMADEpsilon = 0.05
 
 	// roomToneDispersionMADs is the RMS-dispersion (MAD) transient gate multiplier.
 	// A candidate is rejected when any constituent 250 ms interval's RMS deviates more
@@ -205,15 +224,22 @@ func findBestRoomToneRegion(regions []RoomToneRegion, intervals []IntervalSample
 		measured = append(measured, metrics)
 	}
 
+	// Crest-outlier crosstalk population: median and MAD of crest factor over the
+	// digital-silence survivors, computed PRE-crosstalk (we are deciding crosstalk, so the
+	// population must not already be crosstalk-filtered). This is a different population from
+	// clusterP50, which is computed over crosstalk+silence survivors. The MAD is floored so a
+	// uniform-crest population does not reject every above-median candidate.
+	crestMedian, crestMAD := computeCrestOutlierStats(measured)
+
 	// clusterP50: median RMS of candidates surviving the structural rejections we keep
 	// (crosstalk + digital silence). This is the candidate-population median, distinct
 	// from the interval-distribution median in silenceMedians.rmsP50. The amplitude term
 	// rewards proximity to it.
-	clusterP50 := computeCandidateClusterP50(measured, log)
+	clusterP50 := computeCandidateClusterP50(measured, crestMedian, crestMAD, log)
 
 	// Second pass: score every measured candidate against clusterP50.
 	for _, metrics := range measured {
-		metrics.Score = scoreRoomToneCandidate(metrics, clusterP50, log)
+		metrics.Score = scoreRoomToneCandidate(metrics, clusterP50, crestMedian, crestMAD, log)
 		result.Candidates = append(result.Candidates, *metrics)
 	}
 
@@ -246,13 +272,13 @@ func findBestRoomToneRegion(regions []RoomToneRegion, intervals []IntervalSample
 // applied in scoreRoomToneCandidate; survivors here are exactly the candidates that go on
 // to receive a non-zero amplitude term. Falls back to the median over all measured
 // candidates when none survive the gates (so a cluster median always exists for scoring).
-func computeCandidateClusterP50(measured []*RoomToneCandidateMetrics, log debugLogger) float64 {
+func computeCandidateClusterP50(measured []*RoomToneCandidateMetrics, crestMedian, crestMAD float64, log debugLogger) float64 {
 	survivors := make([]float64, 0, len(measured))
 	for _, m := range measured {
 		if m.RMSLevel <= digitalSilenceRMSThreshold {
 			continue
 		}
-		if isLikelyCrosstalk(m, log) {
+		if isLikelyCrosstalk(m, crestMedian, crestMAD, log) {
 			continue
 		}
 		survivors = append(survivors, m.RMSLevel)
@@ -272,13 +298,35 @@ func computeCandidateClusterP50(measured []*RoomToneCandidateMetrics, log debugL
 	return medianFloat64(all)
 }
 
+// computeCrestOutlierStats returns the median and MAD of crest factor over the
+// digital-silence-surviving candidate population, PRE-crosstalk (the population must not be
+// crosstalk-filtered because these stats drive the crosstalk decision). The MAD is floored at
+// roomToneCrosstalkCrestMADEpsilon so a uniform-crest population (MAD ~= 0) does not flag every
+// above-median candidate as a crest outlier. Returns (0, epsilon) when no candidate survives
+// digital silence, which makes the gate fall back to absolute co-signals (kurtosis, 45 dB gap).
+func computeCrestOutlierStats(measured []*RoomToneCandidateMetrics) (crestMedian, crestMAD float64) {
+	crests := make([]float64, 0, len(measured))
+	for _, m := range measured {
+		if m.RMSLevel <= digitalSilenceRMSThreshold {
+			continue
+		}
+		crests = append(crests, m.CrestFactor)
+	}
+
+	crestMedian, crestMAD = medianAndMAD(crests)
+	if crestMAD < roomToneCrosstalkCrestMADEpsilon {
+		crestMAD = roomToneCrosstalkCrestMADEpsilon
+	}
+	return crestMedian, crestMAD
+}
+
 // scoreRoomToneCandidate computes a composite score for a room tone region candidate.
 // Higher scores indicate better candidates for noise profiling.
 // Returns 0.0 for candidates that should be rejected (e.g., crosstalk detected).
 //
 // clusterP50 is the median RMS of candidates surviving the crosstalk + digital-silence
 // gates; the amplitude term rewards proximity to it (see calculateAmplitudeScore).
-func scoreRoomToneCandidate(m *RoomToneCandidateMetrics, clusterP50 float64, log debugLogger) float64 {
+func scoreRoomToneCandidate(m *RoomToneCandidateMetrics, clusterP50, crestMedian, crestMAD float64, log debugLogger) float64 {
 	if m == nil {
 		return 0.0
 	}
@@ -293,7 +341,7 @@ func scoreRoomToneCandidate(m *RoomToneCandidateMetrics, clusterP50 float64, log
 		return 0.0
 	}
 
-	isCrosstalk := isLikelyCrosstalk(m, log)
+	isCrosstalk := isLikelyCrosstalk(m, crestMedian, crestMAD, log)
 	log.Logf("scoreRoomToneCandidate: start=%.3fs, CrestFactor=%.2f dB, isCrosstalk=%v",
 		m.Region.Start.Seconds(), m.CrestFactor, isCrosstalk)
 	if isCrosstalk {
@@ -379,9 +427,16 @@ func calculateStabilityScore(intervals []IntervalSample) float64 {
 }
 
 // isLikelyCrosstalk detects if a room tone candidate is likely crosstalk (leaked voice).
-// Returns true if centroid is in voice range AND has peaked/impulsive characteristics,
-// OR if the crest factor indicates severe transient contamination (centroid-independent).
-func isLikelyCrosstalk(m *RoomToneCandidateMetrics, log debugLogger) bool {
+// Returns true if centroid is in voice range AND has peaked/impulsive characteristics, OR if
+// the crest factor indicates severe transient contamination (centroid-independent).
+//
+// The in-band crest test is population-relative: a candidate is flagged only when its crest
+// exceeds the candidate-population crest median by more than roomToneCrosstalkCrestMADs MADs.
+// This replaces a fixed absolute crest cap that wrongly rejected healthy quiet room tone
+// (crest inflates as a region quietens). crestMedian/crestMAD are computed over the
+// digital-silence-surviving population (see computeCrestOutlierStats); crestMAD is already
+// floored by its epsilon, so a uniform-crest population never flags an above-median candidate.
+func isLikelyCrosstalk(m *RoomToneCandidateMetrics, crestMedian, crestMAD float64, log debugLogger) bool {
 	crestExceedsThreshold := m.CrestFactor > crosstalkPeakRMSGap
 	log.Logf("isLikelyCrosstalk: CrestFactor=%.2f dB, threshold=%.2f dB, exceeds=%v",
 		m.CrestFactor, crosstalkPeakRMSGap, crestExceedsThreshold)
@@ -400,7 +455,10 @@ func isLikelyCrosstalk(m *RoomToneCandidateMetrics, log debugLogger) bool {
 		return true
 	}
 
-	if m.CrestFactor > crosstalkCrestFactorThreshold {
+	crestOutlierLimit := crestMedian + roomToneCrosstalkCrestMADs*crestMAD
+	if m.CrestFactor > crestOutlierLimit {
+		log.Logf("isLikelyCrosstalk: REJECTING in-band candidate, crest %.2f dB > %.2f dB (median %.2f + %.1f*MAD %.2f)",
+			m.CrestFactor, crestOutlierLimit, crestMedian, roomToneCrosstalkCrestMADs, crestMAD)
 		return true
 	}
 
@@ -465,6 +523,22 @@ func medianFloat64(values []float64) float64 {
 	sorted := slices.Clone(values)
 	slices.Sort(sorted)
 	return sorted[len(sorted)/2]
+}
+
+// medianAndMAD returns the median of values and their median absolute deviation about that
+// median. Both are scale-invariant robust statistics: the MAD is the median of |v - median|.
+// Returns (0, 0) for an empty input. Used by the population-relative crest-outlier crosstalk
+// gate (and mirrors the per-interval MAD logic in exceedsRMSDispersion).
+func medianAndMAD(values []float64) (median, mad float64) {
+	if len(values) == 0 {
+		return 0, 0
+	}
+	median = medianFloat64(values)
+	deviations := make([]float64, len(values))
+	for i, v := range values {
+		deviations[i] = math.Abs(v - median)
+	}
+	return median, medianFloat64(deviations)
 }
 
 // calculateSpectralScore combines spectral metrics into a 0-1 score.

@@ -3006,6 +3006,99 @@ func TestFindBestRoomToneRegion_QuietHighCrestRegionAccepted(t *testing.T) {
 	}
 }
 
+// inBandCrestCandidate builds a measured candidate that is in the voice centroid band
+// and below the kurtosis crosstalk threshold, so the population-relative crest-outlier
+// test is the sole crosstalk discriminator. RMS is kept above the digital-silence floor
+// so the candidate enters the crest population.
+func inBandCrestCandidate(rms, crest float64) *RoomToneCandidateMetrics {
+	return &RoomToneCandidateMetrics{
+		RMSLevel:    rms,
+		PeakLevel:   rms + crest,
+		CrestFactor: crest,
+		Spectral: SpectralMetrics{
+			Centroid: 3000.0, // inside voiceCentroidMin..voiceCentroidMax
+			Kurtosis: 5.0,    // below crosstalkKurtosisThreshold (10)
+			Flatness: 0.5,
+		},
+	}
+}
+
+func TestIsLikelyCrosstalk_PopulationRelativeCrestOutlier(t *testing.T) {
+	// The fixed 15 dB crest cap was replaced by a population-relative crest-outlier gate:
+	// reject an in-band candidate only when its crest exceeds the candidate-population
+	// crest median by more than roomToneCrosstalkCrestMADs (4) MADs. A quiet broadband
+	// region whose crest is high only because it is quiet - but not an outlier for its
+	// population - must NOT be flagged; a genuine crest outlier must be flagged.
+
+	// Population: a tight cluster of in-band crests around ~30 dB (a typical quiet-room-tone
+	// population where crest is elevated by quietness, not contamination), plus one extreme
+	// outlier. Crest values: 28, 29, 30, 30, 31, 32 and an outlier at 60.
+	measured := []*RoomToneCandidateMetrics{
+		inBandCrestCandidate(-70, 28),
+		inBandCrestCandidate(-70, 29),
+		inBandCrestCandidate(-70, 30),
+		inBandCrestCandidate(-70, 30),
+		inBandCrestCandidate(-70, 31),
+		inBandCrestCandidate(-70, 32),
+		inBandCrestCandidate(-70, 60), // genuine outlier
+	}
+
+	crestMedian, crestMAD := computeCrestOutlierStats(measured)
+	limit := crestMedian + roomToneCrosstalkCrestMADs*crestMAD
+	t.Logf("crestMedian=%.2f crestMAD=%.2f limit=%.2f", crestMedian, crestMAD, limit)
+
+	t.Run("quiet high-crest non-outlier accepted", func(t *testing.T) {
+		// A quiet broadband region with crest 32 dB (above the median, not a population
+		// outlier, well under the old 15 dB cap). Must NOT be flagged crosstalk.
+		c := inBandCrestCandidate(-74, 32)
+		if c.CrestFactor <= crestMedian {
+			t.Fatalf("test setup: crest %.1f should be above median %.1f", c.CrestFactor, crestMedian)
+		}
+		if isLikelyCrosstalk(c, crestMedian, crestMAD, nil) {
+			t.Errorf("isLikelyCrosstalk = true for quiet in-band crest %.1f dB (median %.1f, limit %.1f), want false",
+				c.CrestFactor, crestMedian, limit)
+		}
+	})
+
+	t.Run("genuine crest outlier flagged", func(t *testing.T) {
+		// Crest 60 dB sits far beyond median + 4*MAD. Must be flagged crosstalk.
+		c := inBandCrestCandidate(-70, 60)
+		if c.CrestFactor <= limit {
+			t.Fatalf("test setup: outlier crest %.1f should exceed limit %.1f", c.CrestFactor, limit)
+		}
+		if !isLikelyCrosstalk(c, crestMedian, crestMAD, nil) {
+			t.Errorf("isLikelyCrosstalk = false for crest outlier %.1f dB (median %.1f, limit %.1f), want true",
+				c.CrestFactor, crestMedian, limit)
+		}
+	})
+}
+
+func TestComputeCrestOutlierStats_UniformPopulationEpsilonGuard(t *testing.T) {
+	// A uniform-crest population has MAD ~= 0. Without the epsilon floor, any above-median
+	// candidate would be flagged (median + 4*0 = median). The floor must keep an above-median
+	// candidate passing unless it is a genuine outlier.
+	measured := []*RoomToneCandidateMetrics{
+		inBandCrestCandidate(-70, 30),
+		inBandCrestCandidate(-70, 30),
+		inBandCrestCandidate(-70, 30),
+		inBandCrestCandidate(-70, 30),
+		inBandCrestCandidate(-70, 30),
+	}
+
+	crestMedian, crestMAD := computeCrestOutlierStats(measured)
+	if crestMAD < roomToneCrosstalkCrestMADEpsilon {
+		t.Errorf("crestMAD = %.4f, want >= epsilon %.4f (floor applied)", crestMAD, roomToneCrosstalkCrestMADEpsilon)
+	}
+
+	// A candidate marginally above the uniform median must NOT be flagged: median 30, MAD
+	// floored to 0.05, limit = 30 + 4*0.05 = 30.2. Crest 30.1 is above median but under limit.
+	c := inBandCrestCandidate(-74, 30.1)
+	if isLikelyCrosstalk(c, crestMedian, crestMAD, nil) {
+		t.Errorf("isLikelyCrosstalk = true for crest %.2f in uniform population (median %.2f, MAD %.4f), want false",
+			c.CrestFactor, crestMedian, crestMAD)
+	}
+}
+
 func TestDetectVoiceActivated(t *testing.T) {
 	// Helper to build a candidate slice with a given number of digital silence
 	// and non-digital-silence candidates.
