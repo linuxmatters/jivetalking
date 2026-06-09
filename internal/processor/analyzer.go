@@ -97,6 +97,11 @@ type RoomToneCandidateMetrics struct {
 	OriginalStart    time.Duration `json:"original_start,omitempty"`    // Original candidate start before refinement
 	OriginalDuration time.Duration `json:"original_duration,omitempty"` // Original candidate duration before refinement
 	WasRefined       bool          `json:"was_refined,omitempty"`       // True if region was refined from a longer candidate
+
+	// intervals holds the constituent 250 ms interval samples for this candidate.
+	// Unexported and excluded from the report JSON contract; used by the RMS-dispersion
+	// (MAD) transient gate during scoring to reject regions with spiking sub-intervals.
+	intervals []IntervalSample
 }
 
 // SpeechRegion represents a detected continuous speech period in the audio.

@@ -837,10 +837,15 @@ func makeRoomToneTestIntervals(start time.Duration, duration time.Duration, rms,
 }
 
 func TestFindBestRoomToneRegion_HighestScoreWinsAfterDip(t *testing.T) {
-	// Three candidates: A (~0.77), B (~0.52, dip), C (~0.91, highest).
-	// Under the old single-pass algorithm the dip from A to B would trigger
-	// early termination, electing A. The two-pass algorithm scores all
-	// candidates first and then selects the highest, so C should win.
+	// Three candidates with a scoring dip in the middle (B). Under a single-pass
+	// algorithm the dip from A to B would trigger early termination, electing A.
+	// The two-pass algorithm scores all candidates first and then selects the
+	// highest, so C should win.
+	//
+	// Amplitude now rewards proximity to the candidate-population RMS median
+	// (clusterP50). With RMS {A:-78, B:-50, C:-66} the median is C's -66, so C
+	// sits exactly on the cluster and earns the top amplitude term; A is a quiet
+	// outlier (12 dB below the cluster) and B is the loud dip.
 
 	regions := []RoomToneRegion{
 		{Start: 0, End: 10 * time.Second, Duration: 10 * time.Second},
@@ -848,15 +853,15 @@ func TestFindBestRoomToneRegion_HighestScoreWinsAfterDip(t *testing.T) {
 		{Start: 30 * time.Second, End: 40 * time.Second, Duration: 10 * time.Second},
 	}
 
-	// Candidate A intervals: ~0.77 score
+	// Candidate A intervals: quiet outlier, far below the cluster median
 	intervalsA := makeRoomToneTestIntervals(0, 10*time.Second,
-		-60.0, -55.0, 100.0, 0.8, 2.0, 0.0)
-	// Candidate B intervals: ~0.52 score (the dip)
+		-78.0, -73.0, 100.0, 0.9, 1.0, 0.0)
+	// Candidate B intervals: the dip (loud, voice-range centroid, poor spectral)
 	intervalsB := makeRoomToneTestIntervals(15*time.Second, 10*time.Second,
 		-50.0, -45.0, 2375.0, 0.3, 5.0, 0.005)
-	// Candidate C intervals: ~0.91 score (highest)
+	// Candidate C intervals: on the cluster median, strong spectral - highest
 	intervalsC := makeRoomToneTestIntervals(30*time.Second, 10*time.Second,
-		-75.0, -70.0, 100.0, 0.9, 1.0, 0.0)
+		-66.0, -61.0, 100.0, 0.9, 1.0, 0.0)
 
 	allIntervals := append(append(intervalsA, intervalsB...), intervalsC...)
 
@@ -914,20 +919,27 @@ func TestFindBestRoomToneRegion_EarlierCandidatePreferredWithinTolerance(t *test
 	}
 }
 
-func TestFindBestRoomToneRegion_AllBelowMinAcceptableScoreFallsBack(t *testing.T) {
-	// Two regions that will score below minAcceptableScore (0.3).
-	// Both have poor characteristics: high RMS, voice-range centroid, etc.
+func TestFindBestRoomToneRegion_OnClusterCandidateClearsThresholdDespitePoorSpectral(t *testing.T) {
+	// Under proximity-to-cluster-P50 amplitude scoring, the candidate sitting on the
+	// candidate-population median always earns the full amplitude term (1.0). Two poor
+	// candidates that the former monotonic reward scored below minAcceptableScore (0.3)
+	// now both sit AT the cluster median (identical RMS), so the amplitude term alone
+	// (0.30) clears the threshold and the earliest is elected via the primary branch.
+	//
+	// This documents a deliberate consequence of the amplitude change: with proximity
+	// scoring there is always an on-cluster survivor scoring >= amplitudeScoreWeight, so
+	// the "all surviving candidates below minAcceptableScore" state is no longer reachable
+	// for non-rejected candidates. Structural rejection (crosstalk / digital silence) is
+	// covered separately by TestFindBestRoomToneRegion_AllRejectedCandidatesDoNotFallback.
 
 	regions := []RoomToneRegion{
 		{Start: 0, End: 10 * time.Second, Duration: 10 * time.Second},
 		{Start: 15 * time.Second, End: 25 * time.Second, Duration: 10 * time.Second},
 	}
 
-	// Both candidates: very poor scores
-	// RMS -40.5 (ampScore ~0.0125), centroid dead-centre voice range (centroidScore 0.0),
-	// flatness 0.0, kurtosis 9.0 (kurtosisScore 0.55, below crosstalk threshold of 10),
-	// high flux 0.03 (fluxStabilityScore 0.0, rmsStabilityScore 1.0, stability ~0.6)
-	// Expected: 0.0125*0.30 + 0.11*0.35 + 1.0*0.10 + 0.6*0.25 ≈ 0.29
+	// Both candidates identical and poor on spectral/stability: high RMS, voice-range
+	// centroid, flatness 0.0, kurtosis 9.0 (below crosstalk threshold 10), high flux 0.03.
+	// Both sit at clusterP50 (-40.5) so amplitude = 1.0; score = 0.30 + spec + dur + stab.
 	intervalsA := makeRoomToneTestIntervals(0, 10*time.Second,
 		-40.5, -35.5, 2375.0, 0.0, 9.0, 0.03)
 	intervalsB := makeRoomToneTestIntervals(15*time.Second, 10*time.Second,
@@ -940,17 +952,17 @@ func TestFindBestRoomToneRegion_AllBelowMinAcceptableScoreFallsBack(t *testing.T
 	result := findBestRoomToneRegion(regions, allIntervals, nil)
 
 	if result.BestRegion == nil {
-		t.Fatal("expected fallback BestRegion when candidates exist below minAcceptableScore")
+		t.Fatal("expected the on-cluster candidate to clear minAcceptableScore and be elected")
 	}
 	if result.BestRegion.Start != 0 {
-		t.Errorf("BestRegion.Start = %v, want 0 (earliest fallback candidate within tolerance)", result.BestRegion.Start)
+		t.Errorf("BestRegion.Start = %v, want 0 (earliest on-cluster candidate within tolerance)", result.BestRegion.Start)
 	}
 	if len(result.Candidates) != 2 {
 		t.Fatalf("len(Candidates) = %d, want 2", len(result.Candidates))
 	}
 	for _, c := range result.Candidates {
-		if c.Score >= minAcceptableScore {
-			t.Errorf("candidate start=%v score=%.4f, want below minAcceptableScore %.1f", c.Region.Start, c.Score, minAcceptableScore)
+		if c.Score < minAcceptableScore {
+			t.Errorf("candidate start=%v score=%.4f, want >= minAcceptableScore %.1f (amplitude proximity = 1.0)", c.Region.Start, c.Score, minAcceptableScore)
 		}
 	}
 
@@ -1025,12 +1037,12 @@ func TestFindBestRoomToneRegion_LaterCandidateWinsWhenGapExceedsTolerance(t *tes
 		{Start: 30 * time.Second, End: 40 * time.Second, Duration: 10 * time.Second},
 	}
 
-	// Candidate A intervals: ~0.77 (same as test 2.1 candidate A)
+	// Candidate A intervals: quiet outlier, 12 dB below the cluster median (amplitude 0)
 	intervalsA := makeRoomToneTestIntervals(5*time.Second, 10*time.Second,
-		-60.0, -55.0, 100.0, 0.8, 2.0, 0.0)
-	// Candidate B intervals: ~0.91 (same as test 2.1 candidate C)
+		-72.0, -67.0, 100.0, 0.8, 2.0, 0.0)
+	// Candidate B intervals: on the cluster median - top amplitude, strong spectral
 	intervalsB := makeRoomToneTestIntervals(30*time.Second, 10*time.Second,
-		-75.0, -70.0, 100.0, 0.9, 1.0, 0.0)
+		-60.0, -55.0, 100.0, 0.9, 1.0, 0.0)
 
 	allIntervals := make([]IntervalSample, 0, len(intervalsA)+len(intervalsB))
 	allIntervals = append(allIntervals, intervalsA...)
@@ -2705,8 +2717,8 @@ func TestRunFilterGraphLenientErrors(t *testing.T) {
 func TestFindBestRoomToneRegion_BoundaryTransientSurvivesAfterRefinement(t *testing.T) {
 	// An 18s candidate where the first 3s contain a boundary transient (speech-to-room-tone
 	// transition) and the remaining 15s are clean room tone. Without pre-scoring refinement,
-	// the full-span crest factor exceeds silenceCrestFactorMax (25 dB) and the candidate
-	// scores 0.0. With refinement, the golden sub-region trims the transient before scoring.
+	// the spiking transient intervals would trip the RMS-dispersion gate and the candidate
+	// would score 0.0. With refinement, the golden sub-region trims the transient before scoring.
 
 	region := RoomToneRegion{
 		Start:    10 * time.Second,
@@ -2761,7 +2773,7 @@ func TestFindBestRoomToneRegion_BoundaryTransientSurvivesAfterRefinement(t *test
 				t.Errorf("Refined region start %v overlaps transient zone (before 13s)", c.Region.Start)
 			}
 
-			// Crest factor on the refined region should be well below the 25 dB threshold
+			// Refinement should trim the transient, leaving a low crest on the clean sub-region
 			if c.CrestFactor > 25.0 {
 				t.Errorf("Refined crest factor = %.1f dB, want < 25.0 dB", c.CrestFactor)
 			}
@@ -2777,6 +2789,155 @@ func TestFindBestRoomToneRegion_BoundaryTransientSurvivesAfterRefinement(t *test
 
 	if !foundRefined {
 		t.Error("expected WasRefined=true for candidate with boundary transient")
+	}
+}
+
+// makeRoomToneIntervalsFromRMS builds a contiguous interval sequence from explicit
+// per-interval RMS levels, so tests can construct regions with internal RMS dispersion
+// (a spiking interval) or perfectly steady regions. Peak is set 5 dB above each RMS;
+// spectral fields use clean room-tone defaults (low centroid, high flatness, low kurtosis).
+func makeRoomToneIntervalsFromRMS(start time.Duration, rmsLevels []float64) []IntervalSample {
+	intervals := make([]IntervalSample, len(rmsLevels))
+	for i, rms := range rmsLevels {
+		intervals[i] = IntervalSample{
+			Timestamp: start + time.Duration(i)*250*time.Millisecond,
+			RMSLevel:  rms,
+			PeakLevel: rms + 5.0,
+			Spectral: SpectralMetrics{
+				Centroid: 100.0,
+				Flatness: 0.9,
+				Kurtosis: 1.0,
+				Flux:     0.0,
+			},
+		}
+	}
+	return intervals
+}
+
+func TestFindBestRoomToneRegion_ProximityElectsClusterNotQuietOutlier(t *testing.T) {
+	// Regression for the popey-EP83 defect: a quiet bright outlier (~-79) must not be
+	// elected over a representative cluster (~-74). With proximity-to-cluster-P50
+	// amplitude scoring, the cluster candidates sit on the population median and the
+	// quiet outlier is penalised for departing from it by more than roomToneAmplitudeDecayDB.
+
+	// Regions: two cluster members (~-74) and one quiet bright outlier (~-79).
+	regions := []RoomToneRegion{
+		{Start: 0, End: 10 * time.Second, Duration: 10 * time.Second},
+		{Start: 15 * time.Second, End: 25 * time.Second, Duration: 10 * time.Second},
+		{Start: 30 * time.Second, End: 40 * time.Second, Duration: 10 * time.Second},
+	}
+
+	// Two on-cluster candidates at -74 (steady) define clusterP50 = -74.
+	clusterA := makeRoomToneTestIntervals(0, 10*time.Second,
+		-74.0, -69.0, 100.0, 0.9, 1.0, 0.0)
+	clusterB := makeRoomToneTestIntervals(15*time.Second, 10*time.Second,
+		-74.0, -69.0, 100.0, 0.9, 1.0, 0.0)
+	// Quiet outlier at -79, 5 dB below the cluster (within the 6 dB decay span but
+	// strictly farther from P50 than the on-cluster members, which sit at dev 0).
+	outlier := makeRoomToneTestIntervals(30*time.Second, 10*time.Second,
+		-79.0, -74.0, 100.0, 0.9, 1.0, 0.0)
+
+	allIntervals := make([]IntervalSample, 0, len(clusterA)+len(clusterB)+len(outlier))
+	allIntervals = append(allIntervals, clusterA...)
+	allIntervals = append(allIntervals, clusterB...)
+	allIntervals = append(allIntervals, outlier...)
+
+	result := findBestRoomToneRegion(regions, allIntervals, nil)
+
+	if result.BestRegion == nil {
+		t.Fatal("expected a best region to be selected")
+	}
+	for _, c := range result.Candidates {
+		t.Logf("candidate start=%v rms=%.1f score=%.4f", c.Region.Start, c.RMSLevel, c.Score)
+	}
+
+	// The elected region must be a cluster member (0s or 15s), never the quiet outlier (30s).
+	if result.BestRegion.Start == 30*time.Second {
+		t.Errorf("BestRegion.Start = 30s (quiet outlier elected), want a cluster member at 0s or 15s")
+	}
+
+	// The outlier must score strictly lower than the on-cluster candidates.
+	var clusterScore, outlierScore float64
+	for _, c := range result.Candidates {
+		if c.Region.Start == 0 {
+			clusterScore = c.Score
+		}
+		if c.Region.Start == 30*time.Second {
+			outlierScore = c.Score
+		}
+	}
+	if outlierScore >= clusterScore {
+		t.Errorf("outlier score %.4f >= cluster score %.4f, want outlier strictly lower", outlierScore, clusterScore)
+	}
+}
+
+func TestExceedsRMSDispersion_SpikingIntervalRejected(t *testing.T) {
+	// A region with one interval spiking well beyond 4*MAD from the region RMS median
+	// must trip the dispersion gate. Steady -74 floor with a single -50 spike interval.
+	rmsLevels := []float64{-74, -74, -74, -74, -50, -74, -74, -74, -74, -74}
+	intervals := makeRoomToneIntervalsFromRMS(0, rmsLevels)
+
+	maxDev, exceeds := exceedsRMSDispersion(intervals)
+	if !exceeds {
+		t.Errorf("exceedsRMSDispersion = false (maxDev %.2f MADs), want true for a spiking interval", maxDev)
+	}
+	if maxDev <= roomToneDispersionMADs {
+		t.Errorf("maxDev = %.2f MADs, want > %.1f", maxDev, roomToneDispersionMADs)
+	}
+}
+
+func TestExceedsRMSDispersion_SteadyRegionPasses(t *testing.T) {
+	// A perfectly steady region has MAD ~= 0; the epsilon floor must keep it passing
+	// rather than rejecting any tiny variation. Tests both a flat region and one with
+	// negligible jitter within the epsilon floor.
+	t.Run("perfectly flat", func(t *testing.T) {
+		intervals := makeRoomToneIntervalsFromRMS(0,
+			[]float64{-74, -74, -74, -74, -74, -74, -74, -74})
+		if maxDev, exceeds := exceedsRMSDispersion(intervals); exceeds {
+			t.Errorf("exceedsRMSDispersion = true (maxDev %.2f MADs), want false for a flat region", maxDev)
+		}
+	})
+
+	t.Run("negligible jitter", func(t *testing.T) {
+		// Sub-epsilon dispersion: 0.01 dB jitter, far below roomToneDispersionMADEpsilon.
+		intervals := makeRoomToneIntervalsFromRMS(0,
+			[]float64{-74.00, -74.01, -74.00, -73.99, -74.00, -74.01, -74.00, -73.99})
+		if maxDev, exceeds := exceedsRMSDispersion(intervals); exceeds {
+			t.Errorf("exceedsRMSDispersion = true (maxDev %.2f MADs), want false for negligible jitter", maxDev)
+		}
+	})
+}
+
+func TestFindBestRoomToneRegion_QuietHighCrestRegionAccepted(t *testing.T) {
+	// A representative quiet region with high crest factor (RMS -74, peak -44, crest 30)
+	// was formerly hard-rejected by the fixed silenceCrestFactorMax = 25 dB cap. The
+	// dispersion gate replaces the cap: because every interval shares the same RMS, the
+	// region is steady (MAD ~= 0) and must now be ACCEPTED despite the high crest.
+
+	region := RoomToneRegion{Start: 0, End: 10 * time.Second, Duration: 10 * time.Second}
+	regions := []RoomToneRegion{region}
+
+	// Uniform RMS -74 with peak -44 on every interval: crest 30 dB, but zero RMS dispersion.
+	intervals := makeRoomToneTestIntervals(0, 10*time.Second,
+		-74.0, -44.0, 100.0, 0.9, 1.0, 0.0)
+
+	result := findBestRoomToneRegion(regions, intervals, nil)
+
+	if result.BestRegion == nil {
+		t.Fatal("expected the steady high-crest region to be accepted (dispersion gate, not crest cap)")
+	}
+	if len(result.Candidates) != 1 {
+		t.Fatalf("len(Candidates) = %d, want 1", len(result.Candidates))
+	}
+
+	c := result.Candidates[0]
+	t.Logf("candidate rms=%.1f crest=%.1f score=%.4f warning=%q", c.RMSLevel, c.CrestFactor, c.Score, c.TransientWarning)
+
+	if c.CrestFactor <= 25.0 {
+		t.Errorf("CrestFactor = %.1f dB, want > 25 dB (the region the old cap would reject)", c.CrestFactor)
+	}
+	if c.Score <= 0.0 {
+		t.Errorf("Score = %.4f, want > 0 (steady region must not be rejected)", c.Score)
 	}
 }
 

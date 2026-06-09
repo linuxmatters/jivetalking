@@ -172,6 +172,8 @@ func measureRoomToneCandidateFromIntervals(region RoomToneRegion, intervals []In
 		SamplePeak:    acc.samplePeakMax,
 
 		StabilityScore: calculateStabilityScore(regionIntervals),
+
+		intervals: regionIntervals,
 	}
 }
 

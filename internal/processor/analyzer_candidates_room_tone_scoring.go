@@ -3,6 +3,7 @@ package processor
 import (
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 )
@@ -40,11 +41,22 @@ const (
 	crosstalkKurtosisThreshold    = 10.0 // Above this + voice centroid = likely crosstalk
 	crosstalkCrestFactorThreshold = 15.0 // Above this + voice centroid = likely crosstalk
 	crosstalkPeakRMSGap           = 45.0 // dB - catches severe transient contamination regardless of spectral content
-	// silenceCrestFactorMax is the maximum acceptable crest factor for room tone candidates.
-	// Crest factor > 25 dB indicates physical transients (bumps, interference) contaminating
-	// the room tone region, making noise floor measurements unreliable.
-	// Normal room tone: 5-20 dB; contaminated: 25-45 dB.
-	silenceCrestFactorMax = 25.0 // dB - hard rejection above this
+
+	// roomToneDispersionMADs is the RMS-dispersion (MAD) transient gate multiplier.
+	// A candidate is rejected when any constituent 250 ms interval's RMS deviates more
+	// than this many MADs (median absolute deviations) from the candidate's own RMS median.
+	// This is a dimensionless, scale-invariant statistical multiplier - it targets the
+	// transient failure mode directly (a lone spiking sub-interval inside an otherwise-quiet
+	// region) without a fixed dB cap. The sweep at .bench/roomtone-sweep found k = 4 the
+	// operating point (stable across k in [3.5, 4.5]); k = 3 over-rejects, k >= 5 admits
+	// transient outliers. Replaces the former fixed silenceCrestFactorMax = 25 dB cap.
+	roomToneDispersionMADs = 4.0
+
+	// roomToneDispersionMADEpsilon floors the candidate MAD before applying the dispersion
+	// gate. A perfectly steady region has MAD ~= 0, so 4*MAD ~= 0 would reject any tiny
+	// numerical variation; treating a near-zero MAD as "steady, accept" keeps steady regions
+	// passing. Value is well below any meaningful RMS dispersion (dB).
+	roomToneDispersionMADEpsilon = 0.05
 
 	// digitalSilenceRMSThreshold is the maximum RMS level (dBFS) considered digital silence.
 	// Voice-activated recording platforms (Riverside, Zencastr) clamp non-speech regions
@@ -164,6 +176,10 @@ func findBestRoomToneRegion(regions []RoomToneRegion, intervals []IntervalSample
 		return result
 	}
 
+	// First pass: measure (and refine) every candidate. Scoring needs the
+	// candidate-population RMS median (clusterP50), so all candidates must be
+	// measured before any are scored.
+	measured := make([]*RoomToneCandidateMetrics, 0, len(candidates))
 	for i := range candidates {
 		candidate := &candidates[i]
 
@@ -186,9 +202,18 @@ func findBestRoomToneRegion(regions []RoomToneRegion, intervals []IntervalSample
 			}
 		}
 
-		score := scoreRoomToneCandidate(metrics, log)
-		metrics.Score = score
+		measured = append(measured, metrics)
+	}
 
+	// clusterP50: median RMS of candidates surviving the structural rejections we keep
+	// (crosstalk + digital silence). This is the candidate-population median, distinct
+	// from the interval-distribution median in silenceMedians.rmsP50. The amplitude term
+	// rewards proximity to it.
+	clusterP50 := computeCandidateClusterP50(measured, log)
+
+	// Second pass: score every measured candidate against clusterP50.
+	for _, metrics := range measured {
+		metrics.Score = scoreRoomToneCandidate(metrics, clusterP50, log)
 		result.Candidates = append(result.Candidates, *metrics)
 	}
 
@@ -229,10 +254,44 @@ func findBestRoomToneRegion(regions []RoomToneRegion, intervals []IntervalSample
 	return result
 }
 
+// computeCandidateClusterP50 returns the median RMS of candidates that survive the
+// structural rejections we keep (digital silence + crosstalk). These are the same gates
+// applied in scoreRoomToneCandidate; survivors here are exactly the candidates that go on
+// to receive a non-zero amplitude term. Falls back to the median over all measured
+// candidates when none survive the gates (so a cluster median always exists for scoring).
+func computeCandidateClusterP50(measured []*RoomToneCandidateMetrics, log debugLogger) float64 {
+	survivors := make([]float64, 0, len(measured))
+	for _, m := range measured {
+		if m.RMSLevel <= digitalSilenceRMSThreshold {
+			continue
+		}
+		if isLikelyCrosstalk(m, log) {
+			continue
+		}
+		survivors = append(survivors, m.RMSLevel)
+	}
+
+	if len(survivors) > 0 {
+		return medianFloat64(survivors)
+	}
+
+	all := make([]float64, len(measured))
+	for i, m := range measured {
+		all[i] = m.RMSLevel
+	}
+	if len(all) == 0 {
+		return 0
+	}
+	return medianFloat64(all)
+}
+
 // scoreRoomToneCandidate computes a composite score for a room tone region candidate.
 // Higher scores indicate better candidates for noise profiling.
 // Returns 0.0 for candidates that should be rejected (e.g., crosstalk detected).
-func scoreRoomToneCandidate(m *RoomToneCandidateMetrics, log debugLogger) float64 {
+//
+// clusterP50 is the median RMS of candidates surviving the crosstalk + digital-silence
+// gates; the amplitude term rewards proximity to it (see calculateAmplitudeScore).
+func scoreRoomToneCandidate(m *RoomToneCandidateMetrics, clusterP50 float64, log debugLogger) float64 {
 	if m == nil {
 		return 0.0
 	}
@@ -259,17 +318,17 @@ func scoreRoomToneCandidate(m *RoomToneCandidateMetrics, log debugLogger) float6
 		return 0.0
 	}
 
-	if m.CrestFactor > silenceCrestFactorMax {
-		log.Logf("scoreRoomToneCandidate: REJECTING candidate at %.3fs - crest factor %.1f dB exceeds %.1f dB threshold",
-			m.Region.Start.Seconds(), m.CrestFactor, silenceCrestFactorMax)
+	if maxDev, ok := exceedsRMSDispersion(m.intervals); ok {
+		log.Logf("scoreRoomToneCandidate: REJECTING candidate at %.3fs - RMS dispersion %.1f MADs exceeds %.1f MAD gate (transient sub-interval)",
+			m.Region.Start.Seconds(), maxDev, roomToneDispersionMADs)
 		m.TransientWarning = fmt.Sprintf(
-			"rejected: crest factor %.1f dB exceeds %.1f dB threshold (transient contamination)",
-			m.CrestFactor, silenceCrestFactorMax,
+			"rejected: RMS dispersion %.1f MADs exceeds %.1f MAD gate (transient sub-interval)",
+			maxDev, roomToneDispersionMADs,
 		)
 		return 0.0
 	}
 
-	ampScore := calculateAmplitudeScore(m.RMSLevel)
+	ampScore := calculateAmplitudeScore(m.RMSLevel, clusterP50)
 	specScore := calculateSpectralScore(m.Spectral.Centroid, m.Spectral.Flatness, m.Spectral.Kurtosis)
 	durScore := calculateDurationScore(m.Region.Duration)
 
@@ -361,18 +420,64 @@ func isLikelyCrosstalk(m *RoomToneCandidateMetrics, log debugLogger) bool {
 	return false
 }
 
-// calculateAmplitudeScore normalises RMS level to a 0-1 score.
-// Lower RMS (quieter) = higher score.
-// Range: -80 dBFS (best) to -40 dBFS (worst)
-func calculateAmplitudeScore(rmsLevel float64) float64 {
-	if rmsLevel < -80.0 {
-		rmsLevel = -80.0
-	}
-	if rmsLevel > -40.0 {
-		rmsLevel = -40.0
+// calculateAmplitudeScore rewards proximity to the candidate-population RMS median.
+// score = clamp(1 - |candidateRMS - clusterP50| / roomToneAmplitudeDecayDB, 0, 1)
+//
+// This replaces the former monotonic "quieter-is-better" reward, which elected quiet
+// outliers (e.g. a bright breath/fricative tail below the typical cluster). A region
+// closest to the surviving-candidate median scores 1.0; the score decays linearly to 0
+// as the candidate departs by roomToneAmplitudeDecayDB (the existing 6 dB span).
+// clusterP50 is the median RMS of candidates surviving the crosstalk + digital-silence
+// gates - the candidate population median, not the interval distribution median.
+func calculateAmplitudeScore(rmsLevel, clusterP50 float64) float64 {
+	dev := math.Abs(rmsLevel-clusterP50) / roomToneAmplitudeDecayDB
+	return max(0.0, min(1.0-dev, 1.0))
+}
+
+// exceedsRMSDispersion is the RMS-dispersion (MAD) transient gate. It returns the maximum
+// per-interval deviation from the candidate RMS median, in MADs, and whether that deviation
+// exceeds roomToneDispersionMADs. A lone spiking sub-interval inside an otherwise-quiet
+// region produces a high deviation; steady ambience does not.
+//
+// The MAD is floored at roomToneDispersionMADEpsilon: a perfectly steady region has MAD ~= 0,
+// so an unfloored gate would reject any tiny variation. With the floor, steady regions pass.
+// Returns (0, false) when there are too few intervals to assess dispersion.
+func exceedsRMSDispersion(intervals []IntervalSample) (maxDeviationMADs float64, exceeds bool) {
+	if len(intervals) < 2 {
+		return 0, false
 	}
 
-	return (rmsLevel - (-40.0)) / (-80.0 - (-40.0))
+	rmsValues := make([]float64, len(intervals))
+	for i, iv := range intervals {
+		rmsValues[i] = iv.RMSLevel
+	}
+	median := medianFloat64(rmsValues)
+
+	deviations := make([]float64, len(rmsValues))
+	for i, v := range rmsValues {
+		deviations[i] = math.Abs(v - median)
+	}
+	mad := medianFloat64(deviations)
+	if mad < roomToneDispersionMADEpsilon {
+		mad = roomToneDispersionMADEpsilon
+	}
+
+	for _, d := range deviations {
+		if dev := d / mad; dev > maxDeviationMADs {
+			maxDeviationMADs = dev
+		}
+	}
+
+	return maxDeviationMADs, maxDeviationMADs > roomToneDispersionMADs
+}
+
+// medianFloat64 returns the median of the values. It sorts a copy, leaving the input
+// untouched. For even-length input it returns the upper-middle element (matching the
+// existing percentile convention in computeSilenceMedians).
+func medianFloat64(values []float64) float64 {
+	sorted := slices.Clone(values)
+	slices.Sort(sorted)
+	return sorted[len(sorted)/2]
 }
 
 // calculateSpectralScore combines spectral metrics into a 0-1 score.

@@ -221,7 +221,8 @@ func TestGenerateReport_AudioMetricTables(t *testing.T) {
 		"RMS Level",
 		"-58.0",
 		"-64.0",
-		"-61.0",
+		"-65.2", // Final noise floor gain-normalised (-61.0 raw, -4.2 dB program makeup)
+		"Floor-Speech SNR",
 		"Speech Region Analysis",
 		"Spectral Centroid",
 		"2400",
