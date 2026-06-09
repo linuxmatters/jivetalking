@@ -128,13 +128,14 @@ Two separate message sets exist for the two TUI modes.
 
 - **DS201 highpass frequency:** 60-120Hz based on spectral decrease (warm/thin voice detection) and room-tone noise floor; warm voices use gentler Q (0.5) and reduced wet/dry mix
 - **DS201 lowpass:** Unconditional 20.5 kHz band-limit (12 dB/oct) for all content, giving downstream AAC/Opus/MP3 encoders a consistent bandwidth. Not adaptive: no content detection and no HF-noise tuning. 20.5 kHz is at the top of human hearing, so the band-limit is audibly transparent and only removes inaudible ultrasonics the lossy encoders discard anyway
-- **DS201 gate threshold:** Derived from measured noise floor; with breath reduction, positioned at 60% of gap between noise floor and quiet speech level (`SpeechProfile.RMSLevel - CrestFactor`); firmer ratio (1.5x, clamped 2.0-4.0) and deeper range (+6 dB) when breath reduction active
+- **DS201 gate threshold:** Two models in `calculateDS201GateThreshold`. With a usable `SpeechProfile` (and noise-to-quiet-speech separation >= 5 dB), aggression-based: `quietSpeech + dynamicRange × aggression`, where `quietSpeech = SpeechProfile.RMSLevel - CrestFactor`, `dynamicRange = CrestFactor`, and `aggression` (0.25-0.60) scales with separation and reduces for high LRA (`calculateAggression`); clamped between noise floor and speech RMS by safety margins. Otherwise legacy: derived from noise floor plus a ratio-based gap (peak reference for high-crest room tone), clamped [-80, -25] dB
+- **DS201 gate ratio:** LRA-based (`calculateDS201GateRatio`): 1.5 for wide LRA (>15 LU), 2.0 for moderate (>10 LU), 2.5 for narrow
+- **DS201 gate range:** Room-tone entropy-based (`calculateDS201GateRangeDB`): -16 dB tonal, -21 dB mixed, -27 dB broadband; an extra -6 dB depth when the noise floor is below -70 dB (very clean), clamped [-36, -12] dB
+- **DS201 gate gentle mode:** Extreme LUFS gap (>= 25 dB) with low LRA (< 10 LU) overrides ratio to 1.2 and knee to 2.0 to prevent hunting on uniform quiet recordings
 - **LA-2A ratio/release:** Adapts based on kurtosis and flux from `SpeechProfile` when available
 - **De-esser intensity:** 0.0-0.6 based on spectral centroid + rolloff; prefers `SpeechProfile` metrics
 
 **Speech-aware metrics:** Filters processing speech content prefer `SpeechProfile` measurements (speech-only regions) over full-file analysis. Graceful fallback when speech metrics unavailable.
-
-**Breath reduction:** Enabled by default (`--breath-reduction` / `--no-breath-reduction`). Requires `SpeechProfile` to calculate quiet speech level for adaptive gate threshold.
 
 ## Spectral metrics reference
 

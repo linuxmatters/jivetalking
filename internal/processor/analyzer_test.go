@@ -1348,12 +1348,17 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 	})
 
 	t.Run("no candidates for short speech", func(t *testing.T) {
-		// 10s room tone + 20s speech (too short - only 80 intervals)
+		// 10s room tone + 4s speech (too short - only 16 intervals, below 40 minimum).
+		// findSpeechCandidatesFromIntervals needs >= minimumSpeechIntervals samples,
+		// so pad with room tone after the speech to clear the length guard while
+		// keeping the speech run itself under the 10s gate.
 		roomToneIntervals := makeVariedSpeechIntervals(0, 40, false)
-		speechIntervals := makeVariedSpeechIntervals(10*time.Second, 80, true) // 20s
-		intervals := make([]IntervalSample, 0, len(roomToneIntervals)+len(speechIntervals))
+		speechIntervals := makeVariedSpeechIntervals(10*time.Second, 16, true) // 4s speech
+		tailIntervals := makeVariedSpeechIntervals(14*time.Second, 40, false)  // room-tone tail
+		intervals := make([]IntervalSample, 0, len(roomToneIntervals)+len(speechIntervals)+len(tailIntervals))
 		intervals = append(intervals, roomToneIntervals...)
 		intervals = append(intervals, speechIntervals...)
+		intervals = append(intervals, tailIntervals...)
 
 		candidates := findSpeechCandidatesFromIntervals(intervals, 10*time.Second, false, -20.0, -55.0)
 
@@ -1403,8 +1408,8 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 	})
 
 	t.Run("insufficient intervals returns nil", func(t *testing.T) {
-		// Only 100 intervals (25s) - less than minimum 120 (30s)
-		intervals := makeVariedSpeechIntervals(0, 100, true)
+		// Only 30 intervals (7.5s) - less than minimum 40 (10s)
+		intervals := makeVariedSpeechIntervals(0, 30, true)
 
 		candidates := findSpeechCandidatesFromIntervals(intervals, 0, false, -20.0, -55.0)
 
@@ -1414,15 +1419,17 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 	})
 
 	t.Run("long pause breaks speech region", func(t *testing.T) {
-		// Speech with 3s pause in middle (exceeds 2s tolerance, should break)
-		speech1 := makeVariedSpeechIntervals(10*time.Second, 80, true) // 20s
-		pause := makeVariedSpeechIntervals(30*time.Second, 12, false)  // 3s pause (> tolerance)
-		speech2 := makeVariedSpeechIntervals(33*time.Second, 80, true) // 20s more
+		// Speech with 3s pause in middle (exceeds 2s tolerance, should break).
+		// Each segment is 8s (32 intervals), below the 10s / 40-interval gate, so
+		// neither qualifies alone once the pause splits the run.
+		speech1 := makeVariedSpeechIntervals(10*time.Second, 32, true) // 8s
+		pause := makeVariedSpeechIntervals(18*time.Second, 12, false)  // 3s pause (> tolerance)
+		speech2 := makeVariedSpeechIntervals(21*time.Second, 32, true) // 8s more
 		intervals := append(append(speech1, pause...), speech2...)
 
 		candidates := findSpeechCandidatesFromIntervals(intervals, 5*time.Second, false, -20.0, -55.0)
 
-		// Neither segment alone meets 30s minimum, so no candidates expected
+		// Neither segment alone meets the 10s minimum, so no candidates expected
 		if len(candidates) != 0 {
 			t.Errorf("expected no candidates (pause breaks region), got %d", len(candidates))
 		}
@@ -3054,4 +3061,73 @@ func noiseProfilesEqual(a, b *NoiseProfile) bool {
 		return a == b
 	}
 	return *a == *b
+}
+
+// buildConversationalIntervals shapes intervals like a sparse, conversational
+// speaker (mark, popey): speech runs separated by pauses longer than the
+// 8-interval (2s) tolerance, so no single run reaches the old 120-interval
+// (30s) wall. Each speech run scores above speechScoreThreshold via the same
+// loud/median/quiet RMS pattern the other speech tests use.
+func buildConversationalIntervals(runLen, gapLen, runs int) []IntervalSample {
+	var intervals []IntervalSample
+	t := time.Duration(0)
+	appendBlock := func(count int, isSpeech bool) {
+		for range count {
+			rms := -50.0
+			centroid := 1500.0
+			entropy := 0.6
+			if isSpeech {
+				// Voiced speech: above the gap-dominated median, centred in the
+				// voice band with low entropy so every interval clears
+				// speechScoreThreshold on its own (centroid + entropy alone
+				// reach 0.5, independent of amplitude).
+				rms = -14.0
+				centroid = 2350.0 // voiceMid -> centroidScore 1.0
+				entropy = 0.0     // -> entropyScore 1.0
+			}
+			intervals = append(intervals, IntervalSample{
+				Timestamp: t,
+				RMSLevel:  rms,
+				Spectral: SpectralMetrics{
+					Centroid: centroid,
+					Entropy:  entropy,
+				},
+			})
+			t += 250 * time.Millisecond
+		}
+	}
+	for r := range runs {
+		appendBlock(runLen, true)
+		if r < runs-1 {
+			appendBlock(gapLen, false)
+		}
+	}
+	return intervals
+}
+
+// TestFindSpeechCandidatesFromIntervals_ConversationalSpeakerElects guards the
+// detection-ep83 fix: lowering minimumSpeechIntervals to 40 (10s) lets sparse,
+// conversational presenters elect a speech candidate. Runs of ~45 speech
+// intervals separated by >2s pauses never sustained 30 unbroken seconds, so the
+// old 120-interval gate yielded zero candidates and the SpeechProfile fell back
+// to whole-file metrics.
+func TestFindSpeechCandidatesFromIntervals_ConversationalSpeakerElects(t *testing.T) {
+	// Three 45-interval speech runs (11.25s each) split by 10-interval (2.5s)
+	// pauses that exceed the 8-interval default tolerance. No run reaches the
+	// old 120 wall, but each clears the new 40-interval gate.
+	const runLen = 45
+	intervals := buildConversationalIntervals(runLen, 10, 3)
+
+	candidates := findSpeechCandidatesFromIntervals(intervals, 0, false, -20.0, -55.0)
+
+	if len(candidates) == 0 {
+		t.Fatal("expected >=1 speech candidate for conversational speaker at 40-interval gate")
+	}
+
+	// Document the wall: each individual run (45 intervals / 11.25s) is well under
+	// the old 120-interval (30s) threshold, so the pre-fix gate elected nothing.
+	const oldGate = 120
+	if runLen >= oldGate {
+		t.Fatalf("test invariant broken: run length %d should be below the old gate %d", runLen, oldGate)
+	}
 }

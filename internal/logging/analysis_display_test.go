@@ -278,7 +278,7 @@ DERIVED MEASUREMENTS
 FILTER ADAPTATION
   Highpass:       85 Hz (from spectral analysis)
   Lowpass:        20500 Hz
-  Gate Threshold: -51.2 dB (with breath reduction)
+  Gate Threshold: -51.2 dB (speech-aware)
   Gate Ratio:     3.0:1
   NR FFT denoise: 12 dB (fixed)
   De-esser:       35% intensity
@@ -335,7 +335,7 @@ func TestDisplayAnalysisResultsWithDiagnostics_UsesEffectiveConfigAndDiagnostics
 
 	for _, want := range []string{
 		"Lowpass:        disabled (rolloff/centroid gap)",
-		"Gate Threshold: -48.2 dB (with breath reduction)",
+		"Gate Threshold: -48.2 dB (speech-aware)",
 		"Gate Ratio:     3.5:1",
 		"Gate Clamp:     quiet speech ceiling (unclamped -44.5 dB)",
 		"De-esser:       62% intensity",

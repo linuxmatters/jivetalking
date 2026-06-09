@@ -9,8 +9,8 @@ import (
 // Speech detection constants for interval-based analysis
 const (
 	// minimumSpeechIntervals is the minimum consecutive intervals for a speech candidate.
-	// 30 seconds / 250ms = 120 intervals
-	minimumSpeechIntervals = 120
+	// 10 seconds / 250ms = 40 intervals
+	minimumSpeechIntervals = 40
 
 	// speechInterruptionToleranceIntervals allows natural pauses within speech.
 	// 8 intervals = 2 seconds tolerance for breaths, brief pauses.
