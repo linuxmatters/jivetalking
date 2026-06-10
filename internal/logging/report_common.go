@@ -5,6 +5,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/linuxmatters/jivetalking/internal/processor"
 )
 
 // writeSection writes a section header with title and dashed underline.
@@ -14,8 +16,25 @@ func writeSection(f *os.File, title string) {
 	fmt.Fprintln(f, strings.Repeat("-", len(title)))
 }
 
-// loudnormModeString converts linear bool to readable mode string
-func loudnormModeString(linear bool) string {
+// loudnormModeString reports loudnorm's ACTUAL mode from its normalization_type
+// JSON, not the requested config bool. When stats are available it reflects what
+// loudnorm did; the "(target adjusted ...)" qualifier appears only when a linear
+// target adjustment actually happened. When stats are nil it falls back to the
+// config bool so the headline is still populated.
+func loudnormModeString(result *processor.NormalisationResult, linear bool) string {
+	if result != nil && result.LoudnormStats != nil {
+		normType := strings.ToLower(strings.TrimSpace(result.LoudnormStats.NormalizationType))
+		switch normType {
+		case "linear":
+			if result.LinearModeForced {
+				return "Linear (target adjusted to prevent dynamic fallback)"
+			}
+			return "Linear"
+		case "dynamic":
+			return "Dynamic (fell back — output not linearly normalised)"
+		}
+	}
+
 	if linear {
 		return "Linear (target adjusted to prevent dynamic fallback)"
 	}

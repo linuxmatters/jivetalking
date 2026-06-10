@@ -391,7 +391,7 @@ func TestGenerateReport_LoudnormAndPeakLimiterSections(t *testing.T) {
 		"Pass 3 measurement:",
 		"Diagnostic: Loudnorm",
 		"Target I:   -16.0 LUFS",
-		"Mode:       Linear (target adjusted to prevent dynamic fallback)",
+		"Mode:       Linear\n",
 		"FFmpeg diagnostics:",
 		"Norm Type:       linear",
 		"Result: ✓ Within target",
@@ -399,6 +399,73 @@ func TestGenerateReport_LoudnormAndPeakLimiterSections(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Errorf("report missing %q", want)
 		}
+	}
+}
+
+func TestGenerateReport_LoudnormModeHeadlineFromActualType(t *testing.T) {
+	cases := []struct {
+		name        string
+		normType    string
+		forced      bool
+		wantMode    string
+		notWantMode string
+	}{
+		{
+			name:        "linear without adjustment is plain Linear",
+			normType:    "linear",
+			forced:      false,
+			wantMode:    "Mode:       Linear\n",
+			notWantMode: "target adjusted",
+		},
+		{
+			name:     "linear with adjustment carries the qualifier",
+			normType: "linear",
+			forced:   true,
+			wantMode: "Mode:       Linear (target adjusted to prevent dynamic fallback)",
+		},
+		{
+			name:     "dynamic fallback reads honestly",
+			normType: "DYNAMIC",
+			forced:   false,
+			wantMode: "Mode:       Dynamic (fell back — output not linearly normalised)",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data := makeReportData(t)
+			data.Result.NormResult = &processor.NormalisationResult{
+				InputLUFS:        -28.0,
+				OutputLUFS:       -16.1,
+				OutputTP:         -1.3,
+				WithinTarget:     true,
+				RequestedTargetI: -16.0,
+				EffectiveTargetI: -16.0,
+				LinearModeForced: tc.forced,
+				LoudnormStats: &processor.LoudnormStats{
+					InputThresh:       "-38.00",
+					OutputThresh:      "-26.00",
+					NormalizationType: tc.normType,
+					TargetOffset:      "-0.05",
+				},
+				FinalMeasurements: makeOutputMeasurements(
+					-16.1,
+					-1.3,
+					5.8,
+					makeRoomToneSample(-61.0),
+					makeSpeechSample(-19.8),
+				),
+			}
+
+			output := generateReportText(t, data)
+
+			if !strings.Contains(output, tc.wantMode) {
+				t.Errorf("report missing mode headline %q", tc.wantMode)
+			}
+			if tc.notWantMode != "" && strings.Contains(output, tc.notWantMode) {
+				t.Errorf("report should not contain %q for case %q", tc.notWantMode, tc.name)
+			}
+		})
 	}
 }
 
