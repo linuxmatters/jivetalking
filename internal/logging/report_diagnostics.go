@@ -266,7 +266,7 @@ func writeDiagnosticLoudnorm(f *os.File, result *processor.NormalisationResult, 
 	}
 	fmt.Fprintf(f, "  Target TP:  %.1f dBTP\n", config.Loudnorm.TargetTP)
 	fmt.Fprintf(f, "  Target LRA: %.1f LU\n", config.Loudnorm.TargetLRA)
-	fmt.Fprintf(f, "  Mode:       %s\n", loudnormModeString(config.Loudnorm.Linear))
+	fmt.Fprintf(f, "  Mode:       %s\n", loudnormModeString(result, config.Loudnorm.Linear))
 	fmt.Fprintf(f, "  Dual mono:  %v\n", config.Loudnorm.DualMono)
 	fmt.Fprintf(f, "  Gain:       %+.2f dB\n", result.GainApplied)
 
