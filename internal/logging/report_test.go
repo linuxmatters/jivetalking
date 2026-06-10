@@ -363,6 +363,7 @@ func TestGenerateReport_LoudnormAndPeakLimiterSections(t *testing.T) {
 		LimiterEnabled:    true,
 		LimiterCeiling:    -12.0,
 		LimiterGain:       12.0,
+		LimiterFilteredTP: -4.6,                                                                                      // Pass-2 filtered TP the limiter acts on
 		Pass3FilterPrefix: "alimiter=level_in=1:level_out=1:limit=0.251188:attack=5:release=100:asc=1:asc_level=0.8", // #nosec G101 -- FFmpeg filter fixture, not a credential.
 		LoudnormStats: &processor.LoudnormStats{
 			InputThresh:       "-38.00",
@@ -384,7 +385,9 @@ func TestGenerateReport_LoudnormAndPeakLimiterSections(t *testing.T) {
 	for _, want := range []string{
 		"Diagnostic: Peak Limiter",
 		"Status: ACTIVE",
+		"Filtered TP:       -4.6 dBTP (peaks from Pass 2 filtered audio)",
 		"Limiter Ceiling:   -12.0 dBTP",
+		"Peak Reduction:    7.4 dB (from -4.6 to -12.0 dBTP)",
 		"Pass 3 measurement:",
 		"Diagnostic: Loudnorm",
 		"Target I:   -16.0 LUFS",

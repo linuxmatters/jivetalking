@@ -184,11 +184,14 @@ func writeDiagnosticPeakLimiter(f *os.File, result *processor.NormalisationResul
 	fmt.Fprintln(f, "Without limiting, loudnorm would either clip or reduce the target LUFS.")
 	fmt.Fprintln(f, "")
 
-	// Calculate projected TP without limiting
-	projectedTPWithoutLimiter := result.InputTP + result.LimiterGain
+	// The limiter acts on the Pass-2 filtered signal. result.InputTP is the
+	// Pass-3 post-prefix measurement (already limited), so peak reduction and the
+	// without-limiter projection are computed from the filtered true peak.
+	filteredTP := result.LimiterFilteredTP
+	projectedTPWithoutLimiter := filteredTP + result.LimiterGain
 
 	fmt.Fprintln(f, "Problem:")
-	fmt.Fprintf(f, "  Input TP:          %.1f dBTP (peaks from Pass 2 filtered audio)\n", result.InputTP)
+	fmt.Fprintf(f, "  Filtered TP:       %.1f dBTP (peaks from Pass 2 filtered audio)\n", filteredTP)
 	fmt.Fprintf(f, "  Gain Required:     %+.1f dB (to reach %.1f LUFS from %.1f LUFS)\n",
 		result.LimiterGain, config.Loudnorm.TargetI, result.InputLUFS)
 	fmt.Fprintf(f, "  Projected TP:      %.1f dBTP (would exceed %.1f dBTP target by %.1f dB)\n",
@@ -199,13 +202,13 @@ func writeDiagnosticPeakLimiter(f *os.File, result *processor.NormalisationResul
 	fmt.Fprintln(f, "Solution (CBS Volumax-inspired peak limiting):")
 	fmt.Fprintf(f, "  Limiter Ceiling:   %.1f dBTP\n", result.LimiterCeiling)
 	fmt.Fprintf(f, "  Peak Reduction:    %.1f dB (from %.1f to %.1f dBTP)\n",
-		result.InputTP-result.LimiterCeiling, result.InputTP, result.LimiterCeiling)
+		filteredTP-result.LimiterCeiling, filteredTP, result.LimiterCeiling)
 	fmt.Fprintln(f, "")
 
 	if result.PreGainDB > 0 {
 		// idealCeiling = minLimiterCeilingDB - deficit, where deficit = PreGainDB
 		idealCeiling := processor.MinLimiterCeilingDB - result.PreGainDB
-		postGainTP := result.InputTP + result.PreGainDB
+		postGainTP := filteredTP + result.PreGainDB
 
 		fmt.Fprintln(f, "Pre-gain (ceiling deficit compensation):")
 		fmt.Fprintf(f, "  Original Ceiling:    %.1f dBTP (clamped to alimiter minimum)\n", processor.MinLimiterCeilingDB)
@@ -227,15 +230,16 @@ func writeDiagnosticPeakLimiter(f *os.File, result *processor.NormalisationResul
 
 	fmt.Fprintln(f, "Filter parameters:")
 	fmt.Fprintln(f, "  Attack:    5 ms     (gentle - preserves transient shape)")
-	fmt.Fprintln(f, "  Release:   100 ms   (smooth recovery, eliminates pumping)")
-	fmt.Fprintln(f, "  ASC:       enabled  (Auto Soft Clipping for program-dependent smoothing)")
-	fmt.Fprintln(f, "  ASC Level: 0.8      (high smoothing - Volumax characteristic)")
+	fmt.Fprintln(f, "  Release:   100 ms   (smooth recovery)")
+	fmt.Fprintln(f, "  ASC:       enabled  (program-dependent release shaper, dormant safety-net)")
+	fmt.Fprintln(f, "  ASC Level: 0.8      (only arms under heavy sustained limiting)")
 	fmt.Fprintln(f, "")
 
 	fmt.Fprintln(f, "Rationale:")
 	fmt.Fprintln(f, "  The CBS Volumax was the broadcast standard for transparent limiting.")
-	fmt.Fprintln(f, "  Gentle attack preserves transients; smooth release is essentially inaudible.")
-	fmt.Fprintln(f, "  Only peaks above the ceiling are affected (typically <5% of audio).")
+	fmt.Fprintln(f, "  Gentle attack preserves transients; only peaks above the ceiling are")
+	fmt.Fprintln(f, "  affected (typically <5% of audio). ASC stays dormant on typical material")
+	fmt.Fprintln(f, "  and engages only under heavy sustained limiting the pipeline never reaches.")
 	fmt.Fprintln(f, "")
 }
 

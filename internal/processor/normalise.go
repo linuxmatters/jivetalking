@@ -332,8 +332,8 @@ func calculatePreGain(measuredI, targetI, targetTP float64) (preGainDB, reDerive
 // CBS Volumax-inspired parameters for transparent peak limiting:
 //   - attack=5ms: Gentle attack preserves transient shape
 //   - release=100ms: Smooth recovery eliminates pumping
-//   - asc=1: Auto Soft Clipping for program-dependent release
-//   - asc_level=0.8: Program-dependent smoothing (Volumax characteristic)
+//   - asc=1, asc_level=0.8: program-dependent release shaper, dormant on typical
+//     material - only engages under heavy sustained limiting; kept as a safety-net
 //   - level_in/level_out=1: Unity gain (no makeup)
 //   - latency=1: Enable lookahead for better transient handling
 //
@@ -371,6 +371,7 @@ type limiterPlan struct {
 	clamped     bool
 	gainDB      float64
 	pass3Prefix string
+	filteredTP  float64 // Pass-2 filtered true peak (dBTP) the limiter acts on
 }
 
 type loudnormApplicationRequest struct {
@@ -425,6 +426,7 @@ func planLimiterForLoudnorm(output *OutputMeasurements, config *EffectiveFilterC
 		clamped:     clamped,
 		gainDB:      loudnorm.TargetI - output.OutputI,
 		pass3Prefix: buildPreLimiterPrefix(preGainDB, ceilingDB, needed),
+		filteredTP:  output.OutputTP,
 	}
 }
 
@@ -489,6 +491,7 @@ type NormalisationResult struct {
 	LimiterEnabled    bool    // True if pre-limiting was applied
 	LimiterCeiling    float64 // Ceiling in dBTP (only valid if LimiterEnabled)
 	LimiterGain       float64 // Gain required that triggered limiting (dB)
+	LimiterFilteredTP float64 // Pass-2 filtered true peak (dBTP) the limiter acts on
 	PreGainDB         float64 // Pre-gain amount in dB (0.0 when no pre-gain applied)
 	LimiterClamped    bool    // True when calculateLimiterCeiling clamped ceiling to minimum
 	Pass3FilterPrefix string  // Filter prefix used for Pass 3 measurement (empty when no pre-gain/limiting)
@@ -643,6 +646,7 @@ func ApplyNormalisation(
 		LimiterEnabled:        limiter.needed,
 		LimiterCeiling:        limiter.ceilingDB,
 		LimiterGain:           limiter.gainDB,
+		LimiterFilteredTP:     limiter.filteredTP,
 		PreGainDB:             limiter.preGainDB,
 		LimiterClamped:        limiter.clamped,
 		Pass3FilterPrefix:     limiter.pass3Prefix,
