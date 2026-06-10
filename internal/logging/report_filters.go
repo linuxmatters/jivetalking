@@ -143,16 +143,17 @@ func formatDS201GateFilter(f *os.File, cfg *processor.EffectiveFilterConfig, dia
 		modeNote = " [gentle mode]"
 	}
 
-	fmt.Fprintf(f, "%sDS201 gate: threshold %.1f dB, ratio %.1f:1, detection %s%s\n", prefix, thresholdDB, gate.Ratio, detection, modeNote)
-	fmt.Fprintf(f, "        Timing: attack %.2fms, release %.0fms (soft expander)\n", gate.Attack, gate.Release)
-	fmt.Fprintf(f, "        Range: %.1f dB reduction, knee %.1f\n", rangeDB, gate.Knee)
+	fmt.Fprintf(f, "%sDS201 gate: threshold %.1f dB, ratio %.1f:1, detection %s (fixed)%s\n", prefix, thresholdDB, gate.Ratio, detection, modeNote)
+	fmt.Fprintf(f, "        Timing: attack %.2fms (fixed), release %.0fms (soft expander)\n", gate.Attack, gate.Release)
+	fmt.Fprintf(f, "        Range: %.1f dB reduction, knee %.1f (fixed)\n", rangeDB, gate.Knee)
 
 	// Show rationale based on measurements
 	if m != nil {
 		var rationale []string
 
-		// Threshold rationale - must match logic in calculateDS201GateThreshold
-		// Peak reference is used when: crest > 20 AND peak != 0 AND lufsGap < 25
+		// Threshold rationale - must match logic in calculateDS201GateThreshold.
+		// Peak reference is used by the low-separation guard when:
+		// crest > 20 AND peak != 0 AND lufsGap < 25.
 		lufsGap := cfg.Loudnorm.TargetI - m.InputI
 		if lufsGap < 0 {
 			lufsGap = 0
@@ -182,20 +183,11 @@ func formatDS201GateFilter(f *os.File, cfg *processor.EffectiveFilterConfig, dia
 			rationale = append(rationale, fmt.Sprintf("LRA %.1f LU (%s)", m.InputLRA, lraType))
 		}
 
-		// Noise character for range/detection and release
-		// Thresholds: very tonal < 0.10, tonal < 0.12, mixed < 0.16, broadband >= 0.16
-		if m.NoiseProfile != nil {
-			entropy := m.NoiseProfile.Entropy
-			switch {
-			case entropy < 0.10:
-				rationale = append(rationale, fmt.Sprintf("very tonal (entropy %.2f, slow release)", entropy))
-			case entropy < 0.12:
-				rationale = append(rationale, fmt.Sprintf("tonal (entropy %.2f)", entropy))
-			case entropy < 0.16:
-				rationale = append(rationale, fmt.Sprintf("mixed (entropy %.2f, faster release)", entropy))
-			default:
-				rationale = append(rationale, fmt.Sprintf("broadband-ish (entropy %.2f, fast release)", entropy))
-			}
+		// Range rationale: driven by the noise floor (clean recordings go deeper).
+		if m.NoiseFloor < -70 {
+			rationale = append(rationale, fmt.Sprintf("clean floor %.1f dB (deeper range)", m.NoiseFloor))
+		} else {
+			rationale = append(rationale, fmt.Sprintf("floor %.1f dB (standard range)", m.NoiseFloor))
 		}
 
 		// Gentle mode rationale - for extreme LUFS gap + low LRA recordings

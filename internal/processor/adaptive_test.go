@@ -108,7 +108,7 @@ func TestAdaptConfigFilterSpecBehaviourBaseline(t *testing.T) {
 				"lowpass=f=20500:poles=2:width_type=q:width=0.707:normalize=1," +
 				"anlmdn=s=0.00001:p=0.0060:r=0.0058:m=11," +
 				"afftdn=nr=12:nt=w:tn=1," +
-				"agate=threshold=0.012589:ratio=1.2:attack=17.00:release=400:range=0.0447:knee=2.0:detection=rms:makeup=1.0," +
+				"agate=threshold=0.012589:ratio=1.2:attack=10.00:release=575:range=0.1585:knee=2.0:detection=rms:makeup=1.0," +
 				"acompressor=threshold=0.031623:ratio=3.0:attack=10:release=200:makeup=1.00:knee=4.0:detection=rms:mix=1.00",
 		},
 		{
@@ -118,7 +118,7 @@ func TestAdaptConfigFilterSpecBehaviourBaseline(t *testing.T) {
 				"lowpass=f=20500:poles=2:width_type=q:width=0.707:normalize=1," +
 				"anlmdn=s=0.00001:p=0.0060:r=0.0058:m=11," +
 				"afftdn=nr=12:nt=w:tn=1," +
-				"agate=threshold=0.019953:ratio=2.0:attack=10.00:release=250:range=0.0447:knee=5.0:detection=rms:makeup=1.0," +
+				"agate=threshold=0.019953:ratio=2.0:attack=10.00:release=425:range=0.1585:knee=3.0:detection=rms:makeup=1.0," +
 				"acompressor=threshold=0.177828:ratio=3.0:attack=10:release=200:makeup=1.00:knee=4.0:detection=rms:mix=1.00",
 		},
 	}
@@ -711,21 +711,16 @@ func TestTuneDS201Gate(t *testing.T) {
 		}
 	})
 
-	t.Run("attack based on transients", func(t *testing.T) {
-		// gateMaxDiffHigh = 25%, gateMaxDiffMod = 10%
-		// gateAttackFast = 7ms, gateAttackMod = 12ms, gateAttackSlow = 17ms
-		// gateFluxDynamicThres = 0.05 (above: apply 0.8 multiplier)
+	t.Run("attack is fixed", func(t *testing.T) {
+		// Attack collapsed to a fixed 10ms floor; transient/flux inputs no longer matter.
 		tests := []struct {
 			name         string
-			maxDiff      float64 // 0-1 range (MaxDifference)
+			maxDiff      float64
 			spectralFlux float64
-			wantAttackMS float64
-			tolerance    float64
-			desc         string
 		}{
-			{"fast transients", 0.3, 1.0, 10.0, 1.0, "fast attack (minimum 10ms) for sharp transients"},
-			{"slow transients no flux", 0.05, 0.02, 17.0, 1.0, "slow attack 17ms for gentle speech with low flux"},
-			{"moderate with flux", 0.15, 0.1, 10.0, 1.0, "moderate attack (12*0.8=9.6, clamped to 10ms) with dynamic flux"},
+			{"sharp transients", 0.3, 1.0},
+			{"gentle low flux", 0.05, 0.02},
+			{"moderate flux", 0.15, 0.1},
 		}
 
 		for _, tt := range tests {
@@ -738,33 +733,23 @@ func TestTuneDS201Gate(t *testing.T) {
 
 				tuneDS201GateForTest(config, measurements)
 
-				diff := config.DS201Gate.Attack - tt.wantAttackMS
-				if diff < 0 {
-					diff = -diff
-				}
-				if diff > tt.tolerance {
-					t.Errorf("DS201Gate.Attack = %.1f ms, want %.1f ms ±%.1f [%s]",
-						config.DS201Gate.Attack, tt.wantAttackMS, tt.tolerance, tt.desc)
+				if config.DS201Gate.Attack != ds201GateAttackMS {
+					t.Errorf("DS201Gate.Attack = %.1f ms, want fixed %.1f ms", config.DS201Gate.Attack, ds201GateAttackMS)
 				}
 			})
 		}
 	})
 
-	t.Run("detection mode based on noise character", func(t *testing.T) {
-		// Detection uses RMS for tonal or spiky noise, peak for clean
-		// gateEntropyTonal = 0.3, gateRoomToneCrestThreshold = 25.0
-		// gateEntropyClean = 0.7 (above this + crest < 15 = peak)
+	t.Run("detection is fixed rms", func(t *testing.T) {
+		// Detection collapsed to fixed RMS; room-tone entropy/crest no longer matter.
 		tests := []struct {
 			name            string
 			roomToneEntropy float64
 			roomToneCrest   float64
-			wantDetection   string
-			desc            string
 		}{
-			{"tonal noise", 0.2, 10.0, "rms", "low entropy = tonal, use RMS"},
-			{"transient bleed", 0.5, 28.0, "rms", "high crest > 25 = bleed spikes, use RMS"},
-			{"clean recording", 0.8, 8.0, "peak", "entropy > 0.7 + crest < 15 = peak"},
-			{"borderline case", 0.5, 20.0, "rms", "moderate entropy + crest, defaults to RMS"},
+			{"tonal noise", 0.2, 10.0},
+			{"transient bleed", 0.5, 28.0},
+			{"would-be-clean recording", 0.8, 8.0},
 		}
 
 		for _, tt := range tests {
@@ -781,28 +766,56 @@ func TestTuneDS201Gate(t *testing.T) {
 
 				tuneDS201GateForTest(config, measurements)
 
-				if config.DS201Gate.Detection != tt.wantDetection {
-					t.Errorf("DS201Gate.Detection = %q, want %q [%s]",
-						config.DS201Gate.Detection, tt.wantDetection, tt.desc)
+				if config.DS201Gate.Detection != "rms" {
+					t.Errorf("DS201Gate.Detection = %q, want fixed \"rms\"", config.DS201Gate.Detection)
 				}
 			})
 		}
 	})
 
-	t.Run("range based on entropy", func(t *testing.T) {
-		// gateEntropyTonal=0.3, gateEntropyMixed=0.6
-		// gateRangeTonalDB=-16, gateRangeMixedDB=-21, gateRangeBroadbandDB=-27
+	t.Run("knee is fixed", func(t *testing.T) {
+		// Knee collapsed to a fixed value; spectral crest no longer matters.
+		// Gentle mode overrides it; that case is covered separately.
+		tests := []struct {
+			name  string
+			crest float64
+		}{
+			{"high crest", 40.0},
+			{"moderate crest", 25.0},
+			{"low crest", 10.0},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				config := newTestConfig()
+				measurements := &AudioMeasurements{
+					BaseMeasurements: BaseMeasurements{Spectral: SpectralMetrics{Crest: tt.crest}},
+					NoiseFloor:       -55.0,
+					InputLRA:         15.0,
+				}
+
+				tuneDS201GateForTest(config, measurements)
+
+				if config.DS201Gate.Knee != ds201GateKneeFixed {
+					t.Errorf("DS201Gate.Knee = %.1f, want fixed %.1f", config.DS201Gate.Knee, ds201GateKneeFixed)
+				}
+			})
+		}
+	})
+
+	t.Run("range based on noise floor", func(t *testing.T) {
+		// Range is driven by the noise floor alone:
+		// floor < -70 dBFS → clean range (-22 dB), else standard range (-16 dB).
 		tests := []struct {
 			name        string
-			entropy     float64
 			noiseFloor  float64
 			wantRangeDB float64
-			tolerance   float64
 			desc        string
 		}{
-			{"tonal noise - gentle range", 0.2, -55.0, -16.0, 2.0, "low entropy = tonal, gentle range"},
-			{"mixed noise - moderate range", 0.5, -55.0, -21.0, 2.0, "mixed entropy, moderate range"},
-			{"broadband noise - aggressive", 0.7, -55.0, -27.0, 2.0, "high entropy, aggressive range"},
+			{"clean floor - deeper range", -85.0, ds201GateRangeCleanDB, "very clean recording, deeper range"},
+			{"clean boundary - deeper range", -70.1, ds201GateRangeCleanDB, "just below clean threshold"},
+			{"standard floor - gentle range", -62.0, ds201GateRangeStandardDB, "noisier floor, standard range"},
+			{"standard boundary", -70.0, ds201GateRangeStandardDB, "at threshold counts as standard"},
 		}
 
 		for _, tt := range tests {
@@ -813,7 +826,7 @@ func TestTuneDS201Gate(t *testing.T) {
 					NoiseProfile: &NoiseProfile{
 						PeakLevel:   tt.noiseFloor + 5,
 						CrestFactor: 10.0,
-						Entropy:     tt.entropy,
+						Entropy:     0.005,
 					},
 				}
 
@@ -824,9 +837,9 @@ func TestTuneDS201Gate(t *testing.T) {
 				if diff < 0 {
 					diff = -diff
 				}
-				if diff > tt.tolerance {
-					t.Errorf("DS201Gate.Range = %.1f dB, want %.1f dB ±%.1f [%s]",
-						actualDB, tt.wantRangeDB, tt.tolerance, tt.desc)
+				if diff > 0.5 {
+					t.Errorf("DS201Gate.Range = %.1f dB, want %.1f dB [%s]",
+						actualDB, tt.wantRangeDB, tt.desc)
 				}
 			})
 		}
@@ -855,86 +868,46 @@ func TestTuneDS201Gate(t *testing.T) {
 		}
 	})
 
-	t.Run("release based on noise entropy", func(t *testing.T) {
-		// Release times adapt based on room-tone entropy:
-		// - Very tonal (< 0.1): slowest release (hide pumping on pure hum)
-		// - Tonal (< 0.15): slow release (some pumping hiding)
-		// - Mixed (< 0.2): moderate release
-		// - Broadband-ish (>= 0.2): faster release (cut noise quickly)
-		//
-		// Base constants:
-		// ds201GateReleaseMod = 300ms (base for typical content)
-		// ds201GateReleaseHoldComp = 50ms (compensate for no hold param)
-		// ds201GateReleaseTonalComp = 75ms (extra for tonal)
-		// ds201GateReleaseEntropyReduce = 100ms (reduction for broadband)
-
-		// Current thresholds:
-		// - veryTonal: < 0.10
-		// - tonal: < 0.12
-		// - mixed: < 0.16
-		// - broadband: >= 0.16
-		//
-		// Base release values (tuned for tight noise control):
-		// - ds201GateReleaseMod = 250ms
-		// - ds201GateReleaseSustained = 300ms
-		// - ds201GateReleaseDynamic = 180ms
+	t.Run("release based on speech sustain", func(t *testing.T) {
+		// Release no longer keys off room-tone entropy. A fixed +50ms hold
+		// compensation and +75ms tonal allowance are always applied. The only
+		// content split is sustained speech vs standard:
+		// - Sustained (flux < 0.01 AND zcr < 0.08): 300 + 50 + 75 = 425ms
+		// - Standard (otherwise):                   250 + 50 + 75 = 375ms
 		tests := []struct {
-			name           string
-			entropy        float64
-			wantReleaseMin float64 // minimum expected release (ms)
-			wantReleaseMax float64 // maximum expected release (ms)
-			desc           string
+			name        string
+			flux        float64
+			zcr         float64
+			wantRelease float64
+			desc        string
 		}{
-			{
-				name:           "very tonal noise (pure hum)",
-				entropy:        0.08, // < 0.10 → very tonal
-				wantReleaseMin: 350,  // base 250 + hold 50 + full tonal 75 = 375ms
-				wantReleaseMax: 420,
-				desc:           "very tonal needs slowest release to hide pumping",
-			},
-			{
-				name:           "tonal noise (hum/bleed)",
-				entropy:        0.11, // >= 0.10 && < 0.12 → tonal (70% compensation)
-				wantReleaseMin: 320,  // base 250 + hold 50 + 70% tonal ~52 = 352ms
-				wantReleaseMax: 400,
-				desc:           "tonal needs slow release for pumping hiding",
-			},
-			{
-				name:           "mixed noise character",
-				entropy:        0.14, // >= 0.12 && < 0.16 → mixed (30% reduction)
-				wantReleaseMin: 240,  // base 250 + hold 50 - 30% reduce ~30 = 270ms
-				wantReleaseMax: 320,
-				desc:           "mixed needs moderate release to cut noise faster",
-			},
-			{
-				name:           "broadband-ish noise",
-				entropy:        0.20, // >= 0.16 → broadband (full reduction)
-				wantReleaseMin: 150,  // base 250 + hold 50 - reduce 100 = 200ms
-				wantReleaseMax: 250,
-				desc:           "broadband needs faster release to cut noise",
-			},
+			{"sustained speech", 0.005, 0.05, 425, "low flux + low zcr → sustained release"},
+			{"standard speech", 0.02, 0.20, 375, "active speech → standard release"},
+			{"flux high but zcr high", 0.005, 0.20, 375, "zcr disqualifies sustained → standard"},
 		}
 
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				config := newTestConfig()
 				measurements := &AudioMeasurements{
-					BaseMeasurements: BaseMeasurements{Spectral: SpectralMetrics{Flux: 0.02}}, // Moderate flux (uses ds201GateReleaseMod)
-
+					BaseMeasurements: BaseMeasurements{
+						Spectral:          SpectralMetrics{Flux: tt.flux},
+						ZeroCrossingsRate: tt.zcr,
+					},
 					NoiseFloor: -55.0,
-					InputLRA:   15.0, // Above LRA threshold (10 LU) to avoid LRA-based extension
+					InputLRA:   15.0, // Above LRA threshold (10 LU): no extension
 					NoiseProfile: &NoiseProfile{
 						PeakLevel:   -50.0,
 						CrestFactor: 15.0,
-						Entropy:     tt.entropy,
+						Entropy:     0.005,
 					},
 				}
 
 				tuneDS201GateForTest(config, measurements)
 
-				if config.DS201Gate.Release < tt.wantReleaseMin || config.DS201Gate.Release > tt.wantReleaseMax {
-					t.Errorf("DS201Gate.Release = %.1f ms, want %.1f-%.1f ms [%s]",
-						config.DS201Gate.Release, tt.wantReleaseMin, tt.wantReleaseMax, tt.desc)
+				if config.DS201Gate.Release != tt.wantRelease {
+					t.Errorf("DS201Gate.Release = %.1f ms, want %.1f ms [%s]",
+						config.DS201Gate.Release, tt.wantRelease, tt.desc)
 				}
 			})
 		}
@@ -951,63 +924,40 @@ func TestTuneDS201Gate(t *testing.T) {
 		// ds201GateReleaseLRAExtension = 100ms (extension for low LRA)
 		// ds201GateReleaseLRAMaxExt = 150ms (max extension for very low LRA)
 
+		// Standard-tier base release (flux 0.02 → 250 + 50 hold + 75 tonal = 375ms),
+		// then LRA extension on top.
 		tests := []struct {
-			name           string
-			lra            float64
-			wantReleaseMin float64 // relative to base release
-			wantReleaseMax float64
-			desc           string
+			name        string
+			lra         float64
+			wantRelease float64
+			desc        string
 		}{
-			{
-				name:           "wide LRA - no extension",
-				lra:            16.0, // Well above 10 LU threshold
-				wantReleaseMin: 250,  // Base release (no extension)
-				wantReleaseMax: 320,
-				desc:           "wide dynamics don't need release extension",
-			},
-			{
-				name:           "moderate LRA - no extension",
-				lra:            12.0, // Above 10 LU threshold
-				wantReleaseMin: 250,
-				wantReleaseMax: 320,
-				desc:           "moderate dynamics don't need release extension",
-			},
-			{
-				name:           "low LRA - partial extension",
-				lra:            9.0, // Between 8-10 LU, scaled extension
-				wantReleaseMin: 290, // Base ~300 + 50% of 100ms extension
-				wantReleaseMax: 380,
-				desc:           "low dynamics need release extension to hide pumping",
-			},
-			{
-				name:           "very low LRA - maximum extension",
-				lra:            7.0, // Below 8 LU, full 150ms extension
-				wantReleaseMin: 380, // Base ~300 + 150ms max extension
-				wantReleaseMax: 500,
-				desc:           "very low dynamics need maximum release extension",
-			},
+			{"wide LRA - no extension", 16.0, 375, "wide dynamics don't need release extension"},
+			{"moderate LRA - no extension", 12.0, 375, "moderate dynamics don't need release extension"},
+			{"low LRA - partial extension", 9.0, 425, "375 + 50% of 100ms extension"},
+			{"very low LRA - maximum extension", 7.0, 525, "375 + 150ms max extension"},
 		}
 
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				config := newTestConfig()
 				measurements := &AudioMeasurements{
-					BaseMeasurements: BaseMeasurements{Spectral: SpectralMetrics{Flux: 0.02}}, // Moderate flux
+					BaseMeasurements: BaseMeasurements{Spectral: SpectralMetrics{Flux: 0.02}}, // Standard tier
 
 					NoiseFloor: -55.0,
 					InputLRA:   tt.lra,
 					NoiseProfile: &NoiseProfile{
 						PeakLevel:   -50.0,
 						CrestFactor: 15.0,
-						Entropy:     0.14, // Mixed entropy (no tonal extension)
+						Entropy:     0.005,
 					},
 				}
 
 				tuneDS201GateForTest(config, measurements)
 
-				if config.DS201Gate.Release < tt.wantReleaseMin || config.DS201Gate.Release > tt.wantReleaseMax {
-					t.Errorf("DS201Gate.Release = %.1f ms (LRA=%.1f LU), want %.1f-%.1f ms [%s]",
-						config.DS201Gate.Release, tt.lra, tt.wantReleaseMin, tt.wantReleaseMax, tt.desc)
+				if config.DS201Gate.Release != tt.wantRelease {
+					t.Errorf("DS201Gate.Release = %.1f ms (LRA=%.1f LU), want %.1f ms [%s]",
+						config.DS201Gate.Release, tt.lra, tt.wantRelease, tt.desc)
 				}
 			})
 		}

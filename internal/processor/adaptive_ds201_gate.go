@@ -50,86 +50,63 @@ const (
 	ds201GateRatioMod    = 2.0  // For moderate LRA
 	ds201GateRatioTight  = 2.5  // For narrow LRA (tighter control OK)
 
-	// Attack: based on MaxDifference (transient indicator)
-	// Fast transients need fast attack to avoid clipping word onsets
-	ds201GateMaxDiffHigh      = 25.0 // % - sharp transients
-	ds201GateMaxDiffMod       = 10.0 // % - moderate transients
-	ds201GateMaxDiffExtreme   = 40.0 // % - threshold for ultra-fast attack
-	ds201GateCrestExtreme     = 40.0 // dB - threshold for ultra-fast attack
-	ds201GateAttackMin        = 10.0 // ms - minimum attack: fastest tier for extreme/sharp transients and the clamp floor that prevents click artifacts
-	ds201GateAttackMod        = 12.0 // ms - standard speech
-	ds201GateAttackSlow       = 17.0 // ms - soft onsets
-	ds201GateFluxDynamicThres = 0.05 // SpectralFlux threshold for dynamic content
+	// Attack: fixed. Every corpus stem produces the 10ms floor; the transient
+	// tiers above it never fire on speech, so attack is no longer adaptive.
+	ds201GateAttackMS = 10.0 // ms - fixed minimum attack (prevents click artifacts on gate open)
 
-	// Release: based on flux, ZCR, and noise character
-	// No hold parameter exists - release must compensate
-	ds201GateFluxLow          = 0.01 // Low flux threshold
-	ds201GateZCRLow           = 0.08 // Low zero crossings rate
-	ds201GateFluxHigh         = 0.05 // High flux threshold
+	// Release: based on speech sustain (flux/ZCR) and LRA.
+	// No hold parameter exists - release must compensate.
+	ds201GateFluxLow          = 0.01 // Low flux threshold (sustained-speech test)
+	ds201GateZCRLow           = 0.08 // Low zero crossings rate (sustained-speech test)
 	ds201GateReleaseSustained = 300  // ms - for sustained speech
 	ds201GateReleaseMod       = 250  // ms - standard
-	ds201GateReleaseDynamic   = 180  // ms - for dynamic content
 	ds201GateReleaseHoldComp  = 50   // ms - compensation for lack of hold parameter
-	ds201GateReleaseTonalComp = 75   // ms - extra for tonal bleed (hide pump)
+	ds201GateReleaseTonalComp = 75   // ms - extra to hide pumping on tonal bleed
 	ds201GateReleaseMin       = 150  // ms - minimum release
 	ds201GateReleaseMax       = 600  // ms - maximum release (increased for low LRA)
 
-	// Adaptive release based on noise entropy (higher entropy = more broadband = faster release)
-	// Tonal noise (low entropy) needs slow release to hide pumping artifacts
-	// Broadband/mixed noise (higher entropy) benefits from faster release to cut noise quickly
-	ds201GateReleaseEntropyVeryTonal = 0.10 // Below: very tonal (pure hum/bleed) - slowest
-	ds201GateReleaseEntropyTonal     = 0.12 // Below: tonal noise - slow release
-	ds201GateReleaseEntropyMixed     = 0.16 // Below: mixed character - moderate release
-	// Above 0.16: broadband-ish noise - faster release OK
-	ds201GateReleaseEntropyReduce = 100 // ms - reduction for broadband-ish noise
-
 	// LRA-based release extension (low dynamic range = more pumping risk)
-	// When speech has narrow loudness range (<12 LU), gate opens/closes rapidly
+	// When speech has narrow loudness range (<10 LU), gate opens/closes rapidly
 	// on similar-level segments, causing audible pumping. Longer release helps.
 	ds201GateReleaseLRALow       = 10.0 // LU - below: low dynamic range, extend release
 	ds201GateReleaseLRAVeryLow   = 8.0  // LU - below: very low LRA, maximum extension
 	ds201GateReleaseLRAExtension = 100  // ms - extension for low LRA audio
 	ds201GateReleaseLRAMaxExt    = 150  // ms - maximum extension for very low LRA
 
-	// Range: based on room-tone noise profile entropy and noise floor
-	// Tonal noise sounds worse when hard-gated - gentler range hides pumping
-	ds201GateEntropyTonal     = 0.3 // Below: tonal noise (bleed/hum)
-	ds201GateEntropyMixed     = 0.6 // Below: mixed noise
-	ds201GateRangeTonalDB     = -16 // dB - gentle for tonal noise
-	ds201GateRangeMixedDB     = -21 // dB - moderate for mixed
-	ds201GateRangeBroadbandDB = -27 // dB - aggressive for broadband
-	ds201GateRangeCleanBoost  = -6  // dB - extra depth for very clean
-	ds201GateRangeMinDB       = -36 // dB - minimum (deepest)
-	ds201GateRangeMaxDB       = -12 // dB - maximum (gentlest)
+	// Range: driven by noise floor alone. Clean recordings (floor below
+	// -70 dBFS) take a deeper range; everything else takes the gentle range.
+	// The user may tune these by ear after auditioning.
+	ds201GateRangeCleanFloorDB = -70.0 // dBFS - below this the recording counts as clean
+	ds201GateRangeCleanDB      = -22.0 // dB - depth for clean recordings
+	ds201GateRangeStandardDB   = -16.0 // dB - depth for everything else
+	ds201GateRangeMinDB        = -36.0 // dB - minimum (deepest)
+	ds201GateRangeMaxDB        = -12.0 // dB - maximum (gentlest)
 
-	// Knee: based on spectral crest
-	ds201GateSpectralCrestHigh = 35.0 // High crest threshold
-	ds201GateSpectralCrestMod  = 20.0 // Moderate crest threshold
-	ds201GateKneeSoft          = 5.0  // For dynamic content with prominent peaks
-	ds201GateKneeMod           = 3.0  // Standard
-	ds201GateKneeSharp         = 2.0  // For less dynamic content
+	// Knee: fixed. The spectral-crest signal it used to key off is the wrong
+	// signal (per the de-esser/LA-2A reviews). The user may tune this by ear.
+	ds201GateKneeFixed = 3.0 // standard knee for all content
 
-	// Detection: based on room-tone noise profile entropy and crest factor
-	ds201GateRoomToneCrestThreshold = 25.0 // dB - above: use RMS (noise has spikes)
-	ds201GateEntropyClean           = 0.7  // Above: can use peak detection
+	// Detection: fixed RMS. RMS is the safe choice for speech and tonal bleed;
+	// the peak branch needed entropy > 0.7, which the corpus never reaches.
 
 	ds201DefaultGateThreshold = 0.01 // -40dBFS
 )
 
-// tuneGate adapts all noise gate parameters based on Pass 1 measurements.
+// tuneDS201Gate adapts the noise gate parameters based on Pass 1 measurements.
 //
 // Parameters are tuned as follows:
-//   - Threshold: above room-tone peak (if crest > 20dB) or noise floor, with headroom
+//   - Threshold: aggression-based positioning between quiet speech and speech RMS
+//     (low-separation guard falls back to the noise-floor-based path)
 //   - Ratio: based on LRA (wide dynamics = gentle ratio)
-//   - Attack: based on MaxDifference (fast transients = fast attack to avoid clipping onsets)
-//   - Release: based on flux/ZCR + hold compensation (no hold param in agate)
-//   - Range: based on room-tone entropy (tonal noise = gentle range to hide pumping)
-//   - Knee: based on spectral crest (dynamic content = soft knee)
-//   - Detection: RMS for tonal bleed/noisy room tone, peak for clean recordings
+//   - Release: based on speech sustain (flux/ZCR) + LRA extension + hold compensation
+//   - Range: driven by noise floor (clean recordings take a deeper range)
+//   - Attack: fixed 10 ms (clamp floor, prevents click artifacts)
+//   - Knee: fixed 3.0
+//   - Detection: fixed RMS (safe for speech and tonal bleed)
 //   - Makeup: 1.0 (loudness normalisation handles level compensation)
 //
-// Room-tone metrics (entropy, crest, peak) are read from the noise profile
-// extracted from the elected room-tone region.
+// Room-tone peak/crest are read from the noise profile extracted from the
+// elected room-tone region and feed only the low-separation threshold guard.
 func tuneDS201Gate(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagnostics, measurements *AudioMeasurements) {
 	if diagnostics != nil {
 		diagnostics.DS201GateGentleMode = false
@@ -142,21 +119,17 @@ func tuneDS201Gate(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagnosti
 		diagnostics.DS201GateClampReason = ""
 	}
 
-	// Extract room-tone noise profile characteristics for gate tuning
+	// Room-tone peak/crest feed only the low-separation threshold guard
 	// (NoiseProfile is extracted from the elected room-tone region).
-	var roomToneEntropy, roomToneCrest, roomTonePeak float64
+	var roomToneCrest, roomTonePeak float64
 
 	if measurements.NoiseProfile != nil {
-		roomToneEntropy = measurements.NoiseProfile.Entropy
 		roomToneCrest = measurements.NoiseProfile.CrestFactor
 		roomTonePeak = measurements.NoiseProfile.PeakLevel
 	} else {
-		// NoiseProfile unavailable - use conservative defaults for broadband noise
-		// Entropy 0.65 triggers broadband range (-27 dB) for effective gating
-		// Without room-tone analysis, assume typical room noise characteristics
-		roomToneEntropy = 0.65
-		roomToneCrest = 15.0 // Moderate crest, use RMS detection
-		roomTonePeak = 0     // Will fall back to NoiseFloor for threshold
+		// NoiseProfile unavailable - conservative defaults for the threshold guard.
+		roomToneCrest = 15.0 // Moderate crest, no peak reference
+		roomTonePeak = 0     // Falls back to NoiseFloor for threshold
 	}
 
 	// Calculate LUFS gap for threshold decision
@@ -225,37 +198,30 @@ func tuneDS201Gate(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagnosti
 		diagnostics.DS201GateSpeechHeadroom = quietSpeech - actualThreshold
 	}
 
-	// 3. Attack: based on MaxDifference, SpectralFlux, and SpectralCrest
-	// DS201-inspired: supports sub-millisecond attack for transient preservation
-	config.DS201Gate.Attack = calculateDS201GateAttack(
-		measurements.MaxDifference,
-		measurements.Spectral.Flux,
-		measurements.Spectral.Crest,
-	)
+	// 3. Attack: fixed 10ms floor (transient tiers never fire on speech)
+	config.DS201Gate.Attack = ds201GateAttackMS
 
-	// 4. Release: based on flux, ZCR, noise character (entropy), and LRA
-	// Includes +50ms compensation for lack of Hold parameter
-	// Higher entropy = more broadband noise = faster release to cut noise quickly
-	// Low LRA = narrow dynamics = extend release to prevent pumping
+	// 4. Release: based on speech sustain (flux/ZCR) and LRA
+	// Includes +50ms compensation for lack of Hold parameter and +75ms to hide
+	// pumping on tonal bleed; low LRA extends release to prevent pumping.
 	config.DS201Gate.Release = calculateDS201GateRelease(
 		measurements.Spectral.Flux,
 		measurements.ZeroCrossingsRate,
-		roomToneEntropy,
 		measurements.InputLRA,
 	)
 
-	// 5. Range: based on room-tone entropy and noise floor
-	rangeDB := calculateDS201GateRangeDB(roomToneEntropy, measurements.NoiseFloor)
+	// 5. Range: driven by noise floor (clean recordings take a deeper range)
+	rangeDB := calculateDS201GateRangeDB(measurements.NoiseFloor)
 
 	// Clamp range and convert to linear
-	rangeDB = max(float64(ds201GateRangeMinDB), min(rangeDB, float64(ds201GateRangeMaxDB)))
+	rangeDB = max(ds201GateRangeMinDB, min(rangeDB, ds201GateRangeMaxDB))
 	config.DS201Gate.Range = Decibels(rangeDB).LinearAmplitude().Float64()
 
-	// 6. Knee: based on spectral crest - soft knee for natural transitions
-	config.DS201Gate.Knee = calculateDS201GateKnee(measurements.Spectral.Crest)
+	// 6. Knee: fixed
+	config.DS201Gate.Knee = ds201GateKneeFixed
 
-	// 7. Detection: RMS for bleed, peak for clean
-	config.DS201Gate.Detection = calculateDS201GateDetection(roomToneEntropy, roomToneCrest)
+	// 7. Detection: fixed RMS (safe for speech and tonal bleed)
+	config.DS201Gate.Detection = "rms"
 
 	// Note: Makeup gain left at default (1.0 unity) - loudnorm handles all level adjustment
 
@@ -310,9 +276,12 @@ func calculateAggression(separation, lra float64) float64 {
 	return max(ds201GateAggressionMin, min(baseAggression-lraAdjustment, ds201GateAggressionMax))
 }
 
-// calculateDS201GateThresholdLegacy uses the original noise-floor-based approach
-// when SpeechProfile is unavailable. roomTonePeakDB and roomToneCrestDB describe
-// the noise profile extracted from the elected room-tone region.
+// calculateDS201GateThresholdLegacy positions the threshold from the noise floor
+// (or room-tone peak for high-crest bleed). Since commit 098ef6c every corpus stem
+// elects a SpeechProfile, so this path is reached only via the <5 dB speech-to-noise
+// separation guard in calculateDS201GateThreshold, not via a missing profile.
+// roomTonePeakDB and roomToneCrestDB describe the noise profile extracted from the
+// elected room-tone region.
 func calculateDS201GateThresholdLegacy(
 	noiseFloorDB, roomTonePeakDB, roomToneCrestDB float64,
 	ratio, lufsGap float64,
@@ -345,8 +314,9 @@ func calculateDS201GateThresholdLegacy(
 //   - Aggression scales with noise-to-speech separation and LRA
 //   - Safety clamps ensure threshold stays between noise floor and speech RMS
 //
-// Legacy approach (no SpeechProfile):
-//   - Threshold derived from noise floor + ratio-based gap
+// Low-separation guard (calculateDS201GateThresholdLegacy):
+//   - When speech-to-noise separation is < 5 dB the aggression maths is
+//     unreliable, so fall back to the noise-floor-based path
 //   - Peak reference used for high-crest noise (bleed, transients)
 //
 // roomTonePeakDB and roomToneCrestDB describe the noise profile extracted from
@@ -362,7 +332,7 @@ func calculateDS201GateThreshold(
 		dynamicRange := speechCrest // Distance from quiet to RMS
 		separation := quietSpeechEstimate - noiseFloorDB
 
-		// Fall back to legacy if separation is too tight for reliable aggression
+		// Low-separation guard: too tight for reliable aggression maths
 		if separation < 5.0 {
 			return calculateDS201GateThresholdLegacy(
 				noiseFloorDB, roomTonePeakDB, roomToneCrestDB,
@@ -411,95 +381,34 @@ func calculateDS201GateRatio(lra float64) float64 {
 	}
 }
 
-// calculateDS201GateAttack determines attack time based on transient characteristics.
-// Fast transients need fast attack to preserve word onsets, but not so fast as to click.
-// Minimum 10ms prevents audible gain discontinuities when gate opens.
-// MaxDifference is expressed as a fraction (0.0-1.0), convert to percentage.
-func calculateDS201GateAttack(maxDiff, spectralFlux, spectralCrest float64) float64 {
-	// MaxDifference is 0.0-1.0 fraction, convert to percentage for comparison
-	maxDiffPercent := maxDiff * 100.0
-
-	// Attack tiers adapted for speech (minimum 10ms to prevent click artifacts)
-	// Faster attacks would cause audible gain discontinuities when gate opens
-	var baseAttack float64
-	switch {
-	case maxDiffPercent > ds201GateMaxDiffExtreme || spectralCrest > ds201GateCrestExtreme:
-		// Extreme transients - fastest attack, with 10ms floor to prevent click artifacts
-		baseAttack = ds201GateAttackMin
-	case maxDiffPercent > ds201GateMaxDiffHigh || spectralCrest > 30.0:
-		// Sharp transients - fast opening
-		baseAttack = ds201GateAttackMin
-	case maxDiffPercent > ds201GateMaxDiffMod:
-		// Standard speech
-		baseAttack = ds201GateAttackMod
-	default:
-		// Soft onsets - gentler OK
-		baseAttack = ds201GateAttackSlow
-	}
-
-	// Bias faster for dynamic content
-	if spectralFlux > ds201GateFluxDynamicThres {
-		baseAttack *= 0.8
-	}
-
-	return max(ds201GateAttackMin, min(baseAttack, 25.0))
-}
-
-// calculateDS201GateRelease determines release time based on content and noise character.
-// Compensates for lack of hold parameter by extending release (+50ms).
+// calculateDS201GateRelease determines release time from speech sustain and LRA.
+// Compensates for lack of hold parameter by extending release (+50ms) and adds a
+// fixed +75ms to hide pumping on tonal bleed.
 //
-// Entropy-based adaptation:
-//   - Very tonal noise (entropy < 0.1): slowest release - hide pumping on pure hum/bleed
-//   - Tonal noise (entropy < 0.12): slow release - some pumping hiding needed
-//   - Mixed noise (entropy < 0.16): moderate release
-//   - Broadband-ish (entropy >= 0.16): faster release - cut noise quickly without pumping risk
+// Speech-sustain split:
+//   - Sustained speech (flux < 0.01 AND ZCR < 0.08): slow release
+//   - Everything else: standard release
 //
 // LRA-based extension:
 //   - Low LRA (<10 LU): speech at similar levels, gate opens/closes rapidly → pumping
 //   - Very low LRA (<8 LU): maximum release extension to hide pumping
 //
-// This allows voices with more broadband room noise to benefit from
-// tighter release that cuts noise faster when speech stops, while preserving the
-// slow release for tonal bleed/hum that would otherwise pump audibly.
-//
-// roomToneEntropy is the noise-profile entropy extracted from the elected
-// room-tone region.
-func calculateDS201GateRelease(spectralFlux, zcr, roomToneEntropy, lra float64) float64 {
+// The elected room tone is tonal across the corpus (entropy pinned far below the
+// old tiering thresholds), so the tonal compensation is applied as a fixed term
+// rather than tiered on entropy.
+func calculateDS201GateRelease(spectralFlux, zcr, lra float64) float64 {
 	var baseRelease float64
 
-	switch {
-	case spectralFlux < ds201GateFluxLow && zcr < ds201GateZCRLow:
+	if spectralFlux < ds201GateFluxLow && zcr < ds201GateZCRLow {
 		// Sustained speech with low activity
 		baseRelease = ds201GateReleaseSustained
-	case spectralFlux > ds201GateFluxHigh:
-		// Dynamic content - more responsive
-		baseRelease = ds201GateReleaseDynamic
-	default:
+	} else {
 		baseRelease = ds201GateReleaseMod
 	}
 
-	// Compensate for lack of hold parameter
+	// Compensate for lack of hold parameter, plus fixed tonal-bleed allowance.
 	baseRelease += ds201GateReleaseHoldComp
-
-	// Entropy-based release adjustment
-	// Very tonal noise needs slowest release to hide pumping artifacts
-	// Higher entropy (broadband-ish) allows faster release to cut noise quickly
-	switch {
-	case roomToneEntropy < ds201GateReleaseEntropyVeryTonal:
-		// Pure tonal (hum, bleed) - maximum release time
-		baseRelease += ds201GateReleaseTonalComp
-	case roomToneEntropy < ds201GateReleaseEntropyTonal:
-		// Tonal noise - slow release, reduced compensation
-		baseRelease += ds201GateReleaseTonalComp * 0.7
-	case roomToneEntropy < ds201GateReleaseEntropyMixed:
-		// Mixed character - moderate release, slight reduction
-		// Don't add tonal comp, and reduce base slightly to cut noise faster
-		baseRelease -= ds201GateReleaseEntropyReduce * 0.3
-	default:
-		// Broadband-ish noise - faster release to cut noise quickly
-		// No tonal compensation, and reduce base release
-		baseRelease -= ds201GateReleaseEntropyReduce
-	}
+	baseRelease += ds201GateReleaseTonalComp
 
 	// LRA-based release extension
 	// Low dynamic range audio has speech at similar levels throughout, causing
@@ -519,63 +428,13 @@ func calculateDS201GateRelease(spectralFlux, zcr, roomToneEntropy, lra float64) 
 	return max(float64(ds201GateReleaseMin), min(baseRelease, float64(ds201GateReleaseMax)))
 }
 
-// calculateDS201GateRangeDB determines maximum attenuation depth in dB based on noise character.
-// Tonal noise (bleed, hum) sounds worse when hard-gated - use gentler range.
-// Broadband noise can be gated more aggressively.
-// Returns unclamped dB value for further adjustment by caller.
-//
-// roomToneEntropy is the noise-profile entropy extracted from the elected
-// room-tone region.
-func calculateDS201GateRangeDB(roomToneEntropy, noiseFloorDB float64) float64 {
-	var rangeDB float64
-
-	switch {
-	case roomToneEntropy < ds201GateEntropyTonal:
-		rangeDB = ds201GateRangeTonalDB // Tonal - gentle
-	case roomToneEntropy < ds201GateEntropyMixed:
-		rangeDB = ds201GateRangeMixedDB // Mixed - moderate
-	default:
-		rangeDB = ds201GateRangeBroadbandDB // Broadband - aggressive
+// calculateDS201GateRangeDB determines maximum attenuation depth in dB from the
+// noise floor. Clean recordings (floor below -70 dBFS) take the deeper clean
+// range; everything else takes the gentle standard range. Returns an unclamped
+// dB value for the caller to clamp.
+func calculateDS201GateRangeDB(noiseFloorDB float64) float64 {
+	if noiseFloorDB < ds201GateRangeCleanFloorDB {
+		return ds201GateRangeCleanDB
 	}
-
-	// Can go deeper if very clean recording
-	if noiseFloorDB < -70 {
-		rangeDB += ds201GateRangeCleanBoost // More negative = deeper
-	}
-
-	return rangeDB
-}
-
-// calculateDS201GateKnee determines knee softness based on spectral crest.
-// Dynamic content with prominent peaks benefits from softer knee.
-func calculateDS201GateKnee(spectralCrest float64) float64 {
-	switch {
-	case spectralCrest > ds201GateSpectralCrestHigh:
-		return ds201GateKneeSoft // Dynamic - soft engagement
-	case spectralCrest > ds201GateSpectralCrestMod:
-		return ds201GateKneeMod // Standard
-	default:
-		return ds201GateKneeSharp // Less dynamic - sharper OK
-	}
-}
-
-// calculateDS201GateDetection determines whether to use RMS or peak detection.
-// RMS is safer for speech and handles tonal bleed better.
-// Peak provides tighter tracking for very clean recordings.
-//
-// roomToneEntropy and roomToneCrestDB describe the noise profile extracted
-// from the elected room-tone region.
-func calculateDS201GateDetection(roomToneEntropy, roomToneCrestDB float64) string {
-	// Tonal noise or high crest in room tone - use RMS
-	if roomToneEntropy < ds201GateEntropyTonal || roomToneCrestDB > ds201GateRoomToneCrestThreshold {
-		return "rms"
-	}
-
-	// Very clean with low crest - can use peak for tighter tracking
-	if roomToneEntropy > ds201GateEntropyClean && roomToneCrestDB < 15 {
-		return "peak"
-	}
-
-	// Default: RMS is safer for speech
-	return "rms"
+	return ds201GateRangeStandardDB
 }
