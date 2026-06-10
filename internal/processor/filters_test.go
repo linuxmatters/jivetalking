@@ -507,10 +507,6 @@ func perFileStateFieldNames() []string {
 		"DS201GateSpeechHeadroom",
 		"DS201GateThresholdUnclamped",
 		"DS201GateClampReason",
-		"LA2AHighCrestActive",
-		"LA2AHighCrestDeficit",
-		"LA2AHighCrestSeverity",
-		"LA2AHighCrestProjectedTP",
 	}
 }
 
@@ -1211,10 +1207,6 @@ func staleFlatConfigFieldNames() []string {
 		"LoudnormLinear",
 		"DS201LPReason",
 		"DS201GateClampReason",
-		"LA2AHighCrestActive",
-		"LA2AHighCrestDeficit",
-		"LA2AHighCrestSeverity",
-		"LA2AHighCrestProjectedTP",
 	}
 }
 

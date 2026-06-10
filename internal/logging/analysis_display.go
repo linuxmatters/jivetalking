@@ -206,15 +206,16 @@ func writeAnalysisFilterAdaptation(w io.Writer, measurements *processor.AudioMea
 				{"De-esser", value},
 			})
 		}
-		writeAnalysisMetricRows(w, "  ", 15, []analysisMetricSpec{
-			{"LA-2A Thresh", fmt.Sprintf("%.0f dB", config.LA2A.Threshold)},
-			{"LA-2A Ratio", fmt.Sprintf("%.1f:1", config.LA2A.Ratio)},
-		})
-		if diagnostics != nil && diagnostics.LA2AHighCrestActive {
-			writeAnalysisMetricRows(w, "  ", 15, []analysisMetricSpec{
-				{"LA-2A Crest", fmt.Sprintf("high-crest override active (deficit %.1f dB, severity %.2f)", diagnostics.LA2AHighCrestDeficit, diagnostics.LA2AHighCrestSeverity)},
-			})
+		thresholdSource := "adapted"
+		if measurements != nil && measurements.SpeechProfile != nil {
+			thresholdSource = fmt.Sprintf("speech RMS %.1f + %.0f dB", measurements.SpeechProfile.RMSLevel, processor.LA2AThresholdSpeechOffsetDB)
+		} else if measurements != nil {
+			thresholdSource = fmt.Sprintf("peak %.1f - 20 dB (no speech profile)", measurements.PeakLevel)
 		}
+		writeAnalysisMetricRows(w, "  ", 15, []analysisMetricSpec{
+			{"LA-2A Thresh", fmt.Sprintf("%.1f dB (%s)", config.LA2A.Threshold, thresholdSource)},
+			{"LA-2A Ratio", fmt.Sprintf("%.1f:1 (fixed)", config.LA2A.Ratio)},
+		})
 	}
 }
 

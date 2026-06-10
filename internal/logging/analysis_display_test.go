@@ -285,8 +285,8 @@ FILTER ADAPTATION
   Gate Ratio:     3.0:1
   NR FFT denoise: 12 dB (fixed)
   De-esser:       35% intensity (sibilance excess -3.0 dB)
-  LA-2A Thresh:   -21 dB
-  LA-2A Ratio:    2.5:1
+  LA-2A Thresh:   -21.0 dB (speech RMS -33.8 + 9 dB)
+  LA-2A Ratio:    2.5:1 (fixed)
 SPECTRAL SUMMARY
   Centroid:       2450 Hz (forward, clear)
   Spread:         1800 Hz (moderate, natural speech)
@@ -327,9 +327,6 @@ func TestDisplayAnalysisResultsWithDiagnostics_UsesEffectiveConfigAndDiagnostics
 		DS201LPReason:               "rolloff/centroid gap",
 		DS201GateClampReason:        "quiet speech ceiling",
 		DS201GateThresholdUnclamped: -44.5,
-		LA2AHighCrestActive:         true,
-		LA2AHighCrestDeficit:        5.6,
-		LA2AHighCrestSeverity:       0.78,
 	}
 
 	var buf bytes.Buffer
@@ -342,9 +339,8 @@ func TestDisplayAnalysisResultsWithDiagnostics_UsesEffectiveConfigAndDiagnostics
 		"Gate Ratio:     3.5:1",
 		"Gate Clamp:     quiet speech ceiling (unclamped -44.5 dB)",
 		"De-esser:       62% intensity",
-		"LA-2A Thresh:   -26 dB",
-		"LA-2A Ratio:    4.2:1",
-		"LA-2A Crest:    high-crest override active (deficit 5.6 dB, severity 0.78)",
+		"LA-2A Thresh:   -26.0 dB (speech RMS -33.8 + 9 dB)",
+		"LA-2A Ratio:    4.2:1 (fixed)",
 	} {
 		if !strings.Contains(output, want) {
 			t.Errorf("analysis output missing %q", want)

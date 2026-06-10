@@ -9,8 +9,3 @@ func sanitizeFloat(val, defaultVal float64) float64 {
 	}
 	return val
 }
-
-// lerp performs linear interpolation from a to b by factor t (0.0-1.0).
-func lerp(a, b, t float64) float64 {
-	return a + t*(b-a)
-}
