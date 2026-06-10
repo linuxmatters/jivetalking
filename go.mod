@@ -11,7 +11,7 @@ require (
 	github.com/charmbracelet/harmonica v0.2.0
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/linuxmatters/ffmpeg-statigo v0.0.0-00010101000000-000000000000
-	github.com/mattn/go-runewidth v0.0.23
+	github.com/mattn/go-runewidth v0.0.24
 )
 
 replace github.com/linuxmatters/ffmpeg-statigo => ./third_party/ffmpeg-statigo
