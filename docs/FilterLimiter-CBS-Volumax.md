@@ -47,7 +47,7 @@ The Volumax was designed to be invisible. Its job was to prevent overmodulation 
 |-----------|-------------|---------------------------|
 | **Attack** | ~5ms (gentle) | 5ms |
 | **Release** | ~100-200ms (smooth) | 100ms |
-| **Limiting** | Soft, program-dependent | ASC enabled, level 0.8 |
+| **Limiting** | Soft, program-dependent | Sample-peak ceiling; ASC kept as dormant safety-net |
 | **Character** | Transparent | Transparent |
 | **Purpose** | Prevent overmodulation | Create headroom for loudnorm |
 
@@ -104,21 +104,18 @@ alimiter=limit=<ceiling>:attack=5:release=100:level_in=1:level_out=1:level=0:lat
 |-----------|-------|-------------------|
 | `attack` | 5ms | Gentle attack, preserves transients |
 | `release` | 100ms | Smooth recovery, no pumping |
-| `asc` | 1 (enabled) | Program-dependent behaviour |
-| `asc_level` | 0.8 | High smoothing, Volumax characteristic |
+| `asc` | 1 (enabled) | Safety-net: dormant on typical material; arms only under heavy sustained limiting the pipeline does not reach |
+| `asc_level` | 0.8 | Smoothing depth when ASC does engage (0.0 = minimum, 1.0 = maximum) |
 | `latency` | 1 (enabled) | Lookahead for transparent limiting |
 | `level` | 0 (disabled) | No auto-makeup (loudnorm handles levels) |
 
+### Sample-peak ceiling
+
+Per `af_alimiter.c` (FFmpeg release/8.1), `alimiter`'s `limit` is a **sample-peak** ceiling with attack-length lookahead - it is not true-peak/oversampled. Inter-sample peaks above the ceiling by up to ~0.8 dB are possible. The adaptive ceiling calculation accounts for this with a 1.5 dB safety margin (`safetyMarginDB`), keeping the downstream loudnorm within its linear-mode condition.
+
 ### Auto Soft Clipping (ASC)
 
-FFmpeg's `asc` parameter approximates the Volumax's program-dependent behaviour. When enabled:
-
-- Release time adapts to programme content
-- Short peaks recover quickly
-- Sustained limiting releases smoothly
-- The `asc_level` of 0.8 provides high smoothing (0.0 = minimum, 1.0 = maximum)
-
-This prevents the pumping artifacts that fixed-release limiters create on speech, where consonants and vowels have very different envelope characteristics.
+`asc=1:asc_level=0.8` is kept as a deliberate dormant safety-net. It is inert on all current corpus material - byte-identical A/B output confirms it never engages at the limiting depths this pipeline reaches. It would only activate under heavy sustained limiting, which the ceiling/pre-gain gain-staging prevents. The `asc_level` of 0.8 sets the smoothing depth if it ever does engage.
 
 ---
 
