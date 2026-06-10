@@ -277,11 +277,6 @@ func TestGenerateReport_FilterChainUsesProcessingDiagnostics(t *testing.T) {
 		DS201GateThresholdUnclamped:  -42.8,
 		DS201GateClampReason:         "quiet speech ceiling",
 		DS201GateGentleMode:          true,
-
-		LA2AHighCrestActive:      true,
-		LA2AHighCrestDeficit:     5.6,
-		LA2AHighCrestSeverity:    0.78,
-		LA2AHighCrestProjectedTP: 3.4,
 	}
 
 	output := generateReportText(t, data)
@@ -294,8 +289,7 @@ func TestGenerateReport_FilterChainUsesProcessingDiagnostics(t *testing.T) {
 		"Quiet speech: -38.2 dB, Dynamic range: 18.4 dB",
 		"Clamped by: quiet speech ceiling (unclamped: -42.8 dB)",
 		"Headroom above quiet speech: 4.5 dB",
-		"High-crest override: ACTIVE (deficit 5.6 dB, severity 0.78)",
-		"Projected TP: 3.4 dBTP",
+		"Threshold: speech RMS -28.0 dBFS + 9 dB offset",
 	} {
 		if !strings.Contains(output, want) {
 			t.Errorf("report missing %q", want)
@@ -305,7 +299,7 @@ func TestGenerateReport_FilterChainUsesProcessingDiagnostics(t *testing.T) {
 	for _, stale := range []string{
 		"stale config lowpass reason",
 		"stale config clamp",
-		"High-crest override: not needed (deficit 0.1 dB)",
+		"High-crest override",
 	} {
 		if strings.Contains(output, stale) {
 			t.Errorf("report used stale config diagnostic %q", stale)

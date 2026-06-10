@@ -224,64 +224,23 @@ func formatDS201GateFilter(f *os.File, cfg *processor.EffectiveFilterConfig, dia
 }
 
 // formatLA2ACompressorFilter outputs LA-2A Compressor filter details
-func formatLA2ACompressorFilter(f *os.File, cfg *processor.EffectiveFilterConfig, diagnostics *processor.AdaptiveDiagnostics, m *processor.AudioMeasurements, prefix string) {
+func formatLA2ACompressorFilter(f *os.File, cfg *processor.EffectiveFilterConfig, _ *processor.AdaptiveDiagnostics, m *processor.AudioMeasurements, prefix string) {
 	la2a := cfg.LA2A
 	if !la2a.Enabled {
 		fmt.Fprintf(f, "%sLA-2A Compressor: DISABLED\n", prefix)
 		return
 	}
 
-	fmt.Fprintf(f, "%sLA-2A Compressor: threshold %.0f dB, ratio %.1f:1\n", prefix, la2a.Threshold, la2a.Ratio)
-	fmt.Fprintf(f, "        Timing: attack %.0fms, release %.0fms\n", la2a.Attack, la2a.Release)
-	fmt.Fprintf(f, "        Mix: %.0f%%, knee %.1f\n", la2a.Mix*100, la2a.Knee)
+	fmt.Fprintf(f, "%sLA-2A Compressor: threshold %.1f dB, ratio %.1f:1\n", prefix, la2a.Threshold, la2a.Ratio)
+	fmt.Fprintf(f, "        Timing: attack %.0fms, release %.0fms (fixed)\n", la2a.Attack, la2a.Release)
+	fmt.Fprintf(f, "        Mix: %.0f%%, knee %.1f, makeup %.0f dB (fixed)\n", la2a.Mix*100, la2a.Knee, la2a.Makeup)
 
-	// Show rationale with measurement sources
-	if m != nil && m.DynamicRange > 0 {
-		dynamicsType := "moderate"
-		if m.DynamicRange > 30 {
-			dynamicsType = "expressive (preserving transients)"
-		} else if m.DynamicRange < 20 {
-			dynamicsType = "already compressed"
-		}
-		fmt.Fprintf(f, "        Rationale: DR %.1f dB (%s), LRA %.1f LU\n", m.DynamicRange, dynamicsType, m.InputLRA)
-
-		// Show kurtosis and flux with sources (used for ratio and release tuning)
-		kurtosis := m.Spectral.Kurtosis
-		flux := m.Spectral.Flux
-		kurtosisSource := "full-file"
-		fluxSource := "full-file"
-		if m.SpeechProfile != nil {
-			if m.SpeechProfile.Spectral.Kurtosis > 0 {
-				kurtosis = m.SpeechProfile.Spectral.Kurtosis
-				kurtosisSource = "speech region"
-			}
-			if m.SpeechProfile.Spectral.Flux > 0 {
-				flux = m.SpeechProfile.Spectral.Flux
-				fluxSource = "speech region"
-			}
-		}
-		fmt.Fprintf(f, "        spectral kurtosis: %.1f (%s)\n", kurtosis, kurtosisSource)
-		fmt.Fprintf(f, "        spectral flux: %.4f (%s)\n", flux, fluxSource)
-	}
-
-	// High-crest override diagnostics
-	if diagnostics != nil && diagnostics.LA2AHighCrestActive && m != nil {
-		fmt.Fprintf(f, "        High-crest override: ACTIVE (deficit %.1f dB, severity %.2f)\n",
-			diagnostics.LA2AHighCrestDeficit, diagnostics.LA2AHighCrestSeverity)
-		gainRequired := processor.NormTargetLUFS - m.InputI
-		fmt.Fprintf(f, "        Projected TP: %.1f dBTP (gain %.1f dB applied to %.1f dBTP peaks)\n",
-			diagnostics.LA2AHighCrestProjectedTP, gainRequired, m.InputTP)
-		idealCeiling := cfg.Loudnorm.TargetTP - gainRequired - 1.5
-		fmt.Fprintf(f, "        Ideal ceiling: %.1f dBTP, alimiter minimum: -24.0 dBTP\n", idealCeiling)
-		fmt.Fprintf(f, "        Override targets: threshold <= %.0f dB, ratio >= %.1f:1\n",
-			la2a.Threshold, la2a.Ratio)
-	} else {
-		highCrestDeficit := 0.0
-		if diagnostics != nil {
-			highCrestDeficit = diagnostics.LA2AHighCrestDeficit
-		}
-		fmt.Fprintf(f, "        High-crest override: not needed (deficit %.1f dB)\n",
-			highCrestDeficit)
+	// Only the threshold adapts. Show its source.
+	if m != nil && m.SpeechProfile != nil {
+		fmt.Fprintf(f, "        Threshold: speech RMS %.1f dBFS + %.0f dB offset\n",
+			m.SpeechProfile.RMSLevel, processor.LA2AThresholdSpeechOffsetDB)
+	} else if m != nil {
+		fmt.Fprintf(f, "        Threshold: peak %.1f dBFS - 20 dB (no speech profile)\n", m.PeakLevel)
 	}
 }
 

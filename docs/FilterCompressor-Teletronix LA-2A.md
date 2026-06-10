@@ -1,6 +1,6 @@
 # Teletronix LA-2A Leveling Amplifier
 
-*Emulating the optical compressor that defined the sound of recorded voice for six decades*
+*The quality target: gentle, programme-aware levelling. The implementation: FFmpeg's `acompressor` with speech-RMS-relative threshold.*
 
 ---
 
@@ -8,175 +8,75 @@
 
 In 1965, Jim Lawrence founded Teletronix Engineering and introduced a compressor that would become synonymous with vocal recording: the LA-2A Leveling Amplifier. Decades later, engineers still reach for LA-2As—original units now command five-figure prices—whenever a voice needs warmth without aggression, control without constraint.
 
-The LA-2A's magic lies in its **T4 electro-optical attenuator**: an electroluminescent panel paired with a cadmium sulfide photoresistor. Light output changes with the input signal; photoresistor conductance follows the light. This indirect coupling creates inherently smooth gain changes that electronic circuits struggle to replicate.
-
-Bill Putnam, founder of Universal Audio and the man who acquired Teletronix in the 1960s, described the LA-2A's character simply: it "treats your signal lovingly."
-
-### What Makes the T4 Cell Special
-
-The T4's response isn't linear or instantaneous—and that's the point. The photoresistor's conductance changes occur on a molecular level, creating attack and release curves that no capacitor-based design can match:
+The LA-2A's character comes from its **T4 electro-optical attenuator**: an electroluminescent panel paired with a cadmium sulfide photoresistor. Light output changes with the input signal; photoresistor conductance follows the light. This indirect coupling produces inherently smooth gain changes with two-stage programme-dependent release behaviour.
 
 | Characteristic | T4 Behaviour | Sonic Result |
 |---------------|--------------|--------------|
-| Attack | ~10ms fixed | Transients pass through naturally |
-| Release (initial) | 60ms to 50% | Quick recovery from peaks |
+| Attack | ~10 ms fixed | Transients pass through naturally |
+| Release (initial) | 60 ms to 50% | Quick recovery from peaks |
 | Release (full) | 1–15 seconds | Graceful return, no pumping |
 | Ratio | Programme-dependent | Harder compression on louder signals |
 | Knee | Inherently soft | Gradual onset, musical transition |
-
-The two-stage release is the LA-2A's signature: short peaks recover quickly, sustained compression releases slowly. This creates the "levelling" effect—consistent output without the mechanical feel of VCA compression.
 
 ---
 
 ## Jivetalking's Implementation
 
-Jivetalking captures the LA-2A's programme-dependent behaviour through FFmpeg's `acompressor` filter with **[spectral-adaptive parameter tuning](Spectral%20Analysis.md)**. Pass 1 measurements drive every parameter, approximating the way the T4 cell naturally responds to different programme material.
+Jivetalking uses FFmpeg's `acompressor` filter (`af_sidechaincompress.c`) to apply gentle, consistent levelling in the spirit of the LA-2A. **This is not a faithful emulation.** `acompressor` is a single-pole-release, fixed-ratio RMS compressor. It structurally cannot reproduce the T4 cell's two-stage programme-dependent release or level-dependent ratio. The LA-2A is the quality target — gentle levelling, least treatment, preserve natural speech character — not the DSP model.
 
 ### Design Philosophy
 
-| T4 Characteristic | Implementation Strategy |
-|-------------------|------------------------|
-| Fixed 10ms attack | Base 10ms with ±2ms transient adaptation |
-| Two-stage release | LRA + spectral flux determine release time |
-| Programme-dependent ratio | Spectral kurtosis modulates 2.5–3.5:1 range; high-crest override can push toward 5.0:1 based on deficit severity |
-| Soft knee | Centroid-adaptive knee (3.5–5.0) |
-| Warmth on dark voices | Skewness detection triggers knee + release boost |
+The filter serves one purpose: even out the upper-half loudness variation in speech without audible compression artefacts. A render sweep across the real corpus showed that ratio, attack, release, knee, and mix all collapsed to a single value regardless of source character. Adaptive tuning of those parameters was theatre. The one parameter that genuinely varies across presenters and recording setups is the threshold: it must track the actual speech level to engage consistently.
 
----
+### Parameters
 
-## Adaptive Parameter Tuning
+All parameters are fixed except the threshold.
 
-### High-Crest Override
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| Ratio | 3.0 | Gentle levelling; sweep showed no benefit from adaptive range |
+| Attack | 10 ms | Matches the T4's fixed attack; lets word onsets through |
+| Release | 200 ms | Clean recovery without pumping for typical speech patterns |
+| Knee | 4.0 | Soft onset; matches the T4's inherently gradual compression |
+| Mix | 1.0 | Full wet; consistent with the LA-2A's no-parallel-path design |
+| Makeup | 0 dB | Unity; loudnorm handles final level in Pass 3/4 |
+| Detection | RMS | Matches how the photoresistor responds to sustained level |
 
-When a recording's predicted limiter ceiling deficit is positive, the sub-tuners alone cannot prevent Pass 4's alimiter from clamping. The high-crest override detects this condition using Pass 1 measurements and applies proportional floor values that sub-tuners cannot reduce below.
+### Threshold Adaptation
 
-**Detection** mirrors `calculateLimiterCeiling()` in `normalise.go`:
+Threshold is the only adaptive parameter:
 
 ```
-gainRequired = NormTargetLUFS - InputI
-projectedTP  = InputTP + gainRequired
-idealCeiling = LoudnormTargetTP - gainRequired - safetyMargin
-deficit      = minLimiterCeilingDB - idealCeiling
+threshold = SpeechProfile.RMSLevel + 9 dB   (when SpeechProfile elected)
+threshold = PeakLevel − 20 dB               (fallback, no SpeechProfile)
 ```
 
-When `deficit > 0`, severity scales linearly: `clamp(deficit / 6.0, 0.0, 1.0)`.
+Speech-RMS + 9 dB places the threshold just above the bulk of speech energy, engaging compression on the upper half of the dynamic range. Across the real corpus, this delivers ~2.5-4.4 dB compression depth and an output crest factor in the 8-12 dB sweet spot — consistent across the wide input-level spread that made peak-relative thresholding unreliable (depth swung 6.6-24 dB under the old `peak − 20` primary).
 
-**Override floors** (linear interpolation from severity 0.0 to 1.0):
+The `peak − 20` path is retained as a fallback for files where speech election fails, not as a standard path.
 
-| Parameter | Default | At severity 1.0 | Formula | Enforcement |
-|-----------|---------|-----------------|---------|-------------|
-| Threshold | -18 dB | -40 dB | `lerp(-18.0, -40.0, severity)` | `min(tunerResult, floor)` |
-| Ratio | 3.0 | 5.0 | `lerp(3.0, 5.0, severity)` | `max(tunerResult, floor)` |
-| Release | 200 ms | 350 ms | `lerp(200.0, 350.0, severity)` | `max(tunerResult, floor)` |
-| Knee | 4.0 | 6.0 | `lerp(4.0, 6.0, severity)` | `max(tunerResult, floor)` |
-
-The override blends from no change (deficit just above 0) to maximum aggressiveness (deficit >= 6 dB). Sub-tuners may push values beyond the floor but cannot pull them back.
-
-### Attack: Preserving Consonant "Pluck"
-
-The LA-2A's fixed 10ms attack is slow enough to let word onsets through—critical for podcast intelligibility. We honour this baseline with minimal adaptation for extreme cases:
-
-| Transient Character | MaxDifference | Attack |
-|--------------------|---------------|--------|
-| Sharp transients | > 25% | 8 ms |
-| Normal speech | 10–25% | 10 ms |
-| Soft delivery | < 10% | 12 ms |
-
-### Release: Approximating Two-Stage Recovery
-
-The T4 cell's two-stage release gives the LA-2A its breathing room. We approximate this by scaling release time with loudness range and spectral flux:
-
-| Source Character | LRA | Spectral Flux | Release |
-|-----------------|-----|---------------|---------|
-| Expressive speech | > 14 LU | > 0.025 | 300 ms |
-| Standard podcast | 8–14 LU | 0.008–0.025 | 200 ms |
-| Compressed delivery | < 8 LU | < 0.008 | 150 ms |
-
-**Warm voice boost:** Dark voices (skewness > 1.5) add 30ms release to preserve body.
-**Heavy compression boost:** Large LUFS gap (>15dB) adds 50ms, mimicking the T4's slower recovery after sustained compression.
-**High-crest override:** When active, extends the release range to 350 ms to accommodate recordings with large predicted ceiling deficits.
-
-### Ratio: The Levelling Character
-
-Real LA-2As don't have a fixed ratio—the T4 cell compresses harder on louder signals. We approximate this programme-dependency using spectral kurtosis (peaked vs. flat spectrum):
-
-| Spectral Character | Kurtosis | Ratio |
-|-------------------|----------|-------|
-| Peaked/tonal harmonics | > 10 | 2.5:1 |
-| Standard speech | 5–10 | 3.0:1 |
-| Flat/noise-like | < 5 | 3.5:1 |
-
-Very wide dynamic range (>35dB) adds +0.5 to the ratio for extra control.
-
-### Threshold: Signal-Relative
-
-The LA-2A's "Peak Reduction" knob sets threshold relative to the incoming signal. We calculate threshold from peak level minus a dynamic range-dependent headroom:
-
-| Dynamic Range | Headroom | Compression Depth |
-|--------------|----------|-------------------|
-| > 30 dB | 20 dB | Heavy levelling |
-| 20–30 dB | 15 dB | Standard LA-2A |
-| < 20 dB | 10 dB | Light levelling |
-
-Threshold range: -40 dB to -12 dB (clamped for safety). The high-crest override can push threshold to -40 dB, beyond the range the normal tuner typically selects.
-
-### Knee: T4 Softness
-
-The T4 cell's gradual gain changes produce an inherently soft knee. We adapt knee softness based on voice character:
-
-| Voice Character | Spectral Centroid | Knee |
-|----------------|-------------------|------|
-| Dark/warm voice | < 4000 Hz | 5.0 |
-| Normal voice | 4000–6000 Hz | 4.0 |
-| Bright voice | > 6000 Hz | 3.5 |
-
-Warm voices (skewness > 1.5) add +0.5 knee for extra softness.
-
-### Mix: Honouring 100% Wet
-
-Real LA-2As have no parallel compression—they're 100% wet. We default to full wet, reducing mix only for problematic recordings where dry signal masks artefacts:
-
-| Recording Quality | Noise Floor | Mix |
-|------------------|-------------|-----|
-| Studio clean | < −65 dBFS | 1.0 |
-| Home office | −65 to −45 dBFS | 0.93 |
-| Noisy environment | > −45 dBFS | 0.85 |
-
-### Makeup Gain: Unity
-
-Makeup gain stays at 0 dB. Loudnorm handles final level adjustment after compression.
+**Removed adaptations:** kurtosis/flux-based ratio and release, centroid-based knee, mix-by-noise-floor, and the high-crest override. All were confirmed theatre on the corpus: the high-crest override (which pushed ratio toward 5.0 for predicted limiter ceiling deficits) was beaten on LRA and true-peak by the plain fixed-3.0 / speechRMS+9 combination, and the downstream `alimiter` owns peak control regardless (output -1.1 to -2.9 dBTP).
 
 ---
 
 ## Configuration
 
-### Configuration Fields
+`BaseFilterConfig` stores caller-owned LA-2A defaults. `AdaptConfig()` copies those defaults into an `EffectiveFilterConfig`, sets the speech-RMS-relative threshold from Pass 1 measurements, and returns `AdaptiveDiagnostics`.
 
-`BaseFilterConfig` stores caller-owned LA-2A defaults. `AdaptConfig()` copies those defaults into an `EffectiveFilterConfig`, tunes them from Pass 1 measurements, and returns `AdaptiveDiagnostics` for report-only high-crest explanations.
-
-| Field | Type | Range | Default | Purpose |
-|-------|------|-------|---------|---------|
-| `LA2AEnabled` | bool | — | true | Enable/disable filter |
-| `LA2AThreshold` | float64 | −40 to −12 dB | −18 dB | Compression threshold |
-| `LA2ARatio` | float64 | 2.0–5.0 | 3.0 | Compression ratio |
-| `LA2AAttack` | float64 | 8–12 ms | 10 ms | Attack time |
-| `LA2ARelease` | float64 | 150–350 ms | 200 ms | Release time |
-| `LA2AMakeup` | float64 | 0 dB | 0 dB | Unity gain |
-| `LA2AKnee` | float64 | 3.5–6.0 | 4.0 | Knee softness |
-| `LA2AMix` | float64 | 0.85–1.0 | 1.0 | Wet/dry mix |
-
-### AdaptiveDiagnostics Fields
-
-| Field | Type | Range | Default | Purpose |
-|-------|------|-------|---------|---------|
-| `LA2AHighCrestActive` | bool | — | false | Whether high-crest overrides were applied |
-| `LA2AHighCrestDeficit` | float64 | dB | 0.0 | Predicted ceiling deficit |
-| `LA2AHighCrestSeverity` | float64 | 0.0–1.0 | 0.0 | Override scaling factor |
-| `LA2AHighCrestProjectedTP` | float64 | dBTP | 0.0 | Projected true peak before compression |
+| Field | Type | Default | Purpose |
+|-------|------|---------|---------|
+| `LA2AEnabled` | bool | true | Enable/disable filter |
+| `LA2AThreshold` | float64 | −18 dB | Compression threshold (overwritten by `AdaptConfig`) |
+| `LA2ARatio` | float64 | 3.0 | Fixed compression ratio |
+| `LA2AAttack` | float64 | 10 ms | Fixed attack time |
+| `LA2ARelease` | float64 | 200 ms | Fixed release time |
+| `LA2AMakeup` | float64 | 0 dB | Unity gain |
+| `LA2AKnee` | float64 | 4.0 | Fixed knee softness |
+| `LA2AMix` | float64 | 1.0 | Fixed wet/dry mix |
 
 ### FFmpeg Filter Specification
 
-`LA2AThreshold` and `LA2AMakeup` are configured in dB, then converted to FFmpeg's linear `acompressor` values:
+`LA2AThreshold` is stored in dB and converted to FFmpeg's linear scale before building the filter string. Example at threshold −18 dB:
 
 ```
 acompressor=threshold=0.125893:ratio=3.0:attack=10:release=200:makeup=1.00:knee=4.0:detection=rms:mix=1.00
@@ -187,23 +87,18 @@ acompressor=threshold=0.125893:ratio=3.0:attack=10:release=200:makeup=1.00:knee=
 ## Pipeline Integration
 
 ```
-DS201 Gate (dynamics cleanup) → Dolby SR (noise polish) → LA-2A (levelling) → Limiter
+DS201 Gate → NoiseRemove → LA-2A (levelling) → De-esser → Loudnorm (Pass 3/4)
 ```
 
-**Division of responsibility:**
-- **DS201 Gate:** Room-tone-aware inter-phrase cleanup
-- **Dolby SR:** Spectral noise floor polishing
-- **LA-2A:** Dynamic range levelling with warmth
-- **Limiter:** Final peak control
-
-The LA-2A operates on already-cleaned audio, so it can focus on its strength: gentle, programme-dependent levelling that evens out volume variations while preserving the natural character of speech.
+The LA-2A operates on already-gated, already-denoised audio. Its job is narrow: reduce the loudness variation between quiet and loud speech passages before the normalisation passes lock in the final level. Peak control belongs to the downstream `alimiter` (Volumax) in Pass 4.
 
 ---
 
 ## References
 
-- [Teletronix Engineering, LA-2A Leveling Amplifier Manual (1965) ](https://tile.loc.gov/storage-services/master/mbrs/recording_preservation/manuals/Teletronix%20Model%20LA-2A%20Leveling%20Amplifier.pdf)
+- [Teletronix Engineering, LA-2A Leveling Amplifier Manual (1965)](https://tile.loc.gov/storage-services/master/mbrs/recording_preservation/manuals/Teletronix%20Model%20LA-2A%20Leveling%20Amplifier.pdf)
 - [Universal Audio, "LA-2A Leveling Amplifier" reissue documentation](https://media.uaudio.com/assetlibrary/l/a/la-2a_manual.pdf)
 - Dennis Fink, "The History of the LA-2A" (Mix Magazine, 2003)
+- FFmpeg source: [`libavfilter/af_sidechaincompress.c`](https://github.com/FFmpeg/FFmpeg/blob/master/libavfilter/af_sidechaincompress.c) — single-pole-release RMS compressor implementation
 - FFmpeg Documentation: [`acompressor` filter](https://ffmpeg.org/ffmpeg-filters.html#acompressor)
 - https://github.com/aim-qmul/4a2a

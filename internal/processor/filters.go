@@ -267,11 +267,6 @@ type AdaptiveDiagnostics struct {
 	DS201GateThresholdUnclamped  float64
 	DS201GateClampReason         string
 	DS201GateGentleMode          bool
-
-	LA2AHighCrestActive      bool
-	LA2AHighCrestDeficit     float64
-	LA2AHighCrestSeverity    float64
-	LA2AHighCrestProjectedTP float64
 }
 
 // ProcessingFilterContext holds pass execution state outside caller-owned defaults.

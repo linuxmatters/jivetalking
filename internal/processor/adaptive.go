@@ -184,7 +184,7 @@ func sanitizeDS201GateConfig(config *DS201GateConfig) {
 
 func sanitizeLA2AConfig(config *LA2AConfig) {
 	defaults := defaultLA2AConfig()
-	config.Ratio = sanitizeFloat(config.Ratio, defaultLA2ARatio)
+	config.Ratio = sanitizeFloat(config.Ratio, defaults.Ratio)
 	config.Threshold = sanitizeFloat(config.Threshold, defaultLA2AThreshold)
 	config.Attack = sanitizeFloat(config.Attack, defaults.Attack)
 	config.Release = sanitizeFloat(config.Release, defaults.Release)
