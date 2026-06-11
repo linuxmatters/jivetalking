@@ -87,10 +87,11 @@ build: _check-submodule
     echo "Building jivetalking version: $VERSION"
     CGO_ENABLED=1 go build -ldflags="-X main.version=$VERSION" -o jivetalking ./cmd/jivetalking
 
-# Clean build artifacts
+# Clean build artifacts and generated reports/data (.log, .json run-records, .jsonl sidecars)
 clean:
     @rm -fv jivetalking 2>/dev/null || true
-    @rm -fv testdata/LMP-*-processed.* 2>/dev/null || true
+    @rm -fv testdata/*-processed.* 2>/dev/null || true
+    @rm -fv testdata/*-analysis.* 2>/dev/null || true
     @rm -fv testdata/LMP-*-stashed.* 2>/dev/null || true
     @rm -fv testdata/*.png 2>/dev/null || true
     @rm -fv testdata/*.txt 2>/dev/null || true
