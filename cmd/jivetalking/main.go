@@ -18,8 +18,8 @@ import (
 	ffmpeg "github.com/linuxmatters/ffmpeg-statigo"
 	"github.com/linuxmatters/jivetalking/internal/audio"
 	"github.com/linuxmatters/jivetalking/internal/cli"
-	"github.com/linuxmatters/jivetalking/internal/logging"
 	"github.com/linuxmatters/jivetalking/internal/processor"
+	"github.com/linuxmatters/jivetalking/internal/report"
 	"github.com/linuxmatters/jivetalking/internal/ui"
 	"github.com/mattn/go-runewidth"
 )
@@ -205,49 +205,42 @@ func openDebugLog(enabled bool) (*os.File, error) {
 	return logFile, nil
 }
 
-func buildProcessingReportData(inputPath string, fileStartTime time.Time, timings logging.ProcessingTimings, result *processor.ProcessingResult) logging.ReportData {
-	return logging.ReportData{
-		InputPath:    inputPath,
-		OutputPath:   result.OutputPath,
-		StartTime:    fileStartTime,
-		EndTime:      time.Now(),
-		Timings:      timings,
-		Result:       result,
-		SampleRate:   result.InputMetadata.SampleRate,
-		Channels:     result.InputMetadata.Channels,
-		DurationSecs: result.InputMetadata.DurationSecs,
+// buildProcessingTimings completes the report.Timings for a processed file by
+// pairing the per-pass durations with the real-time factor (audio duration /
+// total wall-clock from fileStartTime to now). Mirrors the legacy report's RTF
+// maths: total time spans the whole file's processing, the factor is omitted
+// (left zero) when the input duration is unknown.
+func buildProcessingTimings(fileStartTime time.Time, timings report.Timings, result *processor.ProcessingResult) report.Timings {
+	if result.InputMetadata.DurationSecs > 0 {
+		totalTime := time.Since(fileStartTime)
+		audioDuration := time.Duration(result.InputMetadata.DurationSecs * float64(time.Second))
+		timings.RealTimeFactor = float64(audioDuration) / float64(totalTime)
 	}
+	return timings
 }
 
 type analysisOnlyDeps struct {
-	stdout          io.Writer
-	hasTTY          func() bool
-	openMetadata    func(string) (*audio.Metadata, error)
-	analyzeDetailed func(context.Context, string, *processor.BaseFilterConfig, processor.ProgressCallback) (*processor.AnalysisResult, error)
-	displayResults  func(io.Writer, string, *audio.Metadata, *processor.AudioMeasurements, *processor.EffectiveFilterConfig, *processor.AdaptiveDiagnostics, ...logging.AnalysisTimings)
-	printError      func(string)
-	createLog       func(string) (io.WriteCloser, error)
-	writeRunRecord  func(*processor.RunRecord, string) error
-	writeSidecars   func(*processor.AudioMeasurements, string) error
+	stdout              io.Writer
+	hasTTY              func() bool
+	openMetadata        func(string) (*audio.Metadata, error)
+	analyzeDetailed     func(context.Context, string, *processor.BaseFilterConfig, processor.ProgressCallback) (*processor.AnalysisResult, error)
+	printError          func(string)
+	writeMarkdownReport func(*processor.RunRecord, report.Timings, string) error
+	writeRunRecord      func(*processor.RunRecord, string) error
+	writeSidecars       func(*processor.AudioMeasurements, string) error
 }
 
 func defaultAnalysisOnlyDeps() analysisOnlyDeps {
 	return analysisOnlyDeps{
-		stdout:          os.Stdout,
-		hasTTY:          isTTY,
-		openMetadata:    openAudioMetadata,
-		analyzeDetailed: processor.AnalyzeOnlyDetailed,
-		displayResults:  logging.DisplayAnalysisResultsWithDiagnostics,
-		printError:      cli.PrintError,
-		createLog:       createAnalysisLogFile,
-		writeRunRecord:  processor.WriteRunRecord,
-		writeSidecars:   processor.WriteRunRecordSidecars,
+		stdout:              os.Stdout,
+		hasTTY:              isTTY,
+		openMetadata:        openAudioMetadata,
+		analyzeDetailed:     processor.AnalyzeOnlyDetailed,
+		printError:          cli.PrintError,
+		writeMarkdownReport: report.WriteMarkdownReport,
+		writeRunRecord:      processor.WriteRunRecord,
+		writeSidecars:       processor.WriteRunRecordSidecars,
 	}
-}
-
-// createAnalysisLogFile creates (or truncates) the analysis log file at path.
-func createAnalysisLogFile(path string) (io.WriteCloser, error) {
-	return os.Create(path)
 }
 
 func openAudioMetadata(inputPath string) (*audio.Metadata, error) {
@@ -259,8 +252,8 @@ func openAudioMetadata(inputPath string) (*audio.Metadata, error) {
 	return metadata, nil
 }
 
-func (ph *progressHandler) timings(pass2Time time.Duration) logging.ProcessingTimings {
-	return logging.ProcessingTimings{
+func (ph *progressHandler) timings(pass2Time time.Duration) report.Timings {
+	return report.Timings{
 		Pass1: ph.pass1Time,
 		Pass2: pass2Time,
 		Pass3: ph.pass3Time,
@@ -360,7 +353,7 @@ func runAnalysisOnlyWithDeps(files []string, config *processor.BaseFilterConfig,
 		cancel()
 	}
 
-	// Write each file's report to <source-name>-analysis.log in input order
+	// Write each file's report to <source-name>-analysis.md in input order
 	// after the pool completes. A worker cancelled at the acquire select leaves
 	// both results[i] and errs[i] nil; a worker cancelled mid-analysis sets
 	// errs[i] to a context.Canceled-wrapped error. Both cases are skipped: a
@@ -369,7 +362,7 @@ func runAnalysisOnlyWithDeps(files []string, config *processor.BaseFilterConfig,
 	//
 	// In no-TTY mode the post-loop prints the one-line confirmation to stdout;
 	// in TTY mode the persisted analysis TUI already shows it, so we skip the
-	// stdout print to avoid doubling up. The .log file is written in both modes.
+	// stdout print to avoid doubling up. The .md report is written in both modes.
 	noTTY := !deps.hasTTY()
 	for i := range files {
 		if errs[i] != nil {
@@ -384,29 +377,13 @@ func runAnalysisOnlyWithDeps(files []string, config *processor.BaseFilterConfig,
 			continue // cancelled before analysis ran
 		}
 
-		timings := logging.AnalysisTimings{
-			Analysis:   results[i].AnalysisDuration,
-			Adaptation: results[i].AdaptationDuration,
-		}
-
-		logPath := logging.AnalysisLogPath(files[i])
-		logFile, err := deps.createLog(logPath)
-		if err != nil {
-			deps.printError(fmt.Sprintf("Failed to create analysis log for %s: %v", files[i], err))
-			continue
-		}
-		deps.displayResults(logFile, files[i], metas[i], results[i].Measurements, results[i].Config, results[i].Diagnostics, timings)
-		if err := logFile.Close(); err != nil {
-			deps.printError(fmt.Sprintf("Failed to write analysis log for %s: %v", files[i], err))
-			continue
-		}
-
-		// Emit the Pass-1-only run record beside the analysis log. The .json path
-		// is derived from AnalysisLogPath by swapping the .log extension, so both
-		// share the <stem>-<ext>-analysis basename. metas[i] supplies provenance
-		// (sample rate, channels) that the Pass-1 record cannot carry on its own.
-		// A write failure is non-fatal, matching the analysis log above.
-		recordPath := strings.TrimSuffix(logPath, filepath.Ext(logPath)) + ".json"
+		// Emit the Pass-1-only run record beside the analysis report. The .json
+		// path is derived from AnalysisReportPath by swapping the .md extension, so
+		// both share the <stem>-<ext>-analysis basename. metas[i] supplies
+		// provenance (sample rate, channels) that the Pass-1 record cannot carry on
+		// its own.
+		reportPath := report.AnalysisReportPath(files[i])
+		recordPath := strings.TrimSuffix(reportPath, filepath.Ext(reportPath)) + ".json"
 		record := processor.NewAnalysisRunRecord(files[i], results[i].Measurements)
 		if metas[i] != nil {
 			record.Run.SampleRateHz = metas[i].SampleRate
@@ -415,6 +392,20 @@ func runAnalysisOnlyWithDeps(files []string, config *processor.BaseFilterConfig,
 				record.Run.DurationS = metas[i].Duration
 			}
 		}
+
+		// Render the Markdown report from the same Pass-1-only record. Analysis and
+		// Adaptation are the only timings available (no Pass 1-4); the Processing
+		// Summary renders just those two non-zero rows. A write failure is
+		// non-fatal, matching the run record and sidecars below.
+		timings := report.Timings{
+			Analysis:   results[i].AnalysisDuration,
+			Adaptation: results[i].AdaptationDuration,
+		}
+		if err := deps.writeMarkdownReport(record, timings, reportPath); err != nil {
+			deps.printError(fmt.Sprintf("Failed to write analysis report for %s: %v", files[i], err))
+			continue
+		}
+
 		if err := deps.writeRunRecord(record, recordPath); err != nil {
 			deps.printError(fmt.Sprintf("Failed to write analysis run record for %s: %v", files[i], err))
 		}
@@ -427,18 +418,18 @@ func runAnalysisOnlyWithDeps(files []string, config *processor.BaseFilterConfig,
 		}
 
 		if noTTY {
-			printAnalysisConfirmation(deps.stdout, files[i], logPath)
+			printAnalysisConfirmation(deps.stdout, files[i], reportPath)
 		}
 	}
 }
 
 // printAnalysisConfirmation writes a single styled confirmation line
-// "🗸 <source-basename> → <log-basename>" through a colour-aware writer so the
+// "🗸 <source-basename> → <report-basename>" through a colour-aware writer so the
 // green check downgrades cleanly on non-colour stdout.
-func printAnalysisConfirmation(w io.Writer, inputPath, logPath string) {
+func printAnalysisConfirmation(w io.Writer, inputPath, reportPath string) {
 	icon := lipgloss.NewStyle().Foreground(cli.ColorGreen).Render("🗸")
 	cw := colorprofile.NewWriter(w, os.Environ())
-	fmt.Fprintf(cw, "%s %s → %s\n", icon, filepath.Base(inputPath), filepath.Base(logPath))
+	fmt.Fprintf(cw, "%s %s → %s\n", icon, filepath.Base(inputPath), filepath.Base(reportPath))
 }
 
 // isTTY reports whether stdout is connected to a terminal.

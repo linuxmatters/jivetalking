@@ -153,6 +153,14 @@ type RoomToneRegionRecord struct {
 	Samples           RegionSamples       `json:"samples"`
 }
 
+// ElectedProfile returns the elected room-tone NoiseProfile for read-only
+// consumers of the record (e.g. the Markdown renderer), or nil when no profile was
+// elected. The Elected wrapper type is unexported (it owns the JSON shape), so this
+// is the named read seam onto the underlying measurement.
+func (r RoomToneRegionRecord) ElectedProfile() *NoiseProfile {
+	return r.Elected.Profile()
+}
+
 // SpeechRegionRecord is the §8.1 `regions.speech` nested block: the elected
 // speech profile, a candidate summary (full array → sidecar), and the per-stage
 // region samples.
@@ -163,6 +171,13 @@ type SpeechRegionRecord struct {
 	Elected           *speechProfileRecord `json:"elected,omitempty"`
 	CandidatesSummary *CandidatesSummary   `json:"candidates_summary,omitempty"`
 	Samples           RegionSamples        `json:"samples"`
+}
+
+// ElectedProfile returns the elected speech SpeechCandidateMetrics for read-only
+// consumers of the record (e.g. the Markdown renderer), or nil when no profile was
+// elected. Mirrors RoomToneRegionRecord.ElectedProfile.
+func (s SpeechRegionRecord) ElectedProfile() *SpeechCandidateMetrics {
+	return s.Elected.Profile()
 }
 
 // CandidatesSummary is the inline stand-in for a full candidate array (§9.3): the

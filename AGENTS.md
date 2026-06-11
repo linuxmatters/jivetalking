@@ -39,11 +39,14 @@ internal/
 │   ├── frame_processor.go  # runFilterGraph(), FrameLoopConfig - shared filter graph execution
 │   ├── normalise.go        # ApplyNormalisation() - Pass 3/4: loudnorm measurement + application
 │   └── processor.go        # ProcessAudio(), AnalyzeOnlyDetailed() - pass orchestration
-├── logging/
-│   ├── analysis_display.go # DisplayAnalysisResults() - console output for --analysis-only mode
-│   ├── recording_tips.go   # Actionable recording advice from measurements
-│   ├── report.go           # GenerateReport() - always-on detailed processing report files
-│   └── table.go            # MetricRow, reusable multi-column table formatting (Input/Filtered/Final)
+├── report/                 # always-on Markdown report rendered from RunRecord (replaces internal/logging)
+│   ├── render.go           # RenderMarkdown() - orchestrates section order from a RunRecord
+│   ├── sections.go         # per-domain section renderers (loudness, dynamics, spectral, regions, filters, normalisation)
+│   ├── mdtable.go          # Markdown table builder + numeric formatters
+│   ├── definitions.go      # objective metric-definition catalogue (sourced from docs/Spectral-Metrics-Reference.md)
+│   ├── format.go           # formatFloat() + NaN/±Inf placeholder rule
+│   ├── write.go            # WriteMarkdownReport(), Timings struct
+│   └── paths.go            # AnalysisReportPath() - analysis-only report path derivation
 ├── ui/
 │   ├── analysis_model.go   # AnalysisModel - Bubbletea model for --analysis-only progress TUI
 │   ├── messages.go         # ProgressMsg, FileStartMsg, FileCompleteMsg, AllCompleteMsg
@@ -52,9 +55,9 @@ internal/
 └── cli/                    # Help styling, version output, error formatting
 ```
 
-**Data flow (processing):** `main.go` resolves worker count via `resolveJobs()` (number of input files, capped at `NumCPU`, floored at 1; no flag), creates a cancellable `ctx`, then launches `runWorkerPool()` (`pool.go`) → up to `jobs` files run concurrently, each a goroutine bounded by a semaphore, taking a `CloneForWorker()` config copy and `FileIndex`-routed TUI messages → `ProcessAudio(ctx, …)` → Pass 1 (`AnalyzeAudio`) → `AdaptConfig()` → Pass 2 (filter chain) → Pass 3/4 (`ApplyNormalisation`) → `GenerateReport()` writes an always-on processing report → sends `ui.*Msg` to TUI via `tea.Program.Send()`. After `WaitGroup` drains, the pool sends `ui.AllCompleteMsg`. `cancel()` fires after `p.Run()` returns; `runFilterGraph` checks `ctx.Err()` each frame so in-flight workers abort and run deferred temp cleanup.
+**Data flow (processing):** `main.go` resolves worker count via `resolveJobs()` (number of input files, capped at `NumCPU`, floored at 1; no flag), creates a cancellable `ctx`, then launches `runWorkerPool()` (`pool.go`) → up to `jobs` files run concurrently, each a goroutine bounded by a semaphore, taking a `CloneForWorker()` config copy and `FileIndex`-routed TUI messages → `ProcessAudio(ctx, …)` → Pass 1 (`AnalyzeAudio`) → `AdaptConfig()` → Pass 2 (filter chain) → Pass 3/4 (`ApplyNormalisation`) → `report.WriteMarkdownReport()` renders an always-on Markdown report (`<name>-LUFS-NN-processed.md`) from the run's `RunRecord` → sends `ui.*Msg` to TUI via `tea.Program.Send()`. After `WaitGroup` drains, the pool sends `ui.AllCompleteMsg`. `cancel()` fires after `p.Run()` returns; `runFilterGraph` checks `ctx.Err()` each frame so in-flight workers abort and run deferred temp cleanup.
 
-**Data flow (analysis-only):** `main.go` → `runAnalysisOnly()` → `runAnalysisOnlyWithDeps()` (passes `jobs` from `resolveJobs()`) → spawns `runAnalysisPool()` (`analysispool.go`) with a buffered semaphore of size `jobs` and a `sync.WaitGroup`. Up to `jobs` files analyse concurrently; each worker owns its index slot in pre-allocated `results`, `metas`, and `errs` slices (no sharing), calls `CloneForWorker()` for an independent config copy, and sends `ui.AnalysisStartMsg` / `ui.AnalysisProgressMsg` / `ui.AnalysisCompleteMsg` keyed by `FileIndex`. After `wg.Wait()` drains, the pool sends `ui.AllCompleteMsg`. Two branches: TTY path launches a `tea.Program` (using `ui.NewAnalysisModel`) in a goroutine alongside the pool; no-TTY path prints an up-front banner then calls the pool synchronously with `p == nil` (all `p.Send` calls are gated). After the pool returns, `runAnalysisOnlyWithDeps()` prints results in input order, skipping cancelled or nil slots. No output files are created.
+**Data flow (analysis-only):** `main.go` → `runAnalysisOnly()` → `runAnalysisOnlyWithDeps()` (passes `jobs` from `resolveJobs()`) → spawns `runAnalysisPool()` (`analysispool.go`) with a buffered semaphore of size `jobs` and a `sync.WaitGroup`. Up to `jobs` files analyse concurrently; each worker owns its index slot in pre-allocated `results`, `metas`, and `errs` slices (no sharing), calls `CloneForWorker()` for an independent config copy, and sends `ui.AnalysisStartMsg` / `ui.AnalysisProgressMsg` / `ui.AnalysisCompleteMsg` keyed by `FileIndex`. After `wg.Wait()` drains, the pool sends `ui.AllCompleteMsg`. Two branches: TTY path launches a `tea.Program` (using `ui.NewAnalysisModel`) in a goroutine alongside the pool; no-TTY path prints an up-front banner then calls the pool synchronously with `p == nil` (all `p.Send` calls are gated). After the pool returns, `runAnalysisOnlyWithDeps()` prints results in input order, skipping cancelled or nil slots, and `report.WriteMarkdownReport()` writes an `<input>-analysis.md` report (path from `report.AnalysisReportPath`) per file from the Pass-1-only `RunRecord`. The console/TUI summary output (`internal/ui`) is unchanged. No processed audio is produced.
 
 ## Audio processing pipeline
 
@@ -82,7 +85,9 @@ Pass 3: [volume (pre-gain, when clamped) → alimiter (Volumax)] → loudnorm (m
 Pass 4: volume (pre-gain, when clamped) → alimiter (Volumax, peak reduction) → loudnorm (linear mode, input stats from Pass 3) → aresample (source rate) → adeclick
 ```
 
-**Output filename:** `<name>-LUFS-NN-processed.<ext>` where NN is the rounded (nearest whole) absolute LUFS value of the final output (e.g., -26.8 LUFS produces `LUFS-27`).
+**Output filename:** `<name>-LUFS-NN-processed.<ext>` where NN is the rounded (nearest whole) absolute LUFS value of the final output (e.g., -26.8 LUFS produces `LUFS-27`). The matching always-on report is `<name>-LUFS-NN-processed.md`; analysis-only writes `<input>-analysis.md`.
+
+**Report:** `internal/report` renders the always-on `.md` report from the run's `RunRecord` (never the `.json` artefact or `AudioMeasurements`), so a future `.json` → `.md` re-render is a thin adapter over `RenderMarkdown`. The report is empirical: objective metric definitions and units (sourced from `docs/Spectral-Metrics-Reference.md` via `definitions.go`), no quality verdicts or interpretive adjectives.
 
 ## Code style
 

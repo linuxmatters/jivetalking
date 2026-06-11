@@ -10,8 +10,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/linuxmatters/jivetalking/internal/cli"
-	"github.com/linuxmatters/jivetalking/internal/logging"
 	"github.com/linuxmatters/jivetalking/internal/processor"
+	"github.com/linuxmatters/jivetalking/internal/report"
 )
 
 // analysisFileState tracks analysis progress and results for a single file
@@ -183,7 +183,7 @@ func (m AnalysisModel) View() tea.View {
 			fmt.Fprintf(&b, " %s %s\n   Error: %v\n", icon, fileStyle.Render(f.FileName), f.Err)
 		case f.Done:
 			icon := doneStyle.Render("🗸")
-			logName := filepath.Base(logging.AnalysisLogPath(f.FileName))
+			logName := filepath.Base(report.AnalysisReportPath(f.FileName))
 			fmt.Fprintf(&b, " %s %s → %s\n", icon, fileStyle.Render(f.FileName), logName)
 		default:
 			fmt.Fprintf(&b, " %s %s\n", activeIcon, fileStyle.Render(f.FileName))

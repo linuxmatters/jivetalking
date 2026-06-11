@@ -15,8 +15,8 @@ import (
 
 	"github.com/alecthomas/kong"
 	"github.com/linuxmatters/jivetalking/internal/audio"
-	"github.com/linuxmatters/jivetalking/internal/logging"
 	"github.com/linuxmatters/jivetalking/internal/processor"
+	"github.com/linuxmatters/jivetalking/internal/report"
 )
 
 func TestOpenDebugLog_DisabledReturnsNilWithoutCreatingFile(t *testing.T) {
@@ -150,7 +150,7 @@ func TestRunAnalysisOnlyWithDeps_NonTTYOmitsBenchPath(t *testing.T) {
 	analysisPoolAnalyze = analyze
 	t.Cleanup(func() { analysisPoolAnalyze = origAnalyze })
 
-	logs := newLogCapture()
+	reports := newReportCapture()
 	runAnalysisOnlyWithDeps([]string{inputPath}, config, func(string, ...any) {}, 1, analysisOnlyDeps{
 		stdout: &output,
 		hasTTY: func() bool {
@@ -167,53 +167,52 @@ func TestRunAnalysisOnlyWithDeps_NonTTYOmitsBenchPath(t *testing.T) {
 			}, nil
 		},
 		analyzeDetailed: analyze,
-		displayResults:  logging.DisplayAnalysisResultsWithDiagnostics,
 		printError: func(message string) {
 			t.Fatalf("printError called: %s", message)
 		},
-		createLog:      logs.create,
-		writeRunRecord: func(*processor.RunRecord, string) error { return nil },
-		writeSidecars:  func(*processor.AudioMeasurements, string) error { return nil },
+		writeMarkdownReport: reports.write,
+		writeRunRecord:      func(*processor.RunRecord, string) error { return nil },
+		writeSidecars:       func(*processor.AudioMeasurements, string) error { return nil },
 	})
 
 	got := output.String()
 	// stdout carries the banner plus the one-line confirmation, never the
 	// report body or any benchmark path.
-	if strings.Contains(got, "ANALYSIS: sample.wav") {
-		t.Fatalf("report body leaked to stdout instead of the log file:\n%s", got)
+	if strings.Contains(got, "# Audio Processing Report") {
+		t.Fatalf("report body leaked to stdout instead of the report file:\n%s", got)
 	}
 	if strings.Contains(got, ".bench/") {
 		t.Fatalf("analysis-only stdout leaked benchmark path:\n%s", got)
 	}
 	for _, want := range []string{
 		"Analysing 1 files…",
-		"🗸 sample.wav → sample-wav-analysis.log",
+		"🗸 sample.wav → sample-wav-analysis.md",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("analysis-only stdout missing %q:\n%s", want, got)
 		}
 	}
 
-	// The full report lands in <source-name>-analysis.log beside the source.
-	logPath := ".bench/analysis/input/sample-wav-analysis.log"
-	report, ok := logs.content(logPath)
+	// The full report lands in <source-name>-analysis.md beside the source.
+	reportPath := ".bench/analysis/input/sample-wav-analysis.md"
+	report, ok := reports.content(reportPath)
 	if !ok {
-		t.Fatalf("no analysis log written at %q (have %v)", logPath, logs.logs)
+		t.Fatalf("no analysis report written at %q (have %v)", reportPath, reports.reports)
 	}
 	for _, want := range []string{
-		"ANALYSIS: sample.wav",
-		"ANALYSIS TIMINGS",
-		"Analysis:",
-		"Adaptation:",
-		"Report Output:",
+		"# Audio Processing Report",
+		"| Input file | sample.wav |",
+		"## Processing Summary",
+		"| Analysis | 2.0s |",
+		"| Adaptation | 0.1s |",
 	} {
 		if !strings.Contains(report, want) {
-			t.Fatalf("analysis log missing %q:\n%s", want, report)
+			t.Fatalf("analysis report missing %q:\n%s", want, report)
 		}
 	}
 }
 
-func TestRunAnalysisOnlyWithDeps_UsesPerFileResultConfig(t *testing.T) {
+func TestRunAnalysisOnlyWithDeps_PassesPerWorkerConfigClones(t *testing.T) {
 	files := []string{"first.wav", "second.wav"}
 	baseConfig := processor.DefaultFilterConfig()
 	var output bytes.Buffer
@@ -223,17 +222,8 @@ func TestRunAnalysisOnlyWithDeps_UsesPerFileResultConfig(t *testing.T) {
 		firstEffective,
 		secondEffective,
 	}
-	resultConfigs[0].DS201HighPass.Frequency = 60.0
-	resultConfigs[1].DS201HighPass.Frequency = 100.0
-	secondFilterOrder := append([]processor.FilterID(nil), resultConfigs[1].FilterOrder...)
-	resultDiagnostics := []*processor.AdaptiveDiagnostics{
-		{DS201LPReason: "first"},
-		{DS201LPReason: "second"},
-	}
 
 	var analyzedConfigs []*processor.BaseFilterConfig
-	var displayedConfigs []*processor.EffectiveFilterConfig
-	var displayedDiagnostics []*processor.AdaptiveDiagnostics
 
 	fileIndex := map[string]int{files[0]: 0, files[1]: 1}
 	var mu sync.Mutex
@@ -246,7 +236,7 @@ func TestRunAnalysisOnlyWithDeps_UsesPerFileResultConfig(t *testing.T) {
 		return &processor.AnalysisResult{
 			Measurements:       makeAnalysisOnlyTestMeasurements(),
 			Config:             resultConfigs[index],
-			Diagnostics:        resultDiagnostics[index],
+			Diagnostics:        &processor.AdaptiveDiagnostics{},
 			AnalysisDuration:   2 * time.Second,
 			AdaptationDuration: 100 * time.Millisecond,
 		}, nil
@@ -255,6 +245,7 @@ func TestRunAnalysisOnlyWithDeps_UsesPerFileResultConfig(t *testing.T) {
 	analysisPoolAnalyze = analyze
 	t.Cleanup(func() { analysisPoolAnalyze = origAnalyze })
 
+	reports := newReportCapture()
 	runAnalysisOnlyWithDeps(files, baseConfig, func(string, ...any) {}, 1, analysisOnlyDeps{
 		stdout: &output,
 		hasTTY: func() bool {
@@ -268,44 +259,31 @@ func TestRunAnalysisOnlyWithDeps_UsesPerFileResultConfig(t *testing.T) {
 			}, nil
 		},
 		analyzeDetailed: analyze,
-		displayResults: func(w io.Writer, inputPath string, metadata *audio.Metadata, measurements *processor.AudioMeasurements, config *processor.EffectiveFilterConfig, diagnostics *processor.AdaptiveDiagnostics, timings ...logging.AnalysisTimings) {
-			displayedConfigs = append(displayedConfigs, config)
-			displayedDiagnostics = append(displayedDiagnostics, diagnostics)
-			if len(displayedConfigs) == 1 {
-				config.FilterOrder[0] = processor.FilterAnalysis
-			}
-		},
 		printError: func(message string) {
 			t.Fatalf("printError called: %s", message)
 		},
-		createLog:      newLogCapture().create,
-		writeRunRecord: func(*processor.RunRecord, string) error { return nil },
-		writeSidecars:  func(*processor.AudioMeasurements, string) error { return nil },
+		writeMarkdownReport: reports.write,
+		writeRunRecord:      func(*processor.RunRecord, string) error { return nil },
+		writeSidecars:       func(*processor.AudioMeasurements, string) error { return nil },
 	})
 
 	if len(analyzedConfigs) != len(files) {
 		t.Fatalf("analyzed config count = %d, want %d", len(analyzedConfigs), len(files))
 	}
+	// Each worker must receive its own config clone, never the shared base seed,
+	// so concurrent workers share no mutable config.
 	if analyzedConfigs[0] == baseConfig || analyzedConfigs[1] == baseConfig {
 		t.Fatal("analysis-only did not pass per-worker config clones to analysis calls")
 	}
-	if len(displayedConfigs) != len(resultConfigs) {
-		t.Fatalf("displayed config count = %d, want %d", len(displayedConfigs), len(resultConfigs))
+	if analyzedConfigs[0] == analyzedConfigs[1] {
+		t.Fatal("analysis-only reused one config clone across workers")
 	}
-	for i := range resultConfigs {
-		if displayedConfigs[i] != resultConfigs[i] {
-			t.Fatalf("displayed config %d = %p, want AnalysisResult.Config %p", i, displayedConfigs[i], resultConfigs[i])
+	// Both files produce a Markdown report named after the source.
+	for _, f := range files {
+		reportPath := report.AnalysisReportPath(f)
+		if _, ok := reports.content(reportPath); !ok {
+			t.Fatalf("no analysis report written at %q", reportPath)
 		}
-		if displayedDiagnostics[i] != resultDiagnostics[i] {
-			t.Fatalf("displayed diagnostics %d = %p, want AnalysisResult.Diagnostics %p", i, displayedDiagnostics[i], resultDiagnostics[i])
-		}
-	}
-	if !reflect.DeepEqual(resultConfigs[1].FilterOrder, secondFilterOrder) {
-		t.Fatalf("second result config FilterOrder = %v, want unaffected %v", resultConfigs[1].FilterOrder, secondFilterOrder)
-	}
-	if baseConfig.DS201HighPass.Frequency == resultConfigs[0].DS201HighPass.Frequency ||
-		baseConfig.DS201HighPass.Frequency == resultConfigs[1].DS201HighPass.Frequency {
-		t.Fatal("test setup failed: result configs should differ from the shared base seed")
 	}
 }
 
@@ -350,9 +328,9 @@ func TestRunAnalysisOnlyWithDeps_OrderedOutputParityAcrossJobs(t *testing.T) {
 	analysisPoolAnalyze = analyze
 	t.Cleanup(func() { analysisPoolAnalyze = origAnalyze })
 
-	run := func(jobs int) (string, *logCapture) {
+	run := func(jobs int) (string, *reportCapture) {
 		var output bytes.Buffer
-		logs := newLogCapture()
+		reports := newReportCapture()
 		runAnalysisOnlyWithDeps(files, baseConfig, func(string, ...any) {}, jobs, analysisOnlyDeps{
 			stdout: &output,
 			hasTTY: func() bool {
@@ -368,19 +346,18 @@ func TestRunAnalysisOnlyWithDeps_OrderedOutputParityAcrossJobs(t *testing.T) {
 					Channels:   1,
 				}, nil
 			},
-			analyzeDetailed: analyze,
-			displayResults:  logging.DisplayAnalysisResultsWithDiagnostics,
+			analyzeDetailed:     analyze,
+			writeMarkdownReport: reports.write,
 			printError: func(message string) {
 				t.Fatalf("printError called: %s", message)
 			},
-			createLog:      logs.create,
 			writeRunRecord: func(*processor.RunRecord, string) error { return nil },
 			writeSidecars:  func(*processor.AudioMeasurements, string) error { return nil },
 		})
-		return output.String(), logs
+		return output.String(), reports
 	}
 
-	parallel, parallelLogs := run(4)
+	parallel, parallelReports := run(4)
 	serial, _ := run(1)
 
 	if parallel != serial {
@@ -403,15 +380,15 @@ func TestRunAnalysisOnlyWithDeps_OrderedOutputParityAcrossJobs(t *testing.T) {
 		lastPos = pos
 	}
 
-	// Each file's full report lands in its own <name>-analysis.log.
+	// Each file's full report lands in its own <name>-analysis.md.
 	for _, f := range files {
-		logPath := logging.AnalysisLogPath(f)
-		report, ok := parallelLogs.content(logPath)
+		reportPath := report.AnalysisReportPath(f)
+		report, ok := parallelReports.content(reportPath)
 		if !ok {
-			t.Fatalf("no analysis log at %q", logPath)
+			t.Fatalf("no analysis report at %q", reportPath)
 		}
-		if !strings.Contains(report, "ANALYSIS: "+f) {
-			t.Fatalf("log %q missing report header for %q:\n%s", logPath, f, report)
+		if !strings.Contains(report, "| Input file | "+f+" |") {
+			t.Fatalf("report %q missing input-file row for %q:\n%s", reportPath, f, report)
 		}
 	}
 
@@ -460,7 +437,7 @@ func TestRunAnalysisOnlyWithDeps_NonTTYBannerThenOrderedReports(t *testing.T) {
 	analysisPoolAnalyze = analyze
 	t.Cleanup(func() { analysisPoolAnalyze = origAnalyze })
 
-	logs := newLogCapture()
+	reports := newReportCapture()
 	runAnalysisOnlyWithDeps(files, baseConfig, func(string, ...any) {}, len(files), analysisOnlyDeps{
 		stdout: &output,
 		hasTTY: func() bool {
@@ -476,12 +453,11 @@ func TestRunAnalysisOnlyWithDeps_NonTTYBannerThenOrderedReports(t *testing.T) {
 				Channels:   1,
 			}, nil
 		},
-		analyzeDetailed: analyze,
-		displayResults:  logging.DisplayAnalysisResultsWithDiagnostics,
+		analyzeDetailed:     analyze,
+		writeMarkdownReport: reports.write,
 		printError: func(message string) {
 			t.Fatalf("printError called: %s", message)
 		},
-		createLog:      logs.create,
 		writeRunRecord: func(*processor.RunRecord, string) error { return nil },
 		writeSidecars:  func(*processor.AudioMeasurements, string) error { return nil },
 	})
@@ -497,11 +473,11 @@ func TestRunAnalysisOnlyWithDeps_NonTTYBannerThenOrderedReports(t *testing.T) {
 	}
 
 	// No per-file "Analysing: <file>" line from the old serial format, and no
-	// report body on stdout (the report now lives in the .log file).
+	// report body on stdout (the report now lives in the .md file).
 	if strings.Contains(got, "Analysing: ") {
 		t.Fatalf("output contains the removed per-file %q line:\n%s", "Analysing: ", got)
 	}
-	if strings.Contains(got, "ANALYSIS: ") {
+	if strings.Contains(got, "# Audio Processing Report") {
 		t.Fatalf("report body leaked to stdout:\n%s", got)
 	}
 
@@ -520,15 +496,15 @@ func TestRunAnalysisOnlyWithDeps_NonTTYBannerThenOrderedReports(t *testing.T) {
 		lastPos = pos
 	}
 
-	// Each file's full report lands in its own <name>-analysis.log.
+	// Each file's full report lands in its own <name>-analysis.md.
 	for _, f := range files {
-		logPath := logging.AnalysisLogPath(f)
-		report, ok := logs.content(logPath)
+		reportPath := report.AnalysisReportPath(f)
+		report, ok := reports.content(reportPath)
 		if !ok {
-			t.Fatalf("no analysis log at %q", logPath)
+			t.Fatalf("no analysis report at %q", reportPath)
 		}
-		if !strings.Contains(report, "ANALYSIS: "+f) {
-			t.Fatalf("log %q missing report header for %q:\n%s", logPath, f, report)
+		if !strings.Contains(report, "| Input file | "+f+" |") {
+			t.Fatalf("report %q missing input-file row for %q:\n%s", reportPath, f, report)
 		}
 	}
 }
@@ -573,7 +549,7 @@ func TestRunAnalysisOnlyWithDeps_FailureIsolation(t *testing.T) {
 	var printErrMu sync.Mutex
 	var printErrors []string
 
-	logs := newLogCapture()
+	reports := newReportCapture()
 	runAnalysisOnlyWithDeps(files, baseConfig, func(string, ...any) {}, 4, analysisOnlyDeps{
 		stdout: &output,
 		hasTTY: func() bool {
@@ -589,14 +565,13 @@ func TestRunAnalysisOnlyWithDeps_FailureIsolation(t *testing.T) {
 				Channels:   1,
 			}, nil
 		},
-		analyzeDetailed: analyze,
-		displayResults:  logging.DisplayAnalysisResultsWithDiagnostics,
+		analyzeDetailed:     analyze,
+		writeMarkdownReport: reports.write,
 		printError: func(message string) {
 			printErrMu.Lock()
 			printErrors = append(printErrors, message)
 			printErrMu.Unlock()
 		},
-		createLog:      logs.create,
 		writeRunRecord: func(*processor.RunRecord, string) error { return nil },
 		writeSidecars:  func(*processor.AudioMeasurements, string) error { return nil },
 	})
@@ -609,19 +584,19 @@ func TestRunAnalysisOnlyWithDeps_FailureIsolation(t *testing.T) {
 		t.Fatalf("printError message = %q, want it to mention %q and %q", msg, files[failIndex], "boom")
 	}
 
-	// The good siblings each get a log with their report; the failing file gets
-	// none (no log created, no confirmation).
+	// The good siblings each get a report; the failing file gets none (no report
+	// written, no confirmation).
 	for _, f := range []string{files[0], files[2]} {
-		report, ok := logs.content(logging.AnalysisLogPath(f))
+		report, ok := reports.content(report.AnalysisReportPath(f))
 		if !ok {
-			t.Fatalf("missing analysis log for sibling %q", f)
+			t.Fatalf("missing analysis report for sibling %q", f)
 		}
-		if !strings.Contains(report, "ANALYSIS: "+f) {
-			t.Fatalf("log for sibling %q missing report header:\n%s", f, report)
+		if !strings.Contains(report, "| Input file | "+f+" |") {
+			t.Fatalf("report for sibling %q missing input-file row:\n%s", f, report)
 		}
 	}
-	if _, ok := logs.content(logging.AnalysisLogPath(files[failIndex])); ok {
-		t.Fatalf("failing file %q must not produce an analysis log", files[failIndex])
+	if _, ok := reports.content(report.AnalysisReportPath(files[failIndex])); ok {
+		t.Fatalf("failing file %q must not produce an analysis report", files[failIndex])
 	}
 
 	plain := stripANSI(output.String())
@@ -644,37 +619,30 @@ func stripANSI(s string) string {
 	return ansiRE.ReplaceAllString(s, "")
 }
 
-// logCapture records analysis log writes keyed by the requested log path,
-// letting tests assert report content without touching the filesystem.
-type logCapture struct {
-	mu   sync.Mutex
-	logs map[string]*bytes.Buffer
+// reportCapture records Markdown report writes keyed by the requested report
+// path, rendering each record so tests assert report content without touching
+// the filesystem.
+type reportCapture struct {
+	mu      sync.Mutex
+	reports map[string]string
 }
 
-func newLogCapture() *logCapture {
-	return &logCapture{logs: make(map[string]*bytes.Buffer)}
+func newReportCapture() *reportCapture {
+	return &reportCapture{reports: make(map[string]string)}
 }
 
-type bufferWriteCloser struct{ *bytes.Buffer }
-
-func (bufferWriteCloser) Close() error { return nil }
-
-func (c *logCapture) create(path string) (io.WriteCloser, error) {
+func (c *reportCapture) write(rec *processor.RunRecord, timings report.Timings, path string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	buf := &bytes.Buffer{}
-	c.logs[path] = buf
-	return bufferWriteCloser{buf}, nil
+	c.reports[path] = report.RenderMarkdown(rec, timings)
+	return nil
 }
 
-func (c *logCapture) content(path string) (string, bool) {
+func (c *reportCapture) content(path string) (string, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	buf, ok := c.logs[path]
-	if !ok {
-		return "", false
-	}
-	return buf.String(), true
+	body, ok := c.reports[path]
+	return body, ok
 }
 
 func parseCLIArgs(t *testing.T, args ...string) *CLI {

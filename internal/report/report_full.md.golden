@@ -1,0 +1,339 @@
+# Audio Processing Report
+
+## Run
+
+| Field | Value |
+| --- | --- |
+| Input file | EP83-mark.flac |
+| Processed at | 2026-06-11T17:20:55+01:00 |
+| Duration | 2m 5s |
+| Sample rate | 44.1 kHz |
+| Channels | mono |
+
+## Processing Summary
+
+| Stage | Duration |
+| --- | --- |
+| Pass 1 (analysis) | 2.0s |
+| Pass 2 (filter chain) | 1m 30s |
+| Pass 3 (loudnorm measure) | 3.0s |
+| Pass 4 (loudnorm apply) | 12.0s |
+| Real-time factor | 12.5x |
+
+## Loudness
+
+| Metric | Definition | Input | Filtered | Final |
+| --- | --- | --- | --- | --- |
+| Integrated loudness | Gated programme loudness over the whole input, BS.1770 K-weighted mean-square with two-stage gating. (LUFS) | -35.22 | -25.10 | -16.05 |
+| True peak | Inter-sample peak of the libswresample-oversampled signal. (dBTP) | -6.21 | -19.95 | -2.51 |
+| Loudness range | Statistical spread of the 3 s short-term loudness distribution (lra_high minus lra_low). (LU) | 15.0100 | 9.3000 | 7.1000 |
+| Gating threshold | Relative gating threshold, -10 LU below the absolute-gated loudness mean. (LUFS) | -45.22 | 0.00 | 0.00 |
+| Momentary loudness | BS.1770 loudness over a 400 ms sliding window. (LUFS) | -20.50 | 0.00 | 0.00 |
+| Short-term loudness | BS.1770 loudness over a 3 s sliding window. (LUFS) | -18.20 | 0.00 | 0.00 |
+| Sample peak | Largest digital sample without oversampling, 20*log10(sample_peak). (dBFS) | -6.23 | 0.00 | 0.00 |
+| Target offset | Residual gap to the target integrated loudness, target_i minus output_i. (LU) | +19.22 | +0.00 | +0.00 |
+
+## Dynamics
+
+| Metric | Definition | Input |
+| --- | --- | --- |
+| RMS level | RMS amplitude of the samples, 20*log10(sqrt(sum(x^2)/N)). (dBFS) | -44.46 |
+| Peak level | Largest absolute sample, 20*log10(max(|min|,|max|)). (dBFS) | -6.22 |
+| Crest factor | Time-domain peak-to-RMS ratio (peak/RMS), stored converted linear to dB. (dB) | 128.5400 |
+| Dynamic range | Span between loudest and quietest non-zero sample, 20*log10(2*max(|min|,|max|)/min_nonzero). (dB) | 90.1000 |
+| Min level | Smallest signed sample, converted to dBFS. (dBFS) | -6.22 |
+| Max level | Largest signed sample, converted to dBFS. (dBFS) | -7.61 |
+| RMS peak | Maximum per-window RMS over the short measurement window. (dBFS) | -16.14 |
+| RMS trough | Minimum per-window RMS over the short measurement window. (dBFS) | -87.59 |
+| Flat factor | Run-length flatness at the min/max levels, 20*log10((min_runs+max_runs)/(min_count+max_count)). | 0.0000 |
+| DC offset | Mean sample amplitude, sum(x)/N. | 0.0000 |
+| Zero-crossings rate | Fraction of sample pairs that change sign, zero_crossings/N. | 0.0000 |
+| Bit depth | Effective bit depth estimated from the sample data. (bits) | 14.0000 |
+| Entropy | Magnitude-weighted spectral entropy, -sum(mag*ln(mag+eps))/ln(N); for astats stages, the sample-value distribution entropy. | 0.2357 |
+
+## Spectral
+
+| Metric | Definition | Input |
+| --- | --- | --- |
+| Spectral mean | Arithmetic mean of the magnitude bins, sum(mag[n])/size. | 6.89e-06 |
+| Spectral variance | Population variance of the magnitudes about the mean, sum((mag[n]-mean)^2)/size. | 6.24e-09 |
+| Spectral centroid | Magnitude-weighted mean frequency of the spectrum, sum(mag[n]*f[n])/sum(mag[n]). (Hz) | 7073.3100 |
+| Spectral spread | Magnitude-weighted standard deviation of frequency about the centroid. (Hz) | 5254.6000 |
+| Spectral skewness | Third standardised spectral moment about the centroid. | 0.8500 |
+| Spectral kurtosis | Fourth standardised (Pearson) spectral moment about the centroid; not excess kurtosis. | 5.1600 |
+| Entropy | Magnitude-weighted spectral entropy, -sum(mag*ln(mag+eps))/ln(N); for astats stages, the sample-value distribution entropy. | 0.0086 |
+| Spectral flatness | Geometric mean over arithmetic mean of the magnitudes, a 0-1 linear ratio. | 0.6560 |
+| Spectral crest | Peak magnitude bin over mean magnitude bin, max(mag[n])/mean(mag[n]). | 31.7400 |
+| Spectral flux | L2 distance between this frame's and the previous frame's magnitude spectrum. | 0.0006 |
+| Spectral slope | Linear-regression slope of magnitude against normalised bin index. | -1.50e-05 |
+| Spectral decrease | Relative spectral decrease from the first bin, sum((mag[n]-mag[0])/n)/sum(mag[n]). | -0.0091 |
+| Spectral roll-off | Frequency below which 85% of the cumulative magnitude lies. (Hz) | 13092.4500 |
+
+## Noise Floor
+
+| Metric | Definition | Value |
+| --- | --- | --- |
+| Noise floor | Elected noise floor; overwritten by the room-tone RMS when a profile is elected. (dBFS) | -84.58 |
+| Floor source | Origin of the elected floor: astats, rms_estimate, ebur128_estimate, or silence_profile. | silence_profile |
+| Pre-scan floor | Noise floor estimated from the per-interval data, feeding room-tone detection. (dBFS) | -83.60 |
+| astats floor | FFmpeg astats noise-floor estimate, the minimum local peak over the sliding window. (dBFS) | - |
+| Room-tone detect level | Adaptive threshold below which an interval is treated as a room-tone candidate. (dBFS) | -82.60 |
+| Voice activated | True when at least 95% of room-tone candidates are digital silence. | no |
+| Reduction headroom | Gap in dB between the noise floor and quiet speech. (dB) | 40.12 |
+
+## Regions
+
+### Room Tone
+
+**Elected profile**
+
+| Metric | Definition | Value |
+| --- | --- | --- |
+| Start | Start time of the elected region from the input origin. (s) | 7.00 |
+| Duration | Length of the elected region. (s) | 10.00 |
+| Measured floor | RMS level of the elected room-tone region. (dBFS) | -84.58 |
+| Peak level | Largest absolute sample, 20*log10(max(|min|,|max|)). (dBFS) | -71.22 |
+| Crest factor | Region-scoped time-domain peak-to-RMS ratio (peak/RMS), stored converted linear to dB. (dB) | 13.36 |
+| Entropy | Magnitude-weighted spectral entropy, -sum(mag*ln(mag+eps))/ln(N); for astats stages, the sample-value distribution entropy. | 0.0011 |
+| Spectral centroid | Magnitude-weighted mean frequency of the elected region's spectrum. (Hz) | 8707.02 |
+| Spectral flatness | Geometric over arithmetic mean of the elected region's magnitudes, a 0-1 ratio. | 0.8246 |
+| Spectral kurtosis | Fourth standardised spectral moment of the elected region. | 1.8350 |
+
+**Candidates**
+
+| Metric | Definition | Value |
+| --- | --- | --- |
+| Evaluated count | Number of region candidates evaluated. | 2 |
+| Score | Composite candidate-ranking score of the elected region. | 0.9700 |
+
+**Samples**
+
+| Metric | Definition | Input |
+| --- | --- | --- |
+| RMS level | RMS amplitude of the samples, 20*log10(sqrt(sum(x^2)/N)). (dBFS) | -84.58 |
+| Peak level | Largest absolute sample, 20*log10(max(|min|,|max|)). (dBFS) | -71.22 |
+| Crest factor | Region-scoped time-domain peak-to-RMS ratio (peak/RMS), stored converted linear to dB. (dB) | 0.0000 |
+| Momentary loudness | BS.1770 loudness over a 400 ms sliding window. (LUFS) | 0.00 |
+| Short-term loudness | BS.1770 loudness over a 3 s sliding window. (LUFS) | 0.00 |
+| True peak | Inter-sample peak of the libswresample-oversampled signal. (dBTP) | 0.00 |
+| Sample peak | Largest digital sample without oversampling, 20*log10(sample_peak). (dBFS) | 0.00 |
+| Spectral mean | Arithmetic mean of the magnitude bins, sum(mag[n])/size. | 0.0000 |
+| Spectral variance | Population variance of the magnitudes about the mean, sum((mag[n]-mean)^2)/size. | 0.0000 |
+| Spectral centroid | Magnitude-weighted mean frequency of the spectrum, sum(mag[n]*f[n])/sum(mag[n]). (Hz) | 0.0000 |
+| Spectral spread | Magnitude-weighted standard deviation of frequency about the centroid. (Hz) | 0.0000 |
+| Spectral skewness | Third standardised spectral moment about the centroid. | 0.0000 |
+| Spectral kurtosis | Fourth standardised (Pearson) spectral moment about the centroid; not excess kurtosis. | 0.0000 |
+| Entropy | Magnitude-weighted spectral entropy, -sum(mag*ln(mag+eps))/ln(N); for astats stages, the sample-value distribution entropy. | 0.0000 |
+| Spectral flatness | Geometric mean over arithmetic mean of the magnitudes, a 0-1 linear ratio. | 0.0000 |
+| Spectral crest | Peak magnitude bin over mean magnitude bin, max(mag[n])/mean(mag[n]). | 0.0000 |
+| Spectral flux | L2 distance between this frame's and the previous frame's magnitude spectrum. | 0.0000 |
+| Spectral slope | Linear-regression slope of magnitude against normalised bin index. | 0.0000 |
+| Spectral decrease | Relative spectral decrease from the first bin, sum((mag[n]-mag[0])/n)/sum(mag[n]). | 0.0000 |
+| Spectral roll-off | Frequency below which 85% of the cumulative magnitude lies. (Hz) | 0.0000 |
+
+### Speech
+
+**Elected profile**
+
+| Metric | Definition | Value |
+| --- | --- | --- |
+| Duration | Length of the elected region. (s) | 60.00 |
+| RMS level | RMS amplitude of the samples, 20*log10(sqrt(sum(x^2)/N)). (dBFS) | -45.37 |
+| Peak level | Largest absolute sample, 20*log10(max(|min|,|max|)). (dBFS) | -15.46 |
+| Crest factor | Region-scoped time-domain peak-to-RMS ratio (peak/RMS), stored converted linear to dB. (dB) | 29.91 |
+| Momentary loudness | BS.1770 loudness over a 400 ms sliding window. (LUFS) | -40.93 |
+| Short-term loudness | BS.1770 loudness over a 3 s sliding window. (LUFS) | -36.88 |
+| True peak | Inter-sample peak of the libswresample-oversampled signal. (dBTP) | -13.15 |
+| Sample peak | Largest digital sample without oversampling, 20*log10(sample_peak). (dBFS) | -13.15 |
+| Body-band RMS | RMS over the 1-3 kHz vocal-presence band of the elected speech region. (dBFS) | -48.05 |
+| Sibilant-band RMS | RMS over the 6-9 kHz sibilant band of the elected speech region. (dBFS) | -55.87 |
+| Voicing density | Proportion of voiced intervals over the elected speech region, 0-1. | 0.8560 |
+| Score | Composite candidate-ranking score of the elected region. | 0.6500 |
+
+**Candidates**
+
+| Metric | Definition | Value |
+| --- | --- | --- |
+| Evaluated count | Number of region candidates evaluated. | 2 |
+| Score | Composite candidate-ranking score of the elected region. | 0.6500 |
+
+**Samples**
+
+| Metric | Definition | Input |
+| --- | --- | --- |
+| RMS level | RMS amplitude of the samples, 20*log10(sqrt(sum(x^2)/N)). (dBFS) | -45.37 |
+| Peak level | Largest absolute sample, 20*log10(max(|min|,|max|)). (dBFS) | -15.46 |
+| Crest factor | Region-scoped time-domain peak-to-RMS ratio (peak/RMS), stored converted linear to dB. (dB) | 29.9100 |
+| Momentary loudness | BS.1770 loudness over a 400 ms sliding window. (LUFS) | -40.93 |
+| Short-term loudness | BS.1770 loudness over a 3 s sliding window. (LUFS) | -36.88 |
+| True peak | Inter-sample peak of the libswresample-oversampled signal. (dBTP) | -13.15 |
+| Sample peak | Largest digital sample without oversampling, 20*log10(sample_peak). (dBFS) | -13.15 |
+| Spectral mean | Arithmetic mean of the magnitude bins, sum(mag[n])/size. | 0.0000 |
+| Spectral variance | Population variance of the magnitudes about the mean, sum((mag[n]-mean)^2)/size. | 0.0000 |
+| Spectral centroid | Magnitude-weighted mean frequency of the spectrum, sum(mag[n]*f[n])/sum(mag[n]). (Hz) | 3348.0500 |
+| Spectral spread | Magnitude-weighted standard deviation of frequency about the centroid. (Hz) | 0.0000 |
+| Spectral skewness | Third standardised spectral moment about the centroid. | 0.0000 |
+| Spectral kurtosis | Fourth standardised (Pearson) spectral moment about the centroid; not excess kurtosis. | 12.8000 |
+| Entropy | Magnitude-weighted spectral entropy, -sum(mag*ln(mag+eps))/ln(N); for astats stages, the sample-value distribution entropy. | 0.0000 |
+| Spectral flatness | Geometric mean over arithmetic mean of the magnitudes, a 0-1 linear ratio. | 0.2550 |
+| Spectral crest | Peak magnitude bin over mean magnitude bin, max(mag[n])/mean(mag[n]). | 0.0000 |
+| Spectral flux | L2 distance between this frame's and the previous frame's magnitude spectrum. | 0.0000 |
+| Spectral slope | Linear-regression slope of magnitude against normalised bin index. | 0.0000 |
+| Spectral decrease | Relative spectral decrease from the first bin, sum((mag[n]-mag[0])/n)/sum(mag[n]). | 0.0000 |
+| Spectral roll-off | Frequency below which 85% of the cumulative magnitude lies. (Hz) | 0.0000 |
+
+## Interval Summary
+
+| Metric | Definition | Value |
+| --- | --- | --- |
+| Interval count | Number of 250 ms intervals sampled over the input. (count) | 20 |
+| RMS min | Lowest interval RMS above digital silence. (dBFS) | -86.00 |
+| RMS p10 | 10th-percentile interval RMS above digital silence. (dBFS) | -80.00 |
+| RMS p25 | 25th-percentile interval RMS above digital silence. (dBFS) | -71.00 |
+| RMS p50 | Median interval RMS above digital silence. (dBFS) | -56.00 |
+| RMS p75 | 75th-percentile interval RMS above digital silence. (dBFS) | -41.00 |
+| RMS p90 | 90th-percentile interval RMS above digital silence. (dBFS) | -32.00 |
+| RMS max | Highest interval RMS above digital silence. (dBFS) | -29.00 |
+| Largest gap | Biggest jump between adjacent sorted interval RMS values, the room-tone/speech boundary signal. (dB) | 3.00 |
+
+## Filter Chain
+
+### Downmix
+
+Stereo-to-mono downmix using FFmpeg's standard downmix matrix.
+
+### DS201 high-pass
+
+Removes subsonic rumble before the gate. Fixed corner, 2-pole Butterworth (12 dB/oct), non-adaptive.
+
+| Parameter | Value |
+| --- | --- |
+| Enabled | yes |
+| Frequency (Hz) | 80 |
+| Poles | 2 |
+| Width (Q) | 0.707 |
+| Mix | 1.00 |
+| Transform | tdii |
+
+### DS201 low-pass
+
+Unconditional 20.5 kHz band-limit (2-pole, 12 dB/oct), giving the encoder a consistent bandwidth. Non-adaptive.
+
+| Parameter | Value |
+| --- | --- |
+| Enabled | yes |
+| Frequency (Hz) | 20500 |
+| Poles | 2 |
+| Width (Q) | 0.707 |
+| Mix | 1.00 |
+| Transform | tdii |
+
+### Noise removal
+
+anlmdn Non-Local Means denoiser at the source rate, followed by an afftdn FFT spectral denoise tail.
+
+| Parameter | Value |
+| --- | --- |
+| Enabled | yes |
+| Strength (s) | 1.00e-05 |
+| Patch (s) | 0.0060 |
+| Research (s) | 0.0020 |
+| Smooth (m) | 3 |
+| afftdn enabled | yes |
+| afftdn noise reduction (dB) | 12 |
+| afftdn noise type | w |
+| afftdn track noise | yes |
+
+### DS201 gate
+
+Soft expander for inter-speech cleanup. Threshold and range are adapted per file; the threshold and range values below are in dB.
+
+| Parameter | Value |
+| --- | --- |
+| Enabled | yes |
+| Threshold (dB) | -67.67 |
+| Ratio | 1.5 |
+| Attack (ms) | 12 |
+| Release (ms) | 375 |
+| Range (dB) | -22.00 |
+| Knee | 3.0 |
+| Makeup | 1.0 |
+| Detection | rms |
+
+### LA-2A compressor
+
+LA-2A-inspired gentle levelling. Threshold is speech-RMS-relative (adapted per file); ratio, attack, release, knee are fixed.
+
+| Parameter | Value |
+| --- | --- |
+| Enabled | yes |
+| Threshold (dB) | -36.38 |
+| Ratio | 3.0 |
+| Attack (ms) | 10 |
+| Release (ms) | 200 |
+| Makeup (dB) | 0.0 |
+| Knee | 4.0 |
+| Mix | 1.00 |
+
+### De-esser
+
+Sibilance reduction. Intensity is adapted from the speech-region sibilant-band excess; amount and frequency are fixed (FFmpeg deesser 0-1 normalised params).
+
+| Parameter | Value |
+| --- | --- |
+| Enabled | yes |
+| Intensity (i) | 0.00 |
+| Amount (m) | 0.50 |
+| Frequency (f) | 0.80 |
+
+### Adaptation diagnostics
+
+| Parameter | Value |
+| --- | --- |
+| Low-pass reason | 20.5 kHz band-limit (always on) |
+| Gate aggression | 0.25485 |
+| Gate dynamic range (dB) | 29.92 |
+| Quiet-speech estimate (dBFS) | -75.29 |
+| Speech separation (dB) | 9.30 |
+| Speech headroom (dB) | -7.62 |
+| Gate threshold unclamped (dB) | -67.67 |
+| Clamp reason | none |
+| Gentle mode | no |
+
+## Peak Limiter
+
+Volumax-inspired transparent limiter that creates true-peak headroom so loudnorm reaches the target in linear mode. Pre-gain raises very quiet recordings before limiting.
+
+| Parameter | Value |
+| --- | --- |
+| Enabled | yes |
+| Ceiling (dBTP) | -24.00 |
+| Gain required (dB) | 24.15 |
+| Filtered true peak (dBTP) | -19.91 |
+| Pre-gain (dB) | 3.55 |
+| Ceiling clamped | yes |
+
+## Loudnorm
+
+EBU R128 loudness normalisation in linear mode using the Pass-3 measured input statistics.
+
+| Parameter | Value |
+| --- | --- |
+| Requested target (LUFS) | -16.00 |
+| Effective target (LUFS) | -16.00 |
+| Gain applied (dB) | 20.94 |
+| Linear mode forced | no |
+| Input loudness (LUFS) | -36.94 |
+| Input true peak (dBTP) | -24.00 |
+| Output loudness (LUFS) | -16.02 |
+| Output true peak (dBTP) | -2.37 |
+| Measured input integrated (LUFS) | -36.90 |
+| Measured input true peak (dBTP) | -24.00 |
+| Measured input LRA (LU) | 12.40 |
+| Measured input threshold (LUFS) | -47.56 |
+| Measured output integrated (LUFS) | -15.99 |
+| Measured output true peak (dBTP) | -3.06 |
+| Measured output LRA (LU) | 13.50 |
+| Measured output threshold (LUFS) | -27.38 |
+| Normalisation type | linear |
+| Deviation from target (LU) | +0.01 |

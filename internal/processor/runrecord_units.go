@@ -96,6 +96,18 @@ func (p noiseProfileRecord) MarshalJSON() ([]byte, error) {
 	return json.Marshal(m)
 }
 
+// Profile exposes the wrapped NoiseProfile for read-only consumers of the record
+// (e.g. the Markdown renderer in internal/report) that need the elected room-tone
+// metrics off rec.Regions.RoomTone.Elected. The wrapper and its source pointer are
+// unexported so the JSON marshalling stays representation-controlled; this
+// accessor is the read seam. Returns nil when no profile is wrapped.
+func (p *noiseProfileRecord) Profile() *NoiseProfile {
+	if p == nil {
+		return nil
+	}
+	return p.src
+}
+
 // speechProfileRecord wraps the elected speech candidate for the record. Its
 // nested region (start/end/duration) and refinement bounds become _s floats; all
 // other candidate fields (region-sample, bands, voicing, score) pass through the
@@ -121,6 +133,17 @@ func (s speechProfileRecord) MarshalJSON() ([]byte, error) {
 	return json.Marshal(m)
 }
 
+// Profile exposes the wrapped SpeechCandidateMetrics for read-only consumers of
+// the record (e.g. the Markdown renderer in internal/report) that need the elected
+// speech metrics off rec.Regions.Speech.Elected. The read seam mirrors
+// noiseProfileRecord.Profile. Returns nil when no profile is wrapped.
+func (s *speechProfileRecord) Profile() *SpeechCandidateMetrics {
+	if s == nil {
+		return nil
+	}
+	return s.src
+}
+
 // normalisationRecord wraps NormalisationResult for the record. It presents the
 // region-measurement duration as region_measurement_s (float seconds, §8.4) and
 // converts loudnorm_measured from FFmpeg's raw string keys to the §8.4 numeric
@@ -142,6 +165,19 @@ func (n normalisationRecord) MarshalJSON() ([]byte, error) {
 	durationKeySeconds(m, "region_measurement_ns", "region_measurement_s")
 	m["loudnorm_measured"] = loudnormMeasuredNumeric(n.src.LoudnormStats)
 	return json.Marshal(m)
+}
+
+// Result exposes the wrapped NormalisationResult for read-only consumers of the
+// record (e.g. the Markdown renderer in internal/report) that need the Pass 3/4
+// limiter and loudnorm numbers off rec.Normalisation. The wrapper and its source
+// pointer are unexported so the JSON marshalling stays representation-controlled;
+// this accessor is the read seam, mirroring noiseProfileRecord.Profile. Returns
+// nil when no result is wrapped.
+func (n *normalisationRecord) Result() *NormalisationResult {
+	if n == nil {
+		return nil
+	}
+	return n.src
 }
 
 // loudnormMeasuredNumeric converts FFmpeg's string-keyed LoudnormStats into the

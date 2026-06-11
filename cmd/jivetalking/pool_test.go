@@ -60,7 +60,7 @@ func copyFixtureTo(t *testing.T, src, dir, name string) string {
 // debugSink-backed logger. Run under -race it asserts no data race on the shared
 // tea.Program (p.Send), the shared debugSink, or the per-worker config clones,
 // and that each input produces its <name>-LUFS-NN-processed.<ext> output plus a
-// matching .log report.
+// matching .md report.
 func TestRunWorkerPool_ConcurrentRaceClean(t *testing.T) {
 	src := findPoolTestAudio(t)
 	if src == "" {
@@ -111,7 +111,7 @@ func TestRunWorkerPool_ConcurrentRaceClean(t *testing.T) {
 	}
 
 	// Each distinct input must produce its own <name>-LUFS-NN-processed.<ext>
-	// output plus a matching .log report.
+	// output plus a matching .md report.
 	for _, inputPath := range files {
 		assertProcessedOutput(t, inputPath, ext)
 	}
@@ -177,7 +177,7 @@ func TestProcessAudio_ConcurrentRaceClean(t *testing.T) {
 }
 
 // assertProcessedOutput asserts the input produced a sibling output matching
-// <name>-LUFS-NN-processed.<ext> and a matching .log report.
+// <name>-LUFS-NN-processed.<ext> and a matching .md report.
 func assertProcessedOutput(t *testing.T, inputPath, ext string) {
 	t.Helper()
 
@@ -195,9 +195,9 @@ func assertProcessedOutput(t *testing.T, inputPath, ext string) {
 			inputPath, len(matches), pattern, entries)
 	}
 
-	logPath := strings.TrimSuffix(matches[0], ext) + ".log"
-	if _, err := os.Stat(logPath); err != nil {
-		t.Fatalf("report log not found for %s: %v", inputPath, err)
+	mdPath := strings.TrimSuffix(matches[0], ext) + ".md"
+	if _, err := os.Stat(mdPath); err != nil {
+		t.Fatalf("report not found for %s: %v", inputPath, err)
 	}
 }
 
@@ -346,7 +346,7 @@ func TestRunWorkerPool_BoundHonouredForN(t *testing.T) {
 // isolationFake substitutes poolProcessAudio so exactly one designated input
 // path errors while every sibling succeeds. Successful calls return a
 // ProcessingResult whose OutputPath sits next to the (synthetic) input so the
-// pool's GenerateReport call writes its .log without a report warning. It mirrors
+// pool's report write produces its .md without a report warning. It mirrors
 // AC4: one failing input must leave siblings unaffected.
 type isolationFake struct {
 	failPath string
@@ -356,7 +356,7 @@ func (f *isolationFake) fn(_ context.Context, inputPath string, _ *processor.Bas
 	if inputPath == f.failPath {
 		return nil, errors.New("isolationFake: synthetic unreadable input")
 	}
-	// Derive a sibling output path so GenerateReport writes its .log cleanly.
+	// Derive a sibling output path so the report write produces its .md cleanly.
 	outputPath := strings.TrimSuffix(inputPath, filepath.Ext(inputPath)) + "-LUFS-16-processed" + filepath.Ext(inputPath)
 	if err := os.WriteFile(outputPath, []byte("synthetic"), 0o600); err != nil {
 		return nil, err

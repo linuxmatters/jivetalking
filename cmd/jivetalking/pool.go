@@ -9,8 +9,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/linuxmatters/jivetalking/internal/logging"
 	"github.com/linuxmatters/jivetalking/internal/processor"
+	"github.com/linuxmatters/jivetalking/internal/report"
 	"github.com/linuxmatters/jivetalking/internal/ui"
 )
 
@@ -101,18 +101,27 @@ func runWorkerPool(ctx context.Context, p *tea.Program, files []string, base *pr
 			// passes the progress handler timed directly.
 			pass2Time := time.Since(pass2Start) - ph.pass1Time - ph.pass3Time - ph.pass4Time
 
-			reportData := buildProcessingReportData(inputPath, fileStartTime, ph.timings(pass2Time), result)
-			if err := logging.GenerateReport(reportData); err != nil {
-				wlog("[POOL] Failed to generate log file: %v", err)
+			// Build the run record once and reuse it for both the Markdown report
+			// and the .json: NewRunRecord(result) reads the same in-memory result,
+			// so building it twice would be wasted work.
+			rec := processor.NewRunRecord(result)
+
+			// Write the Markdown report beside the processed audio: swap the output
+			// extension for .md → <name>-LUFS-NN-processed.md. A write failure is
+			// non-fatal: the processed audio and the .json are the product, the
+			// report a side artefact.
+			outputStem := strings.TrimSuffix(result.OutputPath, filepath.Ext(result.OutputPath))
+			mdPath := outputStem + ".md"
+			if err := report.WriteMarkdownReport(rec, buildProcessingTimings(fileStartTime, ph.timings(pass2Time), result), mdPath); err != nil {
+				wlog("[POOL] Failed to write Markdown report: %v", err)
 				reportWarnings <- fmt.Sprintf("Report was not written for %s: %v", inputPath, err)
 			}
 
-			// Emit the run record beside the .log. The .json path is derived from
-			// OutputPath exactly as report.go derives the .log, so they sit
-			// together. A write failure is non-fatal: the processed audio is the
-			// product, the record a side artefact (matches GenerateReport above).
-			recordPath := strings.TrimSuffix(result.OutputPath, filepath.Ext(result.OutputPath)) + ".json"
-			if err := processor.WriteRunRecord(processor.NewRunRecord(result), recordPath); err != nil {
+			// Emit the run record beside the .md. The .json path is derived from
+			// OutputPath exactly as the .md is, so they sit together. A write
+			// failure is non-fatal, matching the report write above.
+			recordPath := outputStem + ".json"
+			if err := processor.WriteRunRecord(rec, recordPath); err != nil {
 				wlog("[POOL] Failed to write run record: %v", err)
 				reportWarnings <- fmt.Sprintf("Run record was not written for %s: %v", inputPath, err)
 			}
