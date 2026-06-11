@@ -145,9 +145,8 @@ Two separate message sets exist for the two TUI modes.
 
 When working on audio analysis code (especially `internal/processor/analyzer.go`):
 
-- Consult `docs/Spectral-Metrics-Reference.md` for target ranges and quality thresholds
-- Align threshold values and scoring constants with the documented ranges
-- Cite the reference document when introducing new audio metric thresholds
+- Consult `docs/Spectral-Metrics-Reference.md` (aligned with the `audio-metrics` skill) for what each metric is - definition, ffmpeg computation, units, range, source filter - when reading or producing audio measurements. It is an objective reference, not a source of thresholds or quality verdicts
+- Threshold values and scoring constants live in the code, justified against the validation corpus per the "no theatre - meaningful, exercised adaptation or a fixed correct value" principle and the bit-exact validation sweeps; do not derive them from documented "good ranges"
 
 Additional filter design references in `docs/`:
 - `FilterGate-Drawmer DS201.md` - DS201 gate and HP/LP side-chain design rationale

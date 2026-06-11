@@ -1,493 +1,171 @@
----
+# Audio Metrics Reference
+
+Objective definitions of the audio metrics Jivetalking measures and emits. Each entry states what the metric measures, how ffmpeg computes it, its units, scale, and source filter. Definitions only: no perceptual interpretation, no quality judgement, no threshold-to-meaning mapping.
+
+Derived from the `audio-metrics` skill. Verified against FFmpeg filter docs (https://ffmpeg.org/ffmpeg-filters.html) and source on `release/8.1` and `master` (`libavfilter/af_aspectralstats.c`, `af_astats.c`, `af_loudnorm.c`, `doc/filters.texi`). Where a derivation is medium-confidence, the entry marks it `medium`.
+
+Jivetalking captures these metrics across its four-pass pipeline: `astats` + `aspectralstats` + `ebur128` in Pass 1 analysis, region re-measures in Pass 2/4, and `loudnorm` in Pass 3/4. For the canonical run-record JSON key names, see `AUDIO-MEASUREMENTS.md` §8.4 (Conventions); that section is the single source of truth for the key strings, which are an internal, still-settling contract. This reference defines the metrics; it does not restate the JSON keys.
+
+## aspectralstats - per-frame spectral statistics
+
+Statistics run over the half-spectrum magnitude array `magnitude[n] = hypotf(re, im)` of length `size = win_size/2`; FFT output is pre-scaled by `1/win_size`; `scale = max_freq/size` with `max_freq = sample_rate/2`. Metadata keys emit per channel as `lavfi.aspectralstats.<N>.<key>`. Jivetalking averages these per scope (whole-file, per-250 ms interval, per elected region).
+
+| Metric | Measures | ffmpeg computation | Units | Range/scale | Confidence |
+| --- | --- | --- | --- | --- | --- |
+| mean | Arithmetic mean of magnitude bins | `sum(mag[n]) / size` | magnitude (linear) | >= 0 | high |
+| variance | Population variance of magnitudes about `mean` | `sum((mag[n]-mean)^2) / size` | magnitude^2 | >= 0 | high |
+| centroid | Magnitude-weighted mean frequency | `Sum(mag[n]*n*scale) / Sum mag[n]` | Hz | 0 .. max_freq | high |
+| spread | Magnitude-weighted std-dev of frequency about centroid | `sqrt( Sum(mag[n]*(n*scale-centroid)^2) / Sum mag[n] )` | Hz | >= 0 | high |
+| skewness | Third standardised spectral moment about centroid | `Sum(mag[n]*(n*scale-centroid)^3) / (Sum mag[n] * spread^3)` | dimensionless | signed | high |
+| kurtosis | Fourth standardised spectral moment about centroid | `Sum(mag[n]*(n*scale-centroid)^4) / (Sum mag[n] * spread^4)` | dimensionless | >= 0 | high |
+| entropy | Magnitude-weighted log-spread, normalised by `log(N)` | `-Sum(mag[n]*ln(mag[n]+eps)) / ln(size)` | dimensionless | unbounded; not a 0-1 probability entropy (magnitudes are raw, not normalised to sum 1) | medium |
+| flatness | Geometric mean / arithmetic mean of magnitudes | `exp(mean(ln(mag[n]+eps))) / mean(mag[n]+eps)` | dimensionless ratio | 0 .. 1 (linear, not dB) | high |
+| crest | Spectral crest: peak bin / mean bin of the magnitude spectrum | `max(mag[n]) / mean(mag[n])` | dimensionless ratio | >= 1 | high |
+| flux | L2 distance between this frame's and the previous frame's magnitude spectrum | `sqrt( Sum(mag[n] - prev_mag[n])^2 )` | magnitude (linear) | >= 0; per-frame; not normalised | high |
+| slope | Linear-regression slope of magnitude vs normalised bin index | `Sum(((n-m)/m)*(mag[n]-mean_mag)) / Sum((n-m)/m)^2`, `m = size*0.5` | magnitude per normalised-bin | signed | medium |
+| decrease | Relative spectral decrease from the first bin | `Sum_{n>=1}((mag[n]-mag[0])/n) / Sum_{n>=1} mag[n]` | dimensionless | signed | medium |
+| rolloff | Frequency below which 85% of cumulative magnitude lies | smallest `n` with `Sum_{0..n} mag >= 0.85*Sum mag`, returns `n*scale` | Hz | 0 .. max_freq | high |
+
+Source notes:
+
+- entropy: ffmpeg applies `ln` to raw magnitudes (not a normalised PMF) and divides by `ln(size)`; the result is not a conventional normalised Shannon entropy and is not bounded to `[0,1]`.
+- slope/decrease: docs are terse; the exact normalisation (`m = size*0.5`, normalised index) is taken from source.
+- Division-by-zero guards return `1.f` (centroid, spread, skewness, kurtosis, entropy) or `0.f` (flatness, crest, slope, decrease).
+
+## astats - time-domain level statistics
+
+Samples are normalised to `[-1, 1]`; `LINEAR_TO_DB(x) = 20*log10(x)`. Metadata key `lavfi.astats.<N>.<Key>`. The `length` option (default 0.05 s) sets the short window for `Noise_floor`, `RMS_peak`, and `RMS_trough`.
+
+| Metric | Measures | ffmpeg computation | Units | Range/scale | Confidence |
+| --- | --- | --- | --- | --- | --- |
+| RMS level | RMS amplitude of samples | `20*log10( sqrt(Sum x^2 / N) )` | dBFS | <= 0 (0 = full scale) | high |
+| Peak level | Largest absolute sample | `20*log10( max(-nmin, nmax) )` | dBFS | <= 0 | high |
+| RMS trough | RMS of the quietest short window | min per-window RMS over `length` seconds | dBFS | <= 0 | high |
+| RMS peak | RMS of the loudest short window | max per-window RMS over `length` seconds | dBFS | <= 0 | high |
+| Crest factor | Peak amplitude / RMS amplitude (time domain) | `max(-nmin, nmax) / sqrt(Sum x^2/N)`; returns 1 if RMS=0 | linear ratio, dimensionless (not dB) | >= 1 | high |
+| Dynamic range | Span between loudest and quietest non-zero sample | `20*log10( 2*max(\|min\|,\|max\|) / min_non_zero )` | dB | >= 0 | high |
+| Noise floor | Minimum local peak over the sliding window | `20*log10(noise_floor)`, min of per-window local peaks over `length` seconds | dBFS | <= 0 | high |
+| Flat factor | Run-length flatness at the min/max levels | `20*log10( (min_runs+max_runs)/(min_count+max_count) )` | dB-scaled | >= 0 | medium |
+| Peak count | Number of occasions (not samples) the signal hit Min or Max level | `min_count + max_count` | count (integer) | >= 0 | high |
+| DC offset | Mean sample amplitude (displacement from zero) | `Sum x / N` | linear amplitude | signed | high |
+| Min level / Max level | Smallest / largest signed sample | raw sample extremes; Jivetalking converts to dBFS | dBFS (after conversion) | <= 0 | high |
+| Zero-crossings rate | Fraction of sample pairs that change sign | `zero_crossings / N` | dimensionless ratio | 0 .. 1 | high |
+| Entropy | astats signal entropy of the sample distribution | per-channel sample-value entropy | dimensionless | 0 .. 1 | medium |
+| Bit depth | Effective bit depth from the sample data | per `af_astats.c` bit-depth estimate | bits | integer | high |
+
+Source quirk (low impact): per-channel metadata `Crest_factor` numerator uses raw `min`/`max` while the console-log path uses normalised `nmin`/`nmax`; they agree for float/double formats. Both paths are peak/RMS linear ratios, never dB. Jivetalking stores `CrestFactor` converted linear -> dB; see the crest-factor disambiguation below.
+
+## ebur128 - loudness
+
+Logged values are labelled `M`, `S`, `I`, `LRA`, `TPK`/`FTPK`. Read-only metadata exports `integrated`, `range`, `lra_low`, `lra_high`, `true_peak`. Loudness uses K-weighting plus mean-square per ITU-R BS.1770; true peak uses libswresample oversampling. Jivetalking runs `ebur128(peak=sample+true)`, so both sample peak and oversampled true peak are captured.
+
+| Metric | Measures | Computation / window | Units | Range/scale | Confidence |
+| --- | --- | --- | --- | --- | --- |
+| Integrated loudness (I) | Gated programme loudness over the whole input | BS.1770 K-weighted mean-square, two-stage gating | LUFS | typ. <= 0 | high |
+| Loudness Range (LRA) | Statistical spread of short-term loudness | distribution of 3 s short-term values; `lra_low`/`lra_high` in LUFS | LU | >= 0 | high |
+| True Peak | Inter-sample peak on the oversampled signal | peak of the up-sampled signal via libswresample | dBTP | typ. <= 0 | high |
+| Sample Peak | Largest digital sample (no oversampling) | `20*log10(sample_peak)` | dBFS | <= 0 | high |
+| Momentary (M) | Loudness over a 400 ms window | BS.1770 loudness, 400 ms sliding | LUFS (or LU if relative) | - | high |
+| Short-term (S) | Loudness over a 3 s window | BS.1770 loudness, 3 s sliding | LUFS (or LU) | - | high |
+
+Gating (BS.1770-2 onward, adopted by EBU R128 / Tech 3341): absolute gate -70 LUFS, then a relative gate -10 LU below the absolute-gated mean. (From the named standards, not the ffmpeg docs.)
+
+## loudnorm - EBU R128 normalisation (FFmpeg 8.1)
+
+JSON stats print at filter teardown when `print_format=json`. Two measurement states: `r128_in` (raw input) and `r128_out` (post-processing output). Output is exactly these 10 keys; no gain/offset field exists in 8.1 (any blog or master claim of extra fields does not apply). 8.1 is byte-identical to master for options, struct, JSON, and decision regions. Jivetalking parses these strings in Pass 3, then applies loudnorm in linear mode in Pass 4.
+
+| Field | Measures | I/O/Control | Units | Range/scale | Confidence |
+| --- | --- | --- | --- | --- | --- |
+| `input_i` | Integrated loudness of input | Input (measured) | LUFS | negative-going; `%.2f` | high |
+| `input_tp` | Max sample peak across channels of input, `20*log10(tp_in)` | Input (measured) | dBTP | typ. <= 0 | high (sample peak, not oversampled true-peak meter) |
+| `input_lra` | Loudness range of input | Input (measured) | LU | >= 0 | high |
+| `input_thresh` | Relative gating threshold of input | Input (measured) | LUFS | negative-going | high |
+| `output_i` | Integrated loudness of processed output | Output (measured) | LUFS | negative-going | high |
+| `output_tp` | Max sample peak across channels of output | Output (measured) | dBTP | typ. <= 0; `%+.2f` | high |
+| `output_lra` | Loudness range of processed output | Output (measured) | LU | >= 0 | high |
+| `output_thresh` | Relative gating threshold of output | Output (measured) | LUFS | negative-going | high |
+| `normalization_type` | Which path ran | Control (decision) | string | `linear` or `dynamic` | high |
+| `target_offset` | `target_i - output_i`: residual gap to target integrated loudness; feed back as `offset` on a second pass | Control (residual) | LU | signed, ~0 | high |
+
+loudnorm default targets and valid option ranges (AVOption table, 8.1; `{default}, min, max`):
+
+- `I` / `i`: -24.0, range -70.0 .. -5.0 (integrated loudness target, LUFS)
+- `LRA` / `lra`: 7.0, range 1.0 .. 50.0 (loudness range target, LU)
+- `TP` / `tp`: -2.0, range -9.0 .. 0.0 (max true peak, dBTP)
+- `linear`: 1 (bool, default on) - linear normalisation attempted only if all four `measured_*` values are supplied
+- `dual_mono`: 0; `print_format`: `none|json|summary`
+
+Method: K-weighted loudness per ITU-R BS.1770 / EBU R128 via the bundled `ebur128`. Dynamic mode (default unless linear preconditions are met) applies a per-frame Gaussian-smoothed gain envelope plus a true-peak limiter and forces the input to 192000 Hz internally. Linear mode applies a single static gain `offset` to all samples. `normalization_type` reports which ran. loudnorm's reported `*_tp` is sample-peak; the standalone `ebur128` filter's True Peak is oversampled.
+
+## Disambiguations
+
+- Spectral crest vs crest factor: `aspectralstats.crest` = `max(magnitude)/mean(magnitude)` over the frequency-domain magnitude spectrum (per-frame spectral peakiness). `astats` Crest factor = `peak_sample/RMS` in the time domain. Different domains; both are linear dimensionless ratios >= 1, never dB. Jivetalking stores the time-domain `astats` value converted linear -> dB. Do not conflate.
+- Kurtosis baseline: `aspectralstats.kurtosis` is Pearson kurtosis (4th-power moment / `Sum mag * spread^4`). No `-3` and no `-0` subtraction. It is not excess kurtosis.
+- Flatness scale: a 0-1 linear ratio (geometric mean / arithmetic mean of magnitudes), not dB. `1.0` = flat spectrum, toward `0` = peaky.
+- Entropy scale/basis: `aspectralstats.entropy` is `-Sum(mag*ln(mag+eps)) / ln(N)`, natural log, normalised by `ln(N)` with `N` = bins. Magnitudes are raw (not a PMF), so this is not a conventional 0-1 normalised entropy and is not bounded to `[0,1]`. This is distinct from the `astats` signal entropy, which runs over the time-domain sample distribution.
+- Flux normalisation: L2 norm between consecutive frames, per-frame, not normalised by bin count or energy. The first frame compares against a zeroed previous frame.
+- True-peak provenance: `ebur128` True Peak is oversampled (per BS.1770 Annex 2). `loudnorm` `*_tp` is sample peak (`20*log10(sample_peak)`), not oversampled.
 
-# Audio Spectral Analysis Reference for Voice Characterisation
+## Standards and platform targets
 
-**A complete reference for interpreting audio metrics in vocal processing, with specific ranges for spoken word and singing, enabling quality assessment of audio processing.**
+External reference targets, not interpretation. Each row marks whether it is a formal standard or a platform norm. Jivetalking targets -16 LUFS with a -2.0 dBTP ceiling by default.
 
-This document provides authoritative definitions, typical value ranges, and perceptual interpretations for audio metrics used in adaptive voice processing. Each metric includes specific target ranges for spoken word (podcast/broadcast speech) and singing, enabling determination of whether processing has damaged or enhanced vocal quality.
+| Target | Exact value | Tolerance / extras | Publisher | Classification |
+| --- | --- | --- | --- | --- |
+| ITU-R BS.1770 | measurement method only (LKFS, dBTP) | 4x oversampling, K-weighting; defines method, not targets | ITU-R | standard |
+| EBU R128 integrated | -23.0 LUFS | +/-1.0 LU (live); +/-0.5 LU non-live programme (since v3.0) | EBU | standard (Recommendation) |
+| EBU R128 true peak ceiling | -1 dBTP | production max; meas. tol. +/-0.3 dB; meter per BS.1770/Tech 3341 | EBU / ITU-R | standard |
+| ATSC A/85 (US TV) | -24 LKFS | +/-2 dB; CALM-Act-mandated for US commercials | ATSC | standard (US, legally mandated for commercials) |
+| Spotify | -14 LUFS | playback ref (Loud -11 / Normal -14 / Quiet -19); mastering <= -1 dBTP | Spotify | platform-norm |
+| Apple Podcasts | -16 LKFS | +/-1 dB; true peak <= -1 dBFS; per BS.1770-5 | Apple | platform-norm |
+| Apple Music (Sound Check) | -16 LUFS | proprietary normalisation | Apple | platform-norm |
+| YouTube | ~ -14 LUFS | observed normalisation reference; no formal spec | YouTube | platform-norm |
+| ACX / Audible (audiobook) | -23 to -18 dB RMS | peak <= -3 dB; noise floor <= -60 dB RMS; submission gate (RMS/dBFS) | ACX (Amazon) | platform-norm (binding submission spec) |
+| AES TD1004 / TD1008 (streaming) | -16 to -20 LUFS | max peak -1.0 dBTP; TD1008 (2021): -18 speech/mixed, -16 music | AES | recommendation (technical document) |
 
----
+Provenance: formal standards are ITU-R BS.1770, EBU R128, and ATSC A/85 (A/85 is legally enforced in the US via the CALM Act for commercials). Platform norms are Spotify, Apple (Podcasts and Music), YouTube, and ACX. AES TD1004/TD1008 is an AES technical document/recommendation, not a formal standard.
 
-## Level Metrics
+Standards URLs:
 
-### RMS Level
+- ITU-R BS.1770: https://www.itu.int/rec/R-REC-BS.1770/en
+- EBU R128: https://tech.ebu.ch/publications/r128 (PDF: https://tech.ebu.ch/docs/r/r128.pdf)
+- EBU Tech 3341: https://tech.ebu.ch/publications/tech3341
+- EBU Tech 3342: https://tech.ebu.ch/publications/tech3342
+- ATSC A/85: https://www.atsc.org/.../A85-2013.pdf
+- AES TD1004: https://aes.org/.../AESTD1004_1_15_10.pdf
+- Spotify: https://support.spotify.com/us/artists/article/loudness-normalization/
+- Apple Podcasts: https://podcasters.apple.com/support/893-audio-requirements
+- ACX: https://help.acx.com/s/article/what-are-the-acx-audio-submission-requirements
 
-**Definition:** Root Mean Square level - the average power of the audio signal, representing perceived loudness more accurately than peak values.
+## Producing the metrics
 
-| Range | Interpretation | Quality Indicator |
-|-------|----------------|-------------------|
-| > -12 dBFS | Very hot, likely clipping | ⚠️ Overprocessed |
-| -18 to -12 dBFS | Hot, broadcast-ready | ✓ Good for podcasts |
-| -24 to -18 dBFS | Moderate, typical recording | ✓ Normal range |
-| -36 to -24 dBFS | Quiet, needs gain | Monitor |
-| < -36 dBFS | Very quiet, problematic | ⚠️ Too low |
+Canonical ffmpeg invocations. `-f null -` discards output and keeps the filter's printed stats.
 
-**Vocal Targets:**
-- **Spoken word:** -20 to -16 dBFS (targeting -16 LUFS final output)
-- **Singing:** -18 to -12 dBFS (higher dynamic range)
+```bash
+# Per-frame spectral statistics (aspectralstats)
+ffmpeg -i in.wav -af aspectralstats -f null -
 
----
+# Time-domain level statistics (astats)
+ffmpeg -i in.wav -af astats -f null -
 
-### Peak Level
+# Loudness: integrated, LRA, true peak, momentary, short-term (ebur128)
+ffmpeg -i in.wav -af ebur128 -f null -
 
-**Definition:** The maximum instantaneous amplitude of the audio signal.
+# Loudness measurement as machine-readable JSON (loudnorm, measurement pass)
+ffmpeg -i in.wav -af loudnorm=print_format=json -f null -
+```
 
-| Range | Interpretation | Quality Indicator |
-|-------|----------------|-------------------|
-| > 0 dBFS | Clipped, digital distortion | ❌ Damaged |
-| -1 to 0 dBFS | At limit, risk of inter-sample peaks | ⚠️ Monitor |
-| -6 to -1 dBFS | Healthy headroom | ✓ Good |
-| -12 to -6 dBFS | Conservative headroom | ✓ Safe |
-| < -12 dBFS | Excessive headroom | Underutilised |
+To collect per-frame `aspectralstats` or `astats` metadata for downstream parsing, route the metadata to a log with `ametadata`:
 
-**Vocal Targets:**
-- **Spoken word:** -3 to -1 dBFS (before loudnorm)
-- **Singing:** -6 to -1 dBFS (preserve transients)
+```bash
+ffmpeg -i in.wav -af aspectralstats,ametadata=mode=print:file=spectral.log -f null -
+ffmpeg -i in.wav -af astats=metadata=1,ametadata=mode=print:file=levels.log -f null -
+```
 
----
+Spectrogram image (`showspectrumpic`): renders the signal as a 2-D image. The x axis is time, the y axis is frequency, and magnitude is mapped to colour. `scale` selects the magnitude mapping (`lin`, `log`, `sqrt`, `cbrt`); `fscale` selects the frequency-axis mapping (`lin` or `log`).
 
-### Crest Factor
+```bash
+ffmpeg -i in.wav -lavfi showspectrumpic=s=1280x480:scale=log:fscale=log spectrogram.png
+```
 
-**Definition:** The ratio of peak level to RMS level, measured in dB. Indicates dynamic range and transient content.
-
-| Crest Factor | Interpretation | Quality Indicator |
-|--------------|----------------|-------------------|
-| < 6 dB | Heavily compressed, brickwalled | ⚠️ Overprocessed |
-| 6-9 dB | Moderate compression | Monitor context |
-| 9-12 dB | Well-balanced mix | ✓ Optimal for speech |
-| 12-15 dB | Natural dynamics, sparse sections | ✓ Good |
-| 15-18 dB | High dynamics, transient-heavy | Normal for percussion |
-| > 18 dB | Extreme dynamics | May need compression |
-
-**Vocal Targets:**
-- **Spoken word:** 9-14 dB (natural articulation with controlled dynamics)
-- **Singing:** 10-16 dB (preserve emotional dynamics)
-
-**Quality Assessment:** Crest factors below 6 dB indicate over-limiting. Values above 18 dB may indicate insufficient level control.
-
----
-
-## Loudness Metrics (EBU R128 / ITU-R BS.1770)
-
-### Momentary LUFS
-
-**Definition:** Integrated loudness over a 400ms window; captures short-term loudness fluctuations.
-
-| Range | Interpretation | Quality Indicator |
-|-------|----------------|-------------------|
-| > -10 LUFS | Very loud transient | ⚠️ Peak loudness |
-| -16 to -10 LUFS | Loud speech/emphasis | Normal for stressed speech |
-| -23 to -16 LUFS | Normal speech level | ✓ Target range |
-| -30 to -23 LUFS | Quiet passages | Normal variation |
-| < -30 LUFS | Very quiet/pause | Normal for inter-phrase |
-
-**Vocal Targets:**
-- **Spoken word:** -20 to -14 LUFS (momentary peaks)
-- **Singing:** -18 to -8 LUFS (wider dynamic range)
-
----
-
-### Short-term LUFS
-
-**Definition:** Integrated loudness over a 3-second window; indicates perceived loudness of phrases.
-
-| Range | Interpretation | Quality Indicator |
-|-------|----------------|-------------------|
-| > -12 LUFS | Very loud | ⚠️ Check limiting |
-| -16 to -12 LUFS | Loud, energetic | Normal for emphasis |
-| -20 to -16 LUFS | Moderate, conversational | ✓ Podcast target |
-| -24 to -20 LUFS | Quiet, intimate | ✓ Broadcast target |
-| < -24 LUFS | Very quiet | May need gain |
-
-**Vocal Targets:**
-- **Spoken word (podcast):** -18 to -14 LUFS
-- **Spoken word (broadcast):** -25 to -21 LUFS
-- **Singing:** -20 to -10 LUFS
-
----
-
-### True Peak
-
-**Definition:** The maximum level of the reconstructed continuous waveform, accounting for inter-sample peaks.
-
-| Range | Interpretation | Quality Indicator |
-|-------|----------------|-------------------|
-| > 0 dBTP | Clipping, inter-sample overs | ❌ Damaged |
-| -0.5 to 0 dBTP | At limit | ⚠️ Risk of codec clipping |
-| -1 to -0.5 dBTP | Tight headroom | Acceptable |
-| -3 to -1 dBTP | Safe headroom | ✓ EBU R128 compliant |
-| < -3 dBTP | Conservative | ✓ Very safe |
-
-**Standards:**
-- **EBU R128:** ≤ -1 dBTP (production), tolerance ±0.3 dB
-- **Apple Podcasts:** ≤ -1 dBTP
-- **AES Streaming:** ≤ -1 dBTP
-
----
-
-### Sample Peak
-
-**Definition:** The maximum digital sample value in the signal.
-
-| Range | Interpretation | Quality Indicator |
-|-------|----------------|-------------------|
-| 0 dBFS | Full scale, at limit | ⚠️ No headroom |
-| -1 to 0 dBFS | Near limit | Monitor true peak |
-| -3 to -1 dBFS | Safe | ✓ Good |
-| < -6 dBFS | Conservative | ✓ Plenty of headroom |
-
-**Note:** Sample peak underestimates true peak by typically 0.5-3 dB for complex signals.
-
----
-
-## Spectral Shape Metrics
-
-### Spectral Mean
-
-**Definition:** The arithmetic mean of spectral magnitudes across all frequency bins. Highly dependent on normalisation method and FFT parameters.
-
-| Relative Level | Interpretation | Quality Indicator |
-|----------------|----------------|-------------------|
-| Higher than baseline | Increased spectral energy | Monitor for noise |
-| At baseline | Typical level for content | ✓ Normal |
-| Lower than baseline | Reduced energy | Check for filtering |
-
-**Usage:** Primarily useful as a relative comparison metric within the same recording or between similar recordings using identical analysis parameters.
-
----
-
-### Spectral Variance
-
-**Definition:** The variance of magnitude values around the spectral mean; indicates spectral energy distribution uniformity.
-
-| Relative Level | Interpretation | Quality Indicator |
-|----------------|----------------|-------------------|
-| High variance | Distinct spectral structure, peaks | ✓ Good harmonic content |
-| Moderate variance | Mixed tonal and noise | Normal speech |
-| Low variance | Uniform energy, noise-like | ⚠️ Check for noise |
-
-**Vocal Targets:**
-- **Spoken word:** Moderate to high variance indicates clear harmonic structure
-- **Singing:** High variance indicates strong formants and harmonics
-
----
-
-### Spectral Centroid
-
-**Definition:** The "centre of gravity" of the spectrum - the frequency around which spectral energy balances. Directly correlates with perceived brightness.
-
-| Centroid (Hz) | Interpretation | Quality Indicator |
-|---------------|----------------|-------------------|
-| < 500 Hz | Dark, muffled | ⚠️ Possible low-pass filtering |
-| 500-1500 Hz | Warm, present | ✓ Male voiced speech |
-| 1500-2500 Hz | Forward, clear | ✓ Female voiced speech |
-| 2500-4000 Hz | Bright, articulate | ✓ Good articulation |
-| 4000-6000 Hz | Very bright, sibilant | Consonant content present |
-| > 6000 Hz | Extremely bright | ⚠️ Fricatives or HF noise |
-
-**Vocal Targets:**
-- **Spoken word (male):** 800-2000 Hz (sustained vowels)
-- **Spoken word (female):** 1200-2800 Hz (sustained vowels)
-- **Singing (male):** 1000-2500 Hz (with singer's formant: 2500-3500 Hz boost)
-- **Singing (female):** 1500-3500 Hz
-
-**Quality Assessment:** Centroid significantly above these ranges may indicate sibilance issues; significantly below may indicate over-filtering or dull processing.
-
----
-
-### Spectral Spread
-
-**Definition:** Standard deviation around the centroid - the "instantaneous bandwidth" of the spectrum.
-
-| Spread (Hz) | Interpretation | Quality Indicator |
-|-------------|----------------|-------------------|
-| < 500 Hz | Very narrow, pure tone | Unusual for voice |
-| 500-1500 Hz | Narrow, clean voiced | ✓ Clean vowels |
-| 1500-2500 Hz | Moderate, natural speech | ✓ Normal articulation |
-| 2500-4000 Hz | Wide, mixed content | Mixed voiced/unvoiced |
-| > 4000 Hz | Very wide, broadband | ⚠️ Noise or fricatives |
-
-**Vocal Targets:**
-- **Spoken word:** 1000-2500 Hz
-- **Singing:** 800-2000 Hz (cleaner vowel sustain)
-
-**Quality Assessment:** Excessive spread may indicate noise contamination or room ambience.
-
----
-
-### Spectral Skewness
-
-**Definition:** Third-order moment measuring asymmetry around the centroid. Indicates energy distribution bias.
-
-| Skewness | Interpretation | Quality Indicator |
-|----------|----------------|-------------------|
-| < -0.5 | Negative skew, HF emphasis | Fricatives, sibilants |
-| -0.5 to 0 | Slight negative, balanced bright | Articulate speech |
-| 0 to 0.5 | Slight positive, typical speech | ✓ Normal modal voice |
-| 0.5 to 1.5 | Positive skew, LF emphasis with HF tail | ✓ Typical male voice |
-| 1.5 to 2.5 | Strong positive, bass-forward | Full-bodied voice |
-| > 2.5 | Very strong LF bias | ⚠️ Possible masking |
-
-**Vocal Targets:**
-- **Spoken word (male):** 0.8-2.0 (positive skew expected)
-- **Spoken word (female):** 0.3-1.5
-- **Singing:** 0.5-2.0 (depends on register)
-
-**Quality Assessment:** Positive skewness is normal for voiced speech due to strong fundamental and lower harmonics with a tail toward higher frequencies.
-
----
-
-### Spectral Kurtosis
-
-**Definition:** Fourth-order moment measuring "peakedness" of the spectrum. Reference: Gaussian distribution = 3.
-
-| Kurtosis | Distribution Type | Interpretation | Quality Indicator |
-|----------|-------------------|----------------|-------------------|
-| < 2 | Platykurtic (very flat) | Noise-dominant | ⚠️ Poor voice quality |
-| 2-3 | Slightly platykurtic | Noisy or fricative | Unvoiced content |
-| ≈ 3 | Mesokurtic (Gaussian) | White noise reference | Mixed content |
-| 3-5 | Moderately leptokurtic | Mixed tonal and noise | Transition content |
-| 5-10 | Leptokurtic (peaky) | Clear harmonics | ✓ Good voice quality |
-| > 10 | Highly leptokurtic | Very strong peaks | ✓ Excellent harmonics |
-
-**Vocal Targets:**
-- **Spoken word:** 4-12 (clear harmonic structure)
-- **Singing:** 6-15 (strong fundamental and harmonics)
-
-**Quality Assessment:** High kurtosis combined with positive skewness indicates healthy voice production with clear harmonic structure. Values trending toward 3 indicate noise contamination.
-
----
-
-### Spectral Entropy
-
-**Definition:** Shannon entropy applied to the frequency domain, normalised to 0-1 range. Measures disorder in power distribution.
-
-| Entropy | Interpretation | Quality Indicator |
-|---------|----------------|-------------------|
-| 0.0-0.15 | Highly ordered, clear pitch | ✓ Pure tone, clean vowel |
-| 0.15-0.30 | Ordered, good harmonic content | ✓ Clean voiced speech |
-| 0.30-0.50 | Moderate order, mixed content | Mixed voiced/unvoiced |
-| 0.50-0.70 | Disordered, noisy | Fricatives, aspiration |
-| 0.70-0.85 | Highly disordered | Unvoiced consonants |
-| 0.85-1.0 | Near-white noise | ⚠️ Noise-dominant |
-
-**Vocal Targets:**
-- **Spoken word (voiced):** 0.08-0.30
-- **Spoken word (mixed):** 0.20-0.50
-- **Singing (sustained):** 0.05-0.25
-
-**Quality Assessment:** Entropy provides excellent voiced/unvoiced discrimination. Clean speech should show low entropy during voiced segments.
-
----
-
-### Spectral Flatness
-
-**Definition:** Ratio of geometric mean to arithmetic mean of the spectrum (Wiener entropy). MPEG-7 standard descriptor for tonality. Range: 0 (pure tone) to 1 (white noise).
-
-| Flatness | Flatness (dB) | Interpretation | Quality Indicator |
-|----------|---------------|----------------|-------------------|
-| 0.0-0.05 | < -26 dB | Pure tone, maximum tonality | Single harmonic |
-| 0.05-0.15 | -26 to -16 dB | Very tonal, strong harmonics | ✓ Clean voiced vowels |
-| 0.15-0.30 | -16 to -10 dB | Tonal with some noise | ✓ Clean voiced speech |
-| 0.30-0.50 | -10 to -6 dB | Mixed tonal and noise | Mixed speech content |
-| 0.50-0.70 | -6 to -3 dB | Noise-like, some tonal | Unvoiced, breathy |
-| 0.70-0.90 | -3 to -1 dB | Highly noise-like | Fricatives, aspiration |
-| 0.90-1.0 | > -1 dB | Near white noise | ⚠️ Noise contamination |
-
-**Vocal Targets:**
-- **Spoken word (voiced):** 0.05-0.25
-- **Singing (sustained vowels):** 0.03-0.20
-
-**Quality Assessment:** Flatness above 0.4 during sustained vowels suggests breathiness, aspiration, or noise contamination.
-
----
-
-### Spectral Crest
-
-**Definition:** Ratio of spectral peak power to mean power. Higher values indicate prominent spectral peaks (tonality); lower values indicate flatter spectra (noise-like).
-
-| Crest (linear) | Crest (dB) | Interpretation | Quality Indicator |
-|----------------|------------|----------------|-------------------|
-| < 5 | < 14 dB | Flat spectrum, noise-like | ⚠️ Low harmonic content |
-| 5-15 | 14-24 dB | Moderate peaks | Mixed content |
-| 15-30 | 24-30 dB | Strong peaks | Good tonal content |
-| 30-60 | 30-36 dB | Very strong peaks | ✓ Clear harmonics |
-| > 60 | > 36 dB | Dominant peaks | ✓ Excellent harmonic clarity |
-
-**Vocal Targets:**
-- **Spoken word:** 20-60 (linear), 26-36 dB
-- **Singing:** 30-100 (linear), 30-40 dB
-
-**Quality Assessment:** Spectral crest is the inverse of flatness conceptually. High crest with moderate flatness indicates clear harmonics amidst mixed content.
-
----
-
-### Spectral Flux
-
-**Definition:** Euclidean distance between successive spectral frames; measures rate of spectral change.
-
-| Flux (normalised) | Interpretation | Quality Indicator |
-|-------------------|----------------|-------------------|
-| < 0.001 | Very stable, sustained | Held vowels |
-| 0.001-0.005 | Stable, continuous | ✓ Sustained phonation |
-| 0.005-0.02 | Moderate variation | ✓ Natural articulation |
-| 0.02-0.05 | High variation | Consonant transitions |
-| > 0.05 | Very high, transient | Plosives, transients |
-
-**Vocal Targets:**
-- **Spoken word (sustained vowels):** < 0.005
-- **Spoken word (natural speech):** 0.005-0.03
-- **Singing (sustained notes):** < 0.003
-
-**Quality Assessment:** Consistently high flux during sustained phonation may indicate instability or processing artefacts.
-
----
-
-### Spectral Slope
-
-**Definition:** Linear regression slope of the spectrum across frequency bins; measures spectral tilt in dB/Hz or dB/octave.
-
-| Slope (dB/octave) | Interpretation | Quality Indicator |
-|-------------------|----------------|-------------------|
-| < -15 | Very steep, dark | Breathy, falsetto |
-| -12 to -15 | Steep, warm | ✓ Breathy voice, falsetto |
-| -6 to -12 | Moderate, typical | ✓ Modal speech (-6 dB/oct typical) |
-| -3 to -6 | Shallow, bright | Pressed voice, emphasis |
-| > -3 | Very shallow, harsh | ⚠️ Potential strain or harshness |
-
-**Reference Values:**
-- Glottal source: approximately -12 dB/octave
-- After lip radiation (+6 dB): modal speech typically -6 dB/octave
-- Loud modal register: -3 to -6 dB/octave
-- Falsetto/breathy: -12 to -25 dB/octave
-
-**Vocal Targets:**
-- **Spoken word (modal):** -8 to -4 dB/octave
-- **Singing (modal):** -6 to -3 dB/octave (louder produces shallower slope)
-- **Singing (falsetto):** -15 to -12 dB/octave
-
-**Quality Assessment:** Slope significantly shallower than -3 dB/octave may indicate pressed or strained voice. Slope steeper than -15 dB/octave may indicate excessive HF attenuation.
-
----
-
-### Spectral Decrease
-
-**Definition:** Rate of spectral amplitude decline from the first frequency bin, with emphasis on lower frequencies.
-
-| Decrease | Interpretation | Quality Indicator |
-|----------|----------------|-------------------|
-| < -0.1 | Strong bass emphasis | Possible LF boost |
-| -0.1 to 0 | Moderate bass presence | ✓ Typical male speech |
-| 0 to 0.05 | Balanced decrease | ✓ Balanced voice |
-| 0.05 to 0.15 | Moderate decrease | Typical speech |
-| > 0.15 | Strong HF content | Bright, sibilant |
-
-**Vocal Targets:**
-- **Spoken word (male):** -0.05 to 0.05
-- **Spoken word (female):** 0 to 0.08
-- **Singing:** -0.03 to 0.05
-
----
-
-### Spectral Rolloff
-
-**Definition:** Frequency below which a specified percentage (typically 85% or 95%) of total spectral energy resides.
-
-| Rolloff @ 85% (Hz) | Interpretation | Quality Indicator |
-|--------------------|----------------|-------------------|
-| < 2000 Hz | Very dark, muffled | ⚠️ Over-filtered |
-| 2000-4000 Hz | Dark, heavy voiced | LF-dominant content |
-| 4000-6000 Hz | Warm, balanced | ✓ Typical voiced speech |
-| 6000-8000 Hz | Balanced, articulate | ✓ Good articulation |
-| 8000-12000 Hz | Bright, airy | Good HF content |
-| > 12000 Hz | Very bright | ⚠️ Check for sibilance |
-
-**Vocal Targets (85% threshold):**
-- **Spoken word (male):** 4000-8000 Hz
-- **Spoken word (female):** 5000-10000 Hz
-- **Singing:** 3500-8000 Hz (varies with register)
-
-**Note:** The 95% threshold produces values approximately 1.5-2× higher.
-
-**Quality Assessment:** Rolloff significantly below 4000 Hz indicates excessive high-frequency attenuation. Values above 12000 Hz may indicate sibilance issues requiring de-essing.
-
----
-
-## Singer's Formant Considerations
-
-For singing voice analysis, the presence and strength of the **singer's formant** (2500-3500 Hz) is a key quality indicator for trained classical voices:
-
-| Metric | Untrained Singer | Trained Singer |
-|--------|------------------|----------------|
-| Spectral Centroid | 1000-2000 Hz | 1500-2500 Hz (elevated) |
-| Energy at 2500-3500 Hz | Low | Prominent peak |
-| Spectral Slope | -10 to -6 dB/oct | -6 to -3 dB/oct |
-
-The singer's formant allows classical singers to project over orchestral accompaniment and is characterised by:
-- Clustering of formants F3, F4, F5 in the 2500-3500 Hz region
-- Elevated spectral energy that increases brightness
-- Lower spectral slope (shallower decline)
-
----
-
-## Summary: Quality Assessment Matrix
-
-| Metric | Damaged (Over-processed) | Good Range | Damaged (Under-processed) |
-|--------|--------------------------|------------|---------------------------|
-| **Crest Factor** | < 6 dB | 9-14 dB | > 18 dB |
-| **True Peak** | > 0 dBTP | -3 to -1 dBTP | < -6 dBTP (underutilised) |
-| **Short-term LUFS** | > -12 LUFS | -20 to -14 LUFS | < -28 LUFS |
-| **Spectral Centroid** | > 6000 Hz (harsh) | 800-4000 Hz | < 500 Hz (muffled) |
-| **Spectral Flatness** | > 0.6 (noisy) | 0.05-0.30 | N/A |
-| **Spectral Kurtosis** | < 3 (noise-contaminated) | 5-12 | N/A |
-| **Spectral Entropy** | > 0.5 (disordered) | 0.08-0.30 | N/A |
-| **Spectral Slope** | > -3 dB/oct (harsh) | -10 to -4 dB/oct | < -15 dB/oct (dull) |
-| **Spectral Rolloff (85%)** | > 12 kHz (sibilant) | 4-8 kHz | < 2 kHz (filtered) |
-
----
-
-## Interesting Findings
-
-- **📌 Spectral slope is the primary loudness regulator in modal speech** - the NIH research shows that varying spectral slope from -3 to -12 dB/octave can produce approximately four doublings of perceived loudness with less than 5 dB SPL variation.
-
-- **📌 The singer's formant (2500-3500 Hz) is a reliable marker of trained classical singing** - it emerges from clustering of F3, F4, and F5 formants and allows singers to project over orchestral accompaniment.
-
-- **📌 Spectral kurtosis reliably distinguishes voice quality** - values above 5 indicate healthy harmonic structure, while values trending toward 3 suggest noise contamination or voice pathology.
-
-- **⚠️ Average podcast loudness is -19 LUFS** (per Auphonic analysis), significantly louder than the EBU R128 broadcast standard of -23 LUFS, reflecting mobile listening requirements.
-
-- **📌 Crest factors of 8-12 dB represent the "sweet spot"** for mastered content - below 6 dB indicates over-compression that may sound unnatural; above 18 dB may indicate insufficient dynamic control.
-
----
-
-## Sources
-
-1. Peeters, G. (2004). "A Large Set of Audio Features for Sound Description (Similarity and Classification) in the CUIDADO Project." IRCAM Technical Report. http://recherche.ircam.fr/anasyn/peeters/ARTICLES/Peeters_2003_cuidadoaudiofeatures.pdf
-
-2. Titze, I.R. & Palaparthi, A. (2020). "Vocal Loudness Variation With Spectral Slope." Journal of Speech, Language, and Hearing Research, 63, 74-82. https://pmc.ncbi.nlm.nih.gov/articles/PMC7213475/
-
-3. EBU R 128 (2023). "Loudness Normalisation and Permitted Maximum Level of Audio Signals." European Broadcasting Union. https://tech.ebu.ch/docs/r/r128.pdf
-
-4. MathWorks. "Spectral Descriptors." Audio Toolbox Documentation. https://www.mathworks.com/help/audio/ug/spectral-descriptors.html
-
-5. Wikipedia. "Spectral Flatness." https://en.wikipedia.org/wiki/Spectral_flatness
-
-6. Johnston, J.D. (1988). ["Transform Coding of Audio Signals Using Perceptual Noise Criteria."](https://www.ee.columbia.edu/~dpwe/papers/Johns88-audiocoding.pdf) [IEEE Journal on Selected Areas in Communications, 6(2), 314-323.](https://ieeexplore.ieee.org/document/608)
-
-7. Dubnov, S. (2004). ["Generalization of Spectral Flatness Measure for Non-Gaussian Linear Processes."](https://www.researchgate.net/publication/3343094_Generalization_of_Spectral_Flatness_Measure_for_Non-Gaussian_Linear_Processes) [IEEE Signal Processing Letters, 11(8), 698-701.](https://ieeexplore.ieee.org/document/1316889/)
-
-8. Misra, H. et al. (2004). "Spectral Entropy Based Feature for Robust ASR." ICASSP'04.
-
-9. iZotope. "What Is Crest Factor and Why Is It Important?" https://www.izotope.com/en/learn/what-is-crest-factor
-
-10. Auphonic. "Loudness Targets for Mobile Audio, Podcasts, Radio and TV." https://auphonic.com/blog/2013/01/07/loudness-targets-mobile-audio-podcasts-radio-tv/
-
-11. AES Technical Document AESTD1004.1.15-10. "Recommendation for Loudness of Audio Streaming and Network File Playback."
-
-12. Apple. "Podcasts Authoring Best Practices." https://help.apple.com/itc/podcastsbestpractices/
-
-13. Keller, P.E. et al. (2017). "Sex-Related Modulations of the Singer's Formant in Human Ensemble Singing." Frontiers in Psychology, 8:1559. https://pmc.ncbi.nlm.nih.gov/articles/PMC5603663/
-
-14. Dixon, S. (2006). "Onset Detection Revisited." DAFx.
-
-15. Scheirer, E. & Slaney, M. (1997). "Construction and Evaluation of a Robust Multifeature Speech/Music Discriminator." IEEE ICASSP.
+For honest before/after comparison, fix the dB and frequency scale and use identical dimensions across both images.
