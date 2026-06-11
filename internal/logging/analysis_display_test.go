@@ -52,16 +52,20 @@ func TestAnalysisLogPath_CollidingStemsDistinct(t *testing.T) {
 // makeMinimalMeasurements creates measurements with enough data to exercise DisplayAnalysisResults.
 func makeMinimalMeasurements() *processor.AudioMeasurements {
 	return &processor.AudioMeasurements{
-		BaseMeasurements: processor.BaseMeasurements{
+		Dynamics: processor.DynamicsMetrics{
 			RMSLevel:     -24.0,
 			PeakLevel:    -6.0,
 			DynamicRange: 18.0,
 		},
-		InputI:              -23.0,
-		InputTP:             -1.0,
-		InputLRA:            6.0,
-		PreScanNoiseFloor:   -50.0,
-		RoomToneDetectLevel: -45.0,
+		Loudness: processor.InputLoudnessMetrics{
+			InputI:   -23.0,
+			InputTP:  -1.0,
+			InputLRA: 6.0,
+		},
+		Noise: processor.NoiseMetrics{
+			FloorPrescan:        -50.0,
+			RoomToneDetectLevel: -45.0,
+		},
 	}
 }
 
@@ -75,19 +79,19 @@ func makeMinimalMetadata() *audio.Metadata {
 
 func makeFullAnalysisMeasurements() *processor.AudioMeasurements {
 	m := makeMinimalMeasurements()
-	m.InputI = -18.4
-	m.InputTP = -2.1
-	m.InputLRA = 7.8
-	m.RMSLevel = -28.2
-	m.PeakLevel = -7.4
-	m.DynamicRange = 20.8
-	m.CrestFactor = 11.4
-	m.PreScanNoiseFloor = -58.4
-	m.RoomToneDetectLevel = -57.4
-	m.NoiseFloor = -58.4
-	m.NoiseFloorSource = "silence_profile"
+	m.Loudness.InputI = -18.4
+	m.Loudness.InputTP = -2.1
+	m.Loudness.InputLRA = 7.8
+	m.Dynamics.RMSLevel = -28.2
+	m.Dynamics.PeakLevel = -7.4
+	m.Dynamics.DynamicRange = 20.8
+	m.Dynamics.CrestFactor = 11.4
+	m.Noise.FloorPrescan = -58.4
+	m.Noise.RoomToneDetectLevel = -57.4
+	m.Noise.Floor = -58.4
+	m.Noise.FloorSource = "silence_profile"
 	m.SuggestedGateThreshold = processor.DbToLinear(-52.4)
-	m.NoiseReductionHeadroom = 24.6
+	m.Noise.ReductionHeadroom = 24.6
 	m.Spectral.Centroid = 2450
 	m.Spectral.Spread = 1800
 	m.Spectral.Rolloff = 7200
@@ -99,7 +103,7 @@ func makeFullAnalysisMeasurements() *processor.AudioMeasurements {
 	m.Spectral.Decrease = -0.0123
 	m.Spectral.Entropy = 0.365
 	m.Spectral.Flux = 0.0820
-	m.NoiseProfile = &processor.NoiseProfile{
+	m.Regions.NoiseProfile = &processor.NoiseProfile{
 		Start:              6 * time.Second,
 		Duration:           4 * time.Second,
 		MeasuredNoiseFloor: -58.4,
@@ -112,26 +116,30 @@ func makeFullAnalysisMeasurements() *processor.AudioMeasurements {
 		OriginalStart:      5 * time.Second,
 		OriginalDuration:   8 * time.Second,
 	}
-	m.RoomToneCandidates = []processor.RoomToneCandidateMetrics{
+	m.Regions.RoomToneCandidates = []processor.RoomToneCandidateMetrics{
 		{
-			Region:      processor.RoomToneRegion{Start: 5 * time.Second, Duration: 8 * time.Second},
-			RMSLevel:    -58.4,
-			PeakLevel:   -44.0,
-			CrestFactor: 14.4,
-			Spectral: processor.SpectralMetrics{
-				Entropy:  0.365,
-				Flatness: 0.210,
-				Kurtosis: 9.7,
-				Centroid: 2450,
+			Region: processor.RoomToneRegion{Start: 5 * time.Second, Duration: 8 * time.Second},
+			RegionSample: processor.RegionSample{
+				RMSLevel:    -58.4,
+				PeakLevel:   -44.0,
+				CrestFactor: 14.4,
+				Spectral: processor.SpectralMetrics{
+					Entropy:  0.365,
+					Flatness: 0.210,
+					Kurtosis: 9.7,
+					Centroid: 2450,
+				},
 			},
 			Score: 0.910,
 		},
 		{
-			Region:      processor.RoomToneRegion{Start: 40 * time.Second, Duration: 3 * time.Second},
-			RMSLevel:    -56.1,
-			CrestFactor: 10.2,
-			Spectral:    processor.SpectralMetrics{Entropy: 0.620},
-			Score:       0.420,
+			Region: processor.RoomToneRegion{Start: 40 * time.Second, Duration: 3 * time.Second},
+			RegionSample: processor.RegionSample{
+				RMSLevel:    -56.1,
+				CrestFactor: 10.2,
+				Spectral:    processor.SpectralMetrics{Entropy: 0.620},
+			},
+			Score: 0.420,
 		},
 		{
 			Region:           processor.RoomToneRegion{Start: 70 * time.Second, Duration: 2 * time.Second},
@@ -139,16 +147,18 @@ func makeFullAnalysisMeasurements() *processor.AudioMeasurements {
 			Score:            0,
 		},
 	}
-	m.SpeechCandidates = []processor.SpeechCandidateMetrics{
+	m.Regions.SpeechCandidates = []processor.SpeechCandidateMetrics{
 		{
-			Region:      processor.SpeechRegion{Start: 15 * time.Second, Duration: 60 * time.Second},
-			RMSLevel:    -33.8,
-			PeakLevel:   -9.0,
-			CrestFactor: 12.8,
-			Spectral: processor.SpectralMetrics{
-				Centroid: 2450,
-				Kurtosis: 9.7,
-				Rolloff:  7200,
+			Region: processor.SpeechRegion{Start: 15 * time.Second, Duration: 60 * time.Second},
+			RegionSample: processor.RegionSample{
+				RMSLevel:    -33.8,
+				PeakLevel:   -9.0,
+				CrestFactor: 12.8,
+				Spectral: processor.SpectralMetrics{
+					Centroid: 2450,
+					Kurtosis: 9.7,
+					Rolloff:  7200,
+				},
 			},
 			VoicingDensity: 0.76,
 			BodyBandRMS:    -23.0,
@@ -157,25 +167,27 @@ func makeFullAnalysisMeasurements() *processor.AudioMeasurements {
 			Score:          0.88,
 		},
 		{
-			Region:      processor.SpeechRegion{Start: 90 * time.Second, Duration: 20 * time.Second},
-			RMSLevel:    -35.2,
-			CrestFactor: 11.0,
-			Spectral:    processor.SpectralMetrics{Centroid: 3100},
-			Score:       0.55,
+			Region: processor.SpeechRegion{Start: 90 * time.Second, Duration: 20 * time.Second},
+			RegionSample: processor.RegionSample{
+				RMSLevel:    -35.2,
+				CrestFactor: 11.0,
+				Spectral:    processor.SpectralMetrics{Centroid: 3100},
+			},
+			Score: 0.55,
 		},
 		{
 			Region: processor.SpeechRegion{Start: 115 * time.Second, Duration: 5 * time.Second},
 			Score:  0,
 		},
 	}
-	m.SpeechProfile = &m.SpeechCandidates[0]
+	m.Regions.SpeechProfile = &m.Regions.SpeechCandidates[0]
 	return m
 }
 
 func TestDisplayAnalysisResults_VoiceActivated_NoElectedCandidate(t *testing.T) {
 	m := makeMinimalMeasurements()
-	m.VoiceActivated = true
-	m.RoomToneCandidates = []processor.RoomToneCandidateMetrics{
+	m.Noise.VoiceActivated = true
+	m.Regions.RoomToneCandidates = []processor.RoomToneCandidateMetrics{
 		{
 			Score:            0.0,
 			TransientWarning: "rejected: digital silence",
@@ -359,7 +371,7 @@ func TestDisplayAnalysisResultsWithDiagnostics_UsesEffectiveConfigAndDiagnostics
 
 func TestDisplayAnalysisResults_DeesserOffBandsNotMeasured(t *testing.T) {
 	m := makeFullAnalysisMeasurements()
-	m.SpeechProfile.BandsMeasured = false
+	m.Regions.SpeechProfile.BandsMeasured = false
 	config := processor.DefaultEffectiveFilterConfig()
 	config.Deesser.Intensity = 0.0
 
@@ -377,7 +389,7 @@ func TestDisplayAnalysisResults_DeesserOffBandsNotMeasured(t *testing.T) {
 
 func TestDisplayAnalysisResults_VoiceActivated_NoRoomTone(t *testing.T) {
 	m := makeMinimalMeasurements()
-	m.VoiceActivated = true
+	m.Noise.VoiceActivated = true
 	// No RoomToneCandidates, no NoiseProfile
 
 	config := processor.DefaultEffectiveFilterConfig()
@@ -395,13 +407,13 @@ func TestDisplayAnalysisResults_VoiceActivated_NoRoomTone(t *testing.T) {
 
 func TestDisplayAnalysisResults_Normal_NoVoiceActivated(t *testing.T) {
 	m := makeMinimalMeasurements()
-	m.VoiceActivated = false
-	m.NoiseProfile = &processor.NoiseProfile{
+	m.Noise.VoiceActivated = false
+	m.Regions.NoiseProfile = &processor.NoiseProfile{
 		Start:              30 * time.Second,
 		Duration:           5 * time.Second,
 		MeasuredNoiseFloor: -55.0,
 	}
-	m.RoomToneCandidates = []processor.RoomToneCandidateMetrics{
+	m.Regions.RoomToneCandidates = []processor.RoomToneCandidateMetrics{
 		{
 			Score:  0.85,
 			Region: processor.RoomToneRegion{Start: 30 * time.Second, Duration: 5 * time.Second},
@@ -529,11 +541,11 @@ func TestDisplayAnalysisResults_ExcludesProcessingOnlyFields(t *testing.T) {
 
 func TestDisplayAnalysisResults_CapsRoomToneCandidatesChronologicallyWithElectedFirst(t *testing.T) {
 	m := makeMinimalMeasurements()
-	m.RoomToneCandidates = makeRankedRoomToneCandidates(12)
-	m.NoiseProfile = &processor.NoiseProfile{
-		Start:              m.RoomToneCandidates[0].Region.Start,
-		Duration:           m.RoomToneCandidates[0].Region.Duration,
-		MeasuredNoiseFloor: m.RoomToneCandidates[0].RMSLevel,
+	m.Regions.RoomToneCandidates = makeRankedRoomToneCandidates(12)
+	m.Regions.NoiseProfile = &processor.NoiseProfile{
+		Start:              m.Regions.RoomToneCandidates[0].Region.Start,
+		Duration:           m.Regions.RoomToneCandidates[0].Region.Duration,
+		MeasuredNoiseFloor: m.Regions.RoomToneCandidates[0].RMSLevel,
 	}
 
 	config := processor.DefaultEffectiveFilterConfig()
@@ -583,9 +595,9 @@ func TestDisplayAnalysisResults_CapsRoomToneCandidatesChronologicallyWithElected
 
 func TestDisplayAnalysisResults_CapsSpeechCandidatesChronologicallyWithElectedFirst(t *testing.T) {
 	m := makeMinimalMeasurements()
-	m.SpeechCandidates = makeRankedSpeechCandidates(12)
-	m.SpeechCandidates[0].VoicingDensity = 0.82
-	m.SpeechProfile = &m.SpeechCandidates[0]
+	m.Regions.SpeechCandidates = makeRankedSpeechCandidates(12)
+	m.Regions.SpeechCandidates[0].VoicingDensity = 0.82
+	m.Regions.SpeechProfile = &m.Regions.SpeechCandidates[0]
 
 	config := processor.DefaultEffectiveFilterConfig()
 	var buf bytes.Buffer
@@ -634,9 +646,9 @@ func TestDisplayAnalysisResults_CapsSpeechCandidatesChronologicallyWithElectedFi
 
 func TestDisplayAnalysisResults_SpeechRejectionSummaryIncludesZeroScore(t *testing.T) {
 	m := makeMinimalMeasurements()
-	m.SpeechCandidates = makeRankedSpeechCandidates(3)
-	m.SpeechCandidates[1].Score = 0.0
-	m.SpeechProfile = &m.SpeechCandidates[0]
+	m.Regions.SpeechCandidates = makeRankedSpeechCandidates(3)
+	m.Regions.SpeechCandidates[1].Score = 0.0
+	m.Regions.SpeechProfile = &m.Regions.SpeechCandidates[0]
 
 	config := processor.DefaultEffectiveFilterConfig()
 	var buf bytes.Buffer
@@ -664,8 +676,8 @@ func TestDisplayAnalysisResults_SpeechRejectionSummaryIncludesZeroScore(t *testi
 
 func TestDisplayAnalysisResults_SpeechDisplaySummaryIncludesZeroOmitted(t *testing.T) {
 	m := makeMinimalMeasurements()
-	m.SpeechCandidates = makeRankedSpeechCandidates(4)
-	m.SpeechProfile = &m.SpeechCandidates[0]
+	m.Regions.SpeechCandidates = makeRankedSpeechCandidates(4)
+	m.Regions.SpeechProfile = &m.Regions.SpeechCandidates[0]
 
 	config := processor.DefaultEffectiveFilterConfig()
 	var buf bytes.Buffer
@@ -687,8 +699,8 @@ func TestDisplayAnalysisResults_SpeechDisplaySummaryIncludesZeroOmitted(t *testi
 
 func TestWriteDiagnosticRoomTone_VoiceActivated_WithCandidates(t *testing.T) {
 	m := makeMinimalMeasurements()
-	m.VoiceActivated = true
-	m.RoomToneCandidates = []processor.RoomToneCandidateMetrics{
+	m.Noise.VoiceActivated = true
+	m.Regions.RoomToneCandidates = []processor.RoomToneCandidateMetrics{
 		{
 			Score:            0.0,
 			TransientWarning: "rejected: digital silence",
@@ -718,7 +730,7 @@ func TestWriteDiagnosticRoomTone_VoiceActivated_WithCandidates(t *testing.T) {
 
 func TestWriteDiagnosticRoomTone_VoiceActivated_NoneFound(t *testing.T) {
 	m := makeMinimalMeasurements()
-	m.VoiceActivated = true
+	m.Noise.VoiceActivated = true
 	// No candidates, no noise profile, no room tone regions
 
 	tmpFile, err := os.CreateTemp("", "diag-room-tone-test-*.txt")
@@ -746,7 +758,7 @@ func TestWriteDiagnosticRoomTone_VoiceActivated_NoneFound(t *testing.T) {
 
 func TestWriteDiagnosticRoomTone_Normal_NoVoiceActivated(t *testing.T) {
 	m := makeMinimalMeasurements()
-	m.VoiceActivated = false
+	m.Noise.VoiceActivated = false
 	// No candidates - triggers NONE FOUND
 
 	tmpFile, err := os.CreateTemp("", "diag-room-tone-test-*.txt")

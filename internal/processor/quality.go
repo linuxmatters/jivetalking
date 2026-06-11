@@ -141,10 +141,10 @@ func outputTruePeak(result *ProcessingResult) float64 {
 		return result.NormResult.OutputTP
 	}
 	if result.NormResult != nil && result.NormResult.FinalMeasurements != nil {
-		return result.NormResult.FinalMeasurements.OutputTP
+		return result.NormResult.FinalMeasurements.Loudness.OutputTP
 	}
 	if result.FilteredMeasurements != nil {
-		return result.FilteredMeasurements.OutputTP
+		return result.FilteredMeasurements.Loudness.OutputTP
 	}
 	// No measurement available: assume worst case so the score is honest.
 	return qualityTPHot
@@ -165,10 +165,10 @@ func FinalNoiseFloor(result *ProcessingResult) (float64, bool) {
 // inputRoomToneRMS resolves the elected input room-tone RMS level (dBFS).
 func inputRoomToneRMS(result *ProcessingResult) (float64, bool) {
 	m := result.Measurements
-	if m == nil || m.NoiseProfile == nil {
+	if m == nil || m.Regions.NoiseProfile == nil {
 		return 0, false
 	}
-	return m.NoiseProfile.MeasuredNoiseFloor, true
+	return m.Regions.NoiseProfile.MeasuredNoiseFloor, true
 }
 
 // finalRoomToneRMS resolves the Pass 4 room-tone RMS level (dBFS).

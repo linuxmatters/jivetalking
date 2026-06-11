@@ -89,23 +89,23 @@ func writeAnalysisHeader(w io.Writer, inputPath string, metadata *audio.Metadata
 func writeAnalysisLoudnessAndDynamics(w io.Writer, measurements *processor.AudioMeasurements) {
 	writeAnalysisSection(w, "LOUDNESS")
 	writeAnalysisMetricRows(w, "  ", 15, []analysisMetricSpec{
-		{"Integrated", fmt.Sprintf("%.1f LUFS", measurements.InputI)},
-		{"True Peak", fmt.Sprintf("%.1f dBTP", measurements.InputTP)},
-		{"Loudness Range", fmt.Sprintf("%.1f LU", measurements.InputLRA)},
+		{"Integrated", fmt.Sprintf("%.1f LUFS", measurements.Loudness.InputI)},
+		{"True Peak", fmt.Sprintf("%.1f dBTP", measurements.Loudness.InputTP)},
+		{"Loudness Range", fmt.Sprintf("%.1f LU", measurements.Loudness.InputLRA)},
 	})
 	fmt.Fprintln(w)
 
 	writeAnalysisSection(w, "DYNAMICS")
-	crestFactor := measurements.PeakLevel - measurements.RMSLevel
+	crestFactor := measurements.Dynamics.PeakLevel - measurements.Dynamics.RMSLevel
 	crestSource := "full-file"
-	if measurements.SpeechProfile != nil && measurements.SpeechProfile.CrestFactor > 0 {
-		crestFactor = measurements.SpeechProfile.CrestFactor
+	if measurements.Regions.SpeechProfile != nil && measurements.Regions.SpeechProfile.CrestFactor > 0 {
+		crestFactor = measurements.Regions.SpeechProfile.CrestFactor
 		crestSource = "speech"
 	}
 	writeAnalysisMetricRows(w, "  ", 15, []analysisMetricSpec{
-		{"RMS Level", fmt.Sprintf("%.1f dBFS", measurements.RMSLevel)},
-		{"Peak Level", fmt.Sprintf("%.1f dBFS", measurements.PeakLevel)},
-		{"Dynamic Range", fmt.Sprintf("%.1f dB", measurements.DynamicRange)},
+		{"RMS Level", fmt.Sprintf("%.1f dBFS", measurements.Dynamics.RMSLevel)},
+		{"Peak Level", fmt.Sprintf("%.1f dBFS", measurements.Dynamics.PeakLevel)},
+		{"Dynamic Range", fmt.Sprintf("%.1f dB", measurements.Dynamics.DynamicRange)},
 		{"Crest Factor", fmt.Sprintf("%.1f dB (%s)", crestFactor, crestSource)},
 	})
 	fmt.Fprintln(w)
@@ -114,7 +114,7 @@ func writeAnalysisLoudnessAndDynamics(w io.Writer, measurements *processor.Audio
 func writeAnalysisRoomToneDetection(w io.Writer, measurements *processor.AudioMeasurements) {
 	writeAnalysisSection(w, "ROOM TONE DETECTION")
 	fmt.Fprintf(w, "  Threshold:      %.1f dB (%.1f dBFS room tone estimate + 1 dB)\n",
-		measurements.RoomToneDetectLevel, measurements.PreScanNoiseFloor)
+		measurements.Noise.RoomToneDetectLevel, measurements.Noise.FloorPrescan)
 
 	writeAnalysisRoomToneCandidates(w, measurements)
 	fmt.Fprintln(w)
@@ -128,16 +128,16 @@ func writeAnalysisSpeechDetection(w io.Writer, measurements *processor.AudioMeas
 
 func writeAnalysisDerivedMeasurements(w io.Writer, measurements *processor.AudioMeasurements) {
 	writeAnalysisSection(w, "DERIVED MEASUREMENTS")
-	if measurements.NoiseProfile != nil {
+	if measurements.Regions.NoiseProfile != nil {
 		suggestedGateDB := processor.LinearToDb(measurements.SuggestedGateThreshold)
 		writeAnalysisMetricRows(w, "  ", 15, []analysisMetricSpec{
-			{"Noise Floor", fmt.Sprintf("%.1f dBFS (from elected room tone)", measurements.NoiseProfile.MeasuredNoiseFloor)},
+			{"Noise Floor", fmt.Sprintf("%.1f dBFS (from elected room tone)", measurements.Regions.NoiseProfile.MeasuredNoiseFloor)},
 			{"Gate Baseline", fmt.Sprintf("%.1f dB (noise floor + margin)", suggestedGateDB)},
-			{"NR Headroom", fmt.Sprintf("%.1f dB (noise-to-speech gap)", measurements.NoiseReductionHeadroom)},
+			{"NR Headroom", fmt.Sprintf("%.1f dB (noise-to-speech gap)", measurements.Noise.ReductionHeadroom)},
 		})
 	} else {
 		writeAnalysisMetricRows(w, "  ", 15, []analysisMetricSpec{
-			{"Noise Floor", fmt.Sprintf("%.1f dBFS (%s)", measurements.NoiseFloor, noiseFloorSourceLabel(measurements.NoiseFloorSource))},
+			{"Noise Floor", fmt.Sprintf("%.1f dBFS (%s)", measurements.Noise.Floor, noiseFloorSourceLabel(measurements.Noise.FloorSource))},
 		})
 	}
 	fmt.Fprintln(w)
@@ -162,10 +162,10 @@ func writeAnalysisFilterAdaptation(w io.Writer, measurements *processor.AudioMea
 				{"Lowpass", fmt.Sprintf("disabled (%s)", diagnostics.DS201LPReason)},
 			})
 		}
-		if measurements.NoiseProfile != nil {
+		if measurements.Regions.NoiseProfile != nil {
 			gateThresholdDB := processor.LinearToDb(config.DS201Gate.Threshold)
 			gateDesc := "(from noise floor)"
-			if measurements.SpeechProfile != nil {
+			if measurements.Regions.SpeechProfile != nil {
 				gateDesc = "(speech-aware)"
 			}
 			writeAnalysisMetricRows(w, "  ", 15, []analysisMetricSpec{
@@ -185,8 +185,8 @@ func writeAnalysisFilterAdaptation(w io.Writer, measurements *processor.AudioMea
 		}
 		if config.Deesser.Intensity > 0 {
 			value := fmt.Sprintf("%.0f%% intensity", config.Deesser.Intensity*100)
-			if measurements != nil && measurements.SpeechProfile != nil {
-				excess := measurements.SpeechProfile.SibBandRMS - measurements.SpeechProfile.BodyBandRMS
+			if measurements != nil && measurements.Regions.SpeechProfile != nil {
+				excess := measurements.Regions.SpeechProfile.SibBandRMS - measurements.Regions.SpeechProfile.BodyBandRMS
 				value = fmt.Sprintf("%.0f%% intensity (sibilance excess %.1f dB)", config.Deesser.Intensity*100, excess)
 			}
 			writeAnalysisMetricRows(w, "  ", 15, []analysisMetricSpec{
@@ -194,11 +194,11 @@ func writeAnalysisFilterAdaptation(w io.Writer, measurements *processor.AudioMea
 			})
 		} else {
 			value := "OFF (no speech profile; full-file metrics unreliable)"
-			if measurements != nil && measurements.SpeechProfile != nil {
-				if !measurements.SpeechProfile.BandsMeasured {
+			if measurements != nil && measurements.Regions.SpeechProfile != nil {
+				if !measurements.Regions.SpeechProfile.BandsMeasured {
 					value = "OFF (speech-band RMS not measured)"
 				} else {
-					excess := measurements.SpeechProfile.SibBandRMS - measurements.SpeechProfile.BodyBandRMS
+					excess := measurements.Regions.SpeechProfile.SibBandRMS - measurements.Regions.SpeechProfile.BodyBandRMS
 					value = fmt.Sprintf("OFF (sibilance excess %.1f dB)", excess)
 				}
 			}
@@ -207,10 +207,10 @@ func writeAnalysisFilterAdaptation(w io.Writer, measurements *processor.AudioMea
 			})
 		}
 		thresholdSource := "adapted"
-		if measurements != nil && measurements.SpeechProfile != nil {
-			thresholdSource = fmt.Sprintf("speech RMS %.1f + %.0f dB", measurements.SpeechProfile.RMSLevel, processor.LA2AThresholdSpeechOffsetDB)
+		if measurements != nil && measurements.Regions.SpeechProfile != nil {
+			thresholdSource = fmt.Sprintf("speech RMS %.1f + %.0f dB", measurements.Regions.SpeechProfile.RMSLevel, processor.LA2AThresholdSpeechOffsetDB)
 		} else if measurements != nil {
-			thresholdSource = fmt.Sprintf("peak %.1f - 20 dB (no speech profile)", measurements.PeakLevel)
+			thresholdSource = fmt.Sprintf("peak %.1f - 20 dB (no speech profile)", measurements.Dynamics.PeakLevel)
 		}
 		writeAnalysisMetricRows(w, "  ", 15, []analysisMetricSpec{
 			{"LA-2A Thresh", fmt.Sprintf("%.1f dB (%s)", config.LA2A.Threshold, thresholdSource)},

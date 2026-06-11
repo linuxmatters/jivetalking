@@ -165,8 +165,10 @@ func measureOutputRegionFromReader(ctx context.Context, reader *audio.Reader, st
 }
 
 // measureOutputRoomToneRegionFromReader measures a room tone region and maps
-// the result to RoomToneCandidateMetrics.
-func measureOutputRoomToneRegionFromReader(ctx context.Context, reader *audio.Reader, region RoomToneRegion, log debugLogger) (*RoomToneCandidateMetrics, error) {
+// the result to a bare RegionSample (amplitude/spectral/loudness only). Output
+// re-measure never scores or elects, so no candidate scoring/stability/band
+// fields are produced.
+func measureOutputRoomToneRegionFromReader(ctx context.Context, reader *audio.Reader, region RoomToneRegion, log debugLogger) (*RegionSample, error) {
 	log.Logf("=== measureOutputRoomToneRegion: start=%.3fs, duration=%.3fs ===",
 		region.Start.Seconds(), region.Duration.Seconds())
 
@@ -177,8 +179,7 @@ func measureOutputRoomToneRegionFromReader(ctx context.Context, reader *audio.Re
 
 	log.Logf("=== measureOutputRoomToneRegion SUMMARY ===")
 
-	return &RoomToneCandidateMetrics{
-		Region:        region,
+	return &RegionSample{
 		RMSLevel:      result.RMSLevel,
 		PeakLevel:     result.PeakLevel,
 		CrestFactor:   result.CrestFactor,
@@ -195,18 +196,18 @@ func measureOutputRoomToneRegionFromReader(ctx context.Context, reader *audio.Re
 func extractRegionPair(m *AudioMeasurements) (*RoomToneRegion, *SpeechRegion) {
 	var roomToneRegion *RoomToneRegion
 	var spRegion *SpeechRegion
-	if m.NoiseProfile != nil {
+	if m.Regions.NoiseProfile != nil {
 		roomToneRegion = &RoomToneRegion{
-			Start:    m.NoiseProfile.Start,
-			End:      m.NoiseProfile.Start + m.NoiseProfile.Duration,
-			Duration: m.NoiseProfile.Duration,
+			Start:    m.Regions.NoiseProfile.Start,
+			End:      m.Regions.NoiseProfile.Start + m.Regions.NoiseProfile.Duration,
+			Duration: m.Regions.NoiseProfile.Duration,
 		}
 	}
-	if m.SpeechProfile != nil {
+	if m.Regions.SpeechProfile != nil {
 		spRegion = &SpeechRegion{
-			Start:    m.SpeechProfile.Region.Start,
-			End:      m.SpeechProfile.Region.End,
-			Duration: m.SpeechProfile.Region.Duration,
+			Start:    m.Regions.SpeechProfile.Region.Start,
+			End:      m.Regions.SpeechProfile.Region.End,
+			Duration: m.Regions.SpeechProfile.Region.Duration,
 		}
 	}
 	return roomToneRegion, spRegion
@@ -219,7 +220,7 @@ func extractRegionPair(m *AudioMeasurements) (*RoomToneRegion, *SpeechRegion) {
 //
 // Either region parameter may be nil to skip that measurement. Returns nil for
 // any skipped or failed measurement (non-fatal - matches existing behaviour).
-func MeasureOutputRegions(ctx context.Context, outputPath string, roomToneRegion *RoomToneRegion, speechRegion *SpeechRegion, log debugLogger) (*RoomToneCandidateMetrics, *SpeechCandidateMetrics) {
+func MeasureOutputRegions(ctx context.Context, outputPath string, roomToneRegion *RoomToneRegion, speechRegion *SpeechRegion, log debugLogger) (*RegionSample, *RegionSample) {
 	if roomToneRegion == nil && speechRegion == nil {
 		return nil, nil
 	}
@@ -233,7 +234,7 @@ func MeasureOutputRegions(ctx context.Context, outputPath string, roomToneRegion
 	defer reader.Close()
 
 	// Measure room tone region first (if requested)
-	var roomToneMetrics *RoomToneCandidateMetrics
+	var roomToneMetrics *RegionSample
 	if roomToneRegion != nil {
 		roomToneMetrics, err = measureOutputRoomToneRegionFromReader(ctx, reader, *roomToneRegion, log)
 		if err != nil {
@@ -264,8 +265,10 @@ func MeasureOutputRegions(ctx context.Context, outputPath string, roomToneRegion
 }
 
 // measureOutputSpeechRegionFromReader measures a speech region and maps
-// the result to SpeechCandidateMetrics.
-func measureOutputSpeechRegionFromReader(ctx context.Context, reader *audio.Reader, region SpeechRegion, log debugLogger) (*SpeechCandidateMetrics, error) {
+// the result to a bare RegionSample (amplitude/spectral/loudness only). Output
+// re-measure never scores or elects, so no candidate scoring/band fields are
+// produced.
+func measureOutputSpeechRegionFromReader(ctx context.Context, reader *audio.Reader, region SpeechRegion, log debugLogger) (*RegionSample, error) {
 	log.Logf("=== measureOutputSpeechRegion: start=%.3fs, duration=%.3fs ===",
 		region.Start.Seconds(), region.Duration.Seconds())
 
@@ -276,8 +279,7 @@ func measureOutputSpeechRegionFromReader(ctx context.Context, reader *audio.Read
 
 	log.Logf("=== measureOutputSpeechRegion SUMMARY ===")
 
-	return &SpeechCandidateMetrics{
-		Region:        region,
+	return &RegionSample{
 		RMSLevel:      result.RMSLevel,
 		PeakLevel:     result.PeakLevel,
 		CrestFactor:   result.CrestFactor,

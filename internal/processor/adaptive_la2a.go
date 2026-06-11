@@ -73,14 +73,14 @@ func tuneLA2ACompressor(config *EffectiveFilterConfig, _ *AdaptiveDiagnostics, m
 func tuneLA2AThreshold(config *EffectiveFilterConfig, measurements *AudioMeasurements) {
 	var threshold float64
 
-	if measurements.SpeechProfile != nil {
-		threshold = measurements.SpeechProfile.RMSLevel + la2aThresholdSpeechOffsetDB
+	if measurements.Regions.SpeechProfile != nil {
+		threshold = measurements.Regions.SpeechProfile.RMSLevel + la2aThresholdSpeechOffsetDB
 	} else {
-		if math.IsNaN(measurements.PeakLevel) || math.IsInf(measurements.PeakLevel, 0) {
+		if math.IsNaN(measurements.Dynamics.PeakLevel) || math.IsInf(measurements.Dynamics.PeakLevel, 0) {
 			config.LA2A.Threshold = defaultLA2AThreshold
 			return
 		}
-		threshold = measurements.PeakLevel - la2aFallbackPeakHeadroomDB
+		threshold = measurements.Dynamics.PeakLevel - la2aFallbackPeakHeadroomDB
 	}
 
 	config.LA2A.Threshold = max(la2aThresholdMin, min(threshold, la2aThresholdMax))

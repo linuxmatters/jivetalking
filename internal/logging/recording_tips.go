@@ -126,20 +126,20 @@ func wrapText(text string, maxWidth int, indent string) string {
 // Gain target is -24 dBFS for speech RMS, -16 LUFS for InputI fallback.
 func tipLevelTooQuiet(m *processor.AudioMeasurements, _ *processor.EffectiveFilterConfig) *RecordingTip {
 	var gainNeeded float64
-	if m.SpeechProfile != nil {
-		speechRMS := m.SpeechProfile.RMSLevel
+	if m.Regions.SpeechProfile != nil {
+		speechRMS := m.Regions.SpeechProfile.RMSLevel
 		if speechRMS >= -42.0 {
 			return nil
 		}
 		gainNeeded = -24.0 - speechRMS
 	} else {
-		if m.InputI >= -30.0 {
+		if m.Loudness.InputI >= -30.0 {
 			return nil
 		}
-		gainNeeded = processor.NormTargetLUFS - m.InputI
+		gainNeeded = processor.NormTargetLUFS - m.Loudness.InputI
 	}
 	// Clamp to available peak headroom (keep peaks below -1 dBTP)
-	maxSafeGain := -1.0 - m.InputTP
+	maxSafeGain := -1.0 - m.Loudness.InputTP
 	wasClamped := gainNeeded > maxSafeGain
 	gainNeeded = min(gainNeeded, maxSafeGain)
 	// If almost no headroom available, the problem is peak-to-average ratio, not gain
@@ -167,20 +167,20 @@ func tipLevelTooQuiet(m *processor.AudioMeasurements, _ *processor.EffectiveFilt
 // Gain target is -24 dBFS for speech RMS, -16 LUFS for InputI fallback.
 func tipLevelQuiet(m *processor.AudioMeasurements, _ *processor.EffectiveFilterConfig) *RecordingTip {
 	var gainNeeded float64
-	if m.SpeechProfile != nil {
-		speechRMS := m.SpeechProfile.RMSLevel
+	if m.Regions.SpeechProfile != nil {
+		speechRMS := m.Regions.SpeechProfile.RMSLevel
 		if speechRMS < -42.0 || speechRMS >= -36.0 {
 			return nil
 		}
 		gainNeeded = -24.0 - speechRMS
 	} else {
-		if m.InputI < -30.0 || m.InputI >= -24.0 {
+		if m.Loudness.InputI < -30.0 || m.Loudness.InputI >= -24.0 {
 			return nil
 		}
-		gainNeeded = processor.NormTargetLUFS - m.InputI
+		gainNeeded = processor.NormTargetLUFS - m.Loudness.InputI
 	}
 	// Clamp to available peak headroom (keep peaks below -1 dBTP)
-	maxSafeGain := -1.0 - m.InputTP
+	maxSafeGain := -1.0 - m.Loudness.InputTP
 	wasClamped := gainNeeded > maxSafeGain
 	gainNeeded = min(gainNeeded, maxSafeGain)
 	// If almost no headroom available, the problem is peak-to-average ratio, not gain
@@ -205,12 +205,12 @@ func tipLevelQuiet(m *processor.AudioMeasurements, _ *processor.EffectiveFilterC
 // tipLevelTooHot fires when true peak approaches or exceeds 0 dBTP.
 // InputTP > 0.0 means actual clipping; > -1.0 means dangerously close.
 func tipLevelTooHot(m *processor.AudioMeasurements, _ *processor.EffectiveFilterConfig) *RecordingTip {
-	if m.InputTP <= -1.0 {
+	if m.Loudness.InputTP <= -1.0 {
 		return nil
 	}
-	if m.InputTP > 0.0 {
+	if m.Loudness.InputTP > 0.0 {
 		// Clipping case
-		if m.InputI < -28.0 {
+		if m.Loudness.InputI < -28.0 {
 			// Simultaneously quiet and clipping - compound problem
 			return &RecordingTip{
 				Priority: 10,
@@ -219,7 +219,7 @@ func tipLevelTooHot(m *processor.AudioMeasurements, _ *processor.EffectiveFilter
 			}
 		}
 		// reduction is always > 3.0 here because InputTP > 0.0
-		reduction := m.InputTP + 3.0 // bring peaks to -3 dBTP
+		reduction := m.Loudness.InputTP + 3.0 // bring peaks to -3 dBTP
 		return &RecordingTip{
 			Priority: 10,
 			RuleID:   "level_clipping",
@@ -227,7 +227,7 @@ func tipLevelTooHot(m *processor.AudioMeasurements, _ *processor.EffectiveFilter
 		}
 	}
 	// Near-clipping case (InputTP between -1.0 exclusive and 0.0 inclusive)
-	reduction := m.InputTP + 3.0 // bring peaks to -3 dBTP
+	reduction := m.Loudness.InputTP + 3.0 // bring peaks to -3 dBTP
 	var msg string
 	if reduction < 3.0 {
 		msg = "Your recording is very close to clipping - try turning your microphone gain down slightly to give yourself some headroom."
@@ -245,9 +245,9 @@ func tipLevelTooHot(m *processor.AudioMeasurements, _ *processor.EffectiveFilter
 // Uses NoiseProfile.MeasuredNoiseFloor when available, falling back to AstatsNoiseFloor.
 // Thresholds align with adaptive.go: -45 dBFS (la2aNoiseFloorNoisy), -55 dBFS (midpoint).
 func tipBackgroundNoise(m *processor.AudioMeasurements, _ *processor.EffectiveFilterConfig) *RecordingTip {
-	noiseFloor := m.AstatsNoiseFloor
-	if m.NoiseProfile != nil {
-		noiseFloor = m.NoiseProfile.MeasuredNoiseFloor
+	noiseFloor := m.Noise.FloorAstats
+	if m.Regions.NoiseProfile != nil {
+		noiseFloor = m.Regions.NoiseProfile.MeasuredNoiseFloor
 	}
 
 	if noiseFloor > -45.0 {
@@ -271,10 +271,10 @@ func tipBackgroundNoise(m *processor.AudioMeasurements, _ *processor.EffectiveFi
 // Requires NoiseProfile with low entropy (< 0.30, indicating tonal noise),
 // low flatness (< 0.3, confirming tonal character), and audible noise (> -65 dBFS).
 func tipMainsHum(m *processor.AudioMeasurements, _ *processor.EffectiveFilterConfig) *RecordingTip {
-	if m.NoiseProfile == nil {
+	if m.Regions.NoiseProfile == nil {
 		return nil
 	}
-	np := m.NoiseProfile
+	np := m.Regions.NoiseProfile
 	if np.Entropy >= 0.30 || np.SpectralFlatness >= 0.3 || np.MeasuredNoiseFloor < -65.0 {
 		return nil
 	}
@@ -291,10 +291,10 @@ func tipMainsHum(m *processor.AudioMeasurements, _ *processor.EffectiveFilterCon
 // Thresholds: NoiseReductionHeadroom < 15 dB (below minSNRMargin of 20 dB in analyzer.go)
 // AND SpeechProfile.RMSLevel < -30 dBFS.
 func tipTooFarFromMic(m *processor.AudioMeasurements, _ *processor.EffectiveFilterConfig) *RecordingTip {
-	if m.SpeechProfile == nil || m.NoiseProfile == nil {
+	if m.Regions.SpeechProfile == nil || m.Regions.NoiseProfile == nil {
 		return nil
 	}
-	if m.NoiseReductionHeadroom >= 15.0 || m.SpeechProfile.RMSLevel >= -30.0 {
+	if m.Noise.ReductionHeadroom >= 15.0 || m.Regions.SpeechProfile.RMSLevel >= -30.0 {
 		return nil
 	}
 	return &RecordingTip{
@@ -311,9 +311,9 @@ func tipTooFarFromMic(m *processor.AudioMeasurements, _ *processor.EffectiveFilt
 func tipProximityEffect(m *processor.AudioMeasurements, _ *processor.EffectiveFilterConfig) *RecordingTip {
 	decrease := m.Spectral.Decrease
 	skewness := m.Spectral.Skewness
-	if m.SpeechProfile != nil {
-		decrease = m.SpeechProfile.Spectral.Decrease
-		skewness = m.SpeechProfile.Spectral.Skewness
+	if m.Regions.SpeechProfile != nil {
+		decrease = m.Regions.SpeechProfile.Spectral.Decrease
+		skewness = m.Regions.SpeechProfile.Spectral.Skewness
 	}
 
 	veryWarm := decrease < -0.10
@@ -341,12 +341,12 @@ func tipSibilance(m *processor.AudioMeasurements, config *processor.EffectiveFil
 
 	centroid := m.Spectral.Centroid
 	rolloff := m.Spectral.Rolloff
-	if m.SpeechProfile != nil {
-		if m.SpeechProfile.Spectral.Centroid > 0 {
-			centroid = m.SpeechProfile.Spectral.Centroid
+	if m.Regions.SpeechProfile != nil {
+		if m.Regions.SpeechProfile.Spectral.Centroid > 0 {
+			centroid = m.Regions.SpeechProfile.Spectral.Centroid
 		}
-		if m.SpeechProfile.Spectral.Rolloff > 0 {
-			rolloff = m.SpeechProfile.Spectral.Rolloff
+		if m.Regions.SpeechProfile.Spectral.Rolloff > 0 {
+			rolloff = m.Regions.SpeechProfile.Spectral.Rolloff
 		}
 	}
 
@@ -363,7 +363,7 @@ func tipSibilance(m *processor.AudioMeasurements, config *processor.EffectiveFil
 // tipDynamicRange fires when the loudness range is very wide (InputLRA > 18 LU),
 // indicating inconsistent speaking volume or microphone distance.
 func tipDynamicRange(m *processor.AudioMeasurements, _ *processor.EffectiveFilterConfig) *RecordingTip {
-	if m.InputLRA <= 18.0 {
+	if m.Loudness.InputLRA <= 18.0 {
 		return nil
 	}
 	return &RecordingTip{
@@ -378,9 +378,9 @@ func tipDynamicRange(m *processor.AudioMeasurements, _ *processor.EffectiveFilte
 // Threshold: CrestFactor < 6 dB (brickwalled per Spectral-Metrics-Reference.md).
 // CrestFactor == 0 is treated as unmeasured and skipped.
 func tipOverCompressed(m *processor.AudioMeasurements, _ *processor.EffectiveFilterConfig) *RecordingTip {
-	crest := m.CrestFactor
-	if m.SpeechProfile != nil && m.SpeechProfile.CrestFactor > 0 {
-		crest = m.SpeechProfile.CrestFactor
+	crest := m.Dynamics.CrestFactor
+	if m.Regions.SpeechProfile != nil && m.Regions.SpeechProfile.CrestFactor > 0 {
+		crest = m.Regions.SpeechProfile.CrestFactor
 	}
 
 	if crest >= 6.0 || crest == 0 {
@@ -397,7 +397,7 @@ func tipOverCompressed(m *processor.AudioMeasurements, _ *processor.EffectiveFil
 // Threshold: NoiseReductionHeadroom < 10 dB (half of minSNRMargin 20 dB).
 // NoiseReductionHeadroom == 0 is treated as unmeasured and skipped.
 func tipPoorSNR(m *processor.AudioMeasurements, _ *processor.EffectiveFilterConfig) *RecordingTip {
-	if m.NoiseReductionHeadroom >= 10.0 || m.NoiseReductionHeadroom == 0 {
+	if m.Noise.ReductionHeadroom >= 10.0 || m.Noise.ReductionHeadroom == 0 {
 		return nil
 	}
 	return &RecordingTip{
@@ -413,9 +413,9 @@ func tipPoorSNR(m *processor.AudioMeasurements, _ *processor.EffectiveFilterConf
 // CrestFactor == 0 is treated as unmeasured and skipped.
 // Prefers SpeechProfile.CrestFactor when available, falling back to full-file CrestFactor.
 func tipHighCrestFactor(m *processor.AudioMeasurements, _ *processor.EffectiveFilterConfig) *RecordingTip {
-	crest := m.CrestFactor
-	if m.SpeechProfile != nil && m.SpeechProfile.CrestFactor > 0 {
-		crest = m.SpeechProfile.CrestFactor
+	crest := m.Dynamics.CrestFactor
+	if m.Regions.SpeechProfile != nil && m.Regions.SpeechProfile.CrestFactor > 0 {
+		crest = m.Regions.SpeechProfile.CrestFactor
 	}
 	if crest <= 20.0 || crest == 0 {
 		return nil

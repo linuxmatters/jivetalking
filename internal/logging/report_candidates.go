@@ -71,12 +71,12 @@ func writeReportRejectionSummary(f *os.File, candidates []processor.RoomToneCand
 }
 
 func rankedRoomToneCandidateEntries(measurements *processor.AudioMeasurements) (*candidateDisplayEntry[processor.RoomToneCandidateMetrics], []candidateDisplayEntry[processor.RoomToneCandidateMetrics]) {
-	if measurements == nil || len(measurements.RoomToneCandidates) == 0 {
+	if measurements == nil || len(measurements.Regions.RoomToneCandidates) == 0 {
 		return nil, nil
 	}
 
 	return rankedCandidateEntries(
-		measurements.RoomToneCandidates,
+		measurements.Regions.RoomToneCandidates,
 		func(c processor.RoomToneCandidateMetrics) bool { return isSelectedRoomToneCandidate(c, measurements) },
 		func(c processor.RoomToneCandidateMetrics) time.Duration { return c.Region.Start },
 		func(c processor.RoomToneCandidateMetrics) float64 { return c.Score },
@@ -84,13 +84,13 @@ func rankedRoomToneCandidateEntries(measurements *processor.AudioMeasurements) (
 }
 
 func isSelectedRoomToneCandidate(c processor.RoomToneCandidateMetrics, measurements *processor.AudioMeasurements) bool {
-	if measurements == nil || measurements.NoiseProfile == nil {
+	if measurements == nil || measurements.Regions.NoiseProfile == nil {
 		return false
 	}
-	if measurements.NoiseProfile.WasRefined {
-		return c.Region.Start == measurements.NoiseProfile.OriginalStart
+	if measurements.Regions.NoiseProfile.WasRefined {
+		return c.Region.Start == measurements.Regions.NoiseProfile.OriginalStart
 	}
-	return c.Region.Start == measurements.NoiseProfile.Start
+	return c.Region.Start == measurements.Regions.NoiseProfile.Start
 }
 
 func writeReportSpeechCandidateMetrics(f io.Writer, index int, c processor.SpeechCandidateMetrics, elected bool) {
@@ -141,12 +141,12 @@ func writeReportCompactSpeechCandidateRow(f io.Writer, index int, c processor.Sp
 }
 
 func rankedSpeechCandidateEntries(measurements *processor.AudioMeasurements) (*candidateDisplayEntry[processor.SpeechCandidateMetrics], []candidateDisplayEntry[processor.SpeechCandidateMetrics]) {
-	if measurements == nil || len(measurements.SpeechCandidates) == 0 {
+	if measurements == nil || len(measurements.Regions.SpeechCandidates) == 0 {
 		return nil, nil
 	}
 
 	return rankedCandidateEntries(
-		measurements.SpeechCandidates,
+		measurements.Regions.SpeechCandidates,
 		func(c processor.SpeechCandidateMetrics) bool { return isSelectedSpeechCandidate(c, measurements) },
 		func(c processor.SpeechCandidateMetrics) time.Duration { return c.Region.Start },
 		func(c processor.SpeechCandidateMetrics) float64 { return c.Score },
@@ -188,13 +188,13 @@ func selectCandidateEntries[T any](entries []candidateDisplayEntry[T]) []candida
 }
 
 func isSelectedSpeechCandidate(c processor.SpeechCandidateMetrics, measurements *processor.AudioMeasurements) bool {
-	if measurements == nil || measurements.SpeechProfile == nil {
+	if measurements == nil || measurements.Regions.SpeechProfile == nil {
 		return false
 	}
 	if c.WasRefined {
-		return c.OriginalStart == measurements.SpeechProfile.OriginalStart
+		return c.OriginalStart == measurements.Regions.SpeechProfile.OriginalStart
 	}
-	return c.Region.Start == measurements.SpeechProfile.Region.Start
+	return c.Region.Start == measurements.Regions.SpeechProfile.Region.Start
 }
 
 func writeCandidateDisplaySummary(f *os.File, totalCandidates int, hasElected bool, displayedCandidates int) {
@@ -246,7 +246,7 @@ func writeReportCandidateRejectionSummary(w io.Writer, summary string) {
 }
 
 func writeAnalysisRoomToneCandidates(w io.Writer, measurements *processor.AudioMeasurements) {
-	if len(measurements.RoomToneCandidates) == 0 {
+	if len(measurements.Regions.RoomToneCandidates) == 0 {
 		writeAnalysisRoomToneFallback(w, measurements)
 		return
 	}
@@ -254,11 +254,11 @@ func writeAnalysisRoomToneCandidates(w io.Writer, measurements *processor.AudioM
 	electedCandidate, displayCandidates := rankedRoomToneCandidateEntries(measurements)
 	writeAnalysisCandidateFlow(
 		w,
-		len(measurements.RoomToneCandidates),
+		len(measurements.Regions.RoomToneCandidates),
 		electedCandidate,
 		displayCandidates,
 		func() {
-			if measurements.VoiceActivated {
+			if measurements.Noise.VoiceActivated {
 				fmt.Fprintln(w, "  Voice-activated recording detected")
 			}
 		},
@@ -269,28 +269,28 @@ func writeAnalysisRoomToneCandidates(w io.Writer, measurements *processor.AudioM
 			writeCompactAnalysisRoomToneCandidateRow(w, entry.index, entry.candidate)
 		},
 		func() {
-			writeRoomToneRejectionSummary(w, measurements.RoomToneCandidates)
+			writeRoomToneRejectionSummary(w, measurements.Regions.RoomToneCandidates)
 		},
 	)
 }
 
 func writeAnalysisRoomToneFallback(w io.Writer, measurements *processor.AudioMeasurements) {
-	if measurements.NoiseProfile != nil {
+	if measurements.Regions.NoiseProfile != nil {
 		writeAnalysisMetricRows(w, "  ", 15, []analysisMetricSpec{
-			{"Sample", fmt.Sprintf("%.1fs at %s", measurements.NoiseProfile.Duration.Seconds(), formatTimestamp(measurements.NoiseProfile.Start))},
-			{"Noise Floor", fmt.Sprintf("%.1f dBFS", measurements.NoiseProfile.MeasuredNoiseFloor)},
+			{"Sample", fmt.Sprintf("%.1fs at %s", measurements.Regions.NoiseProfile.Duration.Seconds(), formatTimestamp(measurements.Regions.NoiseProfile.Start))},
+			{"Noise Floor", fmt.Sprintf("%.1f dBFS", measurements.Regions.NoiseProfile.MeasuredNoiseFloor)},
 		})
 		return
 	}
 
 	fmt.Fprintln(w, "  No room tone detected")
-	if measurements.VoiceActivated {
+	if measurements.Noise.VoiceActivated {
 		fmt.Fprintln(w, "  Voice-activated recording detected")
 	}
 }
 
 func writeAnalysisSpeechCandidates(w io.Writer, measurements *processor.AudioMeasurements) {
-	if len(measurements.SpeechCandidates) == 0 {
+	if len(measurements.Regions.SpeechCandidates) == 0 {
 		writeAnalysisSpeechFallback(w, measurements)
 		return
 	}
@@ -298,7 +298,7 @@ func writeAnalysisSpeechCandidates(w io.Writer, measurements *processor.AudioMea
 	electedCandidate, displayCandidates := rankedSpeechCandidateEntries(measurements)
 	writeAnalysisCandidateFlow(
 		w,
-		len(measurements.SpeechCandidates),
+		len(measurements.Regions.SpeechCandidates),
 		electedCandidate,
 		displayCandidates,
 		nil,
@@ -307,16 +307,16 @@ func writeAnalysisSpeechCandidates(w io.Writer, measurements *processor.AudioMea
 			writeCompactAnalysisSpeechCandidateRow(w, entry.index, entry.candidate)
 		},
 		func() {
-			writeSpeechRejectionSummary(w, measurements.SpeechCandidates)
+			writeSpeechRejectionSummary(w, measurements.Regions.SpeechCandidates)
 		},
 	)
 }
 
 func writeAnalysisSpeechFallback(w io.Writer, measurements *processor.AudioMeasurements) {
-	if measurements.SpeechProfile != nil {
+	if measurements.Regions.SpeechProfile != nil {
 		writeAnalysisMetricRows(w, "  ", 15, []analysisMetricSpec{
-			{"Sample", fmt.Sprintf("%.1fs at %s", measurements.SpeechProfile.Region.Duration.Seconds(), formatTimestamp(measurements.SpeechProfile.Region.Start))},
-			{"RMS Level", fmt.Sprintf("%.1f dBFS", measurements.SpeechProfile.RMSLevel)},
+			{"Sample", fmt.Sprintf("%.1fs at %s", measurements.Regions.SpeechProfile.Region.Duration.Seconds(), formatTimestamp(measurements.Regions.SpeechProfile.Region.Start))},
+			{"RMS Level", fmt.Sprintf("%.1f dBFS", measurements.Regions.SpeechProfile.RMSLevel)},
 		})
 		return
 	}
@@ -375,9 +375,9 @@ func writeAnalysisRoomToneCandidateMetrics(w io.Writer, entry candidateDisplayEn
 	c := entry.candidate
 	fmt.Fprintf(w, "  #%d: %.1fs at %s (elected)\n",
 		entry.index+1, c.Region.Duration.Seconds(), formatTimestamp(c.Region.Start))
-	if measurements.NoiseProfile.WasRefined {
+	if measurements.Regions.NoiseProfile.WasRefined {
 		fmt.Fprintf(w, "      Refined:     %.1fs at %s (golden sub-region)\n",
-			measurements.NoiseProfile.Duration.Seconds(), formatTimestamp(measurements.NoiseProfile.Start))
+			measurements.Regions.NoiseProfile.Duration.Seconds(), formatTimestamp(measurements.Regions.NoiseProfile.Start))
 	}
 	writeRoomToneCandidateMetrics(w, c)
 }

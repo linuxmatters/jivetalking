@@ -330,8 +330,8 @@ func TestRunAnalysisOnlyWithDeps_OrderedOutputParityAcrossJobs(t *testing.T) {
 		time.Sleep(delay)
 
 		measurements := makeAnalysisOnlyTestMeasurements()
-		measurements.InputI -= float64(index)
-		measurements.NoiseFloor -= float64(index)
+		measurements.Loudness.InputI -= float64(index)
+		measurements.Noise.Floor -= float64(index)
 
 		effective, diagnostics := processor.AdaptConfig(baseConfig, measurements)
 		return &processor.AnalysisResult{
@@ -439,7 +439,7 @@ func TestRunAnalysisOnlyWithDeps_NonTTYBannerThenOrderedReports(t *testing.T) {
 		time.Sleep(delay)
 
 		measurements := makeAnalysisOnlyTestMeasurements()
-		measurements.InputI -= float64(index)
+		measurements.Loudness.InputI -= float64(index)
 
 		effective, diagnostics := processor.AdaptConfig(baseConfig, measurements)
 		return &processor.AnalysisResult{
@@ -851,17 +851,21 @@ func TestResolveJobs(t *testing.T) {
 
 func makeAnalysisOnlyTestMeasurements() *processor.AudioMeasurements {
 	return &processor.AudioMeasurements{
-		BaseMeasurements: processor.BaseMeasurements{
+		Dynamics: processor.DynamicsMetrics{
 			RMSLevel:     -24,
 			PeakLevel:    -6,
 			DynamicRange: 18,
 		},
-		InputI:              -23,
-		InputTP:             -1,
-		InputLRA:            6,
-		NoiseFloor:          -50,
-		NoiseFloorSource:    "rms_estimate",
-		PreScanNoiseFloor:   -50,
-		RoomToneDetectLevel: -45,
+		Loudness: processor.InputLoudnessMetrics{
+			InputI:   -23,
+			InputTP:  -1,
+			InputLRA: 6,
+		},
+		Noise: processor.NoiseMetrics{
+			Floor:               -50,
+			FloorSource:         "rms_estimate",
+			FloorPrescan:        -50,
+			RoomToneDetectLevel: -45,
+		},
 	}
 }

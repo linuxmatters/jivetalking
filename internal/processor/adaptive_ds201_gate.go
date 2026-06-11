@@ -123,9 +123,9 @@ func tuneDS201Gate(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagnosti
 	// (NoiseProfile is extracted from the elected room-tone region).
 	var roomToneCrest, roomTonePeak float64
 
-	if measurements.NoiseProfile != nil {
-		roomToneCrest = measurements.NoiseProfile.CrestFactor
-		roomTonePeak = measurements.NoiseProfile.PeakLevel
+	if measurements.Regions.NoiseProfile != nil {
+		roomToneCrest = measurements.Regions.NoiseProfile.CrestFactor
+		roomTonePeak = measurements.Regions.NoiseProfile.PeakLevel
 	} else {
 		// NoiseProfile unavailable - conservative defaults for the threshold guard.
 		roomToneCrest = 15.0 // Moderate crest, no peak reference
@@ -133,50 +133,50 @@ func tuneDS201Gate(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagnosti
 	}
 
 	// Calculate LUFS gap for threshold decision
-	lufsGap := config.Loudnorm.TargetI - measurements.InputI
+	lufsGap := config.Loudnorm.TargetI - measurements.Loudness.InputI
 	if lufsGap < 0 {
 		lufsGap = 0
 	}
 
 	// 2. Ratio: based on LRA (loudness range) - soft expander approach
 	// Calculate ratio FIRST since threshold depends on it
-	config.DS201Gate.Ratio = calculateDS201GateRatio(measurements.InputLRA)
+	config.DS201Gate.Ratio = calculateDS201GateRatio(measurements.Loudness.InputLRA)
 
 	// Extract speech measurements (zero values if no profile)
 	var speechRMS, speechCrest float64
-	if measurements.SpeechProfile != nil {
-		speechRMS = measurements.SpeechProfile.RMSLevel
-		speechCrest = measurements.SpeechProfile.CrestFactor
+	if measurements.Regions.SpeechProfile != nil {
+		speechRMS = measurements.Regions.SpeechProfile.RMSLevel
+		speechCrest = measurements.Regions.SpeechProfile.CrestFactor
 	}
 
 	// 1. Threshold: sits above noise/bleed peaks, below quiet speech
 	// Gap is derived from ratio to achieve target reduction
 	config.DS201Gate.Threshold = calculateDS201GateThreshold(
-		measurements.NoiseFloor,
+		measurements.Noise.Floor,
 		roomTonePeak,
 		roomToneCrest,
 		config.DS201Gate.Ratio,
 		lufsGap,
-		measurements.InputLRA,
+		measurements.Loudness.InputLRA,
 		speechRMS,
 		speechCrest,
 	)
 
 	// Track threshold calculation diagnostics
-	if measurements.SpeechProfile != nil && diagnostics != nil {
-		quietSpeech := measurements.SpeechProfile.RMSLevel - measurements.SpeechProfile.CrestFactor
-		separation := quietSpeech - measurements.NoiseFloor
+	if measurements.Regions.SpeechProfile != nil && diagnostics != nil {
+		quietSpeech := measurements.Regions.SpeechProfile.RMSLevel - measurements.Regions.SpeechProfile.CrestFactor
+		separation := quietSpeech - measurements.Noise.Floor
 
 		// Calculate aggression for diagnostics
-		aggression := calculateAggression(separation, measurements.InputLRA)
-		dynamicRange := measurements.SpeechProfile.CrestFactor
+		aggression := calculateAggression(separation, measurements.Loudness.InputLRA)
+		dynamicRange := measurements.Regions.SpeechProfile.CrestFactor
 
 		// Calculate unclamped threshold for diagnostics
 		thresholdUnclamped := quietSpeech + (dynamicRange * aggression)
 
 		// Determine clamp reason
-		noiseFloorLimit := measurements.NoiseFloor + ds201GateThresholdNoiseMargin
-		speechRMSLimit := measurements.SpeechProfile.RMSLevel - ds201GateThresholdSpeechMargin
+		noiseFloorLimit := measurements.Noise.Floor + ds201GateThresholdNoiseMargin
+		speechRMSLimit := measurements.Regions.SpeechProfile.RMSLevel - ds201GateThresholdSpeechMargin
 		actualThreshold := LinearAmplitude(config.DS201Gate.Threshold).Decibels().Float64()
 
 		var clampReason string
@@ -206,12 +206,12 @@ func tuneDS201Gate(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagnosti
 	// pumping on tonal bleed; low LRA extends release to prevent pumping.
 	config.DS201Gate.Release = calculateDS201GateRelease(
 		measurements.Spectral.Flux,
-		measurements.ZeroCrossingsRate,
-		measurements.InputLRA,
+		measurements.Dynamics.ZeroCrossingsRate,
+		measurements.Loudness.InputLRA,
 	)
 
 	// 5. Range: driven by noise floor (clean recordings take a deeper range)
-	rangeDB := calculateDS201GateRangeDB(measurements.NoiseFloor)
+	rangeDB := calculateDS201GateRangeDB(measurements.Noise.Floor)
 
 	// Clamp range and convert to linear
 	rangeDB = max(ds201GateRangeMinDB, min(rangeDB, ds201GateRangeMaxDB))
@@ -229,7 +229,7 @@ func tuneDS201Gate(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagnosti
 	// Very quiet recordings with uniform levels cause the gate's soft expansion
 	// to apply varying gain reduction across similar speech levels, creating
 	// volume modulation ("hunting"). Override to gentler parameters.
-	if lufsGap >= lufsGapExtreme && measurements.InputLRA < ds201GateGentleLRAThreshold {
+	if lufsGap >= lufsGapExtreme && measurements.Loudness.InputLRA < ds201GateGentleLRAThreshold {
 		config.DS201Gate.Ratio = ds201GateGentleRatio
 		config.DS201Gate.Knee = ds201GateGentleKnee
 		if diagnostics != nil {

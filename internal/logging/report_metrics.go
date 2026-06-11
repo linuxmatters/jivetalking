@@ -72,14 +72,33 @@ func buildSpectralMetricRows(values func(spectralMetricDescriptor) [3]float64, i
 	return specs
 }
 
-func roomToneSpectralValueOr(src *processor.RoomToneCandidateMetrics, descriptor spectralMetricDescriptor) float64 {
+// roomToneRegionSample returns the embedded RegionSample of an input room tone
+// candidate, or nil when the candidate is absent. Lets the shared *RegionSample
+// formatter helpers treat input candidates and bare output samples uniformly.
+func roomToneRegionSample(c *processor.RoomToneCandidateMetrics) *processor.RegionSample {
+	if c == nil {
+		return nil
+	}
+	return &c.RegionSample
+}
+
+// speechRegionSample returns the embedded RegionSample of an input speech
+// candidate, or nil when the candidate is absent.
+func speechRegionSample(c *processor.SpeechCandidateMetrics) *processor.RegionSample {
+	if c == nil {
+		return nil
+	}
+	return &c.RegionSample
+}
+
+func roomToneSpectralValueOr(src *processor.RegionSample, descriptor spectralMetricDescriptor) float64 {
 	if src == nil {
 		return math.NaN()
 	}
 	return descriptor.value(src.Spectral)
 }
 
-func speechSpectralValueOr(src *processor.SpeechCandidateMetrics, descriptor spectralMetricDescriptor) float64 {
+func speechSpectralValueOr(src *processor.RegionSample, descriptor spectralMetricDescriptor) float64 {
 	if src == nil {
 		return math.NaN()
 	}
@@ -191,12 +210,12 @@ func writeLoudnessTable(f *os.File, input *processor.AudioMeasurements, filtered
 	}
 
 	specs := []threeColMetricSpec{
-		{"Integrated Loudness", v(func(m *processor.AudioMeasurements) float64 { return m.InputI }, func(m *processor.OutputMeasurements) float64 { return m.OutputI }), 1, "LUFS", 0, nil},
-		{"True Peak", v(func(m *processor.AudioMeasurements) float64 { return m.InputTP }, func(m *processor.OutputMeasurements) float64 { return m.OutputTP }), 1, "dBTP", 0, nil},
-		{"Loudness Range", v(func(m *processor.AudioMeasurements) float64 { return m.InputLRA }, func(m *processor.OutputMeasurements) float64 { return m.OutputLRA }), 1, "LU", 0, nil},
-		{"Sample Peak", v(func(m *processor.AudioMeasurements) float64 { return m.SamplePeak }, func(m *processor.OutputMeasurements) float64 { return m.SamplePeak }), 1, "dBFS", 0, nil},
-		{"Momentary Loudness", v(func(m *processor.AudioMeasurements) float64 { return m.MomentaryLoudness }, func(m *processor.OutputMeasurements) float64 { return m.MomentaryLoudness }), 1, "LUFS", 0, nil},
-		{"Short-term Loudness", v(func(m *processor.AudioMeasurements) float64 { return m.ShortTermLoudness }, func(m *processor.OutputMeasurements) float64 { return m.ShortTermLoudness }), 1, "LUFS", 0, nil},
+		{"Integrated Loudness", v(func(m *processor.AudioMeasurements) float64 { return m.Loudness.InputI }, func(m *processor.OutputMeasurements) float64 { return m.Loudness.OutputI }), 1, "LUFS", 0, nil},
+		{"True Peak", v(func(m *processor.AudioMeasurements) float64 { return m.Loudness.InputTP }, func(m *processor.OutputMeasurements) float64 { return m.Loudness.OutputTP }), 1, "dBTP", 0, nil},
+		{"Loudness Range", v(func(m *processor.AudioMeasurements) float64 { return m.Loudness.InputLRA }, func(m *processor.OutputMeasurements) float64 { return m.Loudness.OutputLRA }), 1, "LU", 0, nil},
+		{"Sample Peak", v(func(m *processor.AudioMeasurements) float64 { return m.Loudness.SamplePeak }, func(m *processor.OutputMeasurements) float64 { return m.Loudness.SamplePeak }), 1, "dBFS", 0, nil},
+		{"Momentary Loudness", v(func(m *processor.AudioMeasurements) float64 { return m.Loudness.MomentaryLoudness }, func(m *processor.OutputMeasurements) float64 { return m.Loudness.MomentaryLoudness }), 1, "LUFS", 0, nil},
+		{"Short-term Loudness", v(func(m *processor.AudioMeasurements) float64 { return m.Loudness.ShortTermLoudness }, func(m *processor.OutputMeasurements) float64 { return m.Loudness.ShortTermLoudness }), 1, "LUFS", 0, nil},
 	}
 	for _, s := range specs {
 		table.AddMetricRow(s.label, s.vals[0], s.vals[1], s.vals[2], s.decimals, s.unit, "")
@@ -212,7 +231,7 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	writeSection(f, "Noise Floor Analysis")
 
 	// Skip if no input measurements or noise profile
-	if inputMeasurements == nil || inputMeasurements.NoiseProfile == nil {
+	if inputMeasurements == nil || inputMeasurements.Regions.NoiseProfile == nil {
 		fmt.Fprintln(f, "No room tone detected in input — noise profiling unavailable")
 		fmt.Fprintln(f, "")
 		return
@@ -228,7 +247,7 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	// Find the elected room tone candidate in RoomToneCandidates by matching Region.Start to NoiseProfile.Start
 	// NoiseProfile only has ~10 fields, but we need the full 20+ field RoomToneCandidateMetrics
 	var inputNoise *processor.RoomToneCandidateMetrics
-	noiseProfile := inputMeasurements.NoiseProfile
+	noiseProfile := inputMeasurements.Regions.NoiseProfile
 
 	// Handle refined regions - match against OriginalStart if refined, otherwise match against Start
 	targetStart := noiseProfile.Start
@@ -236,9 +255,9 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 		targetStart = noiseProfile.OriginalStart
 	}
 
-	for i := range inputMeasurements.RoomToneCandidates {
-		if inputMeasurements.RoomToneCandidates[i].Region.Start == targetStart {
-			inputNoise = &inputMeasurements.RoomToneCandidates[i]
+	for i := range inputMeasurements.Regions.RoomToneCandidates {
+		if inputMeasurements.Regions.RoomToneCandidates[i].Region.Start == targetStart {
+			inputNoise = &inputMeasurements.Regions.RoomToneCandidates[i]
 			break
 		}
 	}
@@ -249,9 +268,12 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 		fmt.Fprintln(f, "")
 	}
 
-	// Extract filtered and final room tone samples
-	var filteredNoise *processor.RoomToneCandidateMetrics
-	var finalNoise *processor.RoomToneCandidateMetrics
+	// Extract filtered and final room tone samples (bare RegionSample) and the
+	// input candidate's embedded sample, so the shared formatter helpers read all
+	// three stages through *RegionSample.
+	inputNoiseSample := roomToneRegionSample(inputNoise)
+	var filteredNoise *processor.RegionSample
+	var finalNoise *processor.RegionSample
 	if filteredMeasurements != nil {
 		filteredNoise = filteredMeasurements.RoomToneSample
 	}
@@ -365,8 +387,8 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	inputSNR := math.NaN()
 	filteredSNR := math.NaN()
 	finalSNR := math.NaN()
-	if inputMeasurements.SpeechProfile != nil && !math.IsNaN(inputRMS) {
-		inputSNR = inputMeasurements.SpeechProfile.RMSLevel - inputRMS
+	if inputMeasurements.Regions.SpeechProfile != nil && !math.IsNaN(inputRMS) {
+		inputSNR = inputMeasurements.Regions.SpeechProfile.RMSLevel - inputRMS
 	}
 	if filteredMeasurements != nil && filteredMeasurements.SpeechSample != nil && !math.IsNaN(filteredRMS) {
 		filteredSNR = filteredMeasurements.SpeechSample.RMSLevel - filteredRMS
@@ -434,16 +456,16 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	// Show "n/a" instead of misleading zeros or arbitrary values.
 
 	// Entropy input has a special fallback to NoiseProfile when candidate not found
-	inputEntropy := valOr(inputNoise, func(m *processor.RoomToneCandidateMetrics) float64 { return m.Spectral.Entropy })
+	inputEntropy := valOr(inputNoiseSample, func(m *processor.RegionSample) float64 { return m.Spectral.Entropy })
 	if inputNoise == nil {
 		inputEntropy = noiseProfile.Entropy
 	}
-	filteredEntropy := valOr(filteredNoise, func(m *processor.RoomToneCandidateMetrics) float64 { return m.Spectral.Entropy })
-	finalEntropy := valOr(finalNoise, func(m *processor.RoomToneCandidateMetrics) float64 { return m.Spectral.Entropy })
+	filteredEntropy := valOr(filteredNoise, func(m *processor.RegionSample) float64 { return m.Spectral.Entropy })
+	finalEntropy := valOr(finalNoise, func(m *processor.RegionSample) float64 { return m.Spectral.Entropy })
 
-	v := func(field func(*processor.RoomToneCandidateMetrics) float64) [3]float64 {
+	v := func(field func(*processor.RegionSample) float64) [3]float64 {
 		return [3]float64{
-			valOr(inputNoise, field),
+			valOr(inputNoiseSample, field),
 			valOr(filteredNoise, field),
 			valOr(finalNoise, field),
 		}
@@ -454,7 +476,7 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 			return [3]float64{inputEntropy, filteredEntropy, finalEntropy}
 		}
 		return [3]float64{
-			roomToneSpectralValueOr(inputNoise, d),
+			roomToneSpectralValueOr(inputNoiseSample, d),
 			roomToneSpectralValueOr(filteredNoise, d),
 			roomToneSpectralValueOr(finalNoise, d),
 		}
@@ -463,13 +485,13 @@ func writeNoiseFloorTable(f *os.File, inputMeasurements *processor.AudioMeasurem
 	// ========== LOUDNESS METRICS ==========
 
 	addNoiseFloorMetricRows(table, []threeColMetricSpec{
-		{"Momentary LUFS", v(func(m *processor.RoomToneCandidateMetrics) float64 { return m.MomentaryLUFS }), 1, "LUFS", 0, nil},
-		{"Short-term LUFS", v(func(m *processor.RoomToneCandidateMetrics) float64 { return m.ShortTermLUFS }), 1, "LUFS", 0, nil},
+		{"Momentary LUFS", v(func(m *processor.RegionSample) float64 { return m.MomentaryLUFS }), 1, "LUFS", 0, nil},
+		{"Short-term LUFS", v(func(m *processor.RegionSample) float64 { return m.ShortTermLUFS }), 1, "LUFS", 0, nil},
 	}, nfFmtLUFS, gainNormalise, effectiveGainDB, filteredIsDigitalSilence, finalIsDigitalSilence)
 
 	addNoiseFloorMetricRows(table, []threeColMetricSpec{
-		{"True Peak", v(func(m *processor.RoomToneCandidateMetrics) float64 { return m.TruePeak }), 1, "dBTP", 0, nil},
-		{"Sample Peak", v(func(m *processor.RoomToneCandidateMetrics) float64 { return m.SamplePeak }), 1, "dBFS", 0, nil},
+		{"True Peak", v(func(m *processor.RegionSample) float64 { return m.TruePeak }), 1, "dBTP", 0, nil},
+		{"Sample Peak", v(func(m *processor.RegionSample) float64 { return m.SamplePeak }), 1, "dBFS", 0, nil},
 	}, nfFmtDB, gainNormalise, effectiveGainDB, filteredIsDigitalSilence, finalIsDigitalSilence)
 
 	// Character (interpretation row) - based on entropy
@@ -510,7 +532,7 @@ func writeSpeechRegionTable(f *os.File, inputMeasurements *processor.AudioMeasur
 	writeSection(f, "Speech Region Analysis")
 
 	// Skip if no input measurements or speech profile
-	if inputMeasurements == nil || inputMeasurements.SpeechProfile == nil {
+	if inputMeasurements == nil || inputMeasurements.Regions.SpeechProfile == nil {
 		fmt.Fprintln(f, "No speech profile available")
 		fmt.Fprintln(f, "")
 		return
@@ -523,10 +545,13 @@ func writeSpeechRegionTable(f *os.File, inputMeasurements *processor.AudioMeasur
 	}
 	gainNormalise := effectiveGainDB != 0
 
-	// Extract speech samples
-	inputSpeech := inputMeasurements.SpeechProfile
-	var filteredSpeech *processor.SpeechCandidateMetrics
-	var finalSpeech *processor.SpeechCandidateMetrics
+	// Extract speech samples (bare RegionSample) and the input candidate's
+	// embedded sample, so the shared formatter helpers read all three stages
+	// through *RegionSample.
+	inputSpeech := inputMeasurements.Regions.SpeechProfile
+	inputSpeechSample := speechRegionSample(inputSpeech)
+	var filteredSpeech *processor.RegionSample
+	var finalSpeech *processor.RegionSample
 	if filteredMeasurements != nil {
 		filteredSpeech = filteredMeasurements.SpeechSample
 	}
@@ -586,16 +611,16 @@ func writeSpeechRegionTable(f *os.File, inputMeasurements *processor.AudioMeasur
 	// ========== SPECTRAL METRICS ==========
 
 	// Extract centroid and entropy values needed by the Character row below
-	inputCentroid := valOr(inputSpeech, func(m *processor.SpeechCandidateMetrics) float64 { return m.Spectral.Centroid })
-	filteredCentroid := valOr(filteredSpeech, func(m *processor.SpeechCandidateMetrics) float64 { return m.Spectral.Centroid })
-	finalCentroid := valOr(finalSpeech, func(m *processor.SpeechCandidateMetrics) float64 { return m.Spectral.Centroid })
-	inputEntropy := valOr(inputSpeech, func(m *processor.SpeechCandidateMetrics) float64 { return m.Spectral.Entropy })
-	filteredEntropy := valOr(filteredSpeech, func(m *processor.SpeechCandidateMetrics) float64 { return m.Spectral.Entropy })
-	finalEntropy := valOr(finalSpeech, func(m *processor.SpeechCandidateMetrics) float64 { return m.Spectral.Entropy })
+	inputCentroid := valOr(inputSpeechSample, func(m *processor.RegionSample) float64 { return m.Spectral.Centroid })
+	filteredCentroid := valOr(filteredSpeech, func(m *processor.RegionSample) float64 { return m.Spectral.Centroid })
+	finalCentroid := valOr(finalSpeech, func(m *processor.RegionSample) float64 { return m.Spectral.Centroid })
+	inputEntropy := valOr(inputSpeechSample, func(m *processor.RegionSample) float64 { return m.Spectral.Entropy })
+	filteredEntropy := valOr(filteredSpeech, func(m *processor.RegionSample) float64 { return m.Spectral.Entropy })
+	finalEntropy := valOr(finalSpeech, func(m *processor.RegionSample) float64 { return m.Spectral.Entropy })
 
-	sv := func(field func(*processor.SpeechCandidateMetrics) float64) [3]float64 {
+	sv := func(field func(*processor.RegionSample) float64) [3]float64 {
 		return [3]float64{
-			valOr(inputSpeech, field),
+			valOr(inputSpeechSample, field),
 			valOr(filteredSpeech, field),
 			valOr(finalSpeech, field),
 		}
@@ -609,7 +634,7 @@ func writeSpeechRegionTable(f *os.File, inputMeasurements *processor.AudioMeasur
 			return [3]float64{inputEntropy, filteredEntropy, finalEntropy}
 		default:
 			return [3]float64{
-				speechSpectralValueOr(inputSpeech, d),
+				speechSpectralValueOr(inputSpeechSample, d),
 				speechSpectralValueOr(filteredSpeech, d),
 				speechSpectralValueOr(finalSpeech, d),
 			}
@@ -619,10 +644,10 @@ func writeSpeechRegionTable(f *os.File, inputMeasurements *processor.AudioMeasur
 	// ========== LOUDNESS METRICS ==========
 
 	addSpeechMetricRows(table, []threeColMetricSpec{
-		{"Momentary LUFS", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.MomentaryLUFS }), 1, "LUFS", 0, nil},
-		{"Short-term LUFS", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.ShortTermLUFS }), 1, "LUFS", 0, nil},
-		{"True Peak", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.TruePeak }), 1, "dBTP", 0, nil},
-		{"Sample Peak", sv(func(m *processor.SpeechCandidateMetrics) float64 { return m.SamplePeak }), 1, "dBFS", 0, nil},
+		{"Momentary LUFS", sv(func(m *processor.RegionSample) float64 { return m.MomentaryLUFS }), 1, "LUFS", 0, nil},
+		{"Short-term LUFS", sv(func(m *processor.RegionSample) float64 { return m.ShortTermLUFS }), 1, "LUFS", 0, nil},
+		{"True Peak", sv(func(m *processor.RegionSample) float64 { return m.TruePeak }), 1, "dBTP", 0, nil},
+		{"Sample Peak", sv(func(m *processor.RegionSample) float64 { return m.SamplePeak }), 1, "dBFS", 0, nil},
 	}, gainNormalise, effectiveGainDB)
 
 	// Character (interpretation row) - based on spectral centroid and entropy

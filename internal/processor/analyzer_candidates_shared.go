@@ -160,16 +160,18 @@ func measureRoomToneCandidateFromIntervals(region RoomToneRegion, intervals []In
 	avgSpectral := acc.spectralSum.average(n)
 
 	return &RoomToneCandidateMetrics{
-		Region:      region,
-		RMSLevel:    avgRMS,
-		PeakLevel:   acc.peakMax,
-		CrestFactor: acc.peakMax - avgRMS,
-		Spectral:    avgSpectral,
+		Region: region,
+		RegionSample: RegionSample{
+			RMSLevel:    avgRMS,
+			PeakLevel:   acc.peakMax,
+			CrestFactor: acc.peakMax - avgRMS,
+			Spectral:    avgSpectral,
 
-		MomentaryLUFS: acc.momentarySum / n,
-		ShortTermLUFS: acc.shortTermSum / n,
-		TruePeak:      acc.truePeakMax,
-		SamplePeak:    acc.samplePeakMax,
+			MomentaryLUFS: acc.momentarySum / n,
+			ShortTermLUFS: acc.shortTermSum / n,
+			TruePeak:      acc.truePeakMax,
+			SamplePeak:    acc.samplePeakMax,
+		},
 
 		StabilityScore: calculateStabilityScore(regionIntervals),
 
@@ -352,16 +354,18 @@ func measureSpeechCandidateFromIntervals(region SpeechRegion, intervals []Interv
 	voicingDensity := float64(voicedCount) / n
 
 	return &SpeechCandidateMetrics{
-		Region:      region,
-		RMSLevel:    avgRMS,
-		PeakLevel:   acc.peakMax,
-		CrestFactor: acc.peakMax - avgRMS,
-		Spectral:    avgSpectral,
+		Region: region,
+		RegionSample: RegionSample{
+			RMSLevel:    avgRMS,
+			PeakLevel:   acc.peakMax,
+			CrestFactor: acc.peakMax - avgRMS,
+			Spectral:    avgSpectral,
 
-		MomentaryLUFS: acc.momentarySum / n,
-		ShortTermLUFS: acc.shortTermSum / n,
-		TruePeak:      acc.truePeakMax,
-		SamplePeak:    acc.samplePeakMax,
+			MomentaryLUFS: acc.momentarySum / n,
+			ShortTermLUFS: acc.shortTermSum / n,
+			TruePeak:      acc.truePeakMax,
+			SamplePeak:    acc.samplePeakMax,
+		},
 
 		// Stability metrics
 		VoicingDensity: voicingDensity,

@@ -45,162 +45,6 @@ func TestIntervalSampleJSON_PreservesFlatSpectralFields(t *testing.T) {
 	assertSpectralValues(t, decoded.Spectral)
 }
 
-func TestAudioMeasurementsJSON_PreservesFlatSpectralFields(t *testing.T) {
-	measurements := AudioMeasurements{}
-	measurements.Spectral = flatSpectralMetricsFixture()
-
-	data, err := json.Marshal(measurements)
-	if err != nil {
-		t.Fatalf("Marshal() failed: %v", err)
-	}
-	assertFlatSpectralJSONKeys(t, data)
-
-	var decoded AudioMeasurements
-	if err := json.Unmarshal(flatSpectralJSONFixture(), &decoded); err != nil {
-		t.Fatalf("Unmarshal() failed: %v", err)
-	}
-	assertSpectralValues(t, decoded.Spectral)
-}
-
-func TestAudioMeasurementsJSON_PreservesInputFields(t *testing.T) {
-	measurements := AudioMeasurements{
-		BaseMeasurements: BaseMeasurements{
-			DynamicRange: 14.5,
-			Spectral:     flatSpectralMetricsFixture(),
-		},
-		InputI:                 -23.4,
-		InputTP:                -1.2,
-		InputLRA:               5.6,
-		InputThresh:            -34.0,
-		TargetOffset:           1.1,
-		NoiseFloor:             -62.0,
-		NoiseFloorSource:       "astats",
-		PreScanNoiseFloor:      -63.0,
-		RoomToneDetectLevel:    -55.0,
-		RoomToneRegions:        []RoomToneRegion{{Start: time.Second, End: 2 * time.Second, Duration: time.Second}},
-		RoomToneCandidates:     []RoomToneCandidateMetrics{{RMSLevel: -58.0, Spectral: flatSpectralMetricsFixture()}},
-		IntervalSamples:        []IntervalSample{{Timestamp: 250 * time.Millisecond, RMSLevel: -48.0, Spectral: flatSpectralMetricsFixture()}},
-		SpeechRegions:          []SpeechRegion{{Start: 3 * time.Second, End: 4 * time.Second, Duration: time.Second}},
-		SpeechProfile:          &SpeechCandidateMetrics{RMSLevel: -24.0, Spectral: flatSpectralMetricsFixture()},
-		VoiceActivated:         true,
-		NoiseProfile:           &NoiseProfile{Start: time.Second, Duration: time.Second, MeasuredNoiseFloor: -62.0},
-		SuggestedGateThreshold: 0.025,
-		NoiseReductionHeadroom: 12.5,
-	}
-
-	data, err := json.Marshal(measurements)
-	if err != nil {
-		t.Fatalf("Marshal() failed: %v", err)
-	}
-	assertJSONField(t, data, "input_i")
-	assertJSONField(t, data, "noise_floor_source")
-	assertJSONField(t, data, "interval_samples")
-	assertJSONField(t, data, "speech_profile")
-	assertJSONField(t, data, "noise_profile")
-	assertJSONField(t, data, "room_tone_detect_level")
-	assertJSONField(t, data, "room_tone_regions")
-	assertJSONField(t, data, "room_tone_candidates")
-	assertJSONFieldAbsent(t, data, "silence_detect_level")
-	assertJSONFieldAbsent(t, data, "silence_regions")
-	assertJSONFieldAbsent(t, data, "silence_candidates")
-
-	var decoded AudioMeasurements
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("Unmarshal() failed: %v", err)
-	}
-	if decoded.InputI != measurements.InputI {
-		t.Errorf("InputI = %v, want %v", decoded.InputI, measurements.InputI)
-	}
-	if decoded.NoiseFloorSource != measurements.NoiseFloorSource {
-		t.Errorf("NoiseFloorSource = %q, want %q", decoded.NoiseFloorSource, measurements.NoiseFloorSource)
-	}
-	if len(decoded.IntervalSamples) != 1 {
-		t.Fatalf("IntervalSamples length = %d, want 1", len(decoded.IntervalSamples))
-	}
-	if !decoded.IntervalSamples[0].Spectral.Found {
-		t.Fatal("expected interval sample spectral metrics to preserve Found")
-	}
-	if decoded.SpeechProfile == nil {
-		t.Fatal("expected SpeechProfile to round-trip")
-	}
-	if decoded.NoiseProfile == nil {
-		t.Fatal("expected NoiseProfile to round-trip")
-	}
-	if !decoded.VoiceActivated {
-		t.Fatal("expected VoiceActivated to round-trip")
-	}
-}
-
-func TestOutputMeasurementsJSON_PreservesFlatSpectralFields(t *testing.T) {
-	measurements := OutputMeasurements{}
-	measurements.Spectral = flatSpectralMetricsFixture()
-
-	data, err := json.Marshal(measurements)
-	if err != nil {
-		t.Fatalf("Marshal() failed: %v", err)
-	}
-	assertFlatSpectralJSONKeys(t, data)
-
-	var decoded OutputMeasurements
-	if err := json.Unmarshal(flatSpectralJSONFixture(), &decoded); err != nil {
-		t.Fatalf("Unmarshal() failed: %v", err)
-	}
-	assertSpectralValues(t, decoded.Spectral)
-}
-
-func TestOutputMeasurementsJSON_PreservesOutputFields(t *testing.T) {
-	measurements := OutputMeasurements{
-		BaseMeasurements: BaseMeasurements{
-			DynamicRange: 10.5,
-			Spectral:     flatSpectralMetricsFixture(),
-		},
-		OutputI:              -16.0,
-		OutputTP:             -1.0,
-		OutputLRA:            4.0,
-		OutputThresh:         -26.0,
-		TargetOffset:         0.3,
-		LoudnormInputI:       -18.0,
-		LoudnormInputTP:      -1.5,
-		LoudnormInputLRA:     5.0,
-		LoudnormInputThresh:  -28.0,
-		LoudnormTargetOffset: 1.2,
-		LoudnormMeasured:     true,
-		RoomToneSample:       &RoomToneCandidateMetrics{RMSLevel: -58.0, Spectral: flatSpectralMetricsFixture()},
-		SpeechSample:         &SpeechCandidateMetrics{RMSLevel: -22.0, Spectral: flatSpectralMetricsFixture()},
-	}
-
-	data, err := json.Marshal(measurements)
-	if err != nil {
-		t.Fatalf("Marshal() failed: %v", err)
-	}
-	assertJSONField(t, data, "output_i")
-	assertJSONField(t, data, "loudnorm_input_i")
-	assertJSONField(t, data, "loudnorm_measured")
-	assertJSONField(t, data, "room_tone_sample")
-	assertJSONField(t, data, "speech_sample")
-	assertJSONFieldAbsent(t, data, "silence_sample")
-
-	var decoded OutputMeasurements
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("Unmarshal() failed: %v", err)
-	}
-	if decoded.OutputI != measurements.OutputI {
-		t.Errorf("OutputI = %v, want %v", decoded.OutputI, measurements.OutputI)
-	}
-	if decoded.LoudnormInputI != measurements.LoudnormInputI {
-		t.Errorf("LoudnormInputI = %v, want %v", decoded.LoudnormInputI, measurements.LoudnormInputI)
-	}
-	if !decoded.LoudnormMeasured {
-		t.Fatal("expected LoudnormMeasured to round-trip")
-	}
-	if decoded.RoomToneSample == nil {
-		t.Fatal("expected RoomToneSample to round-trip")
-	}
-	if decoded.SpeechSample == nil {
-		t.Fatal("expected SpeechSample to round-trip")
-	}
-}
-
 func TestBaseMeasurements_HasNoFlatSpectralPrimitiveFields(t *testing.T) {
 	assertNoStaleSpectralPrimitiveFields[BaseMeasurements](t)
 }
@@ -220,30 +64,6 @@ func assertFlatSpectralJSONKeys(t *testing.T, data []byte) {
 	}
 	if _, ok := object["spectral"]; ok {
 		t.Errorf("unexpected nested spectral JSON field in %s", string(data))
-	}
-}
-
-func assertJSONField(t *testing.T, data []byte, field string) {
-	t.Helper()
-
-	var object map[string]json.RawMessage
-	if err := json.Unmarshal(data, &object); err != nil {
-		t.Fatalf("Unmarshal() failed: %v", err)
-	}
-	if _, ok := object[field]; !ok {
-		t.Errorf("missing JSON field %q in %s", field, string(data))
-	}
-}
-
-func assertJSONFieldAbsent(t *testing.T, data []byte, field string) {
-	t.Helper()
-
-	var object map[string]json.RawMessage
-	if err := json.Unmarshal(data, &object); err != nil {
-		t.Fatalf("Unmarshal() failed: %v", err)
-	}
-	if _, ok := object[field]; ok {
-		t.Errorf("unexpected JSON field %q in %s", field, string(data))
 	}
 }
 
@@ -355,40 +175,40 @@ func TestAnalyzeAudio(t *testing.T) {
 		}
 
 		// Log measurements
-		t.Logf("Input Loudness: %.2f LUFS", measurements.InputI)
-		t.Logf("Input True Peak: %.2f dBTP", measurements.InputTP)
-		t.Logf("Input Loudness Range: %.2f LU", measurements.InputLRA)
-		t.Logf("Input Threshold: %.2f dB", measurements.InputThresh)
-		t.Logf("Target Offset: %.2f dB", measurements.TargetOffset)
-		t.Logf("Noise Floor: %.2f dB", measurements.NoiseFloor)
-		t.Logf("Dynamic Range: %.2f dB", measurements.DynamicRange)
-		t.Logf("RMS Level: %.2f dB", measurements.RMSLevel)
-		t.Logf("Peak Level: %.2f dB", measurements.PeakLevel)
+		t.Logf("Input Loudness: %.2f LUFS", measurements.Loudness.InputI)
+		t.Logf("Input True Peak: %.2f dBTP", measurements.Loudness.InputTP)
+		t.Logf("Input Loudness Range: %.2f LU", measurements.Loudness.InputLRA)
+		t.Logf("Input Threshold: %.2f dB", measurements.Loudness.InputThresh)
+		t.Logf("Target Offset: %.2f dB", measurements.Loudness.TargetOffset)
+		t.Logf("Noise Floor: %.2f dB", measurements.Noise.Floor)
+		t.Logf("Dynamic Range: %.2f dB", measurements.Dynamics.DynamicRange)
+		t.Logf("RMS Level: %.2f dB", measurements.Dynamics.RMSLevel)
+		t.Logf("Peak Level: %.2f dB", measurements.Dynamics.PeakLevel)
 
 		// Sanity checks for synthetic audio with known characteristics
 		// Input level should be close to -23 LUFS (our tone level)
-		if measurements.InputI > -20 || measurements.InputI < -30 {
-			t.Errorf("InputI out of expected range for -23dBFS tone: %.2f", measurements.InputI)
+		if measurements.Loudness.InputI > -20 || measurements.Loudness.InputI < -30 {
+			t.Errorf("InputI out of expected range for -23dBFS tone: %.2f", measurements.Loudness.InputI)
 		}
 
 		// True peak should be close to tone level (sine wave peak = RMS + 3dB)
-		if measurements.InputTP > 0 || measurements.InputTP < -30 {
-			t.Errorf("InputTP out of reasonable range: %.2f", measurements.InputTP)
+		if measurements.Loudness.InputTP > 0 || measurements.Loudness.InputTP < -30 {
+			t.Errorf("InputTP out of reasonable range: %.2f", measurements.Loudness.InputTP)
 		}
 
 		// LRA should be low for a steady tone with brief silence (< 10 LU)
-		if measurements.InputLRA < 0 || measurements.InputLRA > 15 {
-			t.Errorf("InputLRA out of expected range for steady tone: %.2f", measurements.InputLRA)
+		if measurements.Loudness.InputLRA < 0 || measurements.Loudness.InputLRA > 15 {
+			t.Errorf("InputLRA out of expected range for steady tone: %.2f", measurements.Loudness.InputLRA)
 		}
 
 		// NoiseFloor should detect the silence gap or low noise floor
 		// With -60dB noise and 0.5s silence, floor should be well below -40dB
-		if measurements.NoiseFloor > -35 || measurements.NoiseFloor < -120 {
-			t.Errorf("NoiseFloor out of reasonable range: %.2f", measurements.NoiseFloor)
+		if measurements.Noise.Floor > -35 || measurements.Noise.Floor < -120 {
+			t.Errorf("NoiseFloor out of reasonable range: %.2f", measurements.Noise.Floor)
 		}
 
 		// The offset should bring us close to target (-16 LUFS)
-		expectedOutput := measurements.InputI + measurements.TargetOffset
+		expectedOutput := measurements.Loudness.InputI + measurements.Loudness.TargetOffset
 		if expectedOutput < config.Loudnorm.TargetI-2 || expectedOutput > config.Loudnorm.TargetI+2 {
 			t.Logf("Warning: Target offset might not achieve target (expected ~%.1f, got %.2f)",
 				config.Loudnorm.TargetI, expectedOutput)
@@ -1728,10 +1548,12 @@ func TestScoreSpeechCandidate(t *testing.T) {
 		{
 			name: "ideal speech candidate",
 			metrics: &SpeechCandidateMetrics{
-				Region:         SpeechRegion{Duration: 60 * time.Second},
-				RMSLevel:       -15.0,
-				CrestFactor:    12.0, // Ideal (crestFactorIdeal)
-				Spectral:       SpectralMetrics{Centroid: 1500.0, Rolloff: 6000.0, Flux: 0.003},
+				Region: SpeechRegion{Duration: 60 * time.Second},
+				RegionSample: RegionSample{
+					RMSLevel:    -15.0,
+					CrestFactor: 12.0, // Ideal (crestFactorIdeal)
+					Spectral:    SpectralMetrics{Centroid: 1500.0, Rolloff: 6000.0, Flux: 0.003},
+				},
 				VoicingDensity: 0.75, // High voiced content (above 0.6 threshold)
 			},
 			wantMin: 0.8,
@@ -1740,10 +1562,12 @@ func TestScoreSpeechCandidate(t *testing.T) {
 		{
 			name: "quiet speech",
 			metrics: &SpeechCandidateMetrics{
-				Region:         SpeechRegion{Duration: 30 * time.Second},
-				RMSLevel:       -28.0,
-				CrestFactor:    12.0, // Ideal
-				Spectral:       SpectralMetrics{Centroid: 1500.0, Rolloff: 6000.0, Flux: 0.003},
+				Region: SpeechRegion{Duration: 30 * time.Second},
+				RegionSample: RegionSample{
+					RMSLevel:    -28.0,
+					CrestFactor: 12.0, // Ideal
+					Spectral:    SpectralMetrics{Centroid: 1500.0, Rolloff: 6000.0, Flux: 0.003},
+				},
 				VoicingDensity: 0.75, // High voiced content
 			},
 			wantMin: 0.3,
@@ -1752,10 +1576,12 @@ func TestScoreSpeechCandidate(t *testing.T) {
 		{
 			name: "wrong centroid",
 			metrics: &SpeechCandidateMetrics{
-				Region:         SpeechRegion{Duration: 60 * time.Second},
-				RMSLevel:       -15.0,
-				CrestFactor:    12.0, // Ideal
-				Spectral:       SpectralMetrics{Centroid: 8000.0, Rolloff: 6000.0, Flux: 0.003},
+				Region: SpeechRegion{Duration: 60 * time.Second},
+				RegionSample: RegionSample{
+					RMSLevel:    -15.0,
+					CrestFactor: 12.0, // Ideal
+					Spectral:    SpectralMetrics{Centroid: 8000.0, Rolloff: 6000.0, Flux: 0.003},
+				},
 				VoicingDensity: 0.75, // High voiced content
 			},
 			wantMin: 0.6,
@@ -2319,14 +2145,6 @@ func TestMeasureOutputRoomToneRegion(t *testing.T) {
 		t.Logf("  ShortTermLUFS: %.2f LUFS", metrics.ShortTermLUFS)
 		t.Logf("  TruePeak: %.2f dBTP", metrics.TruePeak)
 
-		// Verify region is captured correctly
-		if metrics.Region.Start != roomToneRegion.Start {
-			t.Errorf("Region start mismatch: got %v, want %v", metrics.Region.Start, roomToneRegion.Start)
-		}
-		if metrics.Region.Duration != roomToneRegion.Duration {
-			t.Errorf("Region duration mismatch: got %v, want %v", metrics.Region.Duration, roomToneRegion.Duration)
-		}
-
 		// Amplitude metrics: room tone should have very low RMS (< -40 dBFS)
 		// With -60dB noise, we expect RMS around -60dB range
 		if metrics.RMSLevel > -40.0 {
@@ -2426,14 +2244,6 @@ func Test_measureOutputSpeechRegion(t *testing.T) {
 		t.Logf("  MomentaryLUFS: %.2f LUFS", metrics.MomentaryLUFS)
 		t.Logf("  ShortTermLUFS: %.2f LUFS", metrics.ShortTermLUFS)
 		t.Logf("  TruePeak: %.2f dBTP", metrics.TruePeak)
-
-		// Verify region is captured correctly
-		if metrics.Region.Start != speechRegion.Start {
-			t.Errorf("Region start mismatch: got %v, want %v", metrics.Region.Start, speechRegion.Start)
-		}
-		if metrics.Region.Duration != speechRegion.Duration {
-			t.Errorf("Region duration mismatch: got %v, want %v", metrics.Region.Duration, speechRegion.Duration)
-		}
 
 		// Amplitude metrics: speech should have substantial RMS (> -40 dBFS)
 		// With -20dBFS tone, we expect RMS around -20 to -23 dBFS
@@ -3011,16 +2821,11 @@ func TestFindBestRoomToneRegion_QuietHighCrestRegionAccepted(t *testing.T) {
 // test is the sole crosstalk discriminator. RMS is kept above the digital-silence floor
 // so the candidate enters the crest population.
 func inBandCrestCandidate(rms, crest float64) *RoomToneCandidateMetrics {
-	return &RoomToneCandidateMetrics{
-		RMSLevel:    rms,
-		PeakLevel:   rms + crest,
-		CrestFactor: crest,
-		Spectral: SpectralMetrics{
-			Centroid: 3000.0, // inside voiceCentroidMin..voiceCentroidMax
-			Kurtosis: 5.0,    // below crosstalkKurtosisThreshold (10)
-			Flatness: 0.5,
-		},
-	}
+	return &RoomToneCandidateMetrics{RegionSample: RegionSample{RMSLevel: rms, PeakLevel: rms + crest, CrestFactor: crest, Spectral: SpectralMetrics{
+		Centroid: 3000.0, // inside voiceCentroidMin..voiceCentroidMax
+		Kurtosis: 5.0,    // below crosstalkKurtosisThreshold (10)
+		Flatness: 0.5,
+	}}}
 }
 
 func TestIsLikelyCrosstalk_PopulationRelativeCrestOutlier(t *testing.T) {
@@ -3212,9 +3017,9 @@ func TestAnalyzeAudio_RoomToneScanDuration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("baseline AnalyzeAudio failed: %v", err)
 	}
-	if baseline.NoiseProfile == nil {
+	if baseline.Regions.NoiseProfile == nil {
 		t.Fatalf("baseline NoiseProfile is nil; the silence pipeline did not elect a region "+
-			"for the synthetic input (regions=%d)", len(baseline.RoomToneRegions))
+			"for the synthetic input (regions=%d)", len(baseline.Regions.RoomToneRegions))
 	}
 
 	abs := func(x float64) float64 {
@@ -3226,21 +3031,21 @@ func TestAnalyzeAudio_RoomToneScanDuration(t *testing.T) {
 
 	assertLoudnessMatches := func(t *testing.T, got *AudioMeasurements) {
 		t.Helper()
-		if d := abs(got.InputI - baseline.InputI); d > loudnessTolerance {
+		if d := abs(got.Loudness.InputI - baseline.Loudness.InputI); d > loudnessTolerance {
 			t.Errorf("InputI = %.4f, baseline = %.4f, diff = %.4f (tolerance %.4f)",
-				got.InputI, baseline.InputI, d, loudnessTolerance)
+				got.Loudness.InputI, baseline.Loudness.InputI, d, loudnessTolerance)
 		}
-		if d := abs(got.InputTP - baseline.InputTP); d > loudnessTolerance {
+		if d := abs(got.Loudness.InputTP - baseline.Loudness.InputTP); d > loudnessTolerance {
 			t.Errorf("InputTP = %.4f, baseline = %.4f, diff = %.4f (tolerance %.4f)",
-				got.InputTP, baseline.InputTP, d, loudnessTolerance)
+				got.Loudness.InputTP, baseline.Loudness.InputTP, d, loudnessTolerance)
 		}
-		if d := abs(got.InputLRA - baseline.InputLRA); d > loudnessTolerance {
+		if d := abs(got.Loudness.InputLRA - baseline.Loudness.InputLRA); d > loudnessTolerance {
 			t.Errorf("InputLRA = %.4f, baseline = %.4f, diff = %.4f (tolerance %.4f)",
-				got.InputLRA, baseline.InputLRA, d, loudnessTolerance)
+				got.Loudness.InputLRA, baseline.Loudness.InputLRA, d, loudnessTolerance)
 		}
-		if d := abs(got.NoiseFloor - baseline.NoiseFloor); d > loudnessTolerance {
+		if d := abs(got.Noise.Floor - baseline.Noise.Floor); d > loudnessTolerance {
 			t.Errorf("NoiseFloor = %.4f, baseline = %.4f, diff = %.4f (tolerance %.4f)",
-				got.NoiseFloor, baseline.NoiseFloor, d, loudnessTolerance)
+				got.Noise.Floor, baseline.Noise.Floor, d, loudnessTolerance)
 		}
 	}
 
@@ -3257,17 +3062,17 @@ func TestAnalyzeAudio_RoomToneScanDuration(t *testing.T) {
 
 		assertLoudnessMatches(t, got)
 
-		if !regionsEqual(got.RoomToneRegions, baseline.RoomToneRegions) {
+		if !regionsEqual(got.Regions.RoomToneRegions, baseline.Regions.RoomToneRegions) {
 			t.Errorf("RoomToneRegions = %+v, baseline = %+v",
-				got.RoomToneRegions, baseline.RoomToneRegions)
+				got.Regions.RoomToneRegions, baseline.Regions.RoomToneRegions)
 		}
-		if !speechRegionsEqual(got.SpeechRegions, baseline.SpeechRegions) {
+		if !speechRegionsEqual(got.Regions.SpeechRegions, baseline.Regions.SpeechRegions) {
 			t.Errorf("SpeechRegions = %+v, baseline = %+v",
-				got.SpeechRegions, baseline.SpeechRegions)
+				got.Regions.SpeechRegions, baseline.Regions.SpeechRegions)
 		}
-		if !noiseProfilesEqual(got.NoiseProfile, baseline.NoiseProfile) {
+		if !noiseProfilesEqual(got.Regions.NoiseProfile, baseline.Regions.NoiseProfile) {
 			t.Errorf("NoiseProfile = %+v, baseline = %+v",
-				got.NoiseProfile, baseline.NoiseProfile)
+				got.Regions.NoiseProfile, baseline.Regions.NoiseProfile)
 		}
 	})
 
@@ -3284,12 +3089,12 @@ func TestAnalyzeAudio_RoomToneScanDuration(t *testing.T) {
 			t.Fatalf("AnalyzeAudio failed: %v", err)
 		}
 
-		if len(got.RoomToneRegions) != 0 {
+		if len(got.Regions.RoomToneRegions) != 0 {
 			t.Errorf("len(RoomToneRegions) = %d, want 0 (cap should exclude silence at 8-55 s)",
-				len(got.RoomToneRegions))
+				len(got.Regions.RoomToneRegions))
 		}
-		if got.NoiseProfile != nil {
-			t.Errorf("NoiseProfile = %+v, want nil", got.NoiseProfile)
+		if got.Regions.NoiseProfile != nil {
+			t.Errorf("NoiseProfile = %+v, want nil", got.Regions.NoiseProfile)
 		}
 	})
 
@@ -3306,17 +3111,17 @@ func TestAnalyzeAudio_RoomToneScanDuration(t *testing.T) {
 			t.Fatalf("AnalyzeAudio failed: %v", err)
 		}
 
-		if got.NoiseProfile == nil {
+		if got.Regions.NoiseProfile == nil {
 			t.Fatalf("NoiseProfile is nil; expected the same region as the uncapped run "+
-				"(baseline.NoiseProfile.Start = %v)", baseline.NoiseProfile.Start)
+				"(baseline.NoiseProfile.Start = %v)", baseline.Regions.NoiseProfile.Start)
 		}
-		if got.NoiseProfile.Start != baseline.NoiseProfile.Start {
+		if got.Regions.NoiseProfile.Start != baseline.Regions.NoiseProfile.Start {
 			t.Errorf("NoiseProfile.Start = %v, baseline = %v",
-				got.NoiseProfile.Start, baseline.NoiseProfile.Start)
+				got.Regions.NoiseProfile.Start, baseline.Regions.NoiseProfile.Start)
 		}
-		if got.NoiseProfile.Duration != baseline.NoiseProfile.Duration {
+		if got.Regions.NoiseProfile.Duration != baseline.Regions.NoiseProfile.Duration {
 			t.Errorf("NoiseProfile.Duration = %v, baseline = %v",
-				got.NoiseProfile.Duration, baseline.NoiseProfile.Duration)
+				got.Regions.NoiseProfile.Duration, baseline.Regions.NoiseProfile.Duration)
 		}
 	})
 
@@ -3336,13 +3141,13 @@ func TestAnalyzeAudio_RoomToneScanDuration(t *testing.T) {
 
 		assertLoudnessMatches(t, got)
 
-		if !speechRegionsEqual(got.SpeechRegions, baseline.SpeechRegions) {
+		if !speechRegionsEqual(got.Regions.SpeechRegions, baseline.Regions.SpeechRegions) {
 			t.Errorf("SpeechRegions = %+v, baseline = %+v",
-				got.SpeechRegions, baseline.SpeechRegions)
+				got.Regions.SpeechRegions, baseline.Regions.SpeechRegions)
 		}
-		if len(got.IntervalSamples) != len(baseline.IntervalSamples) {
+		if len(got.Regions.IntervalSamples) != len(baseline.Regions.IntervalSamples) {
 			t.Errorf("len(IntervalSamples) = %d, baseline = %d",
-				len(got.IntervalSamples), len(baseline.IntervalSamples))
+				len(got.Regions.IntervalSamples), len(baseline.Regions.IntervalSamples))
 		}
 	})
 }

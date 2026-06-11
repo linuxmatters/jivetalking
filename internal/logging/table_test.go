@@ -462,26 +462,21 @@ func TestNormaliseForGain(t *testing.T) {
 func TestWriteSpeechRegionTableGainNormalisation(t *testing.T) {
 	// Helper to create minimal speech metrics with plausible values
 	makeSpeechMetrics := func() *processor.SpeechCandidateMetrics {
-		return &processor.SpeechCandidateMetrics{
-			RMSLevel:    -24.0,
-			PeakLevel:   -12.0,
-			CrestFactor: 12.0,
-			Spectral: processor.SpectralMetrics{
-				Mean:     0.004812,
-				Variance: 0.018876,
-				Centroid: 1500.0,
-				Spread:   800.0,
-				Skewness: 2.5,
-				Kurtosis: 8.0,
-				Entropy:  0.65,
-				Flatness: 0.15,
-				Crest:    12.0,
-				Flux:     0.003200,
-				Slope:    -0.000045,
-				Decrease: -0.00012,
-				Rolloff:  4500.0,
-			},
-		}
+		return &processor.SpeechCandidateMetrics{RegionSample: processor.RegionSample{RMSLevel: -24.0, PeakLevel: -12.0, CrestFactor: 12.0, Spectral: processor.SpectralMetrics{
+			Mean:     0.004812,
+			Variance: 0.018876,
+			Centroid: 1500.0,
+			Spread:   800.0,
+			Skewness: 2.5,
+			Kurtosis: 8.0,
+			Entropy:  0.65,
+			Flatness: 0.15,
+			Crest:    12.0,
+			Flux:     0.003200,
+			Slope:    -0.000045,
+			Decrease: -0.00012,
+			Rolloff:  4500.0,
+		}}}
 	}
 
 	t.Run("with_normalisation_result", func(t *testing.T) {
@@ -492,13 +487,15 @@ func TestWriteSpeechRegionTableGainNormalisation(t *testing.T) {
 		defer os.Remove(tmpFile.Name())
 
 		input := &processor.AudioMeasurements{
-			SpeechProfile: makeSpeechMetrics(),
+			Regions: processor.RegionMetrics{
+				SpeechProfile: makeSpeechMetrics(),
+			},
 		}
 		filtered := &processor.OutputMeasurements{
-			SpeechSample: makeSpeechMetrics(),
+			SpeechSample: &makeSpeechMetrics().RegionSample,
 		}
 		final := &processor.OutputMeasurements{
-			SpeechSample: makeSpeechMetrics(),
+			SpeechSample: &makeSpeechMetrics().RegionSample,
 		}
 		normResult := &processor.NormalisationResult{
 			OutputLUFS: -18.0,
@@ -539,13 +536,15 @@ func TestWriteSpeechRegionTableGainNormalisation(t *testing.T) {
 		defer os.Remove(tmpFile.Name())
 
 		input := &processor.AudioMeasurements{
-			SpeechProfile: makeSpeechMetrics(),
+			Regions: processor.RegionMetrics{
+				SpeechProfile: makeSpeechMetrics(),
+			},
 		}
 		filtered := &processor.OutputMeasurements{
-			SpeechSample: makeSpeechMetrics(),
+			SpeechSample: &makeSpeechMetrics().RegionSample,
 		}
 		final := &processor.OutputMeasurements{
-			SpeechSample: makeSpeechMetrics(),
+			SpeechSample: &makeSpeechMetrics().RegionSample,
 		}
 
 		writeSpeechRegionTable(tmpFile, input, filtered, final, nil)

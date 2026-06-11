@@ -18,18 +18,18 @@ func writeDiagnosticRoomTone(f *os.File, measurements *processor.AudioMeasuremen
 	writeSection(f, "Diagnostic: Room Tone Detection")
 
 	// Show adaptive room tone detection threshold if different from default
-	if measurements.RoomToneDetectLevel != 0 && measurements.RoomToneDetectLevel != -50.0 {
+	if measurements.Noise.RoomToneDetectLevel != 0 && measurements.Noise.RoomToneDetectLevel != -50.0 {
 		fmt.Fprintf(f, "Room Tone Threshold: %.1f dB (from %.1f dB noise floor estimate)\n",
-			measurements.RoomToneDetectLevel, measurements.PreScanNoiseFloor)
+			measurements.Noise.RoomToneDetectLevel, measurements.Noise.FloorPrescan)
 	}
 
 	// Interval sampling summary with RMSLevel distribution analysis
-	if len(measurements.IntervalSamples) > 0 {
-		fmt.Fprintf(f, "Interval Samples:    %d × 250ms windows analysed\n", len(measurements.IntervalSamples))
+	if len(measurements.Regions.IntervalSamples) > 0 {
+		fmt.Fprintf(f, "Interval Samples:    %d × 250ms windows analysed\n", len(measurements.Regions.IntervalSamples))
 
 		// Calculate and display RMSLevel distribution for room tone detection debugging
-		rmsValues := make([]float64, 0, len(measurements.IntervalSamples))
-		for _, interval := range measurements.IntervalSamples {
+		rmsValues := make([]float64, 0, len(measurements.Regions.IntervalSamples))
+		for _, interval := range measurements.Regions.IntervalSamples {
 			if interval.RMSLevel > -120 { // Exclude digital silence
 				rmsValues = append(rmsValues, interval.RMSLevel)
 			}
@@ -67,13 +67,13 @@ func writeDiagnosticRoomTone(f *os.File, measurements *processor.AudioMeasuremen
 
 	// Room tone candidates (ranked display of evaluated candidates with scores)
 	//nolint:gocritic // ifElseChain: complex display branches with different condition types
-	if len(measurements.RoomToneCandidates) > 0 {
-		fmt.Fprintf(f, "Room Tone Candidates:  %d evaluated\n", len(measurements.RoomToneCandidates))
-		if measurements.VoiceActivated {
+	if len(measurements.Regions.RoomToneCandidates) > 0 {
+		fmt.Fprintf(f, "Room Tone Candidates:  %d evaluated\n", len(measurements.Regions.RoomToneCandidates))
+		if measurements.Noise.VoiceActivated {
 			fmt.Fprintf(f, "Voice-Activated:     yes (digital silence fraction >= 95%%)\n")
 		}
 		electedCandidate, displayCandidates := rankedRoomToneCandidateEntries(measurements)
-		writeCandidateDisplaySummary(f, len(measurements.RoomToneCandidates), electedCandidate != nil, len(displayCandidates))
+		writeCandidateDisplaySummary(f, len(measurements.Regions.RoomToneCandidates), electedCandidate != nil, len(displayCandidates))
 		if electedCandidate != nil {
 			entry := *electedCandidate
 			writeReportRoomToneCandidateMetrics(f, entry.index, entry.candidate, true)
@@ -83,21 +83,21 @@ func writeDiagnosticRoomTone(f *os.File, measurements *processor.AudioMeasuremen
 		}
 
 		// Rejection summary for zero-scored candidates
-		writeReportRejectionSummary(f, measurements.RoomToneCandidates)
-	} else if measurements.NoiseProfile != nil {
+		writeReportRejectionSummary(f, measurements.Regions.RoomToneCandidates)
+	} else if measurements.Regions.NoiseProfile != nil {
 		fmt.Fprintf(f, "Room Tone Sample:    %.1fs at %.1fs\n",
-			measurements.NoiseProfile.Duration.Seconds(),
-			measurements.NoiseProfile.Start.Seconds())
-		fmt.Fprintf(f, "  Noise Floor:       %.1f dBFS (RMS)\n", measurements.NoiseProfile.MeasuredNoiseFloor)
-		fmt.Fprintf(f, "  Peak Level:        %.1f dBFS\n", measurements.NoiseProfile.PeakLevel)
-		fmt.Fprintf(f, "  Crest Factor:      %.1f dB\n", measurements.NoiseProfile.CrestFactor)
-	} else if len(measurements.RoomToneRegions) > 0 {
-		r := measurements.RoomToneRegions[0]
+			measurements.Regions.NoiseProfile.Duration.Seconds(),
+			measurements.Regions.NoiseProfile.Start.Seconds())
+		fmt.Fprintf(f, "  Noise Floor:       %.1f dBFS (RMS)\n", measurements.Regions.NoiseProfile.MeasuredNoiseFloor)
+		fmt.Fprintf(f, "  Peak Level:        %.1f dBFS\n", measurements.Regions.NoiseProfile.PeakLevel)
+		fmt.Fprintf(f, "  Crest Factor:      %.1f dB\n", measurements.Regions.NoiseProfile.CrestFactor)
+	} else if len(measurements.Regions.RoomToneRegions) > 0 {
+		r := measurements.Regions.RoomToneRegions[0]
 		fmt.Fprintf(f, "Room Tone Detected:  %.1fs at %.1fs (no profile extracted)\n",
 			r.Duration.Seconds(), r.Start.Seconds())
 	} else {
 		fmt.Fprintf(f, "Room Tone Candidates:  NONE FOUND\n")
-		if measurements.VoiceActivated {
+		if measurements.Noise.VoiceActivated {
 			fmt.Fprintf(f, "Voice-Activated:     yes (digital silence fraction >= 95%%)\n")
 		}
 		fmt.Fprintf(f, "  No room tone regions detected in audio. Noise profiling unavailable.\n")
@@ -113,7 +113,7 @@ func writeDiagnosticSpeech(f *os.File, measurements *processor.AudioMeasurements
 	}
 
 	// Only output section if speech detection was attempted
-	if len(measurements.SpeechRegions) == 0 && measurements.SpeechProfile == nil {
+	if len(measurements.Regions.SpeechRegions) == 0 && measurements.Regions.SpeechProfile == nil {
 		return
 	}
 
@@ -121,10 +121,10 @@ func writeDiagnosticSpeech(f *os.File, measurements *processor.AudioMeasurements
 
 	// Show speech candidates summary
 	//nolint:gocritic // ifElseChain: complex display branches with different condition types
-	if len(measurements.SpeechCandidates) > 0 {
-		fmt.Fprintf(f, "Speech Candidates:   %d evaluated\n", len(measurements.SpeechCandidates))
+	if len(measurements.Regions.SpeechCandidates) > 0 {
+		fmt.Fprintf(f, "Speech Candidates:   %d evaluated\n", len(measurements.Regions.SpeechCandidates))
 		electedCandidate, displayCandidates := rankedSpeechCandidateEntries(measurements)
-		writeCandidateDisplaySummary(f, len(measurements.SpeechCandidates), electedCandidate != nil, len(displayCandidates))
+		writeCandidateDisplaySummary(f, len(measurements.Regions.SpeechCandidates), electedCandidate != nil, len(displayCandidates))
 
 		if electedCandidate != nil {
 			entry := *electedCandidate
@@ -133,18 +133,18 @@ func writeDiagnosticSpeech(f *os.File, measurements *processor.AudioMeasurements
 		for _, entry := range displayCandidates {
 			writeReportSpeechCandidateMetrics(f, entry.index, entry.candidate, false)
 		}
-		writeReportSpeechRejectionSummary(f, measurements.SpeechCandidates)
-	} else if measurements.SpeechProfile != nil {
+		writeReportSpeechRejectionSummary(f, measurements.Regions.SpeechCandidates)
+	} else if measurements.Regions.SpeechProfile != nil {
 		// Profile exists but no candidates list (shouldn't happen, but handle gracefully)
-		profile := measurements.SpeechProfile
+		profile := measurements.Regions.SpeechProfile
 		fmt.Fprintf(f, "Elected Speech:      %.1fs at %.1fs\n",
 			profile.Region.Duration.Seconds(), profile.Region.Start.Seconds())
 		fmt.Fprintf(f, "  RMS Level:         %.1f dBFS\n", profile.RMSLevel)
 		fmt.Fprintf(f, "  Peak Level:        %.1f dBFS\n", profile.PeakLevel)
 		fmt.Fprintf(f, "  Crest Factor:      %.1f dB\n", profile.CrestFactor)
 		fmt.Fprintf(f, "  Centroid:          %.0f Hz\n", profile.Spectral.Centroid)
-	} else if len(measurements.SpeechRegions) > 0 {
-		fmt.Fprintf(f, "Speech Regions:      %d detected\n", len(measurements.SpeechRegions))
+	} else if len(measurements.Regions.SpeechRegions) > 0 {
+		fmt.Fprintf(f, "Speech Regions:      %d detected\n", len(measurements.Regions.SpeechRegions))
 		fmt.Fprintf(f, "  No candidate met quality threshold for speech profiling.\n")
 	} else {
 		fmt.Fprintf(f, "Speech Candidates:   NONE FOUND\n")

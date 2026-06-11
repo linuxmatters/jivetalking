@@ -92,11 +92,11 @@ func measureSpeechBandRMS(ctx context.Context, reader *audio.Reader, start, dura
 // The input file is opened once and the reader is seeked between the two
 // band measurements, mirroring MeasureOutputRegions' single-open pattern.
 func measureSpeechBands(ctx context.Context, filename string, measurements *AudioMeasurements, log debugLogger) {
-	if measurements == nil || measurements.SpeechProfile == nil {
+	if measurements == nil || measurements.Regions.SpeechProfile == nil {
 		return
 	}
 
-	region := measurements.SpeechProfile.Region
+	region := measurements.Regions.SpeechProfile.Region
 	if region.Duration <= 0 {
 		return
 	}
@@ -114,7 +114,7 @@ func measureSpeechBands(ctx context.Context, filename string, measurements *Audi
 		return
 	}
 	if bodyOK {
-		measurements.SpeechProfile.BodyBandRMS = body
+		measurements.Regions.SpeechProfile.BodyBandRMS = body
 	}
 
 	if err := reader.SeekTo(0); err != nil {
@@ -128,14 +128,14 @@ func measureSpeechBands(ctx context.Context, filename string, measurements *Audi
 		return
 	}
 	if sibOK {
-		measurements.SpeechProfile.SibBandRMS = sib
+		measurements.Regions.SpeechProfile.SibBandRMS = sib
 	}
 
 	// Only treat the band excess as valid when both bands measured; a partial
 	// or absent measurement otherwise reads as a spurious 0 dB excess and
 	// engages the de-esser at the cap (see adaptive_deesser.go).
-	measurements.SpeechProfile.BandsMeasured = bodyOK && sibOK
+	measurements.Regions.SpeechProfile.BandsMeasured = bodyOK && sibOK
 
 	log.Logf("Speech band RMS: body=%.1f dBFS (found=%v), sib=%.1f dBFS (found=%v), excess=%.1f dB, measured=%v",
-		body, bodyOK, sib, sibOK, sib-body, measurements.SpeechProfile.BandsMeasured)
+		body, bodyOK, sib, sibOK, sib-body, measurements.Regions.SpeechProfile.BandsMeasured)
 }
