@@ -1017,7 +1017,7 @@ func TestApplyNormalisationProgressCadenceGuard(t *testing.T) {
 		context.Background(),
 		testFile,
 		defaultNormalisationTestConfig(),
-		&OutputMeasurements{OutputI: -20.0, OutputTP: -10.0},
+		&OutputMeasurements{Loudness: OutputLoudnessMetrics{OutputI: -20.0, OutputTP: -10.0}},
 		nil,
 		func(update ProgressUpdate) {
 			events = append(events, loudnormProgressEvent{pass: update.Pass, passName: update.PassName, progress: update.Progress})
@@ -2178,8 +2178,10 @@ func TestLoudnormPrefixAndFilterSpecParityRepresentativeCases(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			config := defaultNormalisationTestConfig()
 			output := &OutputMeasurements{
-				OutputI:  tt.outputI,
-				OutputTP: tt.outputTP,
+				Loudness: OutputLoudnessMetrics{
+					OutputI:  tt.outputI,
+					OutputTP: tt.outputTP,
+				},
 			}
 
 			limiter := planLimiterForLoudnorm(output, config)
@@ -2242,25 +2244,27 @@ func TestPlanLimiterForLoudnormMatchesInlineCalculation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			config := defaultNormalisationTestConfig()
 			output := &OutputMeasurements{
-				OutputI:  tt.outputI,
-				OutputTP: tt.outputTP,
+				Loudness: OutputLoudnessMetrics{
+					OutputI:  tt.outputI,
+					OutputTP: tt.outputTP,
+				},
 			}
 
 			wantCeiling, wantNeeded, wantClamped := calculateLimiterCeiling(
-				output.OutputI,
-				output.OutputTP,
+				output.Loudness.OutputI,
+				output.Loudness.OutputTP,
 				config.Loudnorm.TargetI,
 				config.Loudnorm.TargetTP,
 			)
 			wantPreGainDB, reDerivedCeiling := calculatePreGain(
-				output.OutputI,
+				output.Loudness.OutputI,
 				config.Loudnorm.TargetI,
 				config.Loudnorm.TargetTP,
 			)
 			if wantClamped {
 				wantCeiling = reDerivedCeiling
 			}
-			wantGainDB := config.Loudnorm.TargetI - output.OutputI
+			wantGainDB := config.Loudnorm.TargetI - output.Loudness.OutputI
 			wantPrefix := buildPreLimiterPrefix(wantPreGainDB, wantCeiling, wantNeeded)
 
 			got := planLimiterForLoudnorm(output, config)

@@ -10,13 +10,13 @@ func resultWith(outputLUFS, outputTP, inputNoiseRMS, finalNoiseRMS float64) *Pro
 	return &ProcessingResult{
 		OutputLUFS: outputLUFS,
 		Measurements: &AudioMeasurements{
-			NoiseProfile: &NoiseProfile{MeasuredNoiseFloor: inputNoiseRMS},
+			Regions: RegionMetrics{NoiseProfile: &NoiseProfile{MeasuredNoiseFloor: inputNoiseRMS}},
 		},
 		NormResult: &NormalisationResult{
 			OutputTP:         outputTP,
 			RequestedTargetI: -16.0,
 			FinalMeasurements: &OutputMeasurements{
-				RoomToneSample: &RoomToneCandidateMetrics{RMSLevel: finalNoiseRMS},
+				RoomToneSample: &RegionSample{RMSLevel: finalNoiseRMS},
 			},
 		},
 	}

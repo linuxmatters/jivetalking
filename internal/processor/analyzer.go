@@ -61,16 +61,17 @@ type NoiseProfile struct {
 	WasRefined       bool          `json:"was_refined,omitempty"`       // True if region was refined from a longer candidate
 }
 
-// RoomToneCandidateMetrics contains measurements for evaluating room tone region candidates.
-// These metrics are collected before final selection to enable multi-metric scoring.
-// Includes all measurements available from IntervalSample for future filter tuning.
-type RoomToneCandidateMetrics struct {
-	Region RoomToneRegion `json:"region"` // The room tone region being evaluated
-
+// RegionSample holds the bare per-region measurement subset shared by the room
+// tone and speech candidate structs (and reused for the Pass 2/4 output region
+// samples). It carries only amplitude, spectral, and loudness measurements; the
+// candidate structs embed it and add their own scoring/stability/bands fields.
+// Embedded anonymously so Go field promotion keeps every existing field access
+// (`m.RMSLevel`, `m.Spectral.Centroid`) and the default-marshalled JSON identical.
+type RegionSample struct {
 	// Amplitude metrics
-	RMSLevel    float64 `json:"rms_level"`    // dBFS, average level (lower = quieter)
+	RMSLevel    float64 `json:"rms_level"`    // dBFS, average level
 	PeakLevel   float64 `json:"peak_level"`   // dBFS, max peak level across region
-	CrestFactor float64 `json:"crest_factor"` // Peak - RMS in dB (high = impulsive)
+	CrestFactor float64 `json:"crest_factor"` // Peak - RMS in dB
 
 	// Spectral metrics (averaged across region)
 	Spectral SpectralMetrics `json:"spectral"`
@@ -80,6 +81,16 @@ type RoomToneCandidateMetrics struct {
 	ShortTermLUFS float64 `json:"short_term_lufs"` // LUFS, average short-term loudness
 	TruePeak      float64 `json:"true_peak"`       // dBTP, max true peak across region
 	SamplePeak    float64 `json:"sample_peak"`     // dBFS, max sample peak across region
+}
+
+// RoomToneCandidateMetrics contains measurements for evaluating room tone region candidates.
+// These metrics are collected before final selection to enable multi-metric scoring.
+// Includes all measurements available from IntervalSample for future filter tuning.
+type RoomToneCandidateMetrics struct {
+	Region RoomToneRegion `json:"region"` // The room tone region being evaluated
+
+	// Shared amplitude/spectral/loudness subset (promoted by anonymous embed).
+	RegionSample
 
 	// Warning flags (populated during scoring)
 	TransientWarning string `json:"transient_warning,omitempty"` // Warning if danger zone signature detected
@@ -118,19 +129,8 @@ type SpeechRegion struct {
 type SpeechCandidateMetrics struct {
 	Region SpeechRegion `json:"region"` // The speech region being evaluated
 
-	// Amplitude metrics
-	RMSLevel    float64 `json:"rms_level"`    // dBFS, average level (higher = louder speech)
-	PeakLevel   float64 `json:"peak_level"`   // dBFS, max peak level across region
-	CrestFactor float64 `json:"crest_factor"` // Peak - RMS in dB (speech typically 9-14 dB, optimal range)
-
-	// Spectral metrics (averaged across region)
-	Spectral SpectralMetrics `json:"spectral"`
-
-	// Loudness metrics (averaged/max across region)
-	MomentaryLUFS float64 `json:"momentary_lufs"`  // LUFS, average momentary loudness
-	ShortTermLUFS float64 `json:"short_term_lufs"` // LUFS, average short-term loudness
-	TruePeak      float64 `json:"true_peak"`       // dBTP, max true peak across region
-	SamplePeak    float64 `json:"sample_peak"`     // dBFS, max sample peak across region
+	// Shared amplitude/spectral/loudness subset (promoted by anonymous embed).
+	RegionSample
 
 	// Stability metrics (populated during measurement)
 	VoicingDensity float64 `json:"voicing_density,omitempty"` // Proportion of voiced intervals (0-1)
@@ -151,8 +151,86 @@ type SpeechCandidateMetrics struct {
 	WasRefined       bool          `json:"was_refined,omitempty"`       // True if region was refined from a longer candidate
 }
 
+// LoudnessMetrics holds the ebur128 windowed-loudness measurements shared by the
+// input and output stages (momentary/short-term/sample-peak). Reused as the base
+// of the input/output stage-specific loudness blocks (8.1 loudness domain).
+type LoudnessMetrics struct {
+	MomentaryLoudness float64 `json:"momentary_loudness"`  // Momentary loudness (400ms window, LUFS)
+	ShortTermLoudness float64 `json:"short_term_loudness"` // Short-term loudness (3s window, LUFS)
+	SamplePeak        float64 `json:"sample_peak"`         // Sample peak (dBFS)
+}
+
+// InputLoudnessMetrics is the Pass-1 loudness domain block: the shared windowed
+// loudness (embedded) plus the input-only integrated/true-peak/LRA/threshold and
+// the a-priori target offset (config.TargetI - InputI).
+type InputLoudnessMetrics struct {
+	LoudnessMetrics // shared windowed loudness, promoted flat into this stage block
+
+	InputI       float64 `json:"input_i"`       // Integrated loudness (LUFS)
+	InputTP      float64 `json:"input_tp"`      // True peak (dBTP)
+	InputLRA     float64 `json:"input_lra"`     // Loudness range (LU)
+	InputThresh  float64 `json:"input_thresh"`  // Threshold level
+	TargetOffset float64 `json:"target_offset"` // Offset for normalization (config.TargetI - InputI)
+}
+
+// DynamicsMetrics holds the astats time-domain measurements shared by the input
+// and output stages (8.1 dynamics domain). The astats noise-floor estimate is not
+// here: it lives in the input-only NoiseMetrics block (8.2, floor_astats).
+type DynamicsMetrics struct {
+	DynamicRange float64 `json:"dynamic_range"` // Measured dynamic range (dB)
+	RMSLevel     float64 `json:"rms_level"`     // Overall RMS level (dBFS)
+	PeakLevel    float64 `json:"peak_level"`    // Overall peak level (dBFS)
+	RMSTrough    float64 `json:"rms_trough"`    // RMS level of quietest segments (dBFS)
+	RMSPeak      float64 `json:"rms_peak"`      // RMS level of loudest segments (dBFS)
+
+	DCOffset          float64 `json:"dc_offset"`           // Mean amplitude displacement from zero
+	FlatFactor        float64 `json:"flat_factor"`         // Consecutive samples at peak (clipping indicator)
+	CrestFactor       float64 `json:"crest_factor"`        // Peak-to-RMS ratio in dB (converted from linear)
+	ZeroCrossingsRate float64 `json:"zero_crossings_rate"` // Zero crossing rate (low=bass, high=noise/sibilance)
+	ZeroCrossings     float64 `json:"zero_crossings"`      // Total zero crossings
+	MaxDifference     float64 `json:"max_difference"`      // Largest sample-to-sample change (clicks/pops indicator)
+	MinDifference     float64 `json:"min_difference"`      // Smallest sample-to-sample change
+	MeanDifference    float64 `json:"mean_difference"`     // Average sample-to-sample change
+	RMSDifference     float64 `json:"rms_difference"`      // RMS of sample-to-sample changes
+	Entropy           float64 `json:"entropy"`             // Signal randomness (1.0 = white noise, lower = structured)
+	MinLevel          float64 `json:"min_level"`           // dBFS, minimum sample level (converted from linear)
+	MaxLevel          float64 `json:"max_level"`           // dBFS, maximum sample level (converted from linear)
+	NoiseFloorCount   float64 `json:"noise_floor_count"`   // Number of samples in noise floor measurement
+	BitDepth          float64 `json:"bit_depth"`           // Effective bit depth
+	NumberOfSamples   float64 `json:"number_of_samples"`   // Total samples processed
+}
+
+// NoiseMetrics is the input-only noise domain block (8.1/8.2). It holds the
+// canonical elected noise floor (Floor + FloorSource), the two distinct floor
+// estimates kept separate (prescan, astats), the adaptive room-tone detect level,
+// the voice-activated flag, and the noise-reduction headroom.
+type NoiseMetrics struct {
+	Floor               float64 `json:"floor"`                  // Derived noise floor (dBFS), three-tier; overwritten by room-tone profile if elected
+	FloorSource         string  `json:"floor_source"`           // Source of Floor: "astats" / "rms_estimate" / "ebur128_estimate" / "silence_profile"
+	FloorPrescan        float64 `json:"floor_prescan"`          // Noise floor estimated from interval data (dBFS)
+	FloorAstats         float64 `json:"floor_astats"`           // FFmpeg astats noise floor estimate (dBFS)
+	RoomToneDetectLevel float64 `json:"room_tone_detect_level"` // Adaptive room tone detection threshold (dBFS)
+	VoiceActivated      bool    `json:"voice_activated"`        // True when >= 95% of room tone candidates are digital silence
+	ReductionHeadroom   float64 `json:"reduction_headroom"`     // dB gap between noise and quiet speech
+}
+
+// RegionMetrics is the input-only regions domain block (8.1). It holds the
+// per-250ms interval samples, the detected room-tone/speech regions and scored
+// candidates, the extracted noise profile, and the elected speech profile.
+type RegionMetrics struct {
+	RoomToneRegions    []RoomToneRegion           `json:"room_tone_regions,omitempty"`    // Detected room tone regions
+	IntervalSamples    []IntervalSample           `json:"interval_samples,omitempty"`     // Per-interval measurements
+	RoomToneCandidates []RoomToneCandidateMetrics `json:"room_tone_candidates,omitempty"` // All evaluated candidates with scores
+	SpeechRegions      []SpeechRegion             `json:"speech_regions,omitempty"`       // Detected speech regions
+	SpeechCandidates   []SpeechCandidateMetrics   `json:"speech_candidates,omitempty"`    // All evaluated candidates with scores
+	SpeechProfile      *SpeechCandidateMetrics    `json:"speech_profile,omitempty"`       // Elected best speech candidate (pointer into SpeechCandidates)
+	NoiseProfile       *NoiseProfile              `json:"noise_profile,omitempty"`        // Metrics from elected room tone region; nil if extraction failed
+}
+
 // BaseMeasurements contains fields shared between input (Pass 1) and output (Pass 2) measurements.
-// Embedded in both AudioMeasurements and OutputMeasurements to avoid duplication.
+// Embedded in OutputMeasurements; AudioMeasurements now carries the equivalent data
+// in nested domain blocks (Loudness/Dynamics/Noise/Regions). 1.4 migrates the output
+// side onto the shared LoudnessMetrics/DynamicsMetrics types.
 type BaseMeasurements struct {
 	// Spectral analysis from aspectralstats (all measurements averaged across frames)
 	Spectral SpectralMetrics `json:"-"` // Kept flat in JSON by custom marshal helpers
@@ -192,83 +270,86 @@ type BaseMeasurements struct {
 // Uses ebur128 (LUFS/LRA), astats (dynamic range/noise floor), and aspectralstats (spectral analysis).
 // Room tone detection runs in Go using 250ms interval sampling rather than an FFmpeg silence filter.
 type AudioMeasurements struct {
-	// Embed shared measurement fields
-	BaseMeasurements
+	// Spectral analysis from aspectralstats (whole-file averaged). Kept directly
+	// accessible at measurements.Spectral so DSP/adaptive reads (m.Spectral.Flux,
+	// .Kurtosis, ...) keep resolving; the spectral.stages grouping is assembled at
+	// the RunRecord level in Phase 2.
+	Spectral SpectralMetrics `json:"-"`
+
+	// Domain blocks (8.1). Loudness/Dynamics use the shared metric types; Noise and
+	// Regions are input-only.
+	Loudness InputLoudnessMetrics `json:"loudness"`
+	Dynamics DynamicsMetrics      `json:"dynamics"`
+	Noise    NoiseMetrics         `json:"noise"`
+	Regions  RegionMetrics        `json:"regions"`
 
 	// Duration is the total audio length in seconds, captured at file open. It is
-	// in-memory UI plumbing only and excluded from the report JSON contract (the
-	// custom MarshalJSON/UnmarshalJSON pair serialises named fields explicitly).
+	// in-memory UI plumbing only and excluded from the report JSON contract.
 	Duration float64 `json:"-"`
 
-	// Input-specific loudness measurements from ebur128
-	InputI           float64 `json:"input_i"`            // Integrated loudness (LUFS)
-	InputTP          float64 `json:"input_tp"`           // True peak (dBTP)
-	InputLRA         float64 `json:"input_lra"`          // Loudness range (LU)
-	InputThresh      float64 `json:"input_thresh"`       // Threshold level
-	TargetOffset     float64 `json:"target_offset"`      // Offset for normalization
-	NoiseFloor       float64 `json:"noise_floor"`        // Derived noise floor (dBFS), three-tier: astats → RMS estimate → ebur128 estimate
-	NoiseFloorSource string  `json:"noise_floor_source"` // Source of NoiseFloor: "astats", "rms_estimate", "ebur128_estimate"
-
-	// Adaptive room tone detection thresholds (derived from interval sampling)
-	PreScanNoiseFloor   float64 `json:"prescan_noise_floor"`    // Noise floor estimated from interval data (dBFS)
-	RoomToneDetectLevel float64 `json:"room_tone_detect_level"` // Adaptive room tone detection threshold (dBFS)
-
-	// Room tone detection results (derived from interval sampling)
-	RoomToneRegions []RoomToneRegion `json:"room_tone_regions,omitempty"` // Detected room tone regions
-
-	// 250ms interval samples for data-driven room tone candidate detection
-	IntervalSamples []IntervalSample `json:"interval_samples,omitempty"` // Per-interval measurements
-
-	// Scored room tone candidates (for debugging/reporting)
-	RoomToneCandidates []RoomToneCandidateMetrics `json:"room_tone_candidates,omitempty"` // All evaluated candidates with scores
-
-	// Speech detection results
-	SpeechRegions    []SpeechRegion           `json:"speech_regions,omitempty"`    // Detected speech regions
-	SpeechCandidates []SpeechCandidateMetrics `json:"speech_candidates,omitempty"` // All evaluated candidates with scores
-
-	// Elected speech candidate measurements (for adaptive tuning)
-	SpeechProfile *SpeechCandidateMetrics `json:"speech_profile,omitempty"` // Best speech candidate metrics
-
-	// Voice-activated recording detection
-	VoiceActivated bool `json:"voice_activated"` // True when >= 95% of room tone candidates are digital silence
-
-	// Noise profile extracted from elected room tone candidate
-	NoiseProfile *NoiseProfile `json:"noise_profile,omitempty"` // nil if extraction failed
-
-	// Derived suggestions for Pass 2 adaptive processing
-	SuggestedGateThreshold float64 `json:"suggested_gate_threshold"` // Suggested gate threshold (linear amplitude)
-	NoiseReductionHeadroom float64 `json:"noise_reduction_headroom"` // dB gap between noise and quiet speech
+	// SuggestedGateThreshold is an early gate-threshold estimate (linear amplitude).
+	// Not part of the 8.1 domain skeleton; record placement deferred to Phase 2.
+	SuggestedGateThreshold float64 `json:"suggested_gate_threshold"`
 }
 
-// OutputMeasurements contains the measurements from Pass 2 output analysis.
-// Uses BaseMeasurements for comparison with AudioMeasurements.
-// Does not include room tone detection or noise profile fields (those are input-only).
-type OutputMeasurements struct {
-	// Embed shared measurement fields
-	BaseMeasurements
+// OutputLoudnessMetrics is the Filtered/Final-stage loudness domain block: the
+// shared windowed loudness (embedded) plus the output-specific
+// integrated/true-peak/LRA/threshold and the pre-limiter target offset from the
+// loudnorm measurement. Mirrors InputLoudnessMetrics for the output side (8.1).
+//
+// The output TargetOffset is the pre-limiter offset loudnorm reports during Pass
+// 2/3 measurement; it is DISTINCT from the Pass-1 InputLoudnessMetrics.TargetOffset
+// (the a-priori config.TargetI - InputI gap) and must not be merged (8.2).
+type OutputLoudnessMetrics struct {
+	LoudnessMetrics // shared windowed loudness, promoted flat into this stage block
 
-	// Output-specific loudness measurements from ebur128
 	OutputI      float64 `json:"output_i"`      // Integrated loudness (LUFS)
 	OutputTP     float64 `json:"output_tp"`     // True peak (dBTP)
 	OutputLRA    float64 `json:"output_lra"`    // Loudness range (LU)
 	OutputThresh float64 `json:"output_thresh"` // Gating threshold (LUFS) - for loudnorm
 	TargetOffset float64 `json:"target_offset"` // Pre-limiter offset (dB) - from loudnorm measurement
+}
 
-	// Loudnorm measurement from Pass 2 analysis chain
-	// These come from loudnorm's first pass (measurement mode, without linear=true)
-	// and are used for the application pass in Pass 3
+// OutputLoudnormMeasurement groups the loudnorm first-pass (measurement mode)
+// values captured during Pass 2/3. Kept together for the later §8.1 normalisation
+// block. Distinct from normalise.go's LoudnormMeasurement (parsed Pass-3 floats).
+type OutputLoudnormMeasurement struct {
 	LoudnormInputI       float64 `json:"loudnorm_input_i"`       // Loudnorm's measured integrated loudness (LUFS)
 	LoudnormInputTP      float64 `json:"loudnorm_input_tp"`      // Loudnorm's measured true peak (dBTP)
 	LoudnormInputLRA     float64 `json:"loudnorm_input_lra"`     // Loudnorm's measured loudness range (LU)
 	LoudnormInputThresh  float64 `json:"loudnorm_input_thresh"`  // Loudnorm's measured threshold (LUFS)
 	LoudnormTargetOffset float64 `json:"loudnorm_target_offset"` // Loudnorm's calculated offset for second pass
 	LoudnormMeasured     bool    `json:"loudnorm_measured"`      // True if loudnorm measurement was captured
+}
 
-	// Room tone region analysis (same region as Pass 1, for noise reduction comparison)
-	RoomToneSample *RoomToneCandidateMetrics `json:"room_tone_sample,omitempty"` // Measurements from same room tone region
+// OutputMeasurements contains the measurements from Pass 2 (Filtered) / Pass 4
+// (Final) output analysis. Mirrors the AudioMeasurements domain grouping: shared
+// LoudnessMetrics/DynamicsMetrics types plus a directly-accessible Spectral, with
+// the loudnorm-measurement fields grouped for the §8.1 normalisation block.
+// Does not include room tone detection or noise profile fields (those are input-only).
+type OutputMeasurements struct {
+	// Spectral analysis from aspectralstats (whole-file averaged). Kept directly
+	// accessible at FilteredMeasurements.Spectral; the spectral.stages grouping is
+	// assembled at the RunRecord level in Phase 2.
+	Spectral SpectralMetrics `json:"-"`
 
-	// Speech region analysis (same region as Pass 1, for processing comparison)
-	SpeechSample *SpeechCandidateMetrics `json:"speech_sample,omitempty"` // Measurements from same speech region
+	// Domain blocks (8.1). Loudness/Dynamics use the shared metric types.
+	Loudness OutputLoudnessMetrics `json:"loudness"`
+	Dynamics DynamicsMetrics       `json:"dynamics"`
+
+	// Loudnorm measurement from Pass 2 analysis chain, grouped for the §8.1
+	// normalisation block. These come from loudnorm's first pass (measurement mode,
+	// without linear=true) and feed the application pass in Pass 3.
+	Loudnorm OutputLoudnormMeasurement `json:"loudnorm"`
+
+	// Room tone region analysis (same region as Pass 1, for noise reduction comparison).
+	// Bare RegionSample: the output re-measure only sets amplitude/spectral/loudness, so
+	// scoring/stability/band fields are structurally absent (no stale-zero values).
+	RoomToneSample *RegionSample `json:"room_tone_sample,omitempty"` // Measurements from same room tone region
+
+	// Speech region analysis (same region as Pass 1, for processing comparison).
+	// Bare RegionSample: see RoomToneSample.
+	SpeechSample *RegionSample `json:"speech_sample,omitempty"` // Measurements from same speech region
 }
 
 // AnalyzeAudio performs Pass 1: ebur128 + astats + aspectralstats analysis to get measurements
@@ -317,11 +398,11 @@ type noiseProfileSelection struct {
 }
 
 func selectNoiseProfile(measurements *AudioMeasurements, intervals, silenceIntervals []IntervalSample, silMedians silenceMedians, log debugLogger) noiseProfileSelection {
-	measurements.RoomToneRegions = findRoomToneCandidatesFromIntervals(silenceIntervals, measurements.RoomToneDetectLevel, silMedians)
+	measurements.Regions.RoomToneRegions = findRoomToneCandidatesFromIntervals(silenceIntervals, measurements.Noise.RoomToneDetectLevel, silMedians)
 
-	roomToneResult := findBestRoomToneRegion(measurements.RoomToneRegions, silenceIntervals, log)
-	measurements.RoomToneCandidates = roomToneResult.Candidates
-	measurements.VoiceActivated = detectVoiceActivated(roomToneResult.Candidates)
+	roomToneResult := findBestRoomToneRegion(measurements.Regions.RoomToneRegions, silenceIntervals, log)
+	measurements.Regions.RoomToneCandidates = roomToneResult.Candidates
+	measurements.Noise.VoiceActivated = detectVoiceActivated(roomToneResult.Candidates)
 
 	selection := noiseProfileSelection{roomToneResult: roomToneResult}
 	if roomToneResult.BestRegion == nil {
@@ -338,7 +419,7 @@ func selectNoiseProfile(measurements *AudioMeasurements, intervals, silenceInter
 	}
 
 	selection.noiseProfile = profile
-	measurements.NoiseProfile = profile
+	measurements.Regions.NoiseProfile = profile
 
 	if wasRefined {
 		profile.WasRefined = true
@@ -347,8 +428,8 @@ func selectNoiseProfile(measurements *AudioMeasurements, intervals, silenceInter
 	}
 
 	if profile.MeasuredNoiseFloor != 0 && !math.IsInf(profile.MeasuredNoiseFloor, -1) {
-		measurements.NoiseFloor = profile.MeasuredNoiseFloor
-		measurements.NoiseFloorSource = "silence_profile"
+		measurements.Noise.Floor = profile.MeasuredNoiseFloor
+		measurements.Noise.FloorSource = "silence_profile"
 	}
 
 	return selection
@@ -359,14 +440,14 @@ func selectSpeechProfile(measurements *AudioMeasurements, intervals []IntervalSa
 	switch {
 	case noiseSelection.roomToneResult != nil && noiseSelection.roomToneResult.BestRegion != nil:
 		speechSearchStart = noiseSelection.roomToneResult.BestRegion.End
-	case len(measurements.RoomToneRegions) > 0:
-		speechSearchStart = measurements.RoomToneRegions[0].End
+	case len(measurements.Regions.RoomToneRegions) > 0:
+		speechSearchStart = measurements.Regions.RoomToneRegions[0].End
 	}
 
-	measurements.SpeechRegions = findSpeechCandidatesFromIntervals(intervals, speechSearchStart, measurements.VoiceActivated, measurements.RMSLevel, measurements.NoiseFloor)
+	measurements.Regions.SpeechRegions = findSpeechCandidatesFromIntervals(intervals, speechSearchStart, measurements.Noise.VoiceActivated, measurements.Dynamics.RMSLevel, measurements.Noise.Floor)
 
-	speechResult := findBestSpeechRegion(measurements.SpeechRegions, intervals, noiseSelection.noiseProfile, log)
-	measurements.SpeechCandidates = speechResult.Candidates
+	speechResult := findBestSpeechRegion(measurements.Regions.SpeechRegions, intervals, noiseSelection.noiseProfile, log)
+	measurements.Regions.SpeechCandidates = speechResult.Candidates
 
 	if speechResult.BestRegion == nil {
 		return
@@ -374,7 +455,7 @@ func selectSpeechProfile(measurements *AudioMeasurements, intervals []IntervalSa
 
 	for i := range speechResult.Candidates {
 		if speechResult.Candidates[i].Region.Start == speechResult.BestRegion.Start {
-			measurements.SpeechProfile = &speechResult.Candidates[i]
+			measurements.Regions.SpeechProfile = &speechResult.Candidates[i]
 			return
 		}
 	}
@@ -390,24 +471,24 @@ func buildInputMeasurements(filename string, collection *analysisFrameCollection
 	}
 
 	measurements := &AudioMeasurements{
-		Duration:            collection.totalDuration,
-		PreScanNoiseFloor:   noiseFloorEstimate,
-		RoomToneDetectLevel: silenceThreshold,
-		IntervalSamples:     collection.intervals,
+		Duration: collection.totalDuration,
 	}
+	measurements.Noise.FloorPrescan = noiseFloorEstimate
+	measurements.Noise.RoomToneDetectLevel = silenceThreshold
+	measurements.Regions.IntervalSamples = collection.intervals
 
 	if !acc.ebur128Found {
 		return nil, fmt.Errorf("ebur128 measurements not found in metadata for file: %s", filename)
 	}
 
-	measurements.InputI = acc.ebur128InputI
-	measurements.InputTP = acc.ebur128InputTP
-	measurements.InputLRA = acc.ebur128InputLRA
-	measurements.InputThresh = acc.ebur128InputI - 10.0
-	measurements.TargetOffset = config.Loudnorm.TargetI - acc.ebur128InputI
-	measurements.MomentaryLoudness = acc.ebur128InputM
-	measurements.ShortTermLoudness = acc.ebur128InputS
-	measurements.SamplePeak = acc.ebur128InputSP
+	measurements.Loudness.InputI = acc.ebur128InputI
+	measurements.Loudness.InputTP = acc.ebur128InputTP
+	measurements.Loudness.InputLRA = acc.ebur128InputLRA
+	measurements.Loudness.InputThresh = acc.ebur128InputI - 10.0
+	measurements.Loudness.TargetOffset = config.Loudnorm.TargetI - acc.ebur128InputI
+	measurements.Loudness.MomentaryLoudness = acc.ebur128InputM
+	measurements.Loudness.ShortTermLoudness = acc.ebur128InputS
+	measurements.Loudness.SamplePeak = acc.ebur128InputSP
 
 	measurements.Spectral = acc.finalizeSpectral()
 	assignAstatsMeasurements(measurements, acc)
@@ -421,80 +502,80 @@ func assignAstatsMeasurements(measurements *AudioMeasurements, acc *metadataAccu
 		return
 	}
 
-	measurements.DynamicRange = acc.astatsDynamicRange
-	measurements.RMSLevel = acc.astatsRMSLevel
-	measurements.PeakLevel = acc.astatsPeakLevel
-	measurements.RMSTrough = acc.astatsRMSTrough
-	measurements.RMSPeak = acc.astatsRMSPeak
-	measurements.DCOffset = acc.astatsDCOffset
-	measurements.FlatFactor = acc.astatsFlatFactor
-	measurements.CrestFactor = acc.astatsCrestFactor
-	measurements.ZeroCrossingsRate = acc.astatsZeroCrossingsRate
-	measurements.ZeroCrossings = acc.astatsZeroCrossings
-	measurements.MaxDifference = acc.astatsMaxDifference
-	measurements.MinDifference = acc.astatsMinDifference
-	measurements.MeanDifference = acc.astatsMeanDifference
-	measurements.RMSDifference = acc.astatsRMSDifference
-	measurements.Entropy = acc.astatsEntropy
-	measurements.MinLevel = acc.astatsMinLevel
-	measurements.MaxLevel = acc.astatsMaxLevel
-	measurements.AstatsNoiseFloor = acc.astatsNoiseFloor
-	measurements.NoiseFloorCount = acc.astatsNoiseFloorCount
-	measurements.BitDepth = acc.astatsBitDepth
-	measurements.NumberOfSamples = acc.astatsNumberOfSamples
+	measurements.Dynamics.DynamicRange = acc.astatsDynamicRange
+	measurements.Dynamics.RMSLevel = acc.astatsRMSLevel
+	measurements.Dynamics.PeakLevel = acc.astatsPeakLevel
+	measurements.Dynamics.RMSTrough = acc.astatsRMSTrough
+	measurements.Dynamics.RMSPeak = acc.astatsRMSPeak
+	measurements.Dynamics.DCOffset = acc.astatsDCOffset
+	measurements.Dynamics.FlatFactor = acc.astatsFlatFactor
+	measurements.Dynamics.CrestFactor = acc.astatsCrestFactor
+	measurements.Dynamics.ZeroCrossingsRate = acc.astatsZeroCrossingsRate
+	measurements.Dynamics.ZeroCrossings = acc.astatsZeroCrossings
+	measurements.Dynamics.MaxDifference = acc.astatsMaxDifference
+	measurements.Dynamics.MinDifference = acc.astatsMinDifference
+	measurements.Dynamics.MeanDifference = acc.astatsMeanDifference
+	measurements.Dynamics.RMSDifference = acc.astatsRMSDifference
+	measurements.Dynamics.Entropy = acc.astatsEntropy
+	measurements.Dynamics.MinLevel = acc.astatsMinLevel
+	measurements.Dynamics.MaxLevel = acc.astatsMaxLevel
+	measurements.Noise.FloorAstats = acc.astatsNoiseFloor
+	measurements.Dynamics.NoiseFloorCount = acc.astatsNoiseFloorCount
+	measurements.Dynamics.BitDepth = acc.astatsBitDepth
+	measurements.Dynamics.NumberOfSamples = acc.astatsNumberOfSamples
 }
 
 func assignInputNoiseFloor(measurements *AudioMeasurements, acc *metadataAccumulators) {
 	switch {
 	case acc.astatsRMSTrough != 0 && !math.IsInf(acc.astatsRMSTrough, -1):
-		measurements.NoiseFloor = acc.astatsRMSTrough
-		measurements.NoiseFloorSource = "astats"
+		measurements.Noise.Floor = acc.astatsRMSTrough
+		measurements.Noise.FloorSource = "astats"
 	case acc.astatsRMSLevel != 0 && !math.IsInf(acc.astatsRMSLevel, -1):
-		measurements.NoiseFloor = acc.astatsRMSLevel - 15.0
-		measurements.NoiseFloorSource = "rms_estimate"
+		measurements.Noise.Floor = acc.astatsRMSLevel - 15.0
+		measurements.Noise.FloorSource = "rms_estimate"
 	default:
 		var noiseFloorOffset float64
 		switch {
-		case measurements.InputI > -20:
+		case measurements.Loudness.InputI > -20:
 			noiseFloorOffset = 18.0
-		case measurements.InputI > -30:
+		case measurements.Loudness.InputI > -30:
 			noiseFloorOffset = 12.0
 		default:
 			noiseFloorOffset = 8.0
 		}
-		measurements.NoiseFloor = measurements.InputThresh - noiseFloorOffset
-		measurements.NoiseFloorSource = "ebur128_estimate"
+		measurements.Noise.Floor = measurements.Loudness.InputThresh - noiseFloorOffset
+		measurements.Noise.FloorSource = "ebur128_estimate"
 	}
 
-	if measurements.NoiseFloor < -90.0 {
-		measurements.NoiseFloor = -90.0
-	} else if measurements.NoiseFloor > -30.0 {
-		measurements.NoiseFloor = -30.0
+	if measurements.Noise.Floor < -90.0 {
+		measurements.Noise.Floor = -90.0
+	} else if measurements.Noise.Floor > -30.0 {
+		measurements.Noise.Floor = -30.0
 	}
 }
 
 func assignInputMeasurementSuggestions(measurements *AudioMeasurements) {
-	gateThresholdDB := calculateAdaptiveDS201GateThreshold(measurements.NoiseFloor, measurements.RMSTrough)
+	gateThresholdDB := calculateAdaptiveDS201GateThreshold(measurements.Noise.Floor, measurements.Dynamics.RMSTrough)
 	measurements.SuggestedGateThreshold = math.Pow(10, gateThresholdDB/20.0)
 
-	if measurements.RMSLevel != 0 && measurements.NoiseFloor != 0 {
-		measurements.NoiseReductionHeadroom = measurements.RMSLevel - measurements.NoiseFloor
-		if measurements.NoiseReductionHeadroom < 0 {
-			measurements.NoiseReductionHeadroom = 0
+	if measurements.Dynamics.RMSLevel != 0 && measurements.Noise.Floor != 0 {
+		measurements.Noise.ReductionHeadroom = measurements.Dynamics.RMSLevel - measurements.Noise.Floor
+		if measurements.Noise.ReductionHeadroom < 0 {
+			measurements.Noise.ReductionHeadroom = 0
 		}
-		if measurements.NoiseReductionHeadroom > 60 {
-			measurements.NoiseReductionHeadroom = 60
+		if measurements.Noise.ReductionHeadroom > 60 {
+			measurements.Noise.ReductionHeadroom = 60
 		}
 		return
 	}
 
 	switch {
-	case measurements.InputI > -20:
-		measurements.NoiseReductionHeadroom = 40.0
-	case measurements.InputI > -30:
-		measurements.NoiseReductionHeadroom = 25.0
+	case measurements.Loudness.InputI > -20:
+		measurements.Noise.ReductionHeadroom = 40.0
+	case measurements.Loudness.InputI > -30:
+		measurements.Noise.ReductionHeadroom = 25.0
 	default:
-		measurements.NoiseReductionHeadroom = 15.0
+		measurements.Noise.ReductionHeadroom = 15.0
 	}
 }
 

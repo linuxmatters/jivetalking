@@ -14,7 +14,7 @@ import (
 //
 // The region parameter should use the same Start/Duration as the NoiseProfile
 // from Pass 1 analysis. Returns nil if the region cannot be measured.
-func measureOutputRoomToneRegion(outputPath string, region RoomToneRegion) (*RoomToneCandidateMetrics, error) {
+func measureOutputRoomToneRegion(outputPath string, region RoomToneRegion) (*RegionSample, error) {
 	// Open the processed audio file
 	reader, _, err := audio.OpenAudioFile(outputPath)
 	if err != nil {
@@ -30,7 +30,7 @@ func measureOutputRoomToneRegion(outputPath string, region RoomToneRegion) (*Roo
 //
 // The region parameter should identify a representative speech section from
 // the processed audio. Returns nil if the region cannot be measured.
-func measureOutputSpeechRegion(outputPath string, region SpeechRegion) (*SpeechCandidateMetrics, error) {
+func measureOutputSpeechRegion(outputPath string, region SpeechRegion) (*RegionSample, error) {
 	// Open the processed audio file
 	reader, _, err := audio.OpenAudioFile(outputPath)
 	if err != nil {
@@ -58,9 +58,11 @@ func TestExtractRegionPair(t *testing.T) {
 		{
 			name: "NoiseProfile only returns room tone region",
 			measurements: &AudioMeasurements{
-				NoiseProfile: &NoiseProfile{
-					Start:    2 * time.Second,
-					Duration: 500 * time.Millisecond,
+				Regions: RegionMetrics{
+					NoiseProfile: &NoiseProfile{
+						Start:    2 * time.Second,
+						Duration: 500 * time.Millisecond,
+					},
 				},
 			},
 			wantSilence: true,
@@ -70,11 +72,13 @@ func TestExtractRegionPair(t *testing.T) {
 		{
 			name: "SpeechProfile only returns speech region",
 			measurements: &AudioMeasurements{
-				SpeechProfile: &SpeechCandidateMetrics{
-					Region: SpeechRegion{
-						Start:    5 * time.Second,
-						End:      8 * time.Second,
-						Duration: 3 * time.Second,
+				Regions: RegionMetrics{
+					SpeechProfile: &SpeechCandidateMetrics{
+						Region: SpeechRegion{
+							Start:    5 * time.Second,
+							End:      8 * time.Second,
+							Duration: 3 * time.Second,
+						},
 					},
 				},
 			},
@@ -84,15 +88,17 @@ func TestExtractRegionPair(t *testing.T) {
 		{
 			name: "both present returns both non-nil",
 			measurements: &AudioMeasurements{
-				NoiseProfile: &NoiseProfile{
-					Start:    1 * time.Second,
-					Duration: 400 * time.Millisecond,
-				},
-				SpeechProfile: &SpeechCandidateMetrics{
-					Region: SpeechRegion{
-						Start:    10 * time.Second,
-						End:      13 * time.Second,
-						Duration: 3 * time.Second,
+				Regions: RegionMetrics{
+					NoiseProfile: &NoiseProfile{
+						Start:    1 * time.Second,
+						Duration: 400 * time.Millisecond,
+					},
+					SpeechProfile: &SpeechCandidateMetrics{
+						Region: SpeechRegion{
+							Start:    10 * time.Second,
+							End:      13 * time.Second,
+							Duration: 3 * time.Second,
+						},
 					},
 				},
 			},
@@ -103,9 +109,11 @@ func TestExtractRegionPair(t *testing.T) {
 		{
 			name: "End equals Start plus Duration for room tone region",
 			measurements: &AudioMeasurements{
-				NoiseProfile: &NoiseProfile{
-					Start:    3 * time.Second,
-					Duration: 750 * time.Millisecond,
+				Regions: RegionMetrics{
+					NoiseProfile: &NoiseProfile{
+						Start:    3 * time.Second,
+						Duration: 750 * time.Millisecond,
+					},
 				},
 			},
 			wantSilence: true,
@@ -142,7 +150,7 @@ func TestExtractRegionPair(t *testing.T) {
 			}
 
 			if spRegion != nil {
-				want := tt.measurements.SpeechProfile.Region
+				want := tt.measurements.Regions.SpeechProfile.Region
 				if spRegion.Start != want.Start || spRegion.End != want.End || spRegion.Duration != want.Duration {
 					t.Errorf("SpeechRegion = %+v, want %+v", *spRegion, want)
 				}

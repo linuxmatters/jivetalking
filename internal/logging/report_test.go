@@ -28,7 +28,7 @@ func makeReportData(t *testing.T) ReportData {
 		},
 		Result: &processor.ProcessingResult{
 			Measurements:         makeInputMeasurements(),
-			FilteredMeasurements: makeOutputMeasurements(-20.2, -2.1, 6.4, makeRoomToneSample(-64.0), makeSpeechSample(-24.0)),
+			FilteredMeasurements: makeOutputMeasurements(-20.2, -2.1, 6.4, makeRoomToneRegionSample(-64.0), makeSpeechRegionSample(-24.0)),
 			Config:               config,
 			NormResult: &processor.NormalisationResult{
 				InputLUFS:  -20.2,
@@ -37,8 +37,8 @@ func makeReportData(t *testing.T) ReportData {
 					-16.0,
 					-1.1,
 					5.9,
-					makeRoomToneSample(-61.0),
-					makeSpeechSample(-19.8),
+					makeRoomToneRegionSample(-61.0),
+					makeSpeechRegionSample(-19.8),
 				),
 			},
 			RegionTimings: processor.RegionMeasurementTimings{
@@ -69,98 +69,111 @@ func makeInputMeasurements() *processor.AudioMeasurements {
 	speechSample.Region = speechRegion
 
 	return &processor.AudioMeasurements{
-		BaseMeasurements: processor.BaseMeasurements{
-			Spectral: processor.SpectralMetrics{Centroid: 2200, Kurtosis: 7.2, Flatness: 0.18, Flux: 0.004}, DynamicRange: 22.0,
-			MomentaryLoudness: -25.0,
-			ShortTermLoudness: -24.5,
-			SamplePeak:        -4.0,
+		Spectral: processor.SpectralMetrics{Centroid: 2200, Kurtosis: 7.2, Flatness: 0.18, Flux: 0.004},
+		Dynamics: processor.DynamicsMetrics{DynamicRange: 22.0},
+		Loudness: processor.InputLoudnessMetrics{
+			LoudnessMetrics: processor.LoudnessMetrics{
+				MomentaryLoudness: -25.0,
+				ShortTermLoudness: -24.5,
+				SamplePeak:        -4.0,
+			},
+			InputI:   -24.1,
+			InputTP:  -3.2,
+			InputLRA: 7.3,
 		},
-		InputI:           -24.1,
-		InputTP:          -3.2,
-		InputLRA:         7.3,
-		NoiseFloor:       -58.0,
-		NoiseFloorSource: "rms_estimate",
-		NoiseProfile: &processor.NoiseProfile{
-			Start:              roomToneRegion.Start,
-			Duration:           roomToneRegion.Duration,
-			MeasuredNoiseFloor: -58.0,
-			PeakLevel:          -45.0,
-			CrestFactor:        13.0,
-			Entropy:            0.42,
+		Noise: processor.NoiseMetrics{
+			Floor:       -58.0,
+			FloorSource: "rms_estimate",
 		},
-		RoomToneCandidates: []processor.RoomToneCandidateMetrics{*roomToneSample},
-		SpeechProfile:      speechSample,
+		Regions: processor.RegionMetrics{
+			NoiseProfile: &processor.NoiseProfile{
+				Start:              roomToneRegion.Start,
+				Duration:           roomToneRegion.Duration,
+				MeasuredNoiseFloor: -58.0,
+				PeakLevel:          -45.0,
+				CrestFactor:        13.0,
+				Entropy:            0.42,
+			},
+			RoomToneCandidates: []processor.RoomToneCandidateMetrics{*roomToneSample},
+			SpeechProfile:      speechSample,
+		},
 	}
 }
 
-func makeOutputMeasurements(inputI, inputTP, inputLRA float64, roomToneSample *processor.RoomToneCandidateMetrics, speechSample *processor.SpeechCandidateMetrics) *processor.OutputMeasurements {
+func makeOutputMeasurements(inputI, inputTP, inputLRA float64, roomToneSample *processor.RegionSample, speechSample *processor.RegionSample) *processor.OutputMeasurements {
 	return &processor.OutputMeasurements{
-		BaseMeasurements: processor.BaseMeasurements{
-			MomentaryLoudness: inputI - 0.5,
-			ShortTermLoudness: inputI - 0.2,
-			SamplePeak:        inputTP - 0.3,
+		Loudness: processor.OutputLoudnessMetrics{
+			LoudnessMetrics: processor.LoudnessMetrics{
+				MomentaryLoudness: inputI - 0.5,
+				ShortTermLoudness: inputI - 0.2,
+				SamplePeak:        inputTP - 0.3,
+			},
+			OutputI:   inputI,
+			OutputTP:  inputTP,
+			OutputLRA: inputLRA,
 		},
-		OutputI:        inputI,
-		OutputTP:       inputTP,
-		OutputLRA:      inputLRA,
 		RoomToneSample: roomToneSample,
 		SpeechSample:   speechSample,
 	}
 }
 
+// makeRoomToneRegionSample builds a bare RegionSample for the Pass 2/4 output
+// room-tone sample slot (now *processor.RegionSample).
+func makeRoomToneRegionSample(rms float64) *processor.RegionSample {
+	return &makeRoomToneSample(rms).RegionSample
+}
+
+// makeSpeechRegionSample builds a bare RegionSample for the Pass 2/4 output
+// speech sample slot (now *processor.RegionSample).
+func makeSpeechRegionSample(rms float64) *processor.RegionSample {
+	return &makeSpeechSample(rms).RegionSample
+}
+
 func makeRoomToneSample(rms float64) *processor.RoomToneCandidateMetrics {
-	return &processor.RoomToneCandidateMetrics{
-		Region:      processor.RoomToneRegion{Start: 10 * time.Second, End: 15 * time.Second, Duration: 5 * time.Second},
-		RMSLevel:    rms,
-		PeakLevel:   rms + 12,
-		CrestFactor: 12,
-		Spectral: processor.SpectralMetrics{
-			Mean:     0.001,
-			Variance: 0.0001,
-			Centroid: 950,
-			Spread:   1200,
-			Skewness: 0.4,
-			Kurtosis: 5.1,
-			Entropy:  0.42,
-			Flatness: 0.32,
-			Crest:    8.5,
-			Flux:     0.002,
-			Slope:    -0.0002,
-			Decrease: 0.04,
-			Rolloff:  3600,
-		},
-		MomentaryLUFS: rms - 2,
-		ShortTermLUFS: rms - 1,
-		TruePeak:      rms + 12,
-		SamplePeak:    rms + 11,
-	}
+	return &processor.RoomToneCandidateMetrics{Region: processor.RoomToneRegion{Start: 10 * time.Second, End: 15 * time.Second, Duration: 5 * time.Second}, RegionSample: processor.RegionSample{RMSLevel: rms, PeakLevel: rms + 12, CrestFactor: 12, Spectral: processor.SpectralMetrics{
+		Mean:     0.001,
+		Variance: 0.0001,
+		Centroid: 950,
+		Spread:   1200,
+		Skewness: 0.4,
+		Kurtosis: 5.1,
+		Entropy:  0.42,
+		Flatness: 0.32,
+		Crest:    8.5,
+		Flux:     0.002,
+		Slope:    -0.0002,
+		Decrease: 0.04,
+		Rolloff:  3600,
+	}, MomentaryLUFS: rms - 2, ShortTermLUFS: rms - 1, TruePeak: rms + 12, SamplePeak: rms + 11}}
 }
 
 func makeSpeechSample(rms float64) *processor.SpeechCandidateMetrics {
 	return &processor.SpeechCandidateMetrics{
-		Region:      processor.SpeechRegion{Start: 30 * time.Second, End: 90 * time.Second, Duration: 60 * time.Second},
-		RMSLevel:    rms,
-		PeakLevel:   rms + 10,
-		CrestFactor: 10,
-		Spectral: processor.SpectralMetrics{
-			Mean:     0.01,
-			Variance: 0.002,
-			Centroid: 2400,
-			Spread:   1800,
-			Skewness: 0.7,
-			Kurtosis: 7.4,
-			Entropy:  0.24,
-			Flatness: 0.18,
-			Crest:    26.0,
-			Flux:     0.006,
-			Slope:    -0.0001,
-			Decrease: 0.06,
-			Rolloff:  6200,
+		Region: processor.SpeechRegion{Start: 30 * time.Second, End: 90 * time.Second, Duration: 60 * time.Second},
+		RegionSample: processor.RegionSample{
+			RMSLevel:    rms,
+			PeakLevel:   rms + 10,
+			CrestFactor: 10,
+			Spectral: processor.SpectralMetrics{
+				Mean:     0.01,
+				Variance: 0.002,
+				Centroid: 2400,
+				Spread:   1800,
+				Skewness: 0.7,
+				Kurtosis: 7.4,
+				Entropy:  0.24,
+				Flatness: 0.18,
+				Crest:    26.0,
+				Flux:     0.006,
+				Slope:    -0.0001,
+				Decrease: 0.06,
+				Rolloff:  6200,
+			},
+			MomentaryLUFS: rms - 1,
+			ShortTermLUFS: rms - 0.5,
+			TruePeak:      rms + 10,
+			SamplePeak:    rms + 9,
 		},
-		MomentaryLUFS: rms - 1,
-		ShortTermLUFS: rms - 0.5,
-		TruePeak:      rms + 10,
-		SamplePeak:    rms + 9,
 		BodyBandRMS:   -22.0,
 		SibBandRMS:    -25.0, // sibilance excess -3 dB
 		BandsMeasured: true,
@@ -336,7 +349,7 @@ func TestGenerateReport_FilterChainReportsDeesserBandsNotMeasured(t *testing.T) 
 	data := makeReportData(t)
 	data.Result.Config.Deesser.Enabled = true
 	data.Result.Config.Deesser.Intensity = 0.0
-	data.Result.Measurements.SpeechProfile.BandsMeasured = false
+	data.Result.Measurements.Regions.SpeechProfile.BandsMeasured = false
 
 	output := generateReportText(t, data)
 
@@ -375,8 +388,8 @@ func TestGenerateReport_LoudnormAndPeakLimiterSections(t *testing.T) {
 			-16.1,
 			-1.3,
 			5.8,
-			makeRoomToneSample(-61.0),
-			makeSpeechSample(-19.8),
+			makeRoomToneRegionSample(-61.0),
+			makeSpeechRegionSample(-19.8),
 		),
 	}
 
@@ -452,8 +465,8 @@ func TestGenerateReport_LoudnormModeHeadlineFromActualType(t *testing.T) {
 					-16.1,
 					-1.3,
 					5.8,
-					makeRoomToneSample(-61.0),
-					makeSpeechSample(-19.8),
+					makeRoomToneRegionSample(-61.0),
+					makeSpeechRegionSample(-19.8),
 				),
 			}
 
@@ -540,11 +553,11 @@ func TestGenerateReport_SkippedNormalisationTimingLabels(t *testing.T) {
 
 func TestWriteDiagnosticRoomTone_CapsCandidatesChronologicallyWithElectedFirst(t *testing.T) {
 	m := makeInputMeasurements()
-	m.RoomToneCandidates = makeRankedRoomToneCandidates(12)
-	m.NoiseProfile = &processor.NoiseProfile{
-		Start:              m.RoomToneCandidates[0].Region.Start,
-		Duration:           m.RoomToneCandidates[0].Region.Duration,
-		MeasuredNoiseFloor: m.RoomToneCandidates[0].RMSLevel,
+	m.Regions.RoomToneCandidates = makeRankedRoomToneCandidates(12)
+	m.Regions.NoiseProfile = &processor.NoiseProfile{
+		Start:              m.Regions.RoomToneCandidates[0].Region.Start,
+		Duration:           m.Regions.RoomToneCandidates[0].Region.Duration,
+		MeasuredNoiseFloor: m.Regions.RoomToneCandidates[0].RMSLevel,
 	}
 
 	output := captureReportDiagnostic(t, func(f *os.File) {
@@ -587,9 +600,9 @@ func TestWriteDiagnosticRoomTone_CapsCandidatesChronologicallyWithElectedFirst(t
 
 func TestWriteDiagnosticSpeech_CapsCandidatesChronologicallyWithElectedFirst(t *testing.T) {
 	m := makeInputMeasurements()
-	m.SpeechCandidates = makeRankedSpeechCandidates(12)
-	m.SpeechCandidates[0].VoicingDensity = 0.82
-	m.SpeechProfile = &m.SpeechCandidates[0]
+	m.Regions.SpeechCandidates = makeRankedSpeechCandidates(12)
+	m.Regions.SpeechCandidates[0].VoicingDensity = 0.82
+	m.Regions.SpeechProfile = &m.Regions.SpeechCandidates[0]
 
 	output := captureReportDiagnostic(t, func(f *os.File) {
 		writeDiagnosticSpeech(f, m)
@@ -632,9 +645,9 @@ func TestWriteDiagnosticSpeech_CapsCandidatesChronologicallyWithElectedFirst(t *
 
 func TestWriteDiagnosticSpeech_RejectionSummaryIncludesZeroScore(t *testing.T) {
 	m := makeInputMeasurements()
-	m.SpeechCandidates = makeRankedSpeechCandidates(3)
-	m.SpeechCandidates[1].Score = 0.0
-	m.SpeechProfile = &m.SpeechCandidates[0]
+	m.Regions.SpeechCandidates = makeRankedSpeechCandidates(3)
+	m.Regions.SpeechCandidates[1].Score = 0.0
+	m.Regions.SpeechProfile = &m.Regions.SpeechCandidates[0]
 
 	output := captureReportDiagnostic(t, func(f *os.File) {
 		writeDiagnosticSpeech(f, m)
@@ -660,8 +673,8 @@ func TestWriteDiagnosticSpeech_RejectionSummaryIncludesZeroScore(t *testing.T) {
 
 func TestWriteDiagnosticSpeech_DisplaySummaryIncludesZeroOmitted(t *testing.T) {
 	m := makeInputMeasurements()
-	m.SpeechCandidates = makeRankedSpeechCandidates(4)
-	m.SpeechProfile = &m.SpeechCandidates[0]
+	m.Regions.SpeechCandidates = makeRankedSpeechCandidates(4)
+	m.Regions.SpeechProfile = &m.Regions.SpeechCandidates[0]
 
 	output := captureReportDiagnostic(t, func(f *os.File) {
 		writeDiagnosticSpeech(f, m)

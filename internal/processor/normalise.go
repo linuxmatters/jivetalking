@@ -425,11 +425,11 @@ type loudnormApplicationExecutionResult struct {
 func planLimiterForLoudnorm(output *OutputMeasurements, config *EffectiveFilterConfig) limiterPlan {
 	loudnorm := config.Loudnorm
 	ceilingDB, needed, clamped := calculateLimiterCeiling(
-		output.OutputI, output.OutputTP,
+		output.Loudness.OutputI, output.Loudness.OutputTP,
 		loudnorm.TargetI, loudnorm.TargetTP,
 	)
 	preGainDB, reDerivedCeiling := calculatePreGain(
-		output.OutputI, loudnorm.TargetI, loudnorm.TargetTP,
+		output.Loudness.OutputI, loudnorm.TargetI, loudnorm.TargetTP,
 	)
 	if clamped {
 		ceilingDB = reDerivedCeiling
@@ -440,9 +440,9 @@ func planLimiterForLoudnorm(output *OutputMeasurements, config *EffectiveFilterC
 		ceilingDB:   ceilingDB,
 		needed:      needed,
 		clamped:     clamped,
-		gainDB:      loudnorm.TargetI - output.OutputI,
+		gainDB:      loudnorm.TargetI - output.Loudness.OutputI,
 		pass3Prefix: buildPreLimiterPrefix(preGainDB, ceilingDB, needed),
-		filteredTP:  output.OutputTP,
+		filteredTP:  output.Loudness.OutputTP,
 	}
 }
 

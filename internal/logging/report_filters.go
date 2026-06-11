@@ -107,9 +107,9 @@ func formatNoiseRemoveFilter(f *os.File, cfg *processor.EffectiveFilterConfig, m
 		noiseRemove.Smooth)
 
 	// Noise floor context from the elected room tone, when available.
-	if m != nil && m.NoiseProfile != nil && m.NoiseProfile.MeasuredNoiseFloor < 0 {
+	if m != nil && m.Regions.NoiseProfile != nil && m.Regions.NoiseProfile.MeasuredNoiseFloor < 0 {
 		fmt.Fprintf(f, "        noise floor: %.1f dBFS (from room tone)\n",
-			m.NoiseProfile.MeasuredNoiseFloor)
+			m.Regions.NoiseProfile.MeasuredNoiseFloor)
 	}
 
 	// afftdn parameters - fixed nr (not adaptive)
@@ -154,40 +154,40 @@ func formatDS201GateFilter(f *os.File, cfg *processor.EffectiveFilterConfig, dia
 		// Threshold rationale - must match logic in calculateDS201GateThreshold.
 		// Peak reference is used by the low-separation guard when:
 		// crest > 20 AND peak != 0 AND lufsGap < 25.
-		lufsGap := cfg.Loudnorm.TargetI - m.InputI
+		lufsGap := cfg.Loudnorm.TargetI - m.Loudness.InputI
 		if lufsGap < 0 {
 			lufsGap = 0
 		}
-		usePeakRef := m.NoiseProfile != nil &&
-			m.NoiseProfile.CrestFactor > 20 &&
-			m.NoiseProfile.PeakLevel != 0 &&
+		usePeakRef := m.Regions.NoiseProfile != nil &&
+			m.Regions.NoiseProfile.CrestFactor > 20 &&
+			m.Regions.NoiseProfile.PeakLevel != 0 &&
 			lufsGap < 25
 
 		switch {
 		case usePeakRef:
-			rationale = append(rationale, fmt.Sprintf("peak ref %.1f dB (crest %.1f dB)", m.NoiseProfile.PeakLevel, m.NoiseProfile.CrestFactor))
-		case lufsGap >= 25 && m.NoiseProfile != nil && m.NoiseProfile.CrestFactor > 20:
-			rationale = append(rationale, fmt.Sprintf("noise floor %.1f dB (extreme LUFS gap %.0f dB, ignoring crest)", m.NoiseFloor, lufsGap))
+			rationale = append(rationale, fmt.Sprintf("peak ref %.1f dB (crest %.1f dB)", m.Regions.NoiseProfile.PeakLevel, m.Regions.NoiseProfile.CrestFactor))
+		case lufsGap >= 25 && m.Regions.NoiseProfile != nil && m.Regions.NoiseProfile.CrestFactor > 20:
+			rationale = append(rationale, fmt.Sprintf("noise floor %.1f dB (extreme LUFS gap %.0f dB, ignoring crest)", m.Noise.Floor, lufsGap))
 		default:
-			rationale = append(rationale, fmt.Sprintf("noise floor %.1f dB", m.NoiseFloor))
+			rationale = append(rationale, fmt.Sprintf("noise floor %.1f dB", m.Noise.Floor))
 		}
 
 		// Ratio rationale
-		if m.InputLRA > 0 {
+		if m.Loudness.InputLRA > 0 {
 			lraType := "moderate"
-			if m.InputLRA > 15 {
+			if m.Loudness.InputLRA > 15 {
 				lraType = "wide"
-			} else if m.InputLRA < 10 {
+			} else if m.Loudness.InputLRA < 10 {
 				lraType = "narrow"
 			}
-			rationale = append(rationale, fmt.Sprintf("LRA %.1f LU (%s)", m.InputLRA, lraType))
+			rationale = append(rationale, fmt.Sprintf("LRA %.1f LU (%s)", m.Loudness.InputLRA, lraType))
 		}
 
 		// Range rationale: driven by the noise floor (clean recordings go deeper).
-		if m.NoiseFloor < -70 {
-			rationale = append(rationale, fmt.Sprintf("clean floor %.1f dB (deeper range)", m.NoiseFloor))
+		if m.Noise.Floor < -70 {
+			rationale = append(rationale, fmt.Sprintf("clean floor %.1f dB (deeper range)", m.Noise.Floor))
 		} else {
-			rationale = append(rationale, fmt.Sprintf("floor %.1f dB (standard range)", m.NoiseFloor))
+			rationale = append(rationale, fmt.Sprintf("floor %.1f dB (standard range)", m.Noise.Floor))
 		}
 
 		// Gentle mode rationale - for extreme LUFS gap + low LRA recordings
@@ -228,11 +228,11 @@ func formatLA2ACompressorFilter(f *os.File, cfg *processor.EffectiveFilterConfig
 	fmt.Fprintf(f, "        Mix: %.0f%%, knee %.1f, makeup %.0f dB (fixed)\n", la2a.Mix*100, la2a.Knee, la2a.Makeup)
 
 	// Only the threshold adapts. Show its source.
-	if m != nil && m.SpeechProfile != nil {
+	if m != nil && m.Regions.SpeechProfile != nil {
 		fmt.Fprintf(f, "        Threshold: speech RMS %.1f dBFS + %.0f dB offset\n",
-			m.SpeechProfile.RMSLevel, processor.LA2AThresholdSpeechOffsetDB)
+			m.Regions.SpeechProfile.RMSLevel, processor.LA2AThresholdSpeechOffsetDB)
 	} else if m != nil {
-		fmt.Fprintf(f, "        Threshold: peak %.1f dBFS - 20 dB (no speech profile)\n", m.PeakLevel)
+		fmt.Fprintf(f, "        Threshold: peak %.1f dBFS - 20 dB (no speech profile)\n", m.Dynamics.PeakLevel)
 	}
 }
 
@@ -245,14 +245,14 @@ func formatDeesserFilter(f *os.File, cfg *processor.EffectiveFilterConfig, m *pr
 	}
 	if deesser.Intensity == 0 {
 		switch {
-		case m == nil || m.SpeechProfile == nil:
+		case m == nil || m.Regions.SpeechProfile == nil:
 			fmt.Fprintf(f, "%sdeesser: inactive: no speech profile (full-file metrics unreliable)\n", prefix)
-		case !m.SpeechProfile.BandsMeasured:
+		case !m.Regions.SpeechProfile.BandsMeasured:
 			fmt.Fprintf(f, "%sdeesser: OFF: speech-band RMS not measured (region too short for astats)\n", prefix)
 		default:
-			excess := m.SpeechProfile.SibBandRMS - m.SpeechProfile.BodyBandRMS
+			excess := m.Regions.SpeechProfile.SibBandRMS - m.Regions.SpeechProfile.BodyBandRMS
 			fmt.Fprintf(f, "%sdeesser: OFF: sibilance excess %.1f dB (sib %.1f - body %.1f dBFS)\n",
-				prefix, excess, m.SpeechProfile.SibBandRMS, m.SpeechProfile.BodyBandRMS)
+				prefix, excess, m.Regions.SpeechProfile.SibBandRMS, m.Regions.SpeechProfile.BodyBandRMS)
 		}
 		return
 	}
@@ -261,11 +261,11 @@ func formatDeesserFilter(f *os.File, cfg *processor.EffectiveFilterConfig, m *pr
 		prefix, deesser.Intensity*100, deesser.Amount*100, deesser.Frequency*100)
 
 	// Show rationale: the band-excess engagement signal from the speech region.
-	if m != nil && m.SpeechProfile != nil {
-		excess := m.SpeechProfile.SibBandRMS - m.SpeechProfile.BodyBandRMS
+	if m != nil && m.Regions.SpeechProfile != nil {
+		excess := m.Regions.SpeechProfile.SibBandRMS - m.Regions.SpeechProfile.BodyBandRMS
 		fmt.Fprintf(f, "        Rationale: sibilance excess %.1f dB (speech region)\n", excess)
-		fmt.Fprintf(f, "        sibilant band (6-9 kHz): %.1f dBFS\n", m.SpeechProfile.SibBandRMS)
-		fmt.Fprintf(f, "        body band (1-3 kHz): %.1f dBFS\n", m.SpeechProfile.BodyBandRMS)
+		fmt.Fprintf(f, "        sibilant band (6-9 kHz): %.1f dBFS\n", m.Regions.SpeechProfile.SibBandRMS)
+		fmt.Fprintf(f, "        body band (1-3 kHz): %.1f dBFS\n", m.Regions.SpeechProfile.BodyBandRMS)
 	}
 }
 

@@ -34,12 +34,12 @@ const (
 //	-3 ..  0              → linear ramp i 0.6 → 0.85
 //	>  0                  → i = 0.85 (cap)
 func tuneDeesser(config *EffectiveFilterConfig, measurements *AudioMeasurements) {
-	if measurements.SpeechProfile == nil || !measurements.SpeechProfile.BandsMeasured {
+	if measurements.Regions.SpeechProfile == nil || !measurements.Regions.SpeechProfile.BandsMeasured {
 		config.Deesser.Intensity = 0.0
 		return
 	}
 
-	sibilanceExcess := measurements.SpeechProfile.SibBandRMS - measurements.SpeechProfile.BodyBandRMS
+	sibilanceExcess := measurements.Regions.SpeechProfile.SibBandRMS - measurements.Regions.SpeechProfile.BodyBandRMS
 
 	switch {
 	case sibilanceExcess < deessExcessOffDB:

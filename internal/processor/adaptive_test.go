@@ -8,18 +8,22 @@ import (
 
 func TestAdaptConfigReturnsEffectiveConfig(t *testing.T) {
 	measurements := &AudioMeasurements{
-		BaseMeasurements: BaseMeasurements{
-			Spectral: SpectralMetrics{Centroid: 5000, Decrease: -0.12, Skewness: 1.2, Kurtosis: 4.0, Flux: 0.01}, DynamicRange: 32.0,
-
-			PeakLevel: -8.0,
+		Spectral: SpectralMetrics{Centroid: 5000, Decrease: -0.12, Skewness: 1.2, Kurtosis: 4.0, Flux: 0.01},
+		Dynamics: DynamicsMetrics{
+			DynamicRange: 32.0,
+			PeakLevel:    -8.0,
 		},
-		InputI:     -28.0,
-		InputTP:    -4.0,
-		InputLRA:   9.0,
-		NoiseFloor: -60.0,
-		NoiseProfile: &NoiseProfile{
-			MeasuredNoiseFloor: -50.0,
-			Entropy:            0.8,
+		Loudness: InputLoudnessMetrics{
+			InputI:   -28.0,
+			InputTP:  -4.0,
+			InputLRA: 9.0,
+		},
+		Noise: NoiseMetrics{Floor: -60.0},
+		Regions: RegionMetrics{
+			NoiseProfile: &NoiseProfile{
+				MeasuredNoiseFloor: -50.0,
+				Entropy:            0.8,
+			},
 		},
 	}
 
@@ -164,45 +168,49 @@ func newOrderIndependenceSeed() *BaseFilterConfig {
 
 func orderIndependenceWarmNoProfileMeasurements() *AudioMeasurements {
 	return &AudioMeasurements{
-		BaseMeasurements: BaseMeasurements{
-			Spectral: SpectralMetrics{Centroid: 6500, Decrease: -0.12, Skewness: 1.6, Kurtosis: 4.0, Flatness: 0.62, Flux: 0.008, Crest: 20.0, Rolloff: 18000}, DynamicRange: 90.0,
-			PeakLevel: -10.0,
+		Spectral: SpectralMetrics{Centroid: 6500, Decrease: -0.12, Skewness: 1.6, Kurtosis: 4.0, Flatness: 0.62, Flux: 0.008, Crest: 20.0, Rolloff: 18000},
+		Dynamics: DynamicsMetrics{
+			DynamicRange: 90.0,
+			PeakLevel:    -10.0,
 		},
-		InputI:     -42.1,
-		InputTP:    -4.9,
-		InputLRA:   6.0,
-		NoiseFloor: -58.0,
+		Loudness: InputLoudnessMetrics{
+			InputI:   -42.1,
+			InputTP:  -4.9,
+			InputLRA: 6.0,
+		},
+		Noise: NoiseMetrics{Floor: -58.0},
 	}
 }
 
 func orderIndependenceBrightSpeechMeasurements() *AudioMeasurements {
 	return &AudioMeasurements{
-		BaseMeasurements: BaseMeasurements{
-			Spectral: SpectralMetrics{Centroid: 5000, Decrease: 0.0, Skewness: 0.0, Kurtosis: 9.0, Flatness: 0.38, Flux: 0.002, Crest: 45.0, Rolloff: 15000}, DynamicRange: 32.0,
+		Spectral: SpectralMetrics{Centroid: 5000, Decrease: 0.0, Skewness: 0.0, Kurtosis: 9.0, Flatness: 0.38, Flux: 0.002, Crest: 45.0, Rolloff: 15000},
+		Dynamics: DynamicsMetrics{
+			DynamicRange:      32.0,
 			PeakLevel:         -6.0,
 			ZeroCrossingsRate: 0.05,
 		},
-		InputI:     -20.0,
-		InputTP:    -2.5,
-		InputLRA:   12.0,
-		NoiseFloor: -60.0,
-		NoiseProfile: &NoiseProfile{
-			MeasuredNoiseFloor: -60.0,
-			PeakLevel:          -45.0,
-			CrestFactor:        15.0,
-			Entropy:            0.8,
+		Loudness: InputLoudnessMetrics{
+			InputI:   -20.0,
+			InputTP:  -2.5,
+			InputLRA: 12.0,
 		},
-		SpeechProfile: &SpeechCandidateMetrics{
-			RMSLevel:    -24.0,
-			CrestFactor: 12.0,
-			Spectral: SpectralMetrics{
+		Noise: NoiseMetrics{Floor: -60.0},
+		Regions: RegionMetrics{
+			NoiseProfile: &NoiseProfile{
+				MeasuredNoiseFloor: -60.0,
+				PeakLevel:          -45.0,
+				CrestFactor:        15.0,
+				Entropy:            0.8,
+			},
+			SpeechProfile: &SpeechCandidateMetrics{RegionSample: RegionSample{RMSLevel: -24.0, CrestFactor: 12.0, Spectral: SpectralMetrics{
 				Centroid: 5000,
 				Decrease: 0.0,
 				Skewness: 0.0,
 				Kurtosis: 9.0,
 				Flux:     0.002,
 				Rolloff:  15000,
-			},
+			}}},
 		},
 	}
 }
@@ -334,7 +342,7 @@ func TestDetectContentType(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := &AudioMeasurements{
-				BaseMeasurements: BaseMeasurements{Spectral: SpectralMetrics{Kurtosis: tt.kurtosis, Flatness: tt.flatness, Flux: tt.flux, Crest: tt.crest}},
+				Spectral: SpectralMetrics{Kurtosis: tt.kurtosis, Flatness: tt.flatness, Flux: tt.flux, Crest: tt.crest},
 			}
 
 			got := detectContentType(m)
@@ -406,7 +414,8 @@ func TestTuneDS201LowPass(t *testing.T) {
 			config := newTestConfig()
 			diagnostics := &AdaptiveDiagnostics{}
 			m := &AudioMeasurements{
-				BaseMeasurements: BaseMeasurements{Spectral: SpectralMetrics{Kurtosis: tt.kurtosis, Flatness: tt.flatness, Flux: tt.flux, Crest: tt.crest, Rolloff: tt.rolloff, Centroid: tt.centroid, Slope: tt.slope}, ZeroCrossingsRate: tt.zcr},
+				Spectral: SpectralMetrics{Kurtosis: tt.kurtosis, Flatness: tt.flatness, Flux: tt.flux, Crest: tt.crest, Rolloff: tt.rolloff, Centroid: tt.centroid, Slope: tt.slope},
+				Dynamics: DynamicsMetrics{ZeroCrossingsRate: tt.zcr},
 			}
 
 			tuneDS201LowPass(config, diagnostics, m)
@@ -550,7 +559,7 @@ func TestTuneDeesser(t *testing.T) {
 			config.Deesser.Intensity = 0.0
 			measurements := &AudioMeasurements{}
 			if tt.hasProfile {
-				measurements.SpeechProfile = &SpeechCandidateMetrics{
+				measurements.Regions.SpeechProfile = &SpeechCandidateMetrics{
 					BodyBandRMS:   tt.body,
 					SibBandRMS:    tt.sib,
 					BandsMeasured: tt.bandsMeasured,
@@ -656,12 +665,14 @@ func TestTuneDS201Gate(t *testing.T) {
 			t.Run(tt.name, func(t *testing.T) {
 				config := newTestConfig()
 				measurements := &AudioMeasurements{
-					NoiseFloor: tt.noiseFloor,
-					InputLRA:   tt.inputLRA,
-					NoiseProfile: &NoiseProfile{
-						PeakLevel:   tt.roomTonePeak,
-						CrestFactor: tt.roomToneCrest,
-						Entropy:     0.5, // Moderate entropy
+					Noise:    NoiseMetrics{Floor: tt.noiseFloor},
+					Loudness: InputLoudnessMetrics{InputLRA: tt.inputLRA},
+					Regions: RegionMetrics{
+						NoiseProfile: &NoiseProfile{
+							PeakLevel:   tt.roomTonePeak,
+							CrestFactor: tt.roomToneCrest,
+							Entropy:     0.5, // Moderate entropy
+						},
 					},
 				}
 
@@ -698,8 +709,8 @@ func TestTuneDS201Gate(t *testing.T) {
 			t.Run(tt.name, func(t *testing.T) {
 				config := newTestConfig()
 				measurements := &AudioMeasurements{
-					NoiseFloor: -55.0,
-					InputLRA:   tt.lra,
+					Noise:    NoiseMetrics{Floor: -55.0},
+					Loudness: InputLoudnessMetrics{InputLRA: tt.lra},
 				}
 
 				tuneDS201GateForTest(config, measurements)
@@ -727,8 +738,9 @@ func TestTuneDS201Gate(t *testing.T) {
 			t.Run(tt.name, func(t *testing.T) {
 				config := newTestConfig()
 				measurements := &AudioMeasurements{
-					BaseMeasurements: BaseMeasurements{Spectral: SpectralMetrics{Flux: tt.spectralFlux}, MaxDifference: tt.maxDiff},
-					NoiseFloor:       -55.0,
+					Spectral: SpectralMetrics{Flux: tt.spectralFlux},
+					Dynamics: DynamicsMetrics{MaxDifference: tt.maxDiff},
+					Noise:    NoiseMetrics{Floor: -55.0},
 				}
 
 				tuneDS201GateForTest(config, measurements)
@@ -756,11 +768,13 @@ func TestTuneDS201Gate(t *testing.T) {
 			t.Run(tt.name, func(t *testing.T) {
 				config := newTestConfig()
 				measurements := &AudioMeasurements{
-					NoiseFloor: -55.0,
-					NoiseProfile: &NoiseProfile{
-						PeakLevel:   -55.0,
-						CrestFactor: tt.roomToneCrest,
-						Entropy:     tt.roomToneEntropy,
+					Noise: NoiseMetrics{Floor: -55.0},
+					Regions: RegionMetrics{
+						NoiseProfile: &NoiseProfile{
+							PeakLevel:   -55.0,
+							CrestFactor: tt.roomToneCrest,
+							Entropy:     tt.roomToneEntropy,
+						},
 					},
 				}
 
@@ -789,9 +803,9 @@ func TestTuneDS201Gate(t *testing.T) {
 			t.Run(tt.name, func(t *testing.T) {
 				config := newTestConfig()
 				measurements := &AudioMeasurements{
-					BaseMeasurements: BaseMeasurements{Spectral: SpectralMetrics{Crest: tt.crest}},
-					NoiseFloor:       -55.0,
-					InputLRA:         15.0,
+					Spectral: SpectralMetrics{Crest: tt.crest},
+					Noise:    NoiseMetrics{Floor: -55.0},
+					Loudness: InputLoudnessMetrics{InputLRA: 15.0},
 				}
 
 				tuneDS201GateForTest(config, measurements)
@@ -822,11 +836,13 @@ func TestTuneDS201Gate(t *testing.T) {
 			t.Run(tt.name, func(t *testing.T) {
 				config := newTestConfig()
 				measurements := &AudioMeasurements{
-					NoiseFloor: tt.noiseFloor,
-					NoiseProfile: &NoiseProfile{
-						PeakLevel:   tt.noiseFloor + 5,
-						CrestFactor: 10.0,
-						Entropy:     0.005,
+					Noise: NoiseMetrics{Floor: tt.noiseFloor},
+					Regions: RegionMetrics{
+						NoiseProfile: &NoiseProfile{
+							PeakLevel:   tt.noiseFloor + 5,
+							CrestFactor: 10.0,
+							Entropy:     0.005,
+						},
 					},
 				}
 
@@ -848,8 +864,8 @@ func TestTuneDS201Gate(t *testing.T) {
 	t.Run("handles nil NoiseProfile gracefully", func(t *testing.T) {
 		config := newTestConfig()
 		measurements := &AudioMeasurements{
-			NoiseFloor: -55.0,
-			InputLRA:   12.0,
+			Noise:    NoiseMetrics{Floor: -55.0},
+			Loudness: InputLoudnessMetrics{InputLRA: 12.0},
 			// NoiseProfile is nil
 		}
 
@@ -890,16 +906,16 @@ func TestTuneDS201Gate(t *testing.T) {
 			t.Run(tt.name, func(t *testing.T) {
 				config := newTestConfig()
 				measurements := &AudioMeasurements{
-					BaseMeasurements: BaseMeasurements{
-						Spectral:          SpectralMetrics{Flux: tt.flux},
-						ZeroCrossingsRate: tt.zcr,
-					},
-					NoiseFloor: -55.0,
-					InputLRA:   15.0, // Above LRA threshold (10 LU): no extension
-					NoiseProfile: &NoiseProfile{
-						PeakLevel:   -50.0,
-						CrestFactor: 15.0,
-						Entropy:     0.005,
+					Spectral: SpectralMetrics{Flux: tt.flux},
+					Dynamics: DynamicsMetrics{ZeroCrossingsRate: tt.zcr},
+					Noise:    NoiseMetrics{Floor: -55.0},
+					Loudness: InputLoudnessMetrics{InputLRA: 15.0}, // Above LRA threshold (10 LU): no extension
+					Regions: RegionMetrics{
+						NoiseProfile: &NoiseProfile{
+							PeakLevel:   -50.0,
+							CrestFactor: 15.0,
+							Entropy:     0.005,
+						},
 					},
 				}
 
@@ -942,14 +958,16 @@ func TestTuneDS201Gate(t *testing.T) {
 			t.Run(tt.name, func(t *testing.T) {
 				config := newTestConfig()
 				measurements := &AudioMeasurements{
-					BaseMeasurements: BaseMeasurements{Spectral: SpectralMetrics{Flux: 0.02}}, // Standard tier
+					Spectral: SpectralMetrics{Flux: 0.02}, // Standard tier
 
-					NoiseFloor: -55.0,
-					InputLRA:   tt.lra,
-					NoiseProfile: &NoiseProfile{
-						PeakLevel:   -50.0,
-						CrestFactor: 15.0,
-						Entropy:     0.005,
+					Noise:    NoiseMetrics{Floor: -55.0},
+					Loudness: InputLoudnessMetrics{InputLRA: tt.lra},
+					Regions: RegionMetrics{
+						NoiseProfile: &NoiseProfile{
+							PeakLevel:   -50.0,
+							CrestFactor: 15.0,
+							Entropy:     0.005,
+						},
 					},
 				}
 
@@ -966,18 +984,16 @@ func TestTuneDS201Gate(t *testing.T) {
 	t.Run("populates diagnostics with speech metrics", func(t *testing.T) {
 		config := newTestConfig()
 		diagnostics := tuneDS201GateForTest(config, &AudioMeasurements{
-			BaseMeasurements: BaseMeasurements{Spectral: SpectralMetrics{Flux: 0.02, Crest: 20.0}},
-			InputI:           -48.0,
-			InputLRA:         6.0,
-			NoiseFloor:       -70.0,
-			NoiseProfile: &NoiseProfile{
-				PeakLevel:   -65.0,
-				CrestFactor: 12.0,
-				Entropy:     0.5,
-			},
-			SpeechProfile: &SpeechCandidateMetrics{
-				RMSLevel:    -35.0,
-				CrestFactor: 10.0,
+			Spectral: SpectralMetrics{Flux: 0.02, Crest: 20.0},
+			Loudness: InputLoudnessMetrics{InputI: -48.0, InputLRA: 6.0},
+			Noise:    NoiseMetrics{Floor: -70.0},
+			Regions: RegionMetrics{
+				NoiseProfile: &NoiseProfile{
+					PeakLevel:   -65.0,
+					CrestFactor: 12.0,
+					Entropy:     0.5,
+				},
+				SpeechProfile: &SpeechCandidateMetrics{RegionSample: RegionSample{RMSLevel: -35.0, CrestFactor: 10.0}},
 			},
 		})
 
@@ -1002,10 +1018,9 @@ func TestTuneDS201Gate(t *testing.T) {
 	t.Run("fresh diagnostics without speech metrics", func(t *testing.T) {
 		config := newTestConfig()
 		diagnostics := tuneDS201GateForTest(config, &AudioMeasurements{
-			BaseMeasurements: BaseMeasurements{Spectral: SpectralMetrics{Flux: 0.02}},
-			InputI:           -20.0,
-			InputLRA:         16.0,
-			NoiseFloor:       -55.0,
+			Spectral: SpectralMetrics{Flux: 0.02},
+			Loudness: InputLoudnessMetrics{InputI: -20.0, InputLRA: 16.0},
+			Noise:    NoiseMetrics{Floor: -55.0},
 		})
 
 		if diagnostics.DS201GateGentleMode {
@@ -1346,8 +1361,8 @@ func TestSanitizeConfig(t *testing.T) {
 func TestTuneLA2AThresholdSpeechRMSAnchor(t *testing.T) {
 	config := newTestConfig()
 	measurements := &AudioMeasurements{
-		BaseMeasurements: BaseMeasurements{PeakLevel: -6.0},
-		SpeechProfile:    &SpeechCandidateMetrics{RMSLevel: -24.0},
+		Dynamics: DynamicsMetrics{PeakLevel: -6.0},
+		Regions:  RegionMetrics{SpeechProfile: &SpeechCandidateMetrics{RegionSample: RegionSample{RMSLevel: -24.0}}},
 	}
 
 	tuneLA2AThreshold(config, measurements)
@@ -1362,7 +1377,7 @@ func TestTuneLA2AThresholdSpeechRMSClampedHigh(t *testing.T) {
 	config := newTestConfig()
 	// Loud speech: RMS -10 + 9 = -1, above the -6 ceiling -> clamps to -6.
 	measurements := &AudioMeasurements{
-		SpeechProfile: &SpeechCandidateMetrics{RMSLevel: -10.0},
+		Regions: RegionMetrics{SpeechProfile: &SpeechCandidateMetrics{RegionSample: RegionSample{RMSLevel: -10.0}}},
 	}
 
 	tuneLA2AThreshold(config, measurements)
@@ -1376,7 +1391,7 @@ func TestTuneLA2AThresholdSpeechRMSClampedLow(t *testing.T) {
 	config := newTestConfig()
 	// Very quiet speech: RMS -60 + 9 = -51, below the -45 floor -> clamps to -45.
 	measurements := &AudioMeasurements{
-		SpeechProfile: &SpeechCandidateMetrics{RMSLevel: -60.0},
+		Regions: RegionMetrics{SpeechProfile: &SpeechCandidateMetrics{RegionSample: RegionSample{RMSLevel: -60.0}}},
 	}
 
 	tuneLA2AThreshold(config, measurements)
@@ -1389,7 +1404,7 @@ func TestTuneLA2AThresholdSpeechRMSClampedLow(t *testing.T) {
 func TestTuneLA2AThresholdPeakFallbackNoProfile(t *testing.T) {
 	config := newTestConfig()
 	measurements := &AudioMeasurements{
-		BaseMeasurements: BaseMeasurements{PeakLevel: -6.0},
+		Dynamics: DynamicsMetrics{PeakLevel: -6.0},
 	}
 
 	tuneLA2AThreshold(config, measurements)
@@ -1403,7 +1418,7 @@ func TestTuneLA2AThresholdPeakFallbackNoProfile(t *testing.T) {
 func TestTuneLA2AThresholdAcceptsZeroDBPeak(t *testing.T) {
 	config := newTestConfig()
 	measurements := &AudioMeasurements{
-		BaseMeasurements: BaseMeasurements{PeakLevel: 0.0},
+		Dynamics: DynamicsMetrics{PeakLevel: 0.0},
 	}
 
 	tuneLA2AThreshold(config, measurements)
@@ -1416,7 +1431,7 @@ func TestTuneLA2AThresholdAcceptsZeroDBPeak(t *testing.T) {
 func TestTuneLA2AThresholdFallsBackForInvalidPeak(t *testing.T) {
 	config := newTestConfig()
 	measurements := &AudioMeasurements{
-		BaseMeasurements: BaseMeasurements{PeakLevel: math.NaN()},
+		Dynamics: DynamicsMetrics{PeakLevel: math.NaN()},
 	}
 
 	tuneLA2AThreshold(config, measurements)

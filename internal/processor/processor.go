@@ -181,9 +181,9 @@ func ProcessAudio(ctx context.Context, inputPath string, config *BaseFilterConfi
 	// Return the processing result with output measurements for comparison
 	result := &ProcessingResult{
 		OutputPath:           outputPath,
-		InputLUFS:            measurements.InputI,
+		InputLUFS:            measurements.Loudness.InputI,
 		OutputLUFS:           0.0, // Will be set to final value below
-		NoiseFloor:           measurements.NoiseFloor,
+		NoiseFloor:           measurements.Noise.Floor,
 		Measurements:         measurements,
 		Config:               effectiveConfig, // Include per-file config for logging adaptive parameters
 		Diagnostics:          diagnostics,
@@ -197,7 +197,7 @@ func ProcessAudio(ctx context.Context, inputPath string, config *BaseFilterConfi
 	if normResult != nil && !normResult.Skipped {
 		result.OutputLUFS = normResult.OutputLUFS
 	} else if filteredMeasurements != nil {
-		result.OutputLUFS = filteredMeasurements.OutputI
+		result.OutputLUFS = filteredMeasurements.Loudness.OutputI
 	}
 
 	// Rename output file to include LUFS value: <name>-processed.<ext> → <name>-LUFS-NN-processed.<ext>
