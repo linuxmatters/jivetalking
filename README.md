@@ -61,6 +61,29 @@ Each filter prepares audio for the next:
 
 ---
 
+## Quality Ratings
+
+When a file finishes, the completion box shows two star ratings:
+
+```
+Recording   ★★☆☆☆  Fair
+Processed   ★★★★★  Excellent
+```
+
+**Recording** grades your source capture, the raw audio you fed in. This is the one that varies, and the one you can act on. **Processed** grades the output against the -16 LUFS broadcast target, and it is usually five stars, because hitting that target is jivetalking's job and it reliably does. Side by side, the pair tells the story: we took your two-star capture to a five-star master.
+
+The Recording score looks at three things, in plain terms:
+
+- **Clean** — low background hiss and a healthy gap between your voice and the room
+- **Headroom** — no clipping; a capture recorded too hot scores zero here
+- **Level** — recorded at a sensible loudness, without wild swings
+
+Scores run 1 to 5 stars (Poor, Fair, Good, Great, Excellent). The scale is grounded on a real podcast corpus, so the stars mean something rather than being plucked from the air.
+
+A low Recording star is a hint to improve the capture next time: record in a quieter room, back the gain off so peaks do not clip, and get the level up if it is too quiet. Either way, jivetalking still rescues the file to a broadcast-ready master.
+
+---
+
 ## Installation
 
 Single binary. Zero external dependencies. FFmpeg is embedded via ffmpeg-statigo.

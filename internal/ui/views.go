@@ -436,9 +436,10 @@ func doneBoxBeforeAfterRow(before, after float64, unit string, delta float64) st
 }
 
 // renderDoneBox renders a completed file as a filename line above an
-// indigo-bordered box with six labelled rows: Time, Loudness, True peak,
-// Dynamics, Noise floor, and Quality. The loudness-family before→after rows are
-// grouped first, then the output-only floor, then the quality stars. Shared by
+// indigo-bordered box with seven labelled rows: Time, Loudness, True peak,
+// Dynamics, Noise floor, Recording, and Processed. The loudness-family
+// before→after rows are grouped first, then the output-only floor, then the
+// source-capture (Recording) and output-quality (Processed) star rows. Shared by
 // the live processing view (StatusComplete) and the persisted
 // final summary so completed files look identical in both. The box matches the
 // active processing box (RoundedBorder, Padding(0,1), meterWidth inner width) but
@@ -523,10 +524,16 @@ func renderDoneBox(file FileProgress) string {
 	fmt.Fprintf(&content, "%s%s\n",
 		labelStyle.Render("Noise floor"), valueStyle.Render(noiseValue))
 
-	// Quality row: objective stars + word label.
-	stars := starStyle.Render(qualityStars(file.Quality.Stars))
+	// Quality rows: source-capture stars (Recording) above output-quality stars
+	// (Processed). The pair tells the value story: a low Recording beside a high
+	// Processed shows what the tool rescued. Both use the same star/label styling.
+	recStars := starStyle.Render(qualityStars(file.RecordingQuality.Stars))
+	fmt.Fprintf(&content, "%s%s  %s\n",
+		labelStyle.Render("Recording"), recStars, valueStyle.Render(file.RecordingQuality.Label))
+
+	procStars := starStyle.Render(qualityStars(file.Quality.Stars))
 	fmt.Fprintf(&content, "%s%s  %s",
-		labelStyle.Render("Quality"), stars, valueStyle.Render(file.Quality.Label))
+		labelStyle.Render("Processed"), procStars, valueStyle.Render(file.Quality.Label))
 
 	return heading + "\n" + box.Render(content.String())
 }

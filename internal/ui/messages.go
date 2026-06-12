@@ -41,7 +41,13 @@ type FileCompleteMsg struct {
 	// with Summary.InputLRA it drives the done-box Dynamics before→after row.
 	OutputLRA  float64
 	OutputPath string
-	Quality    processor.QualityScore
+	// Quality is the OUTPUT quality score (Processed), graded against spec. It
+	// reliably saturates near 5 stars because the normaliser hits -16 LUFS.
+	Quality processor.QualityScore
+	// RecordingQuality is the INPUT capture quality score (Recording), graded from
+	// Pass-1 measurements. It genuinely varies with source quality, so the pair
+	// Recording -> Processed tells the value story in the done box.
+	RecordingQuality processor.QualityScore
 	// ProcessingTime is the total wall-clock time across all four passes; it drives
 	// the done-box Time row. FileProgress.ElapsedTime cannot be used because it
 	// resets per pass.

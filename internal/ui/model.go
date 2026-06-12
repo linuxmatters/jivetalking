@@ -149,7 +149,11 @@ type FileProgress struct {
 	// Dynamics before→after rows.
 	OutputTP  float64
 	OutputLRA float64
-	Quality   processor.QualityScore
+	// Quality is the OUTPUT (Processed) score; RecordingQuality is the INPUT
+	// (Recording) source-capture score. The done box shows both, Recording above
+	// Processed.
+	Quality          processor.QualityScore
+	RecordingQuality processor.QualityScore
 
 	// Error tracking
 	Error error
@@ -296,6 +300,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.Files[msg.FileIndex].OutputLRA = msg.OutputLRA
 			m.Files[msg.FileIndex].OutputPath = msg.OutputPath
 			m.Files[msg.FileIndex].Quality = msg.Quality
+			m.Files[msg.FileIndex].RecordingQuality = msg.RecordingQuality
 			m.Files[msg.FileIndex].ProcessingTime = msg.ProcessingTime
 			m.Files[msg.FileIndex].Error = msg.Error
 
