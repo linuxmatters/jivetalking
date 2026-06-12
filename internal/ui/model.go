@@ -143,7 +143,13 @@ type FileProgress struct {
 	// FinalNoiseFloor is the output room-tone noise floor in dBFS (lower = cleaner),
 	// shown in the done box and aligned with the quality score's noise component.
 	FinalNoiseFloor float64
-	Quality         processor.QualityScore
+	// OutputTP / OutputLRA are the post-normalisation true peak (dBTP) and loudness
+	// range (LU), surfaced from NormResult at the pool send site. Paired with
+	// Summary.TruePeakDBTP / Summary.InputLRA they drive the done-box True peak and
+	// Dynamics before→after rows.
+	OutputTP  float64
+	OutputLRA float64
+	Quality   processor.QualityScore
 
 	// Error tracking
 	Error error
@@ -286,6 +292,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.Files[msg.FileIndex].InputLUFS = msg.InputLUFS
 			m.Files[msg.FileIndex].OutputLUFS = msg.OutputLUFS
 			m.Files[msg.FileIndex].FinalNoiseFloor = msg.FinalNoiseFloor
+			m.Files[msg.FileIndex].OutputTP = msg.OutputTP
+			m.Files[msg.FileIndex].OutputLRA = msg.OutputLRA
 			m.Files[msg.FileIndex].OutputPath = msg.OutputPath
 			m.Files[msg.FileIndex].Quality = msg.Quality
 			m.Files[msg.FileIndex].ProcessingTime = msg.ProcessingTime

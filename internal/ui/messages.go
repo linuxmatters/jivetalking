@@ -32,8 +32,16 @@ type FileCompleteMsg struct {
 	// the same quantity the quality score rewards, so the done box's Noise row and
 	// the star count move together.
 	FinalNoiseFloor float64
-	OutputPath      string
-	Quality         processor.QualityScore
+	// OutputTP is the post-normalisation true peak (dBTP), measured by ebur128 on
+	// the final output (NormResult.OutputTP). Paired with Summary.TruePeakDBTP it
+	// drives the done-box True peak before→after row.
+	OutputTP float64
+	// OutputLRA is the post-normalisation loudness range (LU), measured by ebur128
+	// on the final output (NormResult.FinalMeasurements.Loudness.OutputLRA). Paired
+	// with Summary.InputLRA it drives the done-box Dynamics before→after row.
+	OutputLRA  float64
+	OutputPath string
+	Quality    processor.QualityScore
 	// ProcessingTime is the total wall-clock time across all four passes; it drives
 	// the done-box Time row. FileProgress.ElapsedTime cannot be used because it
 	// resets per pass.

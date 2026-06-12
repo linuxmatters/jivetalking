@@ -403,9 +403,43 @@ func renderCompletionSummary(m Model) string {
 // label ("Noise floor" = 11 cols) plus a trailing space.
 const doneBoxLabelWidth = 12
 
+// Column widths for the three before→after rows (Loudness, True peak, Dynamics)
+// so the →, the unit, and the Δ line up vertically into a mini-table. Sized to
+// the widest realistic %.1f value across the rows: 5 cols fits -35.2 / +19.2,
+// the practical worst case for LUFS / ㏈TP / LU. The whole value portion then
+// occupies 27 cols, which with the 12-col label leaves 1 col spare inside the
+// 40-col box (no wrap). Right-aligning the numeric columns also lines up the
+// decimal points.
+//
+//	doneBoxValueWidth — before and after numeric columns (shared width).
+//	doneBoxUnitWidth  — unit column DISPLAY width; ㏈TP is 4 display cols (㏈ is
+//	                    East-Asian-wide = 2 + "TP"), LUFS 4, LU 2 (padded to 4).
+//	doneBoxDeltaWidth — signed %+.1f delta column.
+const (
+	doneBoxValueWidth = 5
+	doneBoxUnitWidth  = 4
+	doneBoxDeltaWidth = 5
+)
+
+// doneBoxBeforeAfterRow formats one before→after row's value portion as
+// fixed-width columns so the →, unit, and Δ align across rows. The before and
+// after numbers are right-aligned to doneBoxValueWidth (lining up the decimal
+// points); the unit is left-padded to doneBoxUnitWidth using fitWidth so the
+// wide ㏈ glyph pads by DISPLAY width, not rune count; the delta is
+// right-aligned and signed.
+func doneBoxBeforeAfterRow(before, after float64, unit string, delta float64) string {
+	beforeCol := fmt.Sprintf("%*.1f", doneBoxValueWidth, before)
+	afterCol := fmt.Sprintf("%*.1f", doneBoxValueWidth, after)
+	unitCol := fitWidth(unit, doneBoxUnitWidth)
+	deltaCol := fmt.Sprintf("%+*.1f", doneBoxDeltaWidth, delta)
+	return fmt.Sprintf("%s → %s %s  Δ %s", beforeCol, afterCol, unitCol, deltaCol)
+}
+
 // renderDoneBox renders a completed file as a filename line above an
-// indigo-bordered box with four labelled rows: Time, Loudness, Noise, and
-// Quality. Shared by the live processing view (StatusComplete) and the persisted
+// indigo-bordered box with six labelled rows: Time, Loudness, True peak,
+// Dynamics, Noise floor, and Quality. The loudness-family before→after rows are
+// grouped first, then the output-only floor, then the quality stars. Shared by
+// the live processing view (StatusComplete) and the persisted
 // final summary so completed files look identical in both. The box matches the
 // active processing box (RoundedBorder, Padding(0,1), meterWidth inner width) but
 // uses an indigo border to mark "done" against the active sky-blue.
@@ -442,12 +476,39 @@ func renderDoneBox(file FileProgress) string {
 		formatElapsed(file.ProcessingTime), muted.Render("·"), muted.Render(speedBadge))
 	fmt.Fprintf(&content, "%s%s\n", labelStyle.Render("Time"), timeValue)
 
-	// Loudness row: Input → Output ㏈ with signed Δ.
-	delta := file.OutputLUFS - file.InputLUFS
-	loudnessValue := fmt.Sprintf("%.1f → %.1f ㏈  Δ %+.1f",
-		file.InputLUFS, file.OutputLUFS, delta)
+	// Loudness row: input → output integrated loudness (LUFS, never ㏈) with a signed
+	// Δ that carries no unit. Same before→after grammar as True peak and Dynamics.
+	loudnessDelta := file.OutputLUFS - file.InputLUFS
+	loudnessValue := doneBoxBeforeAfterRow(file.InputLUFS, file.OutputLUFS, "LUFS", loudnessDelta)
 	fmt.Fprintf(&content, "%s%s\n",
 		labelStyle.Render("Loudness"), valueStyle.Render(loudnessValue))
+
+	// True peak row: input → output true peak (㏈TP), both ebur128 peak=true so the
+	// before→after is honest. The input TP comes from the Pass-1 Summary; show the
+	// output alone if the Summary is empty rather than a misleading "0.0 →".
+	if file.Summary.ChainReady {
+		tpDelta := file.OutputTP - file.Summary.TruePeakDBTP
+		tpValue := doneBoxBeforeAfterRow(file.Summary.TruePeakDBTP, file.OutputTP, unitDBTP, tpDelta)
+		fmt.Fprintf(&content, "%s%s\n",
+			labelStyle.Render("True peak"), valueStyle.Render(tpValue))
+	} else {
+		tpValue := fmt.Sprintf("%.1f %s", file.OutputTP, unitDBTP)
+		fmt.Fprintf(&content, "%s%s\n",
+			labelStyle.Render("True peak"), valueStyle.Render(tpValue))
+	}
+
+	// Dynamics row: input → output loudness range (LU), both ebur128/loudnorm LU, so
+	// the range tightening is honest. Same Summary-empty guard as True peak.
+	if file.Summary.ChainReady {
+		lraDelta := file.OutputLRA - file.Summary.InputLRA
+		lraValue := doneBoxBeforeAfterRow(file.Summary.InputLRA, file.OutputLRA, "LU", lraDelta)
+		fmt.Fprintf(&content, "%s%s\n",
+			labelStyle.Render("Dynamics"), valueStyle.Render(lraValue))
+	} else {
+		lraValue := fmt.Sprintf("%.1f LU", file.OutputLRA)
+		fmt.Fprintf(&content, "%s%s\n",
+			labelStyle.Render("Dynamics"), valueStyle.Render(lraValue))
+	}
 
 	// Noise row: the output room-tone noise floor in dBFS. A lower (more negative)
 	// floor is cleaner, the same direction the quality stars move, so the number and

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/linuxmatters/jivetalking/internal/processor"
 )
@@ -202,18 +203,23 @@ func TestDoneBoxRendersIndigoLabelledRows(t *testing.T) {
 	}
 
 	// Labelled rows.
-	for _, label := range []string{"Time", "Loudness", "Noise floor", "Quality"} {
+	for _, label := range []string{"Time", "Loudness", "True peak", "Dynamics", "Noise floor", "Quality"} {
 		if !strings.Contains(plain, label) {
 			t.Errorf("done box missing %q row:\n%s", label, plain)
 		}
 	}
 
-	// Loudness row: Input → Output with ㏈ glyph and signed Δ.
-	if !strings.Contains(plain, "-30.9 → -15.9 ㏈") {
-		t.Errorf("done box missing loudness values:\n%s", plain)
+	// Loudness row: Input → Output integrated loudness in LUFS (never ㏈) with a
+	// signed Δ that carries no unit.
+	if !strings.Contains(plain, "-30.9 → -15.9 LUFS") {
+		t.Errorf("done box missing loudness values in LUFS:\n%s", plain)
 	}
 	if !strings.Contains(plain, "Δ +15.0") {
 		t.Errorf("done box missing signed Δ:\n%s", plain)
+	}
+	// The LUFS values must not be mislabelled with the ㏈ glyph.
+	if strings.Contains(plain, "-15.9 ㏈") {
+		t.Errorf("done box loudness still uses ㏈ instead of LUFS:\n%s", plain)
 	}
 
 	// Noise row shows the output noise floor in dBFS, not an amount "reduced".
@@ -348,5 +354,245 @@ func TestDoneBoxNoiseFloorClamp(t *testing.T) {
 				t.Errorf("noise floor %v: want %q in:\n%s", tc.floor, tc.want, plain)
 			}
 		})
+	}
+}
+
+// TestDoneBoxTruePeakRow confirms the True peak row renders the input → output
+// true peak in ㏈TP with a signed Δ carrying no unit. Input TP comes from the
+// Pass-1 Summary (ChainReady), output TP from the completion message.
+func TestDoneBoxTruePeakRow(t *testing.T) {
+	file := FileProgress{
+		OutputPath: "tp-out.flac",
+		Status:     StatusComplete,
+		OutputTP:   -2.0,
+		Summary:    AdaptedSummary{ChainReady: true, TruePeakDBTP: -0.1, InputLRA: 12.3},
+		Quality:    processor.QualityScore{Stars: 4, Label: "Great"},
+	}
+	plain := ansi.Strip(renderDoneBox(file))
+
+	if !strings.Contains(plain, "True peak") {
+		t.Errorf("done box missing True peak row:\n%s", plain)
+	}
+	// Columns are right-aligned to a shared width, so a 4-char value carries one
+	// lead space; the after column (4 chars) lands two spaces after the arrow.
+	if !strings.Contains(plain, "-0.1 →  -2.0 "+unitDBTP) {
+		t.Errorf("done box missing true peak before→after values:\n%s", plain)
+	}
+	if !strings.Contains(plain, "Δ  -1.9") {
+		t.Errorf("done box missing true peak signed Δ:\n%s", plain)
+	}
+}
+
+// TestDoneBoxDynamicsRow confirms the Dynamics row renders the input → output
+// loudness range in LU with a signed Δ carrying no unit.
+func TestDoneBoxDynamicsRow(t *testing.T) {
+	file := FileProgress{
+		OutputPath: "lra-out.flac",
+		Status:     StatusComplete,
+		OutputLRA:  8.0,
+		Summary:    AdaptedSummary{ChainReady: true, TruePeakDBTP: -0.1, InputLRA: 12.3},
+		Quality:    processor.QualityScore{Stars: 4, Label: "Great"},
+	}
+	plain := ansi.Strip(renderDoneBox(file))
+
+	if !strings.Contains(plain, "Dynamics") {
+		t.Errorf("done box missing Dynamics row:\n%s", plain)
+	}
+	// Columns are right-aligned to a shared width: 8.0 (3 chars) carries two lead
+	// spaces, landing three spaces after the arrow.
+	if !strings.Contains(plain, "12.3 →   8.0 LU") {
+		t.Errorf("done box missing dynamics before→after values:\n%s", plain)
+	}
+	if !strings.Contains(plain, "Δ  -4.3") {
+		t.Errorf("done box missing dynamics signed Δ:\n%s", plain)
+	}
+}
+
+// TestDoneBoxRowOrder locks the row order: Time, Loudness, True peak, Dynamics,
+// Noise floor, Quality. The loudness-family before→after rows group first, then
+// the output-only floor, then the quality stars.
+func TestDoneBoxRowOrder(t *testing.T) {
+	file := FileProgress{
+		OutputPath:      "order-out.flac",
+		Status:          StatusComplete,
+		InputLUFS:       -30.9,
+		OutputLUFS:      -15.9,
+		OutputTP:        -2.0,
+		OutputLRA:       8.0,
+		FinalNoiseFloor: -80.0,
+		Summary:         AdaptedSummary{ChainReady: true, TruePeakDBTP: -0.1, InputLRA: 12.3},
+		Quality:         processor.QualityScore{Stars: 4, Label: "Great"},
+	}
+	plain := ansi.Strip(renderDoneBox(file))
+
+	order := []string{"Time", "Loudness", "True peak", "Dynamics", "Noise floor", "Quality"}
+	last := -1
+	for _, label := range order {
+		idx := strings.Index(plain, label)
+		if idx < 0 {
+			t.Fatalf("done box missing %q row:\n%s", label, plain)
+		}
+		if idx <= last {
+			t.Errorf("done box row %q out of order (at %d, previous at %d):\n%s", label, idx, last, plain)
+		}
+		last = idx
+	}
+}
+
+// TestDoneBoxColumnsAlign confirms the three before→after rows (Loudness, True
+// peak, Dynamics) form a mini-table: the → and the Δ sit at the same column
+// across all three rows. Right-aligned numeric columns and a display-width-padded
+// unit column (so the wide ㏈ glyph does not shift the ㏈TP row) make them line
+// up. The display offset is measured via lipgloss.Width on the row prefix, so the
+// wide ㏈/arrow glyphs count as their true column span.
+func TestDoneBoxColumnsAlign(t *testing.T) {
+	file := FileProgress{
+		OutputPath: "align-out.flac",
+		Status:     StatusComplete,
+		InputLUFS:  -29.8,
+		OutputLUFS: -16.0,
+		OutputTP:   -2.2,
+		OutputLRA:  8.8,
+		Summary:    AdaptedSummary{ChainReady: true, TruePeakDBTP: -0.1, InputLRA: 12.3},
+		Quality:    processor.QualityScore{Stars: 4, Label: "Great"},
+	}
+	plain := ansi.Strip(renderDoneBox(file))
+
+	// Display column of the first occurrence of marker in line, or -1.
+	colOf := func(line, marker string) int {
+		before, _, found := strings.Cut(line, marker)
+		if !found {
+			return -1
+		}
+		return lipgloss.Width(before)
+	}
+
+	rowLine := func(label string) string {
+		for l := range strings.SplitSeq(plain, "\n") {
+			if strings.Contains(l, label) {
+				return l
+			}
+		}
+		return ""
+	}
+
+	labels := []string{"Loudness", "True peak", "Dynamics"}
+	var arrowCol, deltaCol int
+	for i, label := range labels {
+		line := rowLine(label)
+		if line == "" {
+			t.Fatalf("done box missing %q row:\n%s", label, plain)
+		}
+		a := colOf(line, "→")
+		d := colOf(line, "Δ")
+		if a < 0 || d < 0 {
+			t.Fatalf("%q row missing → or Δ: %q", label, line)
+		}
+		if i == 0 {
+			arrowCol, deltaCol = a, d
+			continue
+		}
+		if a != arrowCol {
+			t.Errorf("%q row → at column %d, want %d (Loudness):\n%s", label, a, arrowCol, plain)
+		}
+		if d != deltaCol {
+			t.Errorf("%q row Δ at column %d, want %d (Loudness):\n%s", label, d, deltaCol, plain)
+		}
+	}
+}
+
+// TestDoneBoxNoiseFloorOutputOnly confirms the Noise floor row stays output-only:
+// no before→after arrow and no "reduced" delta. The input and output floors are
+// measured by different methods, so a reduction number would be dishonest.
+func TestDoneBoxNoiseFloorOutputOnly(t *testing.T) {
+	file := FileProgress{
+		OutputPath:      "nf-out.flac",
+		Status:          StatusComplete,
+		FinalNoiseFloor: -80.0,
+		Summary:         AdaptedSummary{ChainReady: true, TruePeakDBTP: -0.1, InputLRA: 12.3},
+		Quality:         processor.QualityScore{Stars: 4, Label: "Great"},
+	}
+	plain := ansi.Strip(renderDoneBox(file))
+
+	// Isolate the Noise floor row from the Dynamics/True peak arrows above it.
+	var noiseLine string
+	for line := range strings.SplitSeq(plain, "\n") {
+		if strings.Contains(line, "Noise floor") {
+			noiseLine = line
+			break
+		}
+	}
+	if noiseLine == "" {
+		t.Fatalf("done box missing Noise floor row:\n%s", plain)
+	}
+	if strings.Contains(noiseLine, "→") {
+		t.Errorf("Noise floor row must not show a before→after arrow:\n%s", noiseLine)
+	}
+	if strings.Contains(noiseLine, "Δ") || strings.Contains(noiseLine, "reduced") {
+		t.Errorf("Noise floor row must not show a reduction delta:\n%s", noiseLine)
+	}
+	if !strings.Contains(noiseLine, "-80 ㏈") {
+		t.Errorf("Noise floor row missing the output floor value:\n%s", noiseLine)
+	}
+}
+
+// TestDoneBoxGuardsEmptySummary confirms the True peak and Dynamics rows show the
+// output value alone (no before→after arrow) when the Summary is empty, so an
+// unset input never produces a misleading comparison.
+func TestDoneBoxGuardsEmptySummary(t *testing.T) {
+	file := FileProgress{
+		OutputPath: "guard-out.flac",
+		Status:     StatusComplete,
+		OutputTP:   -2.0,
+		OutputLRA:  8.0,
+		Summary:    AdaptedSummary{ChainReady: false},
+		Quality:    processor.QualityScore{Stars: 4, Label: "Great"},
+	}
+	plain := ansi.Strip(renderDoneBox(file))
+
+	// The True peak and Dynamics rows must show the output value alone, with no
+	// before→after arrow (the Loudness row is gated separately and is out of scope).
+	for _, label := range []string{"True peak", "Dynamics"} {
+		var line string
+		for l := range strings.SplitSeq(plain, "\n") {
+			if strings.Contains(l, label) {
+				line = l
+				break
+			}
+		}
+		if line == "" {
+			t.Fatalf("done box missing %q row:\n%s", label, plain)
+		}
+		if strings.Contains(line, "→") {
+			t.Errorf("%s row shows misleading before→after with empty Summary:\n%s", label, line)
+		}
+	}
+	if !strings.Contains(plain, "-2.0 "+unitDBTP) {
+		t.Errorf("done box missing output-only true peak with empty Summary:\n%s", plain)
+	}
+	if !strings.Contains(plain, "8.0 LU") {
+		t.Errorf("done box missing output-only dynamics with empty Summary:\n%s", plain)
+	}
+}
+
+// TestFileCompleteMsgCopiesOutputTPAndLRA confirms the FileCompleteMsg handler
+// copies OutputTP and OutputLRA onto the routed FileProgress so the done box can
+// render the before→after rows.
+func TestFileCompleteMsgCopiesOutputTPAndLRA(t *testing.T) {
+	m := NewModel([]string{"a.flac"})
+	updated, _ := m.Update(FileCompleteMsg{
+		FileIndex:  0,
+		InputLUFS:  -30.9,
+		OutputLUFS: -15.9,
+		OutputTP:   -2.0,
+		OutputLRA:  8.0,
+		OutputPath: "a-out.flac",
+	})
+	mm := updated.(Model)
+	if got := mm.Files[0].OutputTP; got != -2.0 {
+		t.Errorf("OutputTP not copied: got %v, want -2.0", got)
+	}
+	if got := mm.Files[0].OutputLRA; got != 8.0 {
+		t.Errorf("OutputLRA not copied: got %v, want 8.0", got)
 	}
 }

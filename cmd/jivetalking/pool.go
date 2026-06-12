@@ -193,6 +193,19 @@ func runWorkerPool(ctx context.Context, p *tea.Program, files []string, base *pr
 
 			finalNoiseFloor, _ := processor.FinalNoiseFloor(result)
 
+			// Surface the final-output true peak and loudness range from NormResult for
+			// the done-box before→after rows. Read-only: both are measured by ebur128 on
+			// the final output during normalisation, never recomputed here. NormResult is
+			// nil when normalisation was disabled/skipped; FinalMeasurements may also be
+			// nil, so guard both and leave the value at 0 (the UI gates the row).
+			var outputTP, outputLRA float64
+			if result.NormResult != nil {
+				outputTP = result.NormResult.OutputTP
+				if fm := result.NormResult.FinalMeasurements; fm != nil {
+					outputLRA = fm.Loudness.OutputLRA
+				}
+			}
+
 			// Confirm the Limiter row at completion. The row already lit during Pass 4
 			// (progressHandler resends the summary with the ceiling on the Pass-4-start
 			// update), so this is a harmless final confirmation with the same ceiling
@@ -210,6 +223,8 @@ func runWorkerPool(ctx context.Context, p *tea.Program, files []string, base *pr
 				InputLUFS:       result.InputLUFS,
 				OutputLUFS:      result.OutputLUFS,
 				FinalNoiseFloor: finalNoiseFloor,
+				OutputTP:        outputTP,
+				OutputLRA:       outputLRA,
 				OutputPath:      result.OutputPath,
 				Quality:         processor.ComputeQualityScore(result),
 				ProcessingTime:  time.Since(fileStartTime),
