@@ -227,7 +227,7 @@ func runWorkerPool(ctx context.Context, p *tea.Program, files []string, base *pr
 				OutputLRA:        outputLRA,
 				OutputPath:       result.OutputPath,
 				Quality:          processor.ComputeQualityScore(result),
-				RecordingQuality: processor.ComputeRecordingScore(result),
+				RecordingQuality: processor.ComputeRecordingScore(result.Measurements),
 				ProcessingTime:   time.Since(fileStartTime),
 			})
 		}(i, inputPath)

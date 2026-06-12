@@ -516,18 +516,34 @@ func runAnalysisOnlyWithDeps(files []string, config *processor.BaseFilterConfig,
 		}
 
 		if noTTY {
-			printAnalysisConfirmation(deps.stdout, files[i], reportPath)
+			printAnalysisConfirmation(deps.stdout, files[i], reportPath, results[i].Measurements)
 		}
 	}
 }
 
-// printAnalysisConfirmation writes a single styled confirmation line
+// printAnalysisConfirmation writes the styled confirmation line
 // "🗸 <source-basename> → <report-basename>" through a colour-aware writer so the
-// green check downgrades cleanly on non-colour stdout.
-func printAnalysisConfirmation(w io.Writer, inputPath, reportPath string) {
+// green check downgrades cleanly on non-colour stdout, then the two light-touch
+// verdict lines (Recording stars + label, one-lever Gain advice) computed from
+// the Pass-1 INPUT measurements. The .md report stays verdict-free; these lines
+// live only on the console, mirroring the analysis TUI. A nil measurements
+// (defensive) drops the verdict lines but still prints the confirmation.
+func printAnalysisConfirmation(w io.Writer, inputPath, reportPath string, m *processor.AudioMeasurements) {
 	icon := lipgloss.NewStyle().Foreground(cli.ColorGreen).Render("🗸")
 	cw := colorprofile.NewWriter(w, os.Environ())
 	fmt.Fprintf(cw, "%s %s → %s\n", icon, filepath.Base(inputPath), filepath.Base(reportPath))
+
+	if m == nil {
+		return
+	}
+	starStyle := lipgloss.NewStyle().Foreground(cli.ColorOrange)
+	labelStyle := lipgloss.NewStyle().Foreground(cli.ColorMuted)
+	rec := processor.ComputeRecordingScore(m)
+	advice := processor.GainAdvice(m.Loudness.InputTP)
+	fmt.Fprintf(cw, "   %s  %s  %s\n",
+		labelStyle.Render("Recording"), starStyle.Render(ui.QualityStars(rec.Stars)), rec.Label)
+	fmt.Fprintf(cw, "   %s  %s  %s\n",
+		labelStyle.Render("Gain     "), ui.GainBar(m.Loudness.InputTP), advice.Message())
 }
 
 // isTTY reports whether stdout is connected to a terminal.

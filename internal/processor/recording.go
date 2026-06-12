@@ -76,14 +76,15 @@ func linearScore(v, full, zero float64) float64 {
 	return math.Max(0.0, math.Min(1.0, t))
 }
 
-// ComputeRecordingScore derives the source-capture quality rating from a
-// completed ProcessingResult's Pass-1 INPUT measurements. A nil result or
-// measurements yields the worst rating so the score stays honest.
-func ComputeRecordingScore(result *ProcessingResult) QualityScore {
-	if result == nil || result.Measurements == nil {
+// ComputeRecordingScore derives the source-capture quality rating from Pass-1
+// INPUT measurements. It takes *AudioMeasurements (not *ProcessingResult) so it
+// serves both processing mode (result.Measurements) and analysis-only mode
+// (which has measurements but no full ProcessingResult). A nil m yields the
+// worst rating so the score stays honest.
+func ComputeRecordingScore(m *AudioMeasurements) QualityScore {
+	if m == nil {
 		return QualityScore{Stars: 0, Label: "Poor"}
 	}
-	m := result.Measurements
 
 	cleanliness := recordingCleanliness(m)
 	headroom := linearScore(m.Loudness.InputTP, recordingHeadroomFull, recordingHeadroomZero)

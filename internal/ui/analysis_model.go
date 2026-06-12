@@ -185,6 +185,9 @@ func (m AnalysisModel) View() tea.View {
 			icon := doneStyle.Render("🗸")
 			logName := filepath.Base(report.AnalysisReportPath(f.FileName))
 			fmt.Fprintf(&b, " %s %s → %s\n", icon, fileStyle.Render(f.FileName), logName)
+			if f.Result != nil && f.Result.Measurements != nil {
+				b.WriteString(renderAnalysisVerdict(f.Result.Measurements))
+			}
 		default:
 			fmt.Fprintf(&b, " %s %s\n", activeIcon, fileStyle.Render(f.FileName))
 			fmt.Fprintf(&b, "   %s [%s]\n", m.progress.ViewAs(f.Progress), formatElapsed(elapsed))
@@ -197,6 +200,27 @@ func (m AnalysisModel) View() tea.View {
 	}
 
 	return tea.NewView(b.String())
+}
+
+// renderAnalysisVerdict renders the two light-touch verdict lines shown under a
+// completed analysis row: the Recording capture stars + label, and the one-lever
+// gain advice. Both are pure functions of the Pass-1 INPUT measurements
+// (ComputeRecordingScore and GainAdvice), so the analysis-only mode reuses the
+// same Recording score the processing done box shows. The .md report stays
+// verdict-free; these lines live only in the TUI/console.
+func renderAnalysisVerdict(m *processor.AudioMeasurements) string {
+	starStyle := lipgloss.NewStyle().Foreground(cli.ColorOrange)
+	labelStyle := lipgloss.NewStyle().Foreground(cli.ColorMuted)
+
+	rec := processor.ComputeRecordingScore(m)
+	advice := processor.GainAdvice(m.Loudness.InputTP)
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "   %s  %s  %s\n",
+		labelStyle.Render("Recording"), starStyle.Render(qualityStars(rec.Stars)), rec.Label)
+	fmt.Fprintf(&b, "   %s  %s  %s\n",
+		labelStyle.Render("Gain     "), gainBar(m.Loudness.InputTP), advice.Message())
+	return b.String()
 }
 
 // formatElapsed formats elapsed time as MM:SS or HH:MM:SS

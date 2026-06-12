@@ -43,6 +43,8 @@ var (
 	ColorIndigo = compat.AdaptiveColor{Light: lipgloss.Color("#6366F1"), Dark: lipgloss.Color("#6366F1")}
 	// ColorOrangeDim is the deep-orange trough of the peak-marker pulse.
 	ColorOrangeDim = compat.AdaptiveColor{Light: lipgloss.Color("#B35F00"), Dark: lipgloss.Color("#B35F00")}
+	// ColorBlue is the cold end of the gain thermometer (under-recorded peaks).
+	ColorBlue = compat.AdaptiveColor{Light: lipgloss.Color("#2563EB"), Dark: lipgloss.Color("#3B82F6")}
 )
 
 // Color palette aliases retained for the cli styles below.

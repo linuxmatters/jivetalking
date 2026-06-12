@@ -344,6 +344,94 @@ func peakMarkerColor(elapsed time.Duration) color.Color {
 		lerp(dr, br), lerp(dg, bg), lerp(db, bb)))
 }
 
+// gainBarWidth is the cell count of the horizontal gain bar, matching the
+// separation bar's grammar (▰ filled / ▱ empty) but wider so the gradient reads
+// across width.
+const gainBarWidth = 5
+
+// gainBar returns the gain bar; thin alias kept for in-package call sites,
+// mirroring qualityStars/QualityStars. See GainBar.
+func gainBar(inputTP float64) string {
+	return GainBar(inputTP)
+}
+
+// GainBar renders the input true peak as a short horizontal bar that fills and
+// colours with the peak, mirroring separationBar's grammar. It is pure
+// presentation, derived from the same true peak as GainAdvice, with the fill and
+// colour aligned to the advice zones so the bar matches the advice category:
+//   - Quiet  (TP < -12)        -> ~1 filled, blue end
+//   - Fine   (-12 <= TP <= -1) -> ~3 filled, green centre (the -6 target ≈0.5)
+//   - Hot    (TP > -1)         -> ~5 filled, red end
+//
+// Fill fraction is gainGlyphPosition(inputTP); filled cells = round(position *
+// width). Colour is a fixed five-stop ramp, one colour per cell
+// (bright-cyan→blue→green→amber→red), so the fill edge sits at the zone colour.
+// Empty cells render dim. Styling goes through lipgloss so it auto-strips on a
+// non-TTY pipe, leaving the bare ▰▱ runes (which still convey fill in mono).
+// Exported so the analysis-only console path (cmd/jivetalking) reuses one source
+// of truth.
+func GainBar(inputTP float64) string {
+	position := gainGlyphPosition(inputTP)
+	filled := int(math.Round(position * float64(gainBarWidth)))
+	// Floor at one cell so the cold/blue end always shows a pip — an empty bar
+	// would lose the under-recorded signal. A clipping input (>= 0 dBTP) maxes
+	// the bar so the worst case reads as a full, red-tipped run.
+	filled = max(1, min(filled, gainBarWidth))
+	if inputTP >= 0 {
+		filled = gainBarWidth
+	}
+
+	// Five fixed stops, one per cell (width == stop count, so Blend1D samples land
+	// exactly on the stops with no muddy interpolation): the fill tip reads its
+	// zone colour directly — 3 cells = green (spot on), 4 = amber (hot), 5 = red
+	// (clipping).
+	ramp := lipgloss.Blend1D(gainBarWidth, cli.ColorCyanBright, cli.ColorBlue, cli.ColorGreen, cli.ColorOrange, cli.ColorRed)
+	var b strings.Builder
+	for i := range gainBarWidth {
+		var c color.Color = cli.ColorFill
+		ch := "▱"
+		if i < filled {
+			c = ramp[i]
+			ch = "▰"
+		}
+		b.WriteString(lipgloss.NewStyle().Foreground(c).Render(ch))
+	}
+	return b.String()
+}
+
+// gainGlyphPosition maps an input true peak (dBTP) to a position in [0,1] using
+// the GainAdvice zone boundaries, so the bar's fill and colour band coincide with
+// the advice category. Each band clamps at its edges.
+func gainGlyphPosition(inputTP float64) float64 {
+	const (
+		quietTP  = -12.0
+		hotTP    = -1.0
+		quietLo  = -24.0
+		hotHi    = 1.0
+		quietPos = 0.33
+		finePos  = 0.67
+	)
+	switch {
+	case inputTP < quietTP:
+		return lerpClamp(inputTP, quietLo, quietTP, 0.0, quietPos)
+	case inputTP <= hotTP:
+		return lerpClamp(inputTP, quietTP, hotTP, quietPos, finePos)
+	default:
+		return lerpClamp(inputTP, hotTP, hotHi, finePos, 1.0)
+	}
+}
+
+// lerpClamp maps v from the input range [inLo,inHi] onto [outLo,outHi], clamping
+// the result to the output range at the edges.
+func lerpClamp(v, inLo, inHi, outLo, outHi float64) float64 {
+	if inHi == inLo {
+		return outLo
+	}
+	t := (v - inLo) / (inHi - inLo)
+	t = math.Max(0, math.Min(1, t))
+	return outLo + t*(outHi-outLo)
+}
+
 // rgb8 resolves a color.Color to 8-bit sRGB channels.
 func rgb8(c color.Color) (r, g, b uint8) {
 	r16, g16, b16, _ := c.RGBA()
@@ -540,6 +628,13 @@ func renderDoneBox(file FileProgress) string {
 
 // qualityStars renders an n-of-5 star bar as filled ★ followed by empty ☆.
 func qualityStars(n int) string {
+	return QualityStars(n)
+}
+
+// QualityStars renders an n-of-5 star bar as filled ★ followed by empty ☆,
+// clamped to [0,5]. Exported so the analysis-only console path (cmd/jivetalking)
+// renders the same Recording star bar as the TUI without duplicating the glyphs.
+func QualityStars(n int) string {
 	if n < 0 {
 		n = 0
 	}

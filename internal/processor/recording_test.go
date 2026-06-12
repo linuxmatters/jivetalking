@@ -5,11 +5,11 @@ import (
 	"testing"
 )
 
-// recInput is a compact builder for an in-memory ProcessingResult carrying only
+// recInput is a compact builder for in-memory AudioMeasurements carrying only
 // the Pass-1 INPUT measurements ComputeRecordingScore reads. speechRMS is the
 // elected SpeechProfile RMS; a NaN speechRMS means "no SpeechProfile elected"
 // (the noise-floor-only fallback path).
-func recResult(inputTP, inputI, inputLRA, noiseFloor, speechRMS float64) *ProcessingResult {
+func recInput(inputTP, inputI, inputLRA, noiseFloor, speechRMS float64) *AudioMeasurements {
 	m := &AudioMeasurements{}
 	m.Loudness.InputTP = inputTP
 	m.Loudness.InputI = inputI
@@ -20,7 +20,7 @@ func recResult(inputTP, inputI, inputLRA, noiseFloor, speechRMS float64) *Proces
 		sp.RMSLevel = speechRMS
 		m.Regions.SpeechProfile = sp
 	}
-	return &ProcessingResult{Measurements: m}
+	return m
 }
 
 // TestComputeRecordingScoreCorpusAnchors locks the score against the corpus
@@ -49,7 +49,7 @@ func TestComputeRecordingScoreCorpusAnchors(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := ComputeRecordingScore(recResult(tc.inputTP, tc.inputI, tc.inputLRA, tc.floor, tc.speechRMS))
+			got := ComputeRecordingScore(recInput(tc.inputTP, tc.inputI, tc.inputLRA, tc.floor, tc.speechRMS))
 			if got.Stars != tc.wantStars {
 				t.Errorf("%s: stars = %d (score %.2f), want %d", tc.name, got.Stars, got.Score, tc.wantStars)
 			}
@@ -64,7 +64,7 @@ func TestComputeRecordingScoreCorpusAnchors(t *testing.T) {
 // the documented ~57.9 so the per-axis blend is exercised end to end, not just
 // the star band.
 func TestComputeRecordingScorePopeyComposite(t *testing.T) {
-	got := ComputeRecordingScore(recResult(-0.13, -29.82, 12.32, -74.04, -39.18))
+	got := ComputeRecordingScore(recInput(-0.13, -29.82, 12.32, -74.04, -39.18))
 	if math.Abs(got.Score-57.9) > 0.5 {
 		t.Errorf("83-popey composite = %.3f, want ~57.9 (headroom must zero on a -0.13 dBTP input)", got.Score)
 	}
@@ -76,7 +76,7 @@ func TestComputeRecordingScorePopeyComposite(t *testing.T) {
 // same when speech is absent, and the cleanliness axis must equal floorScore.
 func TestComputeRecordingScoreNoSpeechFallback(t *testing.T) {
 	const floor = -60.0
-	noSpeech := ComputeRecordingScore(recResult(-9.0, -21.0, 9.0, floor, math.NaN()))
+	noSpeech := ComputeRecordingScore(recInput(-9.0, -21.0, 9.0, floor, math.NaN()))
 
 	// floorScore for -60 dBFS: (-60 - -45) / (-75 - -45) = 0.5.
 	floorScore := linearScore(floor, recordingFloorFull, recordingFloorZero)
@@ -94,20 +94,17 @@ func TestComputeRecordingScoreNoSpeechFallback(t *testing.T) {
 
 	// Adding a wide-SNR SpeechProfile must change the score (SNR now contributes),
 	// proving the fallback genuinely dropped the SNR term.
-	withSpeech := ComputeRecordingScore(recResult(-9.0, -21.0, 9.0, floor, -20.0))
+	withSpeech := ComputeRecordingScore(recInput(-9.0, -21.0, 9.0, floor, -20.0))
 	if withSpeech.Score == noSpeech.Score {
 		t.Errorf("electing a SpeechProfile must change cleanliness, both scored %.3f", noSpeech.Score)
 	}
 }
 
-// TestComputeRecordingScoreNilGuard matches ComputeQualityScore's nil guard: a
-// nil result or nil Measurements yields the worst rating.
+// TestComputeRecordingScoreNilGuard matches ComputeQualityScore's nil guard: nil
+// measurements yield the worst rating.
 func TestComputeRecordingScoreNilGuard(t *testing.T) {
 	if got := ComputeRecordingScore(nil); got.Stars != 0 || got.Label != "Poor" {
-		t.Errorf("nil result: got %+v, want {Stars:0 Label:Poor}", got)
-	}
-	if got := ComputeRecordingScore(&ProcessingResult{}); got.Stars != 0 || got.Label != "Poor" {
-		t.Errorf("nil Measurements: got %+v, want {Stars:0 Label:Poor}", got)
+		t.Errorf("nil measurements: got %+v, want {Stars:0 Label:Poor}", got)
 	}
 }
 
@@ -116,8 +113,8 @@ func TestComputeRecordingScoreNilGuard(t *testing.T) {
 // an otherwise-identical capture with healthy headroom (<= -6 dBTP) scores it
 // full, the two differing by exactly the headroom weight in composite terms.
 func TestComputeRecordingScoreHeadroomDiscriminates(t *testing.T) {
-	hot := ComputeRecordingScore(recResult(-0.5, -21.0, 9.0, -78.0, -33.0))
-	healthy := ComputeRecordingScore(recResult(-7.0, -21.0, 9.0, -78.0, -33.0))
+	hot := ComputeRecordingScore(recInput(-0.5, -21.0, 9.0, -78.0, -33.0))
+	healthy := ComputeRecordingScore(recInput(-7.0, -21.0, 9.0, -78.0, -33.0))
 
 	if delta := healthy.Score - hot.Score; math.Abs(delta-100*recordingWeightHeadroom) > 1e-9 {
 		t.Errorf("headroom delta = %.6f, want %.6f (full headroom weight)", delta, 100*recordingWeightHeadroom)

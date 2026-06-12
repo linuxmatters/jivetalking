@@ -7,7 +7,154 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/linuxmatters/jivetalking/internal/processor"
 )
+
+// analysisResultFor builds an AnalysisResult carrying just the Pass-1 INPUT
+// measurements the analysis verdict reads: input true peak (gain advice + the
+// Recording headroom axis), integrated loudness, loudness range, noise floor,
+// and an elected SpeechProfile RMS so cleanliness uses the SNR blend.
+func analysisResultFor(inputTP, inputI, inputLRA, noiseFloor, speechRMS float64) *processor.AnalysisResult {
+	m := &processor.AudioMeasurements{}
+	m.Loudness.InputTP = inputTP
+	m.Loudness.InputI = inputI
+	m.Loudness.InputLRA = inputLRA
+	m.Regions.NoiseProfile = &processor.NoiseProfile{MeasuredNoiseFloor: noiseFloor}
+	sp := &processor.SpeechCandidateMetrics{}
+	sp.RMSLevel = speechRMS
+	m.Regions.SpeechProfile = sp
+	return &processor.AnalysisResult{Measurements: m}
+}
+
+// completedAnalysisView drives a one-file model to completion with the given
+// result and returns the ANSI-stripped view for assertion.
+func completedAnalysisView(t *testing.T, res *processor.AnalysisResult) string {
+	t.Helper()
+	m := NewAnalysisModel([]string{"a.wav"})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(AnalysisModel)
+	updated, _ = m.Update(AnalysisCompleteMsg{FileIndex: 0, Result: res})
+	m = updated.(AnalysisModel)
+	return stripANSI(m.View().Content)
+}
+
+// TestAnalysisVerdictRendersScoreAndGain confirms the completed analysis row
+// carries the Recording stars + label and the one-lever gain advice across the
+// fine / hot / quiet / clipping outcomes, keyed off input true peak alone.
+func TestAnalysisVerdictRendersScoreAndGain(t *testing.T) {
+	cases := []struct {
+		name     string
+		inputTP  float64
+		wantSubs []string
+	}{
+		// Healthy headroom, deep floor, wide SNR, sane level, tight range -> 5 stars.
+		{"fine", -9.0, []string{"Recording", "★★★★★", "Excellent", "Gain", "Level well set"}},
+		// Hot input zeroes the headroom axis and arms the lower-gain advice.
+		{"hot", -0.13, []string{"Recording", "Gain", "Hot", "Lower input gain"}},
+		// Quiet input wastes headroom -> raise advice (peaks well below -12 dBTP).
+		{"quiet", -21.41, []string{"Recording", "Gain", "Quiet", "Raise input gain"}},
+		// Clipping crosses 0 dBTP -> strongest interpretation word, lower-gain advice.
+		{"clipping", 0.4, []string{"Recording", "Gain", "Clipping", "Lower input gain"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res := analysisResultFor(tc.inputTP, -21.0, 9.0, -78.0, -33.0)
+			view := completedAnalysisView(t, res)
+			for _, sub := range tc.wantSubs {
+				if !strings.Contains(view, sub) {
+					t.Errorf("%s: view missing %q:\n%s", tc.name, sub, view)
+				}
+			}
+		})
+	}
+}
+
+// TestAnalysisVerdictGainGlyph confirms the gain line uses the wide ㏈TP glyph,
+// matching the rest of the TUI's true-peak rows.
+func TestAnalysisVerdictGainGlyph(t *testing.T) {
+	view := completedAnalysisView(t, analysisResultFor(-0.13, -21.0, 9.0, -78.0, -33.0))
+	if !strings.Contains(view, "㏈TP") {
+		t.Errorf("gain line missing ㏈TP glyph:\n%s", view)
+	}
+}
+
+// countFilled returns the number of filled (▰) cells in an ANSI-stripped gain
+// bar.
+func countFilled(s string) int {
+	return strings.Count(stripANSI(s), "▰")
+}
+
+// TestGainBarFill asserts the filled-cell COUNT (ANSI stripped) each
+// representative true peak yields, plus boundary clamping. Fill rises with the
+// peak: quiet -> ~1 filled, target -> ~3, hot/clipping -> near-full. Ranges, not
+// exact counts, keep it un-brittle.
+func TestGainBarFill(t *testing.T) {
+	cases := []struct {
+		name       string
+		inputTP    float64
+		minF, maxF int
+	}{
+		{"quiet", -21.0, 1, 2},
+		{"target", -6.0, 2, 4},
+		{"hot", -0.1, 4, 5},
+		{"clipping", 0.3, 5, 5},
+		// Boundaries: far below the quiet floor still shows one blue pip (floored
+		// at 1); a clipping input maxes the bar.
+		{"clampLow", -40.0, 1, 1},
+		{"clampHigh", 6.0, 5, 5},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			n := countFilled(gainBar(tc.inputTP))
+			if n < tc.minF || n > tc.maxF {
+				t.Errorf("inputTP=%.1f: %d filled cells, want [%d,%d]", tc.inputTP, n, tc.minF, tc.maxF)
+			}
+		})
+	}
+}
+
+// TestGainBarStyled confirms GainBar colours the bar on a colour-capable
+// profile, so the gradient rides alongside fill. It asserts a styled output
+// differs from the bare runes (an ANSI sequence is present) without pinning the
+// exact colour.
+func TestGainBarStyled(t *testing.T) {
+	styled := GainBar(-0.1)
+	if stripANSI(styled) == styled {
+		t.Errorf("GainBar emitted no colour styling: %q", styled)
+	}
+}
+
+// TestAnalysisVerdictCarriesBar confirms the rendered gain line carries the
+// horizontal bar runes before the advice message across the advice zones.
+func TestAnalysisVerdictCarriesBar(t *testing.T) {
+	cases := []struct {
+		name    string
+		inputTP float64
+	}{
+		{"quiet", -21.41},
+		{"fine", -9.0},
+		{"hot", -0.13},
+		{"clipping", 0.4},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			view := completedAnalysisView(t, analysisResultFor(tc.inputTP, -21.0, 9.0, -78.0, -33.0))
+			if !strings.ContainsAny(view, "▰▱") {
+				t.Errorf("gain line missing horizontal bar runes:\n%s", view)
+			}
+		})
+	}
+}
+
+// TestAnalysisVerdictSkippedWithoutMeasurements confirms a completed row with no
+// measurements (defensive nil) still renders without the verdict lines, never
+// panics.
+func TestAnalysisVerdictSkippedWithoutMeasurements(t *testing.T) {
+	view := completedAnalysisView(t, &processor.AnalysisResult{})
+	if strings.Contains(view, "Recording") || strings.Contains(view, "Gain") {
+		t.Errorf("verdict lines rendered without measurements:\n%s", view)
+	}
+}
 
 // ansiRE strips ANSI escape sequences so view assertions match on plain text.
 var ansiRE = regexp.MustCompile("\x1b\\[[0-9;]*m")
