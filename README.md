@@ -135,6 +135,7 @@ jivetalking [flags] <files...>
 | `-v, --version` | Show version and exit |
 | `-a, --analysis-only` | Run analysis only (Pass 1), display results, skip processing |
 | `-d, --debug` | Enable debug logging to `jivetalking-debug.log` |
+| `--diagnostics` | Write extra diagnostic artefacts: before/after spectrogram PNGs plus `.intervals.jsonl`/`.candidates.jsonl` sidecars. Adds extra FFmpeg passes. Off by default |
 | `--room-tone-scan-duration=DURATION` | Cap room-tone candidate scan to the first `DURATION` of input (e.g. `30s`, `1m30s`). Default `0s` scans the whole file |
 | `--silence-scan-duration=DURATION` | Deprecated alias for `--room-tone-scan-duration`; still accepted for backwards compatibility |
 
@@ -153,9 +154,12 @@ jivetalking -d troublesome-recording.flac
 
 # Process all FLAC files in directory
 jivetalking *.flac
+
+# Emit before/after spectrograms and interval sidecars
+jivetalking --diagnostics presenter1.flac
 ```
 
-Processing writes a per-file `.log` report by default next to each processed output. For example, `recording-LUFS-16-processed.flac` gets `recording-LUFS-16-processed.log`.
+Processing always writes a Markdown report next to each processed output. For example, `recording-LUFS-16-processed.flac` gets `recording-LUFS-16-processed.md`. The report is empirical: every measurement and the exact adapted filter parameters, with objective metric definitions and no quality verdicts. Analysis-only runs write `<input>-analysis.md` instead.
 
 ### Limiting room-tone scan duration
 
@@ -172,6 +176,13 @@ jivetalking --room-tone-scan-duration=1m presenter1.flac
 jivetalking -a --room-tone-scan-duration=2m30s presenter1.flac
 ```
 
+### Diagnostics
+
+`--diagnostics` writes extra artefacts beside the report for sweeps and before/after comparison. It changes no DSP, so the processed audio is byte-identical with the flag on or off; it only adds FFmpeg passes to render the extras. The flag emits:
+
+- **Before/after spectrogram PNGs**, named `<name>-LUFS-NN-processed.spectrogram-<kind>-<stage>.png`. `<kind>` is `whole`, `roomtone`, or `speech`; `<stage>` is `before` or `after`. Each before/after pair shares identical dimensions and scales for an honest side-by-side. Analysis-only emits `input` spectrograms (no "after"). The Markdown report links them in a `## Spectrograms` section.
+- **Interval sidecars** `<name>.intervals.jsonl` and `<name>.candidates.jsonl`, the raw 250 ms interval samples and scored room-tone candidates. The report's inline summaries cover the common case, so these are only needed for deep analysis.
+
 ### Analysis-Only Mode
 
 Pass `-a` to run only Pass 1 analysis, printing a detailed report to the console without creating any output files. Useful for quickly understanding what jivetalking sees in your recordings, diagnosing setup problems, or checking whether a file needs processing at all.
@@ -183,7 +194,27 @@ The report covers:
 - **Derived measurements**: noise floor, gate baseline, noise-to-speech headroom
 - **Filter adaptation**: the exact parameters jivetalking would apply: highpass frequency, gate threshold, NR settings, de-esser intensity, LA-2A configuration
 - **Spectral summary**: full spectral characterisation with human-readable interpretations
-- **Recording tips**: actionable advice based on your measurements (e.g. "increase your microphone gain by 14 dB" or "your recording is clipping")
+- **Recording score and gain advice**: the same Recording star rating shown after processing, plus a one-line input-gain verdict (see below)
+
+#### Gain advice
+
+Analysis mode is the place to fix your capture before you commit to a take. Alongside the Recording stars, each file gets a single-line verdict and a five-cell thermometer bar that fills with your input true peak, running cyan (quiet) through green (well set) to red (clipping):
+
+```
+Recording  ★★☆☆☆  Fair
+Gain       ▰▱▱▱▱  Quiet. Peaks at -14.2 ㏈TP. Raise input gain ~8 ㏈.
+```
+
+The verdict reads `Interpretation. Level. Advice.` and keys off the input true peak alone, with a target of -6 ㏈TP:
+
+| State | Input true peak | Advice |
+|-------|-----------------|--------|
+| **Clipping** | ≥ 0 ㏈TP | Lower input gain by the stated amount |
+| **Hot** | -1 to 0 ㏈TP | Lower input gain by the stated amount |
+| **Well set** | -12 to -1 ㏈TP | No action required |
+| **Quiet** | < -12 ㏈TP | Raise input gain by the stated amount |
+
+The stars and the gain advice are console-only: the Markdown report stays empirical and verdict-free.
 
 Example output (trimmed):
 
@@ -197,7 +228,7 @@ Channels:    mono
 
 LOUDNESS
   Integrated:     -32.4 LUFS
-  True Peak:      -8.1 dBTP
+  True Peak:      -6.0 dBTP
   Loudness Range: 18.2 LU
 
 DERIVED MEASUREMENTS
@@ -215,9 +246,8 @@ FILTER ADAPTATION
   LA-2A Thresh:   -28 dB
   LA-2A Ratio:    3.2:1
 
-RECORDING TIPS
-  ⚠ Your recording is a bit quiet - increasing your microphone gain
-    by about 14 dB would improve quality
+Recording  ★★★☆☆  Good
+Gain       ▰▰▰▱▱  Level well set. Peaks at -6.0 ㏈TP. No action required.
 ```
 
 Output files are named with the measured LUFS value: `recording.flac` becomes `recording-LUFS-16-processed.flac`.
