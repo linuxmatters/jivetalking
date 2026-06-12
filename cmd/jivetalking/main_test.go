@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"strings"
@@ -151,7 +152,7 @@ func TestRunAnalysisOnlyWithDeps_NonTTYOmitsBenchPath(t *testing.T) {
 	t.Cleanup(func() { analysisPoolAnalyze = origAnalyze })
 
 	reports := newReportCapture()
-	runAnalysisOnlyWithDeps([]string{inputPath}, config, func(string, ...any) {}, 1, analysisOnlyDeps{
+	runAnalysisOnlyWithDeps([]string{inputPath}, config, func(string, ...any) {}, 1, false, analysisOnlyDeps{
 		stdout: &output,
 		hasTTY: func() bool {
 			return false
@@ -212,6 +213,92 @@ func TestRunAnalysisOnlyWithDeps_NonTTYOmitsBenchPath(t *testing.T) {
 	}
 }
 
+// TestRunAnalysisOnlyWithDeps_DiagnosticsGatesSidecars proves the T2.2 contract
+// on the analysis-only path: with --diagnostics off the .jsonl sidecar write is
+// skipped while the .md report and .json record still write; with it on the
+// sidecar write fires exactly once, beside the record. The deps stubs record
+// each write so the test asserts the gate without touching the filesystem.
+func TestRunAnalysisOnlyWithDeps_DiagnosticsGatesSidecars(t *testing.T) {
+	inputPath := "stem.wav"
+	config := processor.DefaultFilterConfig()
+
+	analyze := func(_ context.Context, _ string, cfg *processor.BaseFilterConfig, _ processor.ProgressCallback) (*processor.AnalysisResult, error) {
+		effective, diagnostics := processor.AdaptConfig(cfg, makeAnalysisOnlyTestMeasurements())
+		return &processor.AnalysisResult{
+			Measurements:       makeAnalysisOnlyTestMeasurements(),
+			Config:             effective,
+			Diagnostics:        diagnostics,
+			AnalysisDuration:   2 * time.Second,
+			AdaptationDuration: 100 * time.Millisecond,
+		}, nil
+	}
+	origAnalyze := analysisPoolAnalyze
+	analysisPoolAnalyze = analyze
+	t.Cleanup(func() { analysisPoolAnalyze = origAnalyze })
+
+	reportPath := report.AnalysisReportPath(inputPath)
+	wantRecordPath := strings.TrimSuffix(reportPath, filepath.Ext(reportPath)) + ".json"
+
+	run := func(diagnostics bool) (reportWritten, recordWritten bool, sidecarPaths []string) {
+		reports := newReportCapture()
+		deps := analysisOnlyDeps{
+			stdout: io.Discard,
+			hasTTY: func() bool { return false },
+			openMetadata: func(string) (*audio.Metadata, error) {
+				return &audio.Metadata{Duration: 120, SampleRate: 48000, Channels: 1}, nil
+			},
+			analyzeDetailed: analyze,
+			// The synthetic input (stem.wav) does not exist on disk, so the
+			// diagnostics-on spectrogram renders fail to open it and surface a
+			// non-fatal "Failed to render analysis spectrogram" message. That is
+			// correct behaviour (render failure is non-fatal in this path); this test
+			// only asserts the sidecar gate, so tolerate those messages and fatal on
+			// any other unexpected printError.
+			printError: func(message string) {
+				if strings.Contains(message, "Failed to render analysis spectrogram") {
+					return
+				}
+				t.Fatalf("printError called: %s", message)
+			},
+			writeMarkdownReport: reports.write,
+			writeRunRecord: func(_ *processor.RunRecord, path string) error {
+				if path == wantRecordPath {
+					recordWritten = true
+				}
+				return nil
+			},
+			writeSidecars: func(_ *processor.AudioMeasurements, path string) error {
+				sidecarPaths = append(sidecarPaths, path)
+				return nil
+			},
+		}
+		runAnalysisOnlyWithDeps([]string{inputPath}, config, func(string, ...any) {}, 1, diagnostics, deps)
+		_, reportWritten = reports.content(reportPath)
+		return reportWritten, recordWritten, sidecarPaths
+	}
+
+	// Flag OFF: no sidecar write, but the .md report and .json record still land.
+	reportWritten, recordWritten, sidecarPaths := run(false)
+	if len(sidecarPaths) != 0 {
+		t.Fatalf("diagnostics off: writeSidecars called %d times, want 0 (paths %v)", len(sidecarPaths), sidecarPaths)
+	}
+	if !reportWritten {
+		t.Fatal("diagnostics off: .md report not written (must stay always-on)")
+	}
+	if !recordWritten {
+		t.Fatal("diagnostics off: .json record not written (must stay always-on)")
+	}
+
+	// Flag ON: sidecar write fires once, beside the record.
+	reportWritten, recordWritten, sidecarPaths = run(true)
+	if len(sidecarPaths) != 1 || sidecarPaths[0] != wantRecordPath {
+		t.Fatalf("diagnostics on: sidecar writes = %v, want exactly [%q]", sidecarPaths, wantRecordPath)
+	}
+	if !reportWritten || !recordWritten {
+		t.Fatalf("diagnostics on: always-on artefacts missing (report=%v record=%v)", reportWritten, recordWritten)
+	}
+}
+
 func TestRunAnalysisOnlyWithDeps_PassesPerWorkerConfigClones(t *testing.T) {
 	files := []string{"first.wav", "second.wav"}
 	baseConfig := processor.DefaultFilterConfig()
@@ -246,7 +333,7 @@ func TestRunAnalysisOnlyWithDeps_PassesPerWorkerConfigClones(t *testing.T) {
 	t.Cleanup(func() { analysisPoolAnalyze = origAnalyze })
 
 	reports := newReportCapture()
-	runAnalysisOnlyWithDeps(files, baseConfig, func(string, ...any) {}, 1, analysisOnlyDeps{
+	runAnalysisOnlyWithDeps(files, baseConfig, func(string, ...any) {}, 1, false, analysisOnlyDeps{
 		stdout: &output,
 		hasTTY: func() bool {
 			return false
@@ -331,7 +418,7 @@ func TestRunAnalysisOnlyWithDeps_OrderedOutputParityAcrossJobs(t *testing.T) {
 	run := func(jobs int) (string, *reportCapture) {
 		var output bytes.Buffer
 		reports := newReportCapture()
-		runAnalysisOnlyWithDeps(files, baseConfig, func(string, ...any) {}, jobs, analysisOnlyDeps{
+		runAnalysisOnlyWithDeps(files, baseConfig, func(string, ...any) {}, jobs, false, analysisOnlyDeps{
 			stdout: &output,
 			hasTTY: func() bool {
 				return false
@@ -438,7 +525,7 @@ func TestRunAnalysisOnlyWithDeps_NonTTYBannerThenOrderedReports(t *testing.T) {
 	t.Cleanup(func() { analysisPoolAnalyze = origAnalyze })
 
 	reports := newReportCapture()
-	runAnalysisOnlyWithDeps(files, baseConfig, func(string, ...any) {}, len(files), analysisOnlyDeps{
+	runAnalysisOnlyWithDeps(files, baseConfig, func(string, ...any) {}, len(files), false, analysisOnlyDeps{
 		stdout: &output,
 		hasTTY: func() bool {
 			return false
@@ -550,7 +637,7 @@ func TestRunAnalysisOnlyWithDeps_FailureIsolation(t *testing.T) {
 	var printErrors []string
 
 	reports := newReportCapture()
-	runAnalysisOnlyWithDeps(files, baseConfig, func(string, ...any) {}, 4, analysisOnlyDeps{
+	runAnalysisOnlyWithDeps(files, baseConfig, func(string, ...any) {}, 4, false, analysisOnlyDeps{
 		stdout: &output,
 		hasTTY: func() bool {
 			return false

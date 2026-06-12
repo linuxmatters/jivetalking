@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -37,6 +38,7 @@ type CLI struct {
 	Version              bool          `short:"v" help:"Show version information"`
 	Debug                bool          `short:"d" help:"Enable debug logging to jivetalking-debug.log"`
 	AnalysisOnly         bool          `short:"a" help:"Run analysis only (Pass 1), display results, skip processing"`
+	Diagnostics          bool          `name:"diagnostics" help:"Write bulk diagnostic artefacts for sweeps and quality comparison: the .intervals.jsonl and .candidates.jsonl sidecars plus before/after spectrogram PNGs (whole-file and elected room-tone/speech regions). Adds extra FFmpeg passes. Off by default." default:"false"`
 	RoomToneScanDuration time.Duration `name:"room-tone-scan-duration" help:"Cap room-tone-candidate scan to the first DURATION of input (e.g. 30s, 1m30s). Faster on long files at the cost of coverage; loudness, true peak, LRA, spectral, and speech analysis remain whole-file. Fewer room-tone candidates also reach voice-activated detection when capped. 0s means scan the whole file." placeholder:"DURATION" default:"0s"`
 	SilenceScanDuration  time.Duration `name:"silence-scan-duration" help:"[deprecated alias for --room-tone-scan-duration] Cap room-tone-candidate scan to the first DURATION of input. Supplying both flags with different non-zero values is rejected. 0s means scan the whole file." placeholder:"DURATION" default:"0s"`
 	Files                []string      `arg:"" name:"files" help:"Audio files to process" type:"existingfile" optional:""`
@@ -134,7 +136,7 @@ func main() {
 	config.SetLogger(log)
 
 	if cliArgs.AnalysisOnly {
-		runAnalysisOnly(cliArgs.Files, config, log, resolveJobs(len(cliArgs.Files), runtime.NumCPU()))
+		runAnalysisOnly(cliArgs.Files, config, log, resolveJobs(len(cliArgs.Files), runtime.NumCPU()), cliArgs.Diagnostics)
 		return
 	}
 
@@ -147,7 +149,7 @@ func main() {
 
 	jobs := resolveJobs(len(cliArgs.Files), runtime.NumCPU())
 
-	poolDone := launchWorkerPool(runCtx, p, cliArgs.Files, config, log, jobs, reportWarnings)
+	poolDone := launchWorkerPool(runCtx, p, cliArgs.Files, config, log, jobs, cliArgs.Diagnostics, reportWarnings)
 
 	finalModel, runErr := p.Run()
 
@@ -309,16 +311,36 @@ func (ph *progressHandler) callback(update processor.ProgressUpdate) {
 // runAnalysisOnly performs Pass 1 analysis on each file under a bounded worker
 // pool, then displays results to console in input order. Skips full 4-pass
 // processing.
-func runAnalysisOnly(files []string, config *processor.BaseFilterConfig, log func(string, ...any), jobs int) {
-	runAnalysisOnlyWithDeps(files, config, log, jobs, defaultAnalysisOnlyDeps())
+func runAnalysisOnly(files []string, config *processor.BaseFilterConfig, log func(string, ...any), jobs int, diagnostics bool) {
+	runAnalysisOnlyWithDeps(files, config, log, jobs, diagnostics, defaultAnalysisOnlyDeps())
 }
 
-func runAnalysisOnlyWithDeps(files []string, config *processor.BaseFilterConfig, log func(string, ...any), jobs int, deps analysisOnlyDeps) {
+// runAnalysisOnlyWithDeps drives the analysis-only path with injected
+// dependencies for testing. diagnostics gates the bulk diagnostic artefacts (the
+// .jsonl sidecars and, from T4.2, the input-only spectrogram PNGs). When false
+// the always-on set (.md/.json) still writes; only the opt-in sidecars skip.
+func runAnalysisOnlyWithDeps(files []string, config *processor.BaseFilterConfig, log func(string, ...any), jobs int, diagnostics bool, deps analysisOnlyDeps) {
 	results := make([]*processor.AnalysisResult, len(files))
 	metas := make([]*audio.Metadata, len(files))
 	errs := make([]error, len(files))
 
 	runCtx, cancel := context.WithCancel(context.Background())
+
+	// Spectrogram renders run in background goroutines off the post-pool report
+	// loop, mirroring the processing pool (T4.1). specSem bounds them to the jobs
+	// budget shared across ALL files - one semaphore, never one unbounded goroutine
+	// per PNG. specWG tracks every render so the function waits for all input-only
+	// PNGs before it returns. specCtx is a FRESH context (not runCtx): runCtx is
+	// already cancelled by the unconditional cancel() below by the time the report
+	// loop runs, so renders launched there must not inherit that cancellation;
+	// specCancel fires on return and specWG.Wait() ensures partials are cleaned.
+	specSem := make(chan struct{}, jobs)
+	var specWG sync.WaitGroup
+	specCtx, specCancel := context.WithCancel(context.Background())
+	defer func() {
+		specWG.Wait()
+		specCancel()
+	}()
 
 	if deps.hasTTY() {
 		model := ui.NewAnalysisModel(files)
@@ -393,6 +415,17 @@ func runAnalysisOnlyWithDeps(files []string, config *processor.BaseFilterConfig,
 			}
 		}
 
+		// Attach the input-only spectrogram path list SYNCHRONOUSLY, before the
+		// .md/.json write, so both carry the links. AnalysisSpectrogramStages is the
+		// single input stage (no output exists in this mode, decision #5), so the list
+		// is whole-file + elected regions, up to 3, all input-stage. Pure string work
+		// (no ffmpeg); the PNGs render in background goroutines launched after the
+		// writes. Off path: no list, no goroutines.
+		stem := strings.TrimSuffix(reportPath, filepath.Ext(reportPath))
+		if diagnostics {
+			record.Spectrograms = processor.DeriveSpectrogramImages(record, stem, processor.AnalysisSpectrogramStages)
+		}
+
 		// Render the Markdown report from the same Pass-1-only record. Analysis and
 		// Adaptation are the only timings available (no Pass 1-4); the Processing
 		// Summary renders just those two non-zero rows. A write failure is
@@ -411,10 +444,45 @@ func runAnalysisOnlyWithDeps(files []string, config *processor.BaseFilterConfig,
 		}
 
 		// Stream the Pass-1 interval and candidate series to .jsonl sidecars
-		// beside the analysis record (§8.5 call 2 / §9.3). Non-fatal, matching
-		// the record write above.
-		if err := deps.writeSidecars(results[i].Measurements, recordPath); err != nil {
-			deps.printError(fmt.Sprintf("Failed to write analysis run record sidecars for %s: %v", files[i], err))
+		// beside the analysis record (§8.5 call 2 / §9.3). Opt-in behind
+		// --diagnostics; the always-on .json carries the inline summaries.
+		// Non-fatal, matching the record write above.
+		if diagnostics {
+			if err := deps.writeSidecars(results[i].Measurements, recordPath); err != nil {
+				deps.printError(fmt.Sprintf("Failed to write analysis run record sidecars for %s: %v", files[i], err))
+			}
+		}
+
+		// Launch the input-only spectrogram renders in background goroutines, OFF the
+		// report loop: the .md/.json/sidecars are written and the loop moves on without
+		// waiting for any PNG. Each render is bounded by specSem (shared across files,
+		// sized to the jobs budget) and tracked on specWG, which the deferred wait drains
+		// before the function returns so every input-only PNG lands. The source is always
+		// the INPUT file (stage input); outputPath is unused for the input stage, so "".
+		// Render failure is non-fatal (deps.printError, matching this path's other write
+		// failures); specCtx cancellation aborts + cleans partials inside
+		// generateSpectrogram. The list is empty when --diagnostics is off, so the loop
+		// launches nothing.
+		destDir := filepath.Dir(reportPath)
+		for _, img := range record.Spectrograms {
+			specWG.Add(1)
+			go func(img processor.SpectrogramImage, inputPath string) {
+				// Register specWG.Done() before the acquire select so a render skipped
+				// on a cancelled specCtx still decrements specWG; otherwise the deferred
+				// specWG.Wait() hangs.
+				defer specWG.Done()
+
+				select {
+				case specSem <- struct{}{}:
+					defer func() { <-specSem }()
+				case <-specCtx.Done():
+					return
+				}
+
+				if err := processor.RenderSpectrogramImage(specCtx, img, record, inputPath, "", destDir); err != nil {
+					deps.printError(fmt.Sprintf("Failed to render analysis spectrogram %s for %s: %v", img.Path, inputPath, err))
+				}
+			}(img, files[i])
 		}
 
 		if noTTY {

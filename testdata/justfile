@@ -14,14 +14,30 @@ presenters := "mark martin popey"
 # Episodes processed by the `*-all` recipes
 episodes_list := "68 69 70 71 72 73 74 75 76 77 78 79 80 81"
 
+# Set diagnostics=1 (any non-empty value) to add --diagnostics: emit the .jsonl
+# sidecars + before/after spectrogram PNGs. Off by default. Works on every
+# analyse-*/process-* recipe, e.g. `just diagnostics=1 process-mark` or
+# `just ep=82 diagnostics=1 process-presenters`.
+diagnostics := ""
+diag := if diagnostics == "" { "" } else { "--diagnostics" }
+
+# Run the expensive integration tests (decode testdata/ audio + race detector;
+# excluded from `just test`). Needs the gitignored testdata/ audio present.
+test-integration:
+    go test -tags integration -race ./cmd/jivetalking/ ./internal/processor/
+
+# End-to-end spectrogram validation (runs the binary: gating, .md links, FLAC bit-exact)
+validate-spectrograms:
+    testdata/validation-0.3.1-vs-0.5.x/bin/spectrogram-validate.sh
+
 # Analyse one presenter for the current episode
 _analyse-one presenter:
-    @./jivetalking -a {{ testdata }}/LMP-{{ ep }}-{{ presenter }}.flac
+    @./jivetalking -a {{ diag }} {{ testdata }}/LMP-{{ ep }}-{{ presenter }}.flac
 
 # Process one presenter for the current episode
 _process-one presenter:
     @rm -f {{ testdata }}/LMP-{{ ep }}-{{ presenter }}-*-processed.*
-    @./jivetalking --debug {{ testdata }}/LMP-{{ ep }}-{{ presenter }}.flac
+    @./jivetalking --debug {{ diag }} {{ testdata }}/LMP-{{ ep }}-{{ presenter }}.flac
 
 # Analyse Mark's audio for the current episode
 analyse-mark: (_analyse-one "mark")
@@ -46,14 +62,14 @@ analyse-presenters:
         exit 0
     fi
     echo "=== Analysing Episode {{ ep }} ==="
-    ./jivetalking -a "${files[@]}"
+    ./jivetalking -a {{ diag }} "${files[@]}"
 
 # Analyse all presenters for every episode in batch mode
 analyse-all:
     #!/usr/bin/env bash
     set -euo pipefail
     for e in {{ episodes_list }}; do
-        just ep="$e" analyse-presenters
+        just ep="$e" diagnostics="{{ diagnostics }}" analyse-presenters
     done
 
 # Process Mark's audio for the current episode
@@ -80,12 +96,12 @@ process-presenters:
         exit 0
     fi
     echo "=== Processing Episode {{ ep }} ==="
-    ./jivetalking --debug "${files[@]}"
+    ./jivetalking --debug {{ diag }} "${files[@]}"
 
 # Process all presenters for every episode in batch mode
 process-all:
     #!/usr/bin/env bash
     set -euo pipefail
     for e in {{ episodes_list }}; do
-        just ep="$e" process-presenters
+        just ep="$e" diagnostics="{{ diagnostics }}" process-presenters
     done

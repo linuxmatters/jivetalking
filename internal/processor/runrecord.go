@@ -38,6 +38,14 @@ type RunRecord struct {
 	// 3.1). The full per-interval series lives in the .intervals.jsonl sidecar; the
 	// summary stays inline. nil + omitempty drops it when no intervals exist.
 	IntervalSummary *IntervalSummary `json:"interval_summary,omitempty"`
+
+	// Spectrograms is the deterministic before/after (processing) or input
+	// (analysis-only) spectrogram image list, attached synchronously by the
+	// --diagnostics write site (T4) via deriveSpectrogramImages before the
+	// background PNG renders run. The renderer links these relative paths; the paths
+	// are known before the files land. Empty + omitempty drops it when the flag is
+	// off or no region beyond whole-file is elected.
+	Spectrograms []SpectrogramImage `json:"spectrograms,omitempty"`
 }
 
 // RunProvenance is the §8.1 `run` block: identity + provenance for the run.

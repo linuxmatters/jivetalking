@@ -471,6 +471,99 @@ func TestRenderIntervalSummaryNilOmitted(t *testing.T) {
 	}
 }
 
+// TestRenderSpectrogramsProcessing: a processing record (whole+roomtone+speech,
+// before/after) renders a ## Spectrograms section with image links and both
+// Before and After columns, using the record's relative basenames.
+func TestRenderSpectrogramsProcessing(t *testing.T) {
+	rec := &processor.RunRecord{
+		Spectrograms: []processor.SpectrogramImage{
+			{Kind: processor.SpectrogramKindWhole, Stage: processor.SpectrogramStageBefore, Path: "ep-LUFS-16-processed.spectrogram-whole-before.png"},
+			{Kind: processor.SpectrogramKindWhole, Stage: processor.SpectrogramStageAfter, Path: "ep-LUFS-16-processed.spectrogram-whole-after.png"},
+			{Kind: processor.SpectrogramKindRoomTone, Stage: processor.SpectrogramStageBefore, Path: "ep-LUFS-16-processed.spectrogram-roomtone-before.png"},
+			{Kind: processor.SpectrogramKindRoomTone, Stage: processor.SpectrogramStageAfter, Path: "ep-LUFS-16-processed.spectrogram-roomtone-after.png"},
+			{Kind: processor.SpectrogramKindSpeech, Stage: processor.SpectrogramStageBefore, Path: "ep-LUFS-16-processed.spectrogram-speech-before.png"},
+			{Kind: processor.SpectrogramKindSpeech, Stage: processor.SpectrogramStageAfter, Path: "ep-LUFS-16-processed.spectrogram-speech-after.png"},
+		},
+	}
+	got := renderSpectrograms(rec)
+	for _, want := range []string{
+		"## Spectrograms",
+		"| Region | Before | After |",
+		"Whole file",
+		"Room tone",
+		"Speech",
+		"![whole before](ep-LUFS-16-processed.spectrogram-whole-before.png)",
+		"![whole after](ep-LUFS-16-processed.spectrogram-whole-after.png)",
+		"![roomtone before](ep-LUFS-16-processed.spectrogram-roomtone-before.png)",
+		"![speech after](ep-LUFS-16-processed.spectrogram-speech-after.png)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("spectrograms missing %q\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "Input") {
+		t.Errorf("processing spectrograms must not render an Input column\n%s", got)
+	}
+	// Paths are relative basenames (no directory component) straight from the record.
+	if strings.Contains(got, "/") {
+		t.Errorf("spectrogram links must use relative basenames, found a path separator\n%s", got)
+	}
+}
+
+// TestRenderSpectrogramsAnalysisOnly: an input-only record renders a single Input
+// column with no Before/After.
+func TestRenderSpectrogramsAnalysisOnly(t *testing.T) {
+	rec := &processor.RunRecord{
+		Spectrograms: []processor.SpectrogramImage{
+			{Kind: processor.SpectrogramKindWhole, Stage: processor.SpectrogramStageInput, Path: "show-analysis.spectrogram-whole-input.png"},
+			{Kind: processor.SpectrogramKindSpeech, Stage: processor.SpectrogramStageInput, Path: "show-analysis.spectrogram-speech-input.png"},
+		},
+	}
+	got := renderSpectrograms(rec)
+	for _, want := range []string{
+		"## Spectrograms",
+		"| Region | Input |",
+		"![whole input](show-analysis.spectrogram-whole-input.png)",
+		"![speech input](show-analysis.spectrogram-speech-input.png)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("analysis-only spectrograms missing %q\n%s", want, got)
+		}
+	}
+	for _, banned := range []string{"Before", "After", "Room tone"} {
+		if strings.Contains(got, banned) {
+			t.Errorf("analysis-only spectrograms must not render %q\n%s", banned, got)
+		}
+	}
+}
+
+// TestRenderSpectrogramsEmpty: an empty slice renders "" so the orchestrator emits
+// no ## Spectrograms heading.
+func TestRenderSpectrogramsEmpty(t *testing.T) {
+	if got := renderSpectrograms(&processor.RunRecord{}); got != "" {
+		t.Errorf("empty Spectrograms must render \"\", got %q", got)
+	}
+	if got := RenderMarkdown(fullLoudnessRecord(), Timings{}); strings.Contains(got, "## Spectrograms") {
+		t.Errorf("record with no spectrograms must not emit a Spectrograms heading\n%s", got)
+	}
+}
+
+// TestRenderSpectrogramsNoFFmpegToken grep-asserts the rendered output carries no
+// ffmpeg/exec reference (the renderer is a pure record consumer, criterion A11).
+func TestRenderSpectrogramsNoFFmpegToken(t *testing.T) {
+	rec := &processor.RunRecord{
+		Spectrograms: []processor.SpectrogramImage{
+			{Kind: processor.SpectrogramKindWhole, Stage: processor.SpectrogramStageInput, Path: "show.spectrogram-whole-input.png"},
+		},
+	}
+	got := renderSpectrograms(rec)
+	for _, banned := range []string{"ffmpeg", "showspectrumpic", "exec"} {
+		if strings.Contains(got, banned) {
+			t.Errorf("spectrogram render output contains %q", banned)
+		}
+	}
+}
+
 // TestRenderRegionsNoDroppedTokens grep-asserts the 1.5 sections drop the legacy
 // gain-normalised columns, Character row, and verdict tokens (criterion 5).
 func TestRenderRegionsNoDroppedTokens(t *testing.T) {

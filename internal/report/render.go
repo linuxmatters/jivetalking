@@ -20,9 +20,9 @@ import (
 // A renderer that returns "" contributes nothing - no heading, no blank section.
 // This is how analysis-only / Pass-1-only records naturally drop the processing-
 // only blocks: renderProcessingSummary is empty for zero Timings,
-// renderSpectrograms is always empty (out-of-scope stub), and renderFilters /
-// renderNormalisation return "" when their record blocks are absent. Non-empty
-// sections are joined with one blank line between them.
+// renderSpectrograms is empty when the record carries no Spectrograms, and
+// renderFilters / renderNormalisation return "" when their record blocks are
+// absent. Non-empty sections are joined with one blank line between them.
 func RenderMarkdown(rec *processor.RunRecord, timings Timings) string {
 	if rec == nil {
 		return ""

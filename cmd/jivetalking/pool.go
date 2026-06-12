@@ -25,10 +25,10 @@ var poolProcessAudio = processor.ProcessAudio
 // cancelling the context so all workers' deferred temp cleanup runs before the
 // process exits, giving the no-residue-on-cancel guarantee. Keeping the launch
 // and join in one helper makes the wiring unit-testable apart from main().
-func launchWorkerPool(ctx context.Context, p *tea.Program, files []string, base *processor.BaseFilterConfig, sharedLog func(string, ...any), jobs int, reportWarnings chan<- string) <-chan struct{} {
+func launchWorkerPool(ctx context.Context, p *tea.Program, files []string, base *processor.BaseFilterConfig, sharedLog func(string, ...any), jobs int, diagnostics bool, reportWarnings chan<- string) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
-		runWorkerPool(ctx, p, files, base, sharedLog, jobs, reportWarnings)
+		runWorkerPool(ctx, p, files, base, sharedLog, jobs, diagnostics, reportWarnings)
 		close(done)
 	}()
 	return done
@@ -45,9 +45,21 @@ func launchWorkerPool(ctx context.Context, p *tea.Program, files []string, base 
 // select at acquire, while an in-flight worker aborts mid-frame because ctx is
 // threaded into ProcessAudio. Either way wg.Done() fires so wg.Wait() returns
 // and ui.AllCompleteMsg is sent.
-func runWorkerPool(ctx context.Context, p *tea.Program, files []string, base *processor.BaseFilterConfig, sharedLog func(string, ...any), jobs int, reportWarnings chan<- string) {
+//
+// diagnostics gates the bulk diagnostic artefacts (the .jsonl sidecars and, from
+// T4.1, the spectrogram PNGs). When false the always-on set (.flac/.md/.json)
+// still writes; only the opt-in sidecars are skipped.
+func runWorkerPool(ctx context.Context, p *tea.Program, files []string, base *processor.BaseFilterConfig, sharedLog func(string, ...any), jobs int, diagnostics bool, reportWarnings chan<- string) {
 	sem := make(chan struct{}, jobs)
 	var wg sync.WaitGroup
+
+	// Spectrogram renders run in background goroutines off the file-worker critical
+	// path (proposal §4). specSem bounds them to the jobs budget shared across ALL
+	// files - one pool-level semaphore, never one unbounded goroutine per PNG, so
+	// ffmpeg is not oversubscribed beyond the worker budget. specWG tracks every
+	// render so the pool waits for all PNGs before AllCompleteMsg / program exit.
+	specSem := make(chan struct{}, jobs)
+	var specWG sync.WaitGroup
 
 	for i, inputPath := range files {
 		wg.Add(1)
@@ -106,11 +118,20 @@ func runWorkerPool(ctx context.Context, p *tea.Program, files []string, base *pr
 			// so building it twice would be wasted work.
 			rec := processor.NewRunRecord(result)
 
+			outputStem := strings.TrimSuffix(result.OutputPath, filepath.Ext(result.OutputPath))
+
+			// Attach the spectrogram path list SYNCHRONOUSLY, before the .md/.json
+			// write, so both carry the links. This is pure string work (no ffmpeg);
+			// the PNGs themselves render in background goroutines launched after the
+			// writes. Off path: no list, no goroutines (proposal §4).
+			if diagnostics {
+				rec.Spectrograms = processor.DeriveSpectrogramImages(rec, outputStem, processor.ProcessingSpectrogramStages)
+			}
+
 			// Write the Markdown report beside the processed audio: swap the output
 			// extension for .md → <name>-LUFS-NN-processed.md. A write failure is
 			// non-fatal: the processed audio and the .json are the product, the
 			// report a side artefact.
-			outputStem := strings.TrimSuffix(result.OutputPath, filepath.Ext(result.OutputPath))
 			mdPath := outputStem + ".md"
 			if err := report.WriteMarkdownReport(rec, buildProcessingTimings(fileStartTime, ph.timings(pass2Time), result), mdPath); err != nil {
 				wlog("[POOL] Failed to write Markdown report: %v", err)
@@ -128,10 +149,46 @@ func runWorkerPool(ctx context.Context, p *tea.Program, files []string, base *pr
 
 			// Stream the full interval and candidate series to .jsonl sidecars
 			// beside the record (§8.5 call 2 / §9.3): the bulk data the summary
-			// stands in for. Same non-fatal contract as the record above.
-			if err := processor.WriteRunRecordSidecars(result.Measurements, recordPath); err != nil {
-				wlog("[POOL] Failed to write run record sidecars: %v", err)
-				reportWarnings <- fmt.Sprintf("Run record sidecars were not written for %s: %v", inputPath, err)
+			// stands in for. Opt-in behind --diagnostics; the always-on .json
+			// carries the inline summaries, so .md/.json stay populated when off.
+			// Same non-fatal contract as the record above.
+			if diagnostics {
+				if err := processor.WriteRunRecordSidecars(result.Measurements, recordPath); err != nil {
+					wlog("[POOL] Failed to write run record sidecars: %v", err)
+					reportWarnings <- fmt.Sprintf("Run record sidecars were not written for %s: %v", inputPath, err)
+				}
+			}
+
+			// Launch the spectrogram renders in background goroutines, OFF the
+			// critical path: the .md/.json/sidecars are written and FileCompleteMsg
+			// fires below without waiting for any PNG. Each render is bounded by the
+			// pool-level specSem (shared across files, sized to the jobs budget) and
+			// tracked on specWG, which the pool waits on before AllCompleteMsg so the
+			// process does not exit until every PNG lands. Render failure is
+			// non-fatal (reportWarnings); ctx cancellation aborts + cleans partials
+			// inside generateSpectrogram. The list is empty when --diagnostics is off,
+			// so the loop launches nothing.
+			destDir := filepath.Dir(result.OutputPath)
+			for _, img := range rec.Spectrograms {
+				specWG.Add(1)
+				go func(img processor.SpectrogramImage) {
+					// Register specWG.Done() before the acquire select so a render
+					// skipped on a cancelled ctx still decrements specWG; otherwise
+					// specWG.Wait() hangs.
+					defer specWG.Done()
+
+					select {
+					case specSem <- struct{}{}:
+						defer func() { <-specSem }()
+					case <-ctx.Done():
+						return
+					}
+
+					if err := processor.RenderSpectrogramImage(ctx, img, rec, inputPath, result.OutputPath, destDir); err != nil {
+						wlog("[POOL] Failed to render spectrogram %s: %v", img.Path, err)
+						reportWarnings <- fmt.Sprintf("Spectrogram %s was not written for %s: %v", img.Path, inputPath, err)
+					}
+				}(img)
 			}
 
 			finalNoiseFloor, _ := processor.FinalNoiseFloor(result)
@@ -150,6 +207,14 @@ func runWorkerPool(ctx context.Context, p *tea.Program, files []string, base *pr
 	}
 
 	wg.Wait()
+
+	// Gate program exit on the spectrogram renders: every file's per-file
+	// FileCompleteMsg has already fired (wg drained), so the file-worker TUI is not
+	// held up; only AllCompleteMsg (which quits the program) waits here, so the
+	// process does not exit until every PNG lands. On a user ctx cancel the
+	// in-flight renders abort and clean their partials, then specWG drains. With
+	// --diagnostics off nothing was launched, so this returns at once.
+	specWG.Wait()
 
 	sharedLog("[POOL] Sending AllCompleteMsg")
 	p.Send(ui.AllCompleteMsg{})
