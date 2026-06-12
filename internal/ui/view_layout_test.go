@@ -203,7 +203,7 @@ func TestDoneBoxRendersIndigoLabelledRows(t *testing.T) {
 	}
 
 	// Labelled rows.
-	for _, label := range []string{"Time", "Loudness", "True peak", "Dynamics", "Noise floor", "Quality"} {
+	for _, label := range []string{"Time", "Loudness", "True peak", "Dynamics", "Noise floor", "Recording", "Processed"} {
 		if !strings.Contains(plain, label) {
 			t.Errorf("done box missing %q row:\n%s", label, plain)
 		}
@@ -230,7 +230,7 @@ func TestDoneBoxRendersIndigoLabelledRows(t *testing.T) {
 		t.Errorf("done box still labels the noise floor as 'reduced':\n%s", plain)
 	}
 
-	// Quality row: filled + empty stars and the word label.
+	// Processed row: filled + empty stars and the word label.
 	if !strings.Contains(plain, "★★★★☆") {
 		t.Errorf("done box missing 4-of-5 star bar:\n%s", plain)
 	}
@@ -409,23 +409,25 @@ func TestDoneBoxDynamicsRow(t *testing.T) {
 }
 
 // TestDoneBoxRowOrder locks the row order: Time, Loudness, True peak, Dynamics,
-// Noise floor, Quality. The loudness-family before→after rows group first, then
-// the output-only floor, then the quality stars.
+// Noise floor, Recording, Processed. The loudness-family before→after rows group
+// first, then the output-only floor, then the source-capture (Recording) and
+// output-quality (Processed) star rows, Recording directly above Processed.
 func TestDoneBoxRowOrder(t *testing.T) {
 	file := FileProgress{
-		OutputPath:      "order-out.flac",
-		Status:          StatusComplete,
-		InputLUFS:       -30.9,
-		OutputLUFS:      -15.9,
-		OutputTP:        -2.0,
-		OutputLRA:       8.0,
-		FinalNoiseFloor: -80.0,
-		Summary:         AdaptedSummary{ChainReady: true, TruePeakDBTP: -0.1, InputLRA: 12.3},
-		Quality:         processor.QualityScore{Stars: 4, Label: "Great"},
+		OutputPath:       "order-out.flac",
+		Status:           StatusComplete,
+		InputLUFS:        -30.9,
+		OutputLUFS:       -15.9,
+		OutputTP:         -2.0,
+		OutputLRA:        8.0,
+		FinalNoiseFloor:  -80.0,
+		Summary:          AdaptedSummary{ChainReady: true, TruePeakDBTP: -0.1, InputLRA: 12.3},
+		Quality:          processor.QualityScore{Stars: 4, Label: "Great"},
+		RecordingQuality: processor.QualityScore{Stars: 3, Label: "Good"},
 	}
 	plain := ansi.Strip(renderDoneBox(file))
 
-	order := []string{"Time", "Loudness", "True peak", "Dynamics", "Noise floor", "Quality"}
+	order := []string{"Time", "Loudness", "True peak", "Dynamics", "Noise floor", "Recording", "Processed"}
 	last := -1
 	for _, label := range order {
 		idx := strings.Index(plain, label)
@@ -594,5 +596,80 @@ func TestFileCompleteMsgCopiesOutputTPAndLRA(t *testing.T) {
 	}
 	if got := mm.Files[0].OutputLRA; got != 8.0 {
 		t.Errorf("OutputLRA not copied: got %v, want 8.0", got)
+	}
+}
+
+// TestDoneBoxRecordingAndProcessedRows confirms the done box renders both the
+// Recording (source-capture) and Processed (output) star rows, each with its own
+// star count and word label, Recording directly above Processed.
+func TestDoneBoxRecordingAndProcessedRows(t *testing.T) {
+	file := FileProgress{
+		OutputPath:       "rp-out.flac",
+		Status:           StatusComplete,
+		RecordingQuality: processor.QualityScore{Stars: 2, Label: "Fair"},
+		Quality:          processor.QualityScore{Stars: 5, Label: "Excellent"},
+	}
+	plain := ansi.Strip(renderDoneBox(file))
+
+	// Isolate each row so the star check is per-row, not box-wide.
+	rowLine := func(label string) string {
+		for l := range strings.SplitSeq(plain, "\n") {
+			if strings.Contains(l, label) {
+				return l
+			}
+		}
+		return ""
+	}
+
+	recLine := rowLine("Recording")
+	procLine := rowLine("Processed")
+	if recLine == "" {
+		t.Fatalf("done box missing Recording row:\n%s", plain)
+	}
+	if procLine == "" {
+		t.Fatalf("done box missing Processed row:\n%s", plain)
+	}
+
+	// Recording: 2-of-5 stars + "Fair".
+	if !strings.Contains(recLine, "★★☆☆☆") {
+		t.Errorf("Recording row missing 2-of-5 star bar:\n%s", recLine)
+	}
+	if !strings.Contains(recLine, "Fair") {
+		t.Errorf("Recording row missing label:\n%s", recLine)
+	}
+
+	// Processed: 5-of-5 stars + "Excellent".
+	if !strings.Contains(procLine, "★★★★★") {
+		t.Errorf("Processed row missing 5-of-5 star bar:\n%s", procLine)
+	}
+	if !strings.Contains(procLine, "Excellent") {
+		t.Errorf("Processed row missing label:\n%s", procLine)
+	}
+
+	// Recording sits directly above Processed.
+	recIdx := strings.Index(plain, "Recording")
+	procIdx := strings.Index(plain, "Processed")
+	if recIdx < 0 || procIdx < 0 || recIdx >= procIdx {
+		t.Errorf("Recording must sit above Processed: rec=%d proc=%d\n%s", recIdx, procIdx, plain)
+	}
+}
+
+// TestFileCompleteMsgCopiesRecordingQuality confirms the FileCompleteMsg handler
+// copies RecordingQuality onto the routed FileProgress, mirroring how Quality
+// flows, so the done box can render the Recording star row.
+func TestFileCompleteMsgCopiesRecordingQuality(t *testing.T) {
+	m := NewModel([]string{"a.flac"})
+	updated, _ := m.Update(FileCompleteMsg{
+		FileIndex:        0,
+		OutputPath:       "a-out.flac",
+		Quality:          processor.QualityScore{Stars: 5, Label: "Excellent"},
+		RecordingQuality: processor.QualityScore{Stars: 2, Label: "Fair"},
+	})
+	mm := updated.(Model)
+	if got := mm.Files[0].RecordingQuality.Stars; got != 2 {
+		t.Errorf("RecordingQuality.Stars not copied: got %v, want 2", got)
+	}
+	if got := mm.Files[0].RecordingQuality.Label; got != "Fair" {
+		t.Errorf("RecordingQuality.Label not copied: got %q, want %q", got, "Fair")
 	}
 }

@@ -219,15 +219,16 @@ func runWorkerPool(ctx context.Context, p *tea.Program, files []string, base *pr
 
 			wlog("[POOL] Sending FileCompleteMsg for file %d", i)
 			p.Send(ui.FileCompleteMsg{
-				FileIndex:       i,
-				InputLUFS:       result.InputLUFS,
-				OutputLUFS:      result.OutputLUFS,
-				FinalNoiseFloor: finalNoiseFloor,
-				OutputTP:        outputTP,
-				OutputLRA:       outputLRA,
-				OutputPath:      result.OutputPath,
-				Quality:         processor.ComputeQualityScore(result),
-				ProcessingTime:  time.Since(fileStartTime),
+				FileIndex:        i,
+				InputLUFS:        result.InputLUFS,
+				OutputLUFS:       result.OutputLUFS,
+				FinalNoiseFloor:  finalNoiseFloor,
+				OutputTP:         outputTP,
+				OutputLRA:        outputLRA,
+				OutputPath:       result.OutputPath,
+				Quality:          processor.ComputeQualityScore(result),
+				RecordingQuality: processor.ComputeRecordingScore(result),
+				ProcessingTime:   time.Since(fileStartTime),
 			})
 		}(i, inputPath)
 	}
