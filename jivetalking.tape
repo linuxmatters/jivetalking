@@ -61,7 +61,7 @@ Require ./jivetalking
 
 Set Shell "fish"
 Set FontSize 14
-Set Width 640
+Set Width 1030
 Set Height 720
 Set Padding 8
 Set WindowBar ColorfulRight
