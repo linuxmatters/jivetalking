@@ -105,13 +105,17 @@ func ProcessAudio(ctx context.Context, inputPath string, config *BaseFilterConfi
 		return nil, fmt.Errorf("adaptive config failed")
 	}
 
-	// Pass 2: Processing
+	// Pass 2: Processing. The start event also surfaces the just-derived effective
+	// config and diagnostics (read-only) so the TUI can light its filter-chain
+	// status boxes; this carries no DSP and does not alter AdaptConfig.
 	if progressCallback != nil {
 		progressCallback(ProgressUpdate{
 			Pass:         PassProcessing,
 			PassName:     "Processing",
 			Duration:     measurements.Duration,
 			Measurements: measurements,
+			Config:       effectiveConfig,
+			Diagnostics:  diagnostics,
 		})
 	}
 

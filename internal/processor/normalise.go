@@ -613,6 +613,15 @@ func ApplyNormalisation(
 			Pass:     PassNormalising,
 			PassName: "Normalising",
 			Duration: normaliseDuration(inputMeasurements),
+			// Surface the limiter ceiling at Pass-4 start, the point it is known
+			// (planLimiterForLoudnorm above). This lets the TUI light its Limiter row
+			// while the file still renders, not only at completion. Read-only: the
+			// ceiling reported here is the same limiter.ceilingDB the final
+			// NormalisationResult carries.
+			Limiter: &LimiterProgress{
+				Enabled: limiter.needed,
+				Ceiling: limiter.ceilingDB,
+			},
 		})
 	}
 

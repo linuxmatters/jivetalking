@@ -193,6 +193,17 @@ func runWorkerPool(ctx context.Context, p *tea.Program, files []string, base *pr
 
 			finalNoiseFloor, _ := processor.FinalNoiseFloor(result)
 
+			// Confirm the Limiter row at completion. The row already lit during Pass 4
+			// (progressHandler resends the summary with the ceiling on the Pass-4-start
+			// update), so this is a harmless final confirmation with the same ceiling
+			// from the authoritative NormResult. ph.summary already carries the Pass-4
+			// limiter merge, so WithLimiter here re-applies the identical value.
+			// State-change only; no per-frame work.
+			p.Send(ui.AdaptedSummaryMsg{
+				FileIndex: i,
+				Summary:   ph.summary.WithLimiter(result.NormResult),
+			})
+
 			wlog("[POOL] Sending FileCompleteMsg for file %d", i)
 			p.Send(ui.FileCompleteMsg{
 				FileIndex:       i,

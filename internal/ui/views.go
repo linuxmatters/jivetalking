@@ -54,15 +54,17 @@ func renderFileQueue(m Model, prog progress.Model) string {
 			easedProgress = m.meters[i].progPos
 			easedPeak = m.meters[i].peakPos
 		}
-		b.WriteString(renderFileEntry(m.Files[i], prog, easedLevel, easedProgress, easedPeak))
+		b.WriteString(renderFileEntry(m.Files[i], prog, easedLevel, easedProgress, easedPeak, m.Width))
 		b.WriteString("\n")
 	}
 
 	return b.String()
 }
 
-// renderFileEntry renders a single file entry in the queue
-func renderFileEntry(file FileProgress, prog progress.Model, easedLevel, easedProgress, easedPeak float64) string {
+// renderFileEntry renders a single file entry in the queue. termWidth gates the
+// side-by-side status boxes: they are dropped on narrow terminals so the Pass box
+// never wraps.
+func renderFileEntry(file FileProgress, prog progress.Model, easedLevel, easedProgress, easedPeak float64, termWidth int) string {
 	fileName := filepath.Base(file.InputPath)
 
 	switch file.Status {
@@ -70,11 +72,12 @@ func renderFileEntry(file FileProgress, prog progress.Model, easedLevel, easedPr
 		return renderDoneBox(file)
 
 	case StatusAnalyzing, StatusProcessing, StatusNormalising:
-		// active file with detailed progress
+		// active file with detailed progress, with the filter-chain status boxes
+		// joined to the right of the Pass box.
 		icon := lipgloss.NewStyle().Foreground(cli.ColorOrange).Render("∿")
-		return fmt.Sprintf(" %s %s\n%s",
-			icon, fileName,
-			renderFileDetails(file, prog, easedLevel, easedProgress, easedPeak))
+		passBox := renderFileDetails(file, prog, easedLevel, easedProgress, easedPeak)
+		body := joinStatusBoxes(passBox, file.Summary, termWidth)
+		return fmt.Sprintf(" %s %s\n%s", icon, fileName, body)
 
 	case StatusError:
 		// ✗ failed file
@@ -98,7 +101,8 @@ func renderFileDetails(file FileProgress, prog progress.Model, easedLevel, eased
 
 	var content strings.Builder
 
-	// Pass indicator
+	// Pass indicator. "Pass N/4" sits in the top border (spliced below, matching
+	// the Filter Chain / Analysis boxes); the pass name is the first content row.
 	var passName string
 	switch file.CurrentPass {
 	case processor.PassAnalysis:
@@ -112,7 +116,7 @@ func renderFileDetails(file FileProgress, prog progress.Model, easedLevel, eased
 	default:
 		passName = "Processing"
 	}
-	fmt.Fprintf(&content, "Pass %d/4: %s\n", file.CurrentPass, passName)
+	fmt.Fprintf(&content, "%s\n", passName)
 
 	// Progress bar (spring-eased fill for smooth motion)
 	content.WriteString(prog.ViewAs(easedProgress))
@@ -131,7 +135,8 @@ func renderFileDetails(file FileProgress, prog progress.Model, easedLevel, eased
 		content.WriteString(renderAudioLevelMeter(easedLevel, easedPeak, file.ElapsedTime))
 	}
 
-	return box.Render(content.String())
+	title := fmt.Sprintf("Pass %d/4", file.CurrentPass)
+	return overlayBorderTitle(box.Render(content.String()), title, cli.ColorSkyBlue)
 }
 
 // timelineWidth is the cell count of the mini dot timeline in the Time block.
@@ -380,7 +385,7 @@ func renderCompletionSummary(m Model) string {
 
 	for i := range m.Files {
 		if m.Files[i].Status == StatusError {
-			b.WriteString(renderFileEntry(m.Files[i], m.progress, 0, 0, 0))
+			b.WriteString(renderFileEntry(m.Files[i], m.progress, 0, 0, 0, m.Width))
 			b.WriteString("\n")
 			continue
 		}

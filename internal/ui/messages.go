@@ -41,5 +41,15 @@ type FileCompleteMsg struct {
 	Error          error
 }
 
+// AdaptedSummaryMsg carries the filter-chain status view-model for a single file,
+// routed by FileIndex. It is a state-change message, not a per-frame update: the
+// pool sends it at Pass-2 start (chain + analysis rows; limiter pending) and again
+// at completion (limiter ceiling). The boxes re-render only on receipt, never on
+// the meter tick.
+type AdaptedSummaryMsg struct {
+	FileIndex int
+	Summary   AdaptedSummary
+}
+
 // AllCompleteMsg indicates all files have been processed
 type AllCompleteMsg struct{}

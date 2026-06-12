@@ -275,6 +275,11 @@ type progressHandler struct {
 	pass3Time  time.Duration
 	pass4Start time.Time
 	pass4Time  time.Duration
+
+	// summary is the filter-chain status view-model, built from the Pass-2 start
+	// update (chain + analysis rows). The pool reads it back at completion to merge
+	// the limiter ceiling before the final AdaptedSummaryMsg.
+	summary ui.AdaptedSummary
 }
 
 func (ph *progressHandler) callback(update processor.ProgressUpdate) {
@@ -306,6 +311,31 @@ func (ph *progressHandler) callback(update processor.ProgressUpdate) {
 		Duration:     update.Duration,
 		Measurements: update.Measurements,
 	})
+
+	// At Pass-2 start the update carries the post-AdaptConfig config + diagnostics.
+	// Build the filter-chain status summary (chain + analysis rows; limiter pending)
+	// and send it as a one-off state-change message. Retain it on the handler so the
+	// pool can merge the limiter ceiling at completion. Off path (Config nil): no
+	// summary, no message.
+	if update.Config != nil {
+		ph.summary = ui.NewAdaptedSummary(update.Config, update.Diagnostics, update.Measurements)
+		ph.p.Send(ui.AdaptedSummaryMsg{
+			FileIndex: ph.fileIndex,
+			Summary:   ph.summary,
+		})
+	}
+
+	// At Pass-4 start the update carries the just-computed limiter ceiling. Merge it
+	// into the retained summary and resend so the Limiter row lights to its ceiling
+	// (or settles to OFF) WHILE the file is still processing, not only at completion.
+	// Read-only surfacing: the ceiling is the same value the final NormResult reports.
+	if update.Limiter != nil {
+		ph.summary = ph.summary.WithLimiterProgress(update.Limiter)
+		ph.p.Send(ui.AdaptedSummaryMsg{
+			FileIndex: ph.fileIndex,
+			Summary:   ph.summary,
+		})
+	}
 }
 
 // runAnalysisOnly performs Pass 1 analysis on each file under a bounded worker

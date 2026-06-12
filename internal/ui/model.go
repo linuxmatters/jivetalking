@@ -128,6 +128,11 @@ type FileProgress struct {
 	// Analysis results (from Pass 1)
 	Measurements *processor.AudioMeasurements
 
+	// Summary is the filter-chain status view-model behind the two side boxes. It
+	// is populated from AdaptedSummaryMsg (Pass-2 start, then completion) and read
+	// only by the renderer; the meter tick never touches it.
+	Summary AdaptedSummary
+
 	// Processing statistics
 	CurrentLevel float64 // Current audio level in dB
 	PeakLevel    float64 // Peak level seen so far
@@ -263,6 +268,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.FileIndex >= 0 && msg.FileIndex < len(m.Files) {
 			m.Files[msg.FileIndex].Status = StatusAnalyzing
 			m.Files[msg.FileIndex].StartTime = time.Now()
+		}
+		return m, nil
+
+	case AdaptedSummaryMsg:
+		// State-change update for the filter-chain status boxes. Re-renders on
+		// receipt only; the 60 fps meter tick never carries this. Sent at Pass-2
+		// start (chain + analysis) and at completion (limiter ceiling).
+		if msg.FileIndex >= 0 && msg.FileIndex < len(m.Files) {
+			m.Files[msg.FileIndex].Summary = msg.Summary
 		}
 		return m, nil
 
