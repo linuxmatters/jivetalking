@@ -114,7 +114,6 @@ jivetalking [flags] <files...>
 | `-d, --debug` | Enable debug logging to `jivetalking-debug.log` |
 | `--diagnostics` | Write extra diagnostic artefacts: before/after spectrogram PNGs plus `.intervals.jsonl`/`.candidates.jsonl` sidecars. Adds extra FFmpeg passes. Off by default |
 | `--room-tone-scan-duration=DURATION` | Cap room-tone candidate scan to the first `DURATION` of input (e.g. `30s`, `1m30s`). Default `0s` scans the whole file |
-| `--silence-scan-duration=DURATION` | Deprecated alias for `--room-tone-scan-duration`; still accepted for backwards compatibility |
 
 
 ### Examples

@@ -64,7 +64,7 @@ The stars and the gain advice are console-only: the Markdown report stays empiri
 
 ## Limiting the room-tone scan
 
-Long recordings can spend disproportionate time scoring room-tone candidates across the whole file. `--room-tone-scan-duration` caps that scan to the first `DURATION` of input, trading coverage for speed. Loudness, true peak, LRA, spectral statistics, and speech detection still see the whole file; only room-tone candidate collection is constrained, so fewer candidates reach voice-activated detection when the cap is engaged. The flag accepts Go duration syntax (`30s`, `1m`, `2m30s`); the default `0s` scans the whole file. Works with `--analysis-only` as well. The legacy `--silence-scan-duration` flag remains accepted as a deprecated alias.
+Long recordings can spend disproportionate time scoring room-tone candidates across the whole file. `--room-tone-scan-duration` caps that scan to the first `DURATION` of input, trading coverage for speed. Loudness, true peak, LRA, spectral statistics, and speech detection still see the whole file; only room-tone candidate collection is constrained, so fewer candidates reach voice-activated detection when the cap is engaged. The flag accepts Go duration syntax (`30s`, `1m`, `2m30s`); the default `0s` scans the whole file. Works with `--analysis-only` as well.
 
 ```bash
 # Cap room-tone scanning to the first 30 seconds

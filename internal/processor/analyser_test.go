@@ -2974,7 +2974,7 @@ func TestDetectVoiceActivated(t *testing.T) {
 }
 
 func TestAnalyseAudio_RoomToneScanDuration(t *testing.T) {
-	// Deterministic synthetic input for the silence-scan-duration cap.
+	// Deterministic synthetic input for the room-tone-scan-duration cap.
 	//
 	// Layout (85 seconds total):
 	//   [0,  8 s)   tone + noise floor (32 intervals at ~-23 dBFS RMS)
