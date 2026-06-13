@@ -29,19 +29,21 @@ Measures everything that matters:
 
 ### Pass 2: Adaptive Processing
 
-Filter chain inspired by studio legends, tuned to your specific audio:
+Filter chain tuned to your specific audio:
 
-| Filter | Hardware Inspiration | What It Does |
-|--------|---------------------|--------------|
-| **Highpass** | Drawmer DS201 | Removes subsonic rumble (60-120 Hz, adaptive to spectral content) |
-| **Noise reduction** | Non-Local Means + FFT | `anlmdn` denoiser at the source sample rate (`r=0.0020`, `m=3`) followed by `afftdn` FFT spectral denoise (fixed `nr=12`) for residual suppression |
-| **Gate** | DS201 expander | Soft expansion for natural inter-phrase cleanup; breath reduction option positions threshold between noise floor and quiet speech level |
-| **Compressor** | Teletronix LA-2A | Programme-dependent optical compression; ratio and release adapt to kurtosis and flux. High-crest override pushes ratio, threshold, release, and knee when predicted limiter ceiling deficit is positive |
-| **De-esser** | (none) | Adaptive intensity (0.0-0.6) based on spectral centroid and rolloff |
+| Filter | What it does |
+|--------|--------------|
+| **Downmix** | Folds the source to mono before any processing |
+| **Rumble high-pass (80 Hz)** | Removes subsonic rumble below every vocal fundamental |
+| **Band-limit low-pass (20.5 kHz)** | Caps bandwidth at the top of human hearing for consistent encoder input |
+| **Noise reduction** | `anlmdn` denoiser at the source sample rate (`r=0.0020`, `m=3`) followed by `afftdn` FFT spectral denoise (fixed `nr=12`) for residual suppression |
+| **Speech gate** | Soft expander for natural inter-phrase cleanup; threshold sits between noise floor and quiet speech level |
+| **Levelling compressor** | Gentle speech-relative levelling; threshold tracks measured speech RMS |
+| **De-esser** | Adaptive intensity driven by the speech-region sibilant-band excess |
 
 ### Pass 3 & 4: Loudness Normalisation
 
-Two-stage EBU R128 normalisation with a CBS Volumax-inspired twist:
+Two-stage EBU R128 normalisation:
 
 1. **Pre-gain and ceiling** are calculated from Pass 2 measurements before Pass 3 runs; when the ideal limiter ceiling falls below alimiter's -24.0 dBTP minimum, a pre-gain amount is derived to close the deficit
 2. **Limiter** creates headroom by reducing true peaks; Pass 3 measures through the same `volume -> alimiter` prefix that Pass 4 will apply, so its `measured_I`/`measured_TP` already reflect the post-limiter signal
@@ -192,7 +194,7 @@ The report covers:
 - **Loudness & dynamics**: integrated LUFS, true peak, loudness range, crest factor
 - **Room tone & speech detection**: candidate regions scored and elected for noise profiling and speech-aware metrics; voice-activated recording detected automatically (Riverside, Zencastr)
 - **Derived measurements**: noise floor, gate baseline, noise-to-speech headroom
-- **Filter adaptation**: the exact parameters jivetalking would apply: highpass frequency, gate threshold, NR settings, de-esser intensity, LA-2A configuration
+- **Filter adaptation**: the exact parameters jivetalking would apply: highpass frequency, gate threshold, NR settings, de-esser intensity, levelling-compressor configuration
 - **Spectral summary**: full spectral characterisation with human-readable interpretations
 - **Recording score and gain advice**: the same Recording star rating shown after processing, plus a one-line input-gain verdict (see below)
 
@@ -243,8 +245,8 @@ FILTER ADAPTATION
   NR Threshold:   -47 dB
   NR Expansion:   8 dB
   De-esser:       32% intensity
-  LA-2A Thresh:   -28 dB
-  LA-2A Ratio:    3.2:1
+  Comp Thresh:    -28 dB
+  Comp Ratio:     3.2:1
 
 Recording  ★★★☆☆  Good
 Gain       ▰▰▰▱▱  Level well set. Peaks at -6.0 ㏈TP. No action required.
@@ -296,10 +298,6 @@ just test
 just install
 ```
 
-### Benchmarks
-
-Benchmark recipes, capture and profile workflows, and the `anlmdn`/`adeclick` variant matrices are documented in [docs/Benchmarks.md](docs/Benchmarks.md). Artefacts land under `.bench/`.
-
 ### Project Structure
 
 ```
@@ -317,9 +315,7 @@ internal/
 
 ### Design Documentation
 
-- [Gate: Drawmer DS201](docs/FilterGate-Drawmer%20DS201.md): soft expander with adaptive thresholding
-- [Compressor: LA-2A](docs/FilterCompressor-Teletronix%20LA-2A.md): programme-dependent optical compression
-- [Limiter: CBS Volumax](docs/FilterLimiter-CBS-Volumax.md): transparent broadcast limiting
+- [The hardware that taught me](docs/Inspiration.md): the influences and heritage behind jivetalking's processing approach
 - [Spectral Metrics Reference](docs/Spectral-Metrics-Reference.md): how measurements drive adaptation
 
 See [AGENTS.md](AGENTS.md) for complete development guidelines, architecture details, and contribution standards.

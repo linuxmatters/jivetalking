@@ -83,12 +83,12 @@ Jivetalking is a Go CLI tool for podcast audio preprocessing using embedded FFmp
 | **Pass 1** | Analysis | Measures LUFS, true peak, LRA, noise floor, spectral characteristics via ebur128 + astats + aspectralstats |
 | **Pass 2** | Processing | Applies adaptive filter chain tuned to Pass 1 measurements |
 | **Pass 3** | Measuring | Runs loudnorm in measurement mode to get input stats |
-| **Pass 4** | Normalising | Applies loudnorm with linear mode; CBS Volumax-inspired limiter creates headroom |
+| **Pass 4** | Normalising | Applies loudnorm with linear mode; transparent limiter creates headroom |
 
 ### Pass 2 Filter Chain
 
 ```
-downmix → ds201_highpass → ds201_lowpass → noiseremove → ds201_gate → la2a_compressor → deesser → analysis → resample
+downmix → rumble_highpass → bandlimit_lowpass → noise_reduction → speech_gate → levelling_compressor → deesser → analysis → resample
 ```
 
 **Filter chain rationale:**
@@ -100,11 +100,11 @@ downmix → ds201_highpass → ds201_lowpass → noiseremove → ds201_gate → 
 
 | Filter | Adaptive Parameters | Basis |
 |--------|---------------------|-------|
-| **DS201 Highpass** | Fixed 80Hz / 12dB/oct | None (fixed) |
-| **DS201 Lowpass** | Fixed 20.5kHz / 12dB/oct band-limit | None (unconditional, all content) |
-| **NoiseRemove** | None (fixed) | Not adaptive: `anlmdn` runs at the source sample rate with `r=0.0020` and `m=3`, followed by `afftdn` FFT spectral denoise with a fixed `nr=12` (capped to avoid warble on the noisiest voice) |
-| **DS201 Gate** | Threshold, ratio, attack, release, range, knee | LRA, noise floor, quiet speech estimate, spectral flux, entropy |
-| **LA-2A Compressor** | Threshold only | Speech-RMS-relative (`SpeechProfile.RMSLevel + 9 dB`); all other params fixed (ratio 3.0, attack 10 ms, release 200 ms, knee 4.0, mix 1.0) |
+| **Rumble high-pass** | Fixed 80Hz / 12dB/oct | None (fixed) |
+| **Band-limit low-pass** | Fixed 20.5kHz / 12dB/oct band-limit | None (unconditional, all content) |
+| **Noise reduction** | None (fixed) | Not adaptive: `anlmdn` runs at the source sample rate with `r=0.0020` and `m=3`, followed by `afftdn` FFT spectral denoise with a fixed `nr=12` (capped to avoid warble on the noisiest voice) |
+| **Speech gate** | Threshold, ratio, attack, release, range, knee | LRA, noise floor, quiet speech estimate, spectral flux, entropy |
+| **Levelling compressor** | Threshold only | Speech-RMS-relative (`SpeechProfile.RMSLevel + 9 dB`); all other params fixed (ratio 3.0, attack 10 ms, release 200 ms, knee 4.0, mix 1.0) |
 | **De-esser** | Intensity `i` (0.0-0.85) | Speech-region sibilant-band excess (6-9 kHz vs 1-3 kHz body); `f`/`m` fixed |
 
 ### Target Specifications
@@ -144,8 +144,8 @@ Jivetalking employs speech profile extraction for adaptive tuning:
 | **Target Loudness Standard** | -18 dB RMS (custom RMS calculation) | -16 LUFS |
 | **Silence Detection** | Fixed: 50ms subsegments > -44 dB | Adaptive: spectral analysis + room tone scoring |
 | **Noise Reduction** | None | `anlmdn` (Non-Local Means, source-rate denoising at `r=0.0020`, `m=3`) + `afftdn` (FFT spectral denoise, fixed `nr=12`) |
-| **Dynamics Processing** | Implicit in leveling algorithm | LA-2A-inspired RMS compressor (fixed params, speech-RMS-relative threshold) + CBS Volumax-inspired limiter |
-| **Gating/Expansion** | None | DS201-inspired soft expander (2:1-4:1 ratio) |
+| **Dynamics Processing** | Implicit in leveling algorithm | RMS levelling compressor (fixed params, speech-RMS-relative threshold) + transparent limiter |
+| **Gating/Expansion** | None | Soft expander (2:1-4:1 ratio) |
 | **Highpass Filtering** | None | Fixed 80Hz 12dB/oct highpass |
 | **Lowpass Filtering** | None | Fixed 20.5kHz 12dB/oct band-limit |
 | **De-essing** | None | Adaptive intensity 0.0-0.85 from speech-region sibilant-band excess (6-9 kHz vs 1-3 kHz) |
@@ -195,7 +195,7 @@ Jivetalking employs speech profile extraction for adaptive tuning:
 
 **Gap:** Levelator's unique contribution was correcting "medium-term" loudness variations, neither the short-term transients handled by compressors nor the long-term overall loudness handled by normalisers. This "riding the fader" effect compensated for speakers at different volumes within a recording.
 
-**Jivetalking Status:** Jivetalking applies consistent filter parameters across the entire file. The LA-2A-inspired compressor applies fixed-ratio RMS compression with a speech-level-relative threshold, but does not segment the file or apply different corrections to different time regions.
+**Jivetalking Status:** Jivetalking applies consistent filter parameters across the entire file. The levelling compressor applies fixed-ratio RMS compression with a speech-level-relative threshold, but does not segment the file or apply different corrections to different time regions.
 
 **Quote from Levelator docs:**
 > "Software can do better by performing multiple passes over the audio, generating a loudness map of where the volume changes."
