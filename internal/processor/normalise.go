@@ -91,9 +91,6 @@ const (
 	loudnormTPMinDB = -9.0 // dBTP
 )
 
-// MinLimiterCeilingDB exports minLimiterCeilingDB so the logging package can reference the ceiling without duplicating the literal.
-const MinLimiterCeilingDB = minLimiterCeilingDB
-
 // LoudnormStats contains the JSON output from the loudnorm filter.
 // This is used to diagnose whether loudnorm is using linear or dynamic mode.
 type LoudnormStats struct {

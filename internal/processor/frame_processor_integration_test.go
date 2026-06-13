@@ -6,11 +6,34 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
+	"sort"
 	"testing"
 
 	ffmpeg "github.com/linuxmatters/ffmpeg-statigo"
 	"github.com/linuxmatters/jivetalking/internal/audio"
 )
+
+// findProbeAudioFile locates any audio file under testdata/ for integration
+// tests. Returns "" if none exists.
+func findProbeAudioFile() string {
+	// Prefer the small fixture if present (fast), else any flac/wav.
+	candidates := []string{"fixture-5m.flac"}
+	for _, name := range candidates {
+		p := filepath.Join("..", "..", "testdata", name)
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	matches, _ := filepath.Glob(filepath.Join("..", "..", "testdata", "*.flac"))
+	wavs, _ := filepath.Glob(filepath.Join("..", "..", "testdata", "*.wav"))
+	matches = append(matches, wavs...)
+	if len(matches) == 0 {
+		return ""
+	}
+	sort.Strings(matches)
+	return matches[0]
+}
 
 // openTestFilterGraph opens a real testdata audio file and builds a passthrough
 // (anull) filter graph for driving runFilterGraph. It skips the test gracefully

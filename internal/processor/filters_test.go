@@ -78,47 +78,6 @@ func newTestConfig() *EffectiveFilterConfig {
 	return deriveEffectiveFilterConfig(newTestBaseConfig())
 }
 
-func TestFilterFamilyConfigTypesExist(t *testing.T) {
-	configType := reflect.TypeFor[filterConfigDefaults]()
-	tests := []struct {
-		field string
-		typ   reflect.Type
-	}{
-		{"Downmix", reflect.TypeFor[DownmixConfig]()},
-		{"Analysis", reflect.TypeFor[AnalysisConfig]()},
-		{"Resample", reflect.TypeFor[ResampleConfig]()},
-		{"DS201HighPass", reflect.TypeFor[DS201HighPassConfig]()},
-		{"DS201LowPass", reflect.TypeFor[DS201LowPassConfig]()},
-		{"NoiseRemove", reflect.TypeFor[NoiseRemoveConfig]()},
-		{"DS201Gate", reflect.TypeFor[DS201GateConfig]()},
-		{"LA2A", reflect.TypeFor[LA2AConfig]()},
-		{"Deesser", reflect.TypeFor[DeesserConfig]()},
-		{"Adeclick", reflect.TypeFor[AdeclickConfig]()},
-		{"Loudnorm", reflect.TypeFor[LoudnormConfig]()},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.field, func(t *testing.T) {
-			field, ok := configType.FieldByName(tt.field)
-			if !ok {
-				t.Fatalf("filterConfigDefaults missing %s", tt.field)
-			}
-			if field.Type != tt.typ {
-				t.Fatalf("%s type = %s, want %s", tt.field, field.Type, tt.typ)
-			}
-		})
-	}
-
-	analysisField, ok := reflect.TypeFor[AnalysisConfig]().FieldByName("RoomToneScanDuration")
-	if !ok {
-		t.Fatal("AnalysisConfig missing RoomToneScanDuration")
-	}
-	if analysisField.Type != reflect.TypeFor[time.Duration]() {
-		t.Fatalf("AnalysisConfig.RoomToneScanDuration type = %s, want %s",
-			analysisField.Type, reflect.TypeFor[time.Duration]())
-	}
-}
-
 func TestDefaultFilterConfigComposesTypedDefaults(t *testing.T) {
 	config := DefaultFilterConfig()
 

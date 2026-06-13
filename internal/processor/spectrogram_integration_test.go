@@ -17,8 +17,9 @@ import (
 // stays hermetic. The hermetic registry/spec/resolution tests live in
 // spectrogram_test.go.
 //
-// Input comes from findProbeAudioFile() (defined in loudnorm_logprobe_test.go,
-// same package, also integration-tagged); a missing testdata/ file skips.
+// Input comes from findProbeAudioFile() (defined in
+// frame_processor_integration_test.go, same package, also integration-tagged);
+// a missing testdata/ file skips.
 
 // renderPNG runs generateSpectrogram with a live context and decodes the result,
 // asserting the output is a decodable PNG with non-empty bounds. Fails on any
