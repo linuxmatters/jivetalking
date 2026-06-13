@@ -28,21 +28,27 @@ func sendWarning(ch chan<- string, msg string) {
 	}
 }
 
-// poolProcessAudio is the processing entry point, a package var so tests can
-// substitute a fake to observe concurrency without running real FFmpeg. It
-// defaults to the real processor call, mirroring the loudnormRunFilterGraph
-// seam idiom in internal/processor/normalise.go.
-var poolProcessAudio = processor.ProcessAudio
+// workerPoolDeps injects the pool's processing entry point so tests can
+// substitute a fake to observe concurrency without running real FFmpeg or
+// mutating package state, following the analysisOnlyDeps pattern in main.go.
+// Production callers use defaultWorkerPoolDeps().
+type workerPoolDeps struct {
+	processAudio func(context.Context, string, *processor.BaseFilterConfig, processor.ProgressCallback) (*processor.ProcessingResult, error)
+}
+
+func defaultWorkerPoolDeps() workerPoolDeps {
+	return workerPoolDeps{processAudio: processor.ProcessAudio}
+}
 
 // launchWorkerPool starts runWorkerPool in a goroutine and returns a channel
 // closed once the pool has fully unwound. Callers block on the channel after
 // cancelling the context so all workers' deferred temp cleanup runs before the
 // process exits, giving the no-residue-on-cancel guarantee. Keeping the launch
 // and join in one helper makes the wiring unit-testable apart from main().
-func launchWorkerPool(ctx context.Context, p *tea.Program, files []string, base *processor.BaseFilterConfig, sharedLog func(string, ...any), jobs int, diagnostics bool, reportWarnings chan<- string) <-chan struct{} {
+func launchWorkerPool(ctx context.Context, p *tea.Program, files []string, base *processor.BaseFilterConfig, sharedLog func(string, ...any), jobs int, diagnostics bool, reportWarnings chan<- string, deps workerPoolDeps) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
-		runWorkerPool(ctx, p, files, base, sharedLog, jobs, diagnostics, reportWarnings)
+		runWorkerPool(ctx, p, files, base, sharedLog, jobs, diagnostics, reportWarnings, deps)
 		close(done)
 	}()
 	return done
@@ -63,7 +69,7 @@ func launchWorkerPool(ctx context.Context, p *tea.Program, files []string, base 
 // diagnostics gates the bulk diagnostic artefacts (the .jsonl sidecars and the
 // spectrogram PNGs). When false the always-on set (.flac/.md/.json) still
 // writes; only the opt-in sidecars are skipped.
-func runWorkerPool(ctx context.Context, p *tea.Program, files []string, base *processor.BaseFilterConfig, sharedLog func(string, ...any), jobs int, diagnostics bool, reportWarnings chan<- string) {
+func runWorkerPool(ctx context.Context, p *tea.Program, files []string, base *processor.BaseFilterConfig, sharedLog func(string, ...any), jobs int, diagnostics bool, reportWarnings chan<- string, deps workerPoolDeps) {
 	sem := make(chan struct{}, jobs)
 	var wg sync.WaitGroup
 
@@ -113,7 +119,7 @@ func runWorkerPool(ctx context.Context, p *tea.Program, files []string, base *pr
 
 			pass2Start := time.Now()
 			wlog("[POOL] Starting ProcessAudio for %s", inputPath)
-			result, err := poolProcessAudio(ctx, inputPath, clone, ph.callback)
+			result, err := deps.processAudio(ctx, inputPath, clone, ph.callback)
 			if err != nil {
 				wlog("[POOL] ProcessAudio failed: %v", err)
 				p.Send(ui.FileCompleteMsg{

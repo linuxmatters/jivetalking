@@ -58,8 +58,7 @@ func stubOpenMetadata(t *testing.T) func(string) (*audio.Metadata, error) {
 }
 
 // installAnalysisFake swaps analysisPoolAnalyze for fn and restores it after the
-// test, mirroring pool_test.go's installInflightFake save/restore so tests stay
-// isolated from each other and from main_test.go's swaps.
+// test so tests stay isolated from each other and from main_test.go's swaps.
 func installAnalysisFake(t *testing.T, fn func(context.Context, string, *processor.BaseFilterConfig, processor.ProgressCallback) (*processor.AnalysisResult, error)) {
 	t.Helper()
 	orig := analysisPoolAnalyze

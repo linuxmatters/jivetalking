@@ -151,7 +151,7 @@ func main() {
 
 	jobs := resolveJobs(len(cliArgs.Files), runtime.NumCPU())
 
-	poolDone := launchWorkerPool(runCtx, p, cliArgs.Files, config, log, jobs, cliArgs.Diagnostics, reportWarnings)
+	poolDone := launchWorkerPool(runCtx, p, cliArgs.Files, config, log, jobs, cliArgs.Diagnostics, reportWarnings, defaultWorkerPoolDeps())
 
 	finalModel, runErr := p.Run()
 

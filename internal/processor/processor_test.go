@@ -498,7 +498,7 @@ func TestProcessorSeedAndProgressCallbackBoundaries(t *testing.T) {
 			fn:          measureWithLoudnorm,
 			configArg:   2,
 			progressArg: 4,
-			parameters:  5,
+			parameters:  6,
 		},
 		{
 			name:        "ApplyNormalisation",

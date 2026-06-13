@@ -16,11 +16,12 @@ import (
 	"github.com/linuxmatters/jivetalking/internal/ui"
 )
 
-// inflightFake substitutes poolProcessAudio to observe pool concurrency without
-// real FFmpeg. It tracks live in-flight workers and the high-water mark, sleeps
-// briefly to create overlap opportunity, records each processed path exactly
-// once, then returns an error so runWorkerPool takes the FileCompleteMsg{Error}
-// branch (no report/output path needed to drive the pool end-to-end).
+// inflightFake stands in for the workerPoolDeps processAudio dependency to
+// observe pool concurrency without real FFmpeg. It tracks live in-flight
+// workers and the high-water mark, sleeps briefly to create overlap
+// opportunity, records each processed path exactly once, then returns an error
+// so runWorkerPool takes the FileCompleteMsg{Error} branch (no report/output
+// path needed to drive the pool end-to-end).
 type inflightFake struct {
 	live    atomic.Int32
 	maxSeen atomic.Int32
@@ -46,15 +47,6 @@ func (f *inflightFake) fn(_ context.Context, inputPath string, _ *processor.Base
 
 	f.live.Add(-1)
 	return nil, errors.New("inflightFake: synthetic error to drive pool error branch")
-}
-
-// installInflightFake swaps poolProcessAudio for the fake and restores it after
-// the test. The seam var is test-only state; restoration keeps tests isolated.
-func installInflightFake(t *testing.T, f *inflightFake) {
-	t.Helper()
-	orig := poolProcessAudio
-	poolProcessAudio = f.fn
-	t.Cleanup(func() { poolProcessAudio = orig })
 }
 
 // recordingModel is a headless tea.Model that captures pool messages and quits
@@ -92,7 +84,6 @@ func runPoolWithFake(t *testing.T, jobs, n int) (*inflightFake, int, bool) {
 	t.Helper()
 
 	fake := &inflightFake{}
-	installInflightFake(t, fake)
 
 	dir := t.TempDir()
 	files := make([]string, n)
@@ -109,7 +100,7 @@ func runPoolWithFake(t *testing.T, jobs, n int) (*inflightFake, int, bool) {
 	base := processor.DefaultFilterConfig()
 	reportWarnings := make(chan string, n)
 
-	go runWorkerPool(context.Background(), p, files, base, func(string, ...any) {}, jobs, false, reportWarnings)
+	go runWorkerPool(context.Background(), p, files, base, func(string, ...any) {}, jobs, false, reportWarnings, workerPoolDeps{processAudio: fake.fn})
 
 	if _, err := p.Run(); err != nil {
 		t.Fatalf("p.Run() error = %v", err)
@@ -127,6 +118,8 @@ func runPoolWithFake(t *testing.T, jobs, n int) (*inflightFake, int, bool) {
 // high-water in-flight mark across 5 files; with jobs == 1 it must never exceed
 // 1, proving serial execution under the pool.
 func TestRunWorkerPool_InFlightBoundedToOne(t *testing.T) {
+	t.Parallel()
+
 	fake, fileComplete, allComplete := runPoolWithFake(t, 1, 5)
 
 	if got := fake.maxSeen.Load(); got != 1 {
@@ -144,6 +137,8 @@ func TestRunWorkerPool_InFlightBoundedToOne(t *testing.T) {
 // at 3 over 8 files while still reaching real concurrency (>1), proving the
 // semaphore both bounds and permits parallelism.
 func TestRunWorkerPool_BoundHonouredForN(t *testing.T) {
+	t.Parallel()
+
 	fake, fileComplete, allComplete := runPoolWithFake(t, 3, 8)
 
 	maxSeen := fake.maxSeen.Load()
@@ -158,8 +153,9 @@ func TestRunWorkerPool_BoundHonouredForN(t *testing.T) {
 	}
 }
 
-// isolationFake substitutes poolProcessAudio so exactly one designated input
-// path errors while every sibling succeeds. Successful calls return a
+// isolationFake stands in for the workerPoolDeps processAudio dependency so
+// exactly one designated input path errors while every sibling succeeds.
+// Successful calls return a
 // ProcessingResult whose OutputPath sits next to the (synthetic) input so the
 // pool's report write produces its .md without a report warning. It mirrors
 // AC4: one failing input must leave siblings unaffected.
@@ -222,6 +218,8 @@ func (m isolationModel) View() tea.View { return tea.NewView("") }
 // AllCompleteMsg still fires (the partial-failure run completes), and all N files
 // report exactly once (no early abort). Seam-based, so no real audio is needed.
 func TestRunWorkerPool_FailureIsolation(t *testing.T) {
+	t.Parallel()
+
 	const n = 5
 	const failIdx = 2
 
@@ -232,9 +230,6 @@ func TestRunWorkerPool_FailureIsolation(t *testing.T) {
 	}
 
 	fake := &isolationFake{failPath: files[failIdx]}
-	orig := poolProcessAudio
-	poolProcessAudio = fake.fn
-	t.Cleanup(func() { poolProcessAudio = orig })
 
 	var mu sync.Mutex
 	completed := 0
@@ -246,7 +241,7 @@ func TestRunWorkerPool_FailureIsolation(t *testing.T) {
 	base := processor.DefaultFilterConfig()
 	reportWarnings := make(chan string, n)
 
-	go runWorkerPool(context.Background(), p, files, base, func(string, ...any) {}, 3, false, reportWarnings)
+	go runWorkerPool(context.Background(), p, files, base, func(string, ...any) {}, 3, false, reportWarnings, workerPoolDeps{processAudio: fake.fn})
 
 	if _, err := p.Run(); err != nil {
 		t.Fatalf("p.Run() error = %v", err)
@@ -290,6 +285,8 @@ func TestRunWorkerPool_FailureIsolation(t *testing.T) {
 // FileCompleteMsg, and AllCompleteMsg fires. Parity is proven by the fake's
 // per-path record matching the submission set with no duplicates or omissions.
 func TestRunWorkerPool_SerialParityJobs1(t *testing.T) {
+	t.Parallel()
+
 	const n = 5
 	fake, fileComplete, allComplete := runPoolWithFake(t, 1, n)
 
@@ -323,17 +320,17 @@ func TestRunWorkerPool_SerialParityJobs1(t *testing.T) {
 // release channel so the test observes the not-yet-closed state deterministically
 // before letting the worker finish.
 func TestLaunchWorkerPool_DoneClosesAfterPoolUnwinds(t *testing.T) {
+	t.Parallel()
+
 	release := make(chan struct{})
 	started := make(chan struct{})
 	var once sync.Once
 
-	orig := poolProcessAudio
-	poolProcessAudio = func(_ context.Context, _ string, _ *processor.BaseFilterConfig, _ processor.ProgressCallback) (*processor.ProcessingResult, error) {
+	deps := workerPoolDeps{processAudio: func(_ context.Context, _ string, _ *processor.BaseFilterConfig, _ processor.ProgressCallback) (*processor.ProcessingResult, error) {
 		once.Do(func() { close(started) })
 		<-release
 		return nil, errors.New("synthetic error to drive pool error branch")
-	}
-	t.Cleanup(func() { poolProcessAudio = orig })
+	}}
 
 	model := recordingModel{mu: &sync.Mutex{}, fileComplete: new(int), allComplete: new(bool)}
 	p := tea.NewProgram(model, tea.WithoutRenderer(), tea.WithInput(nil))
@@ -348,7 +345,7 @@ func TestLaunchWorkerPool_DoneClosesAfterPoolUnwinds(t *testing.T) {
 	base := processor.DefaultFilterConfig()
 	reportWarnings := make(chan string, len(files))
 
-	done := launchWorkerPool(context.Background(), p, files, base, func(string, ...any) {}, 1, false, reportWarnings)
+	done := launchWorkerPool(context.Background(), p, files, base, func(string, ...any) {}, 1, false, reportWarnings, deps)
 
 	select {
 	case <-started:
@@ -380,11 +377,11 @@ func TestLaunchWorkerPool_DoneClosesAfterPoolUnwinds(t *testing.T) {
 // returns an error so any worker that does win the acquire race takes the pool's
 // error branch cleanly rather than the nil-result success path.
 func TestLaunchWorkerPool_DoneClosesOnPreCancelledContext(t *testing.T) {
-	orig := poolProcessAudio
-	poolProcessAudio = func(_ context.Context, _ string, _ *processor.BaseFilterConfig, _ processor.ProgressCallback) (*processor.ProcessingResult, error) {
+	t.Parallel()
+
+	deps := workerPoolDeps{processAudio: func(_ context.Context, _ string, _ *processor.BaseFilterConfig, _ processor.ProgressCallback) (*processor.ProcessingResult, error) {
 		return nil, errors.New("synthetic error to drive pool error branch")
-	}
-	t.Cleanup(func() { poolProcessAudio = orig })
+	}}
 
 	model := recordingModel{mu: &sync.Mutex{}, fileComplete: new(int), allComplete: new(bool)}
 	p := tea.NewProgram(model, tea.WithoutRenderer(), tea.WithInput(nil))
@@ -402,7 +399,7 @@ func TestLaunchWorkerPool_DoneClosesOnPreCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	done := launchWorkerPool(ctx, p, files, base, func(string, ...any) {}, 1, false, reportWarnings)
+	done := launchWorkerPool(ctx, p, files, base, func(string, ...any) {}, 1, false, reportWarnings, deps)
 
 	select {
 	case <-done:

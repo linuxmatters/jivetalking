@@ -18,29 +18,29 @@ import (
 
 const loudnormCaptureTestJSON = `{"input_i":"-23.0","input_tp":"-4.0","input_lra":"5.0","input_thresh":"-33.0","output_i":"-16.0","output_tp":"-2.0","output_lra":"5.0","output_thresh":"-26.0","normalization_type":"linear","target_offset":"0.0"}`
 
-// injectLoudnormStatsViaRun swaps loudnormRunFilterGraph for a no-op that writes
-// body into the per-call .loudnorm-*.tmp.json stats file the loudnorm pass
-// created next to inputPath. Setup is stubbed to a nil filter graph so the
-// post-free AVFilterGraphFree is a no-op that writes nothing, and the run hook
-// (which fires after setup, before that free) is the sole writer of the stats
-// file. parseLoudnormStatsFile then reads the controlled fixture. The optional
-// onRun hook runs before the stats write for tests that drive progress.
+// injectLoudnormStatsViaRun returns a loudnormDeps whose run hook is a no-op
+// that writes body into the per-call .loudnorm-*.tmp.json stats file the
+// loudnorm pass created next to inputPath. Setup is stubbed to a nil filter
+// graph so the post-free AVFilterGraphFree is a no-op that writes nothing, and
+// the run hook (which fires after setup, before that free) is the sole writer
+// of the stats file. parseLoudnormStatsFile then reads the controlled fixture.
+// The optional onRun hook runs before the stats write for tests that drive
+// progress.
 func injectLoudnormStatsViaRun(
 	t *testing.T,
 	inputPath, body string,
 	onRun func(config FrameLoopConfig) error,
-) {
+) loudnormDeps {
 	t.Helper()
 
-	replaceApplyLoudnormSetupFilterGraph(t, func(
+	deps := defaultLoudnormDeps()
+	deps.setupFilterGraph = func(
 		*ffmpeg.AVCodecContext,
 		string,
 	) (*ffmpeg.AVFilterGraph, *ffmpeg.AVFilterContext, *ffmpeg.AVFilterContext, error) {
 		return nil, nil, nil, nil
-	})
-
-	oldRun := loudnormRunFilterGraph
-	loudnormRunFilterGraph = func(
+	}
+	deps.runFilterGraph = func(
 		_ context.Context,
 		_ *audio.Reader,
 		_, _ *ffmpeg.AVFilterContext,
@@ -54,13 +54,13 @@ func injectLoudnormStatsViaRun(
 		writeLoudnormStatsForInput(t, inputPath, body)
 		return nil
 	}
-	t.Cleanup(func() {
-		loudnormRunFilterGraph = oldRun
-	})
+	return deps
 }
 
 func TestMeasureWithLoudnormReturnsOpenError(t *testing.T) {
-	_, err := measureWithLoudnorm(context.Background(), "/does/not/exist.wav", defaultNormalisationTestConfig(), "", nil)
+	t.Parallel()
+
+	_, err := measureWithLoudnorm(context.Background(), "/does/not/exist.wav", defaultNormalisationTestConfig(), "", nil, defaultLoudnormDeps())
 	if err == nil {
 		t.Fatal("measureWithLoudnorm() error = nil, want open error")
 	}
@@ -70,9 +70,11 @@ func TestMeasureWithLoudnormReturnsOpenError(t *testing.T) {
 }
 
 func TestMeasureWithLoudnormReturnsSetupError(t *testing.T) {
+	t.Parallel()
+
 	testFile := generateLoudnormApplicationTestAudio(t)
 
-	_, err := measureWithLoudnorm(context.Background(), testFile, defaultNormalisationTestConfig(), "not_a_real_filter", nil)
+	_, err := measureWithLoudnorm(context.Background(), testFile, defaultNormalisationTestConfig(), "not_a_real_filter", nil, defaultLoudnormDeps())
 	if err == nil {
 		t.Fatal("measureWithLoudnorm() error = nil, want setup error")
 	}
@@ -83,6 +85,8 @@ func TestMeasureWithLoudnormReturnsSetupError(t *testing.T) {
 }
 
 func TestMeasureWithLoudnormLoopErrorTakesPrecedenceOverStats(t *testing.T) {
+	t.Parallel()
+
 	testFile := generateTestAudio(t, TestAudioOptions{
 		DurationSecs: 0.2,
 		SampleRate:   44100,
@@ -93,8 +97,8 @@ func TestMeasureWithLoudnormLoopErrorTakesPrecedenceOverStats(t *testing.T) {
 	defer cleanupTestAudio(t, testFile)
 
 	runErr := errors.New("injected frame loop failure")
-	oldRun := loudnormRunFilterGraph
-	loudnormRunFilterGraph = func(
+	deps := defaultLoudnormDeps()
+	deps.runFilterGraph = func(
 		_ context.Context,
 		reader *audio.Reader,
 		bufferSrcCtx, bufferSinkCtx *ffmpeg.AVFilterContext,
@@ -102,11 +106,8 @@ func TestMeasureWithLoudnormLoopErrorTakesPrecedenceOverStats(t *testing.T) {
 	) error {
 		return runErr
 	}
-	t.Cleanup(func() {
-		loudnormRunFilterGraph = oldRun
-	})
 
-	_, err := measureWithLoudnorm(context.Background(), testFile, defaultNormalisationTestConfig(), "", nil)
+	_, err := measureWithLoudnorm(context.Background(), testFile, defaultNormalisationTestConfig(), "", nil, deps)
 	if !errors.Is(err, runErr) {
 		t.Fatalf("measureWithLoudnorm() error = %v, want wrapped run error", err)
 	}
@@ -120,10 +121,12 @@ func TestMeasureWithLoudnormLoopErrorTakesPrecedenceOverStats(t *testing.T) {
 }
 
 func TestMeasureWithLoudnormEmptyStatsFileFails(t *testing.T) {
-	testFile := generateLoudnormApplicationTestAudio(t)
-	injectLoudnormStatsViaRun(t, testFile, "", nil)
+	t.Parallel()
 
-	_, err := measureWithLoudnorm(context.Background(), testFile, defaultNormalisationTestConfig(), "", nil)
+	testFile := generateLoudnormApplicationTestAudio(t)
+	deps := injectLoudnormStatsViaRun(t, testFile, "", nil)
+
+	_, err := measureWithLoudnorm(context.Background(), testFile, defaultNormalisationTestConfig(), "", nil, deps)
 	if err == nil {
 		t.Fatal("measureWithLoudnorm() error = nil, want missing JSON error")
 	}
@@ -137,10 +140,12 @@ func TestMeasureWithLoudnormEmptyStatsFileFails(t *testing.T) {
 }
 
 func TestMeasureWithLoudnormMalformedStatsFileFails(t *testing.T) {
-	testFile := generateLoudnormApplicationTestAudio(t)
-	injectLoudnormStatsViaRun(t, testFile, "{not-json}", nil)
+	t.Parallel()
 
-	_, err := measureWithLoudnorm(context.Background(), testFile, defaultNormalisationTestConfig(), "", nil)
+	testFile := generateLoudnormApplicationTestAudio(t)
+	deps := injectLoudnormStatsViaRun(t, testFile, "{not-json}", nil)
+
+	_, err := measureWithLoudnorm(context.Background(), testFile, defaultNormalisationTestConfig(), "", nil, deps)
 	if err == nil {
 		t.Fatal("measureWithLoudnorm() error = nil, want malformed JSON error")
 	}
@@ -154,10 +159,12 @@ func TestMeasureWithLoudnormMalformedStatsFileFails(t *testing.T) {
 }
 
 func TestMeasureWithLoudnormParsesStatsFile(t *testing.T) {
-	testFile := generateLoudnormApplicationTestAudio(t)
-	injectLoudnormStatsViaRun(t, testFile, loudnormCaptureTestJSON, nil)
+	t.Parallel()
 
-	measurement, err := measureWithLoudnorm(context.Background(), testFile, defaultNormalisationTestConfig(), "", nil)
+	testFile := generateLoudnormApplicationTestAudio(t)
+	deps := injectLoudnormStatsViaRun(t, testFile, loudnormCaptureTestJSON, nil)
+
+	measurement, err := measureWithLoudnorm(context.Background(), testFile, defaultNormalisationTestConfig(), "", nil, deps)
 	if err != nil {
 		t.Fatalf("measureWithLoudnorm() error = %v", err)
 	}
@@ -170,12 +177,14 @@ func TestMeasureWithLoudnormParsesStatsFile(t *testing.T) {
 }
 
 func TestMeasureWithLoudnormRejectsInvalidNumericField(t *testing.T) {
+	t.Parallel()
+
 	testFile := generateLoudnormApplicationTestAudio(t)
 
 	badJSON := strings.Replace(loudnormCaptureTestJSON, `"input_i":"-23.0"`, `"input_i":"not-a-number"`, 1)
-	injectLoudnormStatsViaRun(t, testFile, badJSON, nil)
+	deps := injectLoudnormStatsViaRun(t, testFile, badJSON, nil)
 
-	_, err := measureWithLoudnorm(context.Background(), testFile, defaultNormalisationTestConfig(), "", nil)
+	_, err := measureWithLoudnorm(context.Background(), testFile, defaultNormalisationTestConfig(), "", nil, deps)
 	if err == nil {
 		t.Fatal("measureWithLoudnorm() error = nil, want invalid numeric field error")
 	}
@@ -186,6 +195,8 @@ func TestMeasureWithLoudnormRejectsInvalidNumericField(t *testing.T) {
 }
 
 func TestMeasureWithLoudnormStatsFileYieldsFiniteMeasurement(t *testing.T) {
+	t.Parallel()
+
 	testFile := generateTestAudio(t, TestAudioOptions{
 		DurationSecs: 0.5,
 		SampleRate:   44100,
@@ -197,9 +208,9 @@ func TestMeasureWithLoudnormStatsFileYieldsFiniteMeasurement(t *testing.T) {
 		cleanupTestAudio(t, testFile)
 	})
 
-	injectLoudnormStatsViaRun(t, testFile, loudnormCaptureTestJSON, nil)
+	deps := injectLoudnormStatsViaRun(t, testFile, loudnormCaptureTestJSON, nil)
 
-	measurement, err := measureWithLoudnorm(context.Background(), testFile, defaultNormalisationTestConfig(), "", nil)
+	measurement, err := measureWithLoudnorm(context.Background(), testFile, defaultNormalisationTestConfig(), "", nil, deps)
 	if err != nil {
 		t.Fatalf("measureWithLoudnorm() error = %v", err)
 	}
@@ -223,8 +234,10 @@ func TestMeasureWithLoudnormStatsFileYieldsFiniteMeasurement(t *testing.T) {
 }
 
 func TestMeasureWithLoudnormProgressCadenceCapsAt099(t *testing.T) {
+	t.Parallel()
+
 	testFile := generateLoudnormApplicationTestAudio(t)
-	injectLoudnormStatsViaRun(t, testFile, loudnormCaptureTestJSON, func(config FrameLoopConfig) error {
+	deps := injectLoudnormStatsViaRun(t, testFile, loudnormCaptureTestJSON, func(config FrameLoopConfig) error {
 		frame := ffmpeg.AVFrameAlloc()
 		defer ffmpeg.AVFrameFree(&frame)
 		frame.SetNbSamples(44100)
@@ -238,7 +251,7 @@ func TestMeasureWithLoudnormProgressCadenceCapsAt099(t *testing.T) {
 	var events []loudnormProgressEvent
 	_, err := measureWithLoudnorm(context.Background(), testFile, defaultNormalisationTestConfig(), "", func(update ProgressUpdate) {
 		events = append(events, loudnormProgressEvent{pass: update.Pass, passName: update.PassName, progress: update.Progress})
-	})
+	}, deps)
 	if err != nil {
 		t.Fatalf("measureWithLoudnorm() error = %v", err)
 	}
@@ -269,32 +282,32 @@ func requireNoLoudnormStatsFiles(t *testing.T, inputPath string) {
 	}
 }
 
-// injectPass4StatsViaRun stubs the Pass 4 apply graph so the per-call
-// .loudnorm-*.tmp.json stats file holds the controlled body when
-// applyLoudnormAndMeasure reads it post-free. Setup returns a nil filter graph
-// (so the post-free AVFilterGraphFree writes nothing), the encoder is a no-op
-// fake, and the run hook drives one ebur128-metadata frame through OnFrame so
-// the output accumulators populate (non-nil finalMeasurements) before writing
-// body into the stats file. The caller still supplies a rename stub.
-func injectPass4StatsViaRun(t *testing.T, inputPath, body string) {
+// injectPass4StatsViaRun returns a loudnormDeps that stubs the Pass 4 apply
+// graph so the per-call .loudnorm-*.tmp.json stats file holds the controlled
+// body when applyLoudnormAndMeasure reads it post-free. Setup returns a nil
+// filter graph (so the post-free AVFilterGraphFree writes nothing), the encoder
+// is a no-op fake, and the run hook drives one ebur128-metadata frame through
+// OnFrame so the output accumulators populate (non-nil finalMeasurements)
+// before writing body into the stats file. The caller still supplies a rename
+// stub.
+func injectPass4StatsViaRun(t *testing.T, inputPath, body string) loudnormDeps {
 	t.Helper()
 
-	replaceApplyLoudnormSetupFilterGraph(t, func(
+	deps := defaultLoudnormDeps()
+	deps.setupFilterGraph = func(
 		*ffmpeg.AVCodecContext,
 		string,
 	) (*ffmpeg.AVFilterGraph, *ffmpeg.AVFilterContext, *ffmpeg.AVFilterContext, error) {
 		return nil, nil, nil, nil
-	})
-	replaceApplyLoudnormCreateEncoder(t, func(
+	}
+	deps.createEncoder = func(
 		string,
 		*audio.Metadata,
 		*ffmpeg.AVFilterContext,
 	) (loudnormOutputEncoder, error) {
 		return &loudnormTestEncoder{}, nil
-	})
-
-	oldRun := loudnormRunFilterGraph
-	loudnormRunFilterGraph = func(
+	}
+	deps.runFilterGraph = func(
 		_ context.Context,
 		_ *audio.Reader,
 		_, _ *ffmpeg.AVFilterContext,
@@ -308,9 +321,7 @@ func injectPass4StatsViaRun(t *testing.T, inputPath, body string) {
 		writeLoudnormStatsForInput(t, inputPath, body)
 		return nil
 	}
-	t.Cleanup(func() {
-		loudnormRunFilterGraph = oldRun
-	})
+	return deps
 }
 
 // newEbur128MetadataFrame allocates a frame whose metadata carries an ebur128
@@ -406,55 +417,6 @@ func writeLoudnormStatsForInput(t *testing.T, inputPath, body string) {
 	if err := os.WriteFile(matches[0], []byte(body), 0o600); err != nil {
 		t.Fatalf("write loudnorm stats file: %v", err)
 	}
-}
-
-func replaceApplyLoudnormSetupFilterGraph(
-	t *testing.T,
-	setup func(*ffmpeg.AVCodecContext, string) (*ffmpeg.AVFilterGraph, *ffmpeg.AVFilterContext, *ffmpeg.AVFilterContext, error),
-) {
-	t.Helper()
-
-	oldSetup := loudnormSetupFilterGraph
-	loudnormSetupFilterGraph = setup
-	t.Cleanup(func() {
-		loudnormSetupFilterGraph = oldSetup
-	})
-}
-
-func replaceApplyLoudnormCreateEncoder(
-	t *testing.T,
-	create func(string, *audio.Metadata, *ffmpeg.AVFilterContext) (loudnormOutputEncoder, error),
-) {
-	t.Helper()
-
-	oldCreate := loudnormCreateEncoder
-	loudnormCreateEncoder = create
-	t.Cleanup(func() {
-		loudnormCreateEncoder = oldCreate
-	})
-}
-
-func replaceApplyLoudnormRename(t *testing.T, rename func(string, string) error) {
-	t.Helper()
-
-	oldRename := loudnormRename
-	loudnormRename = rename
-	t.Cleanup(func() {
-		loudnormRename = oldRename
-	})
-}
-
-func replaceLoudnormRunFilterGraph(
-	t *testing.T,
-	run func(context.Context, *audio.Reader, *ffmpeg.AVFilterContext, *ffmpeg.AVFilterContext, FrameLoopConfig) error,
-) {
-	t.Helper()
-
-	oldRun := loudnormRunFilterGraph
-	loudnormRunFilterGraph = run
-	t.Cleanup(func() {
-		loudnormRunFilterGraph = oldRun
-	})
 }
 
 type loudnormTestEncoder struct {
@@ -586,6 +548,7 @@ func requireNoLoudnormTempFiles(t *testing.T, inputPath string) {
 func applyLoudnormTest(
 	t *testing.T,
 	inputPath string,
+	deps loudnormDeps,
 ) (*loudnormApplicationResult, error) {
 	t.Helper()
 
@@ -593,11 +556,13 @@ func applyLoudnormTest(
 		inputPath:   inputPath,
 		config:      loudnormApplicationTestConfig(),
 		measurement: loudnormApplicationTestMeasurement(),
-	}, nil)
+	}, nil, deps)
 }
 
 func TestApplyLoudnormAndMeasureReturnsOpenError(t *testing.T) {
-	_, err := applyLoudnormTest(t, "/does/not/exist.wav")
+	t.Parallel()
+
+	_, err := applyLoudnormTest(t, "/does/not/exist.wav", defaultLoudnormDeps())
 	if err == nil {
 		t.Fatal("applyLoudnormAndMeasure() error = nil, want open error")
 	}
@@ -607,17 +572,20 @@ func TestApplyLoudnormAndMeasureReturnsOpenError(t *testing.T) {
 }
 
 func TestApplyLoudnormAndMeasureSetupErrorRemovesTempAndStats(t *testing.T) {
+	t.Parallel()
+
 	testFile := generateLoudnormApplicationTestAudio(t)
 
 	setupErr := errors.New("injected setup failure")
-	replaceApplyLoudnormSetupFilterGraph(t, func(
+	deps := defaultLoudnormDeps()
+	deps.setupFilterGraph = func(
 		*ffmpeg.AVCodecContext,
 		string,
 	) (*ffmpeg.AVFilterGraph, *ffmpeg.AVFilterContext, *ffmpeg.AVFilterContext, error) {
 		return nil, nil, nil, setupErr
-	})
+	}
 
-	_, err := applyLoudnormTest(t, testFile)
+	_, err := applyLoudnormTest(t, testFile, deps)
 	if !errors.Is(err, setupErr) {
 		t.Fatalf("applyLoudnormAndMeasure() error = %v, want wrapped setup error", err)
 	}
@@ -629,11 +597,14 @@ func TestApplyLoudnormAndMeasureSetupErrorRemovesTempAndStats(t *testing.T) {
 }
 
 func TestApplyLoudnormAndMeasureEncoderCreationErrorRemovesTemp(t *testing.T) {
+	t.Parallel()
+
 	testFile := generateLoudnormApplicationTestAudio(t)
 
 	createErr := errors.New("injected encoder creation failure")
 	var tempPath string
-	replaceApplyLoudnormCreateEncoder(t, func(
+	deps := defaultLoudnormDeps()
+	deps.createEncoder = func(
 		outputPath string,
 		_ *audio.Metadata,
 		_ *ffmpeg.AVFilterContext,
@@ -641,9 +612,9 @@ func TestApplyLoudnormAndMeasureEncoderCreationErrorRemovesTemp(t *testing.T) {
 		tempPath = outputPath
 		requireLoudnormTempPath(t, testFile, outputPath)
 		return nil, createErr
-	})
+	}
 
-	_, err := applyLoudnormTest(t, testFile)
+	_, err := applyLoudnormTest(t, testFile, deps)
 	if !errors.Is(err, createErr) {
 		t.Fatalf("applyLoudnormAndMeasure() error = %v, want wrapped encoder creation error", err)
 	}
@@ -661,10 +632,13 @@ func TestApplyLoudnormAndMeasureEncoderCreationErrorRemovesTemp(t *testing.T) {
 }
 
 func TestApplyLoudnormAndMeasureLoopErrorRemovesTemp(t *testing.T) {
+	t.Parallel()
+
 	testFile := generateLoudnormApplicationTestAudio(t)
 	encoder := &loudnormTestEncoder{}
 	var tempPath string
-	replaceApplyLoudnormCreateEncoder(t, func(
+	deps := defaultLoudnormDeps()
+	deps.createEncoder = func(
 		outputPath string,
 		_ *audio.Metadata,
 		_ *ffmpeg.AVFilterContext,
@@ -672,11 +646,10 @@ func TestApplyLoudnormAndMeasureLoopErrorRemovesTemp(t *testing.T) {
 		tempPath = outputPath
 		requireLoudnormTempPath(t, testFile, outputPath)
 		return encoder, nil
-	})
+	}
 
 	runErr := errors.New("injected application loop failure")
-	oldRun := loudnormRunFilterGraph
-	loudnormRunFilterGraph = func(
+	deps.runFilterGraph = func(
 		_ context.Context,
 		reader *audio.Reader,
 		bufferSrcCtx, bufferSinkCtx *ffmpeg.AVFilterContext,
@@ -684,11 +657,8 @@ func TestApplyLoudnormAndMeasureLoopErrorRemovesTemp(t *testing.T) {
 	) error {
 		return runErr
 	}
-	t.Cleanup(func() {
-		loudnormRunFilterGraph = oldRun
-	})
 
-	_, err := applyLoudnormTest(t, testFile)
+	_, err := applyLoudnormTest(t, testFile, deps)
 	if !errors.Is(err, runErr) {
 		t.Fatalf("applyLoudnormAndMeasure() error = %v, want loop error", err)
 	}
@@ -706,12 +676,15 @@ func TestApplyLoudnormAndMeasureLoopErrorRemovesTemp(t *testing.T) {
 }
 
 func TestApplyLoudnormAndMeasureFlushErrorRemovesTemp(t *testing.T) {
+	t.Parallel()
+
 	testFile := generateLoudnormApplicationTestAudio(t)
 
 	flushErr := errors.New("injected flush failure")
 	encoder := &loudnormTestEncoder{flushErr: flushErr}
 	var tempPath string
-	replaceApplyLoudnormCreateEncoder(t, func(
+	deps := defaultLoudnormDeps()
+	deps.createEncoder = func(
 		outputPath string,
 		_ *audio.Metadata,
 		_ *ffmpeg.AVFilterContext,
@@ -719,10 +692,9 @@ func TestApplyLoudnormAndMeasureFlushErrorRemovesTemp(t *testing.T) {
 		tempPath = outputPath
 		requireLoudnormTempPath(t, testFile, outputPath)
 		return encoder, nil
-	})
+	}
 
-	oldRun := loudnormRunFilterGraph
-	loudnormRunFilterGraph = func(
+	deps.runFilterGraph = func(
 		_ context.Context,
 		reader *audio.Reader,
 		bufferSrcCtx, bufferSinkCtx *ffmpeg.AVFilterContext,
@@ -730,11 +702,8 @@ func TestApplyLoudnormAndMeasureFlushErrorRemovesTemp(t *testing.T) {
 	) error {
 		return nil
 	}
-	t.Cleanup(func() {
-		loudnormRunFilterGraph = oldRun
-	})
 
-	_, err := applyLoudnormTest(t, testFile)
+	_, err := applyLoudnormTest(t, testFile, deps)
 	if !errors.Is(err, flushErr) {
 		t.Fatalf("applyLoudnormAndMeasure() error = %v, want wrapped flush error", err)
 	}
@@ -755,12 +724,15 @@ func TestApplyLoudnormAndMeasureFlushErrorRemovesTemp(t *testing.T) {
 }
 
 func TestApplyLoudnormAndMeasureCloseErrorRemovesTemp(t *testing.T) {
+	t.Parallel()
+
 	testFile := generateLoudnormApplicationTestAudio(t)
 
 	closeErr := errors.New("injected close failure")
 	encoder := &loudnormTestEncoder{closeErr: closeErr}
 	var tempPath string
-	replaceApplyLoudnormCreateEncoder(t, func(
+	deps := defaultLoudnormDeps()
+	deps.createEncoder = func(
 		outputPath string,
 		_ *audio.Metadata,
 		_ *ffmpeg.AVFilterContext,
@@ -768,10 +740,9 @@ func TestApplyLoudnormAndMeasureCloseErrorRemovesTemp(t *testing.T) {
 		tempPath = outputPath
 		requireLoudnormTempPath(t, testFile, outputPath)
 		return encoder, nil
-	})
+	}
 
-	oldRun := loudnormRunFilterGraph
-	loudnormRunFilterGraph = func(
+	deps.runFilterGraph = func(
 		_ context.Context,
 		reader *audio.Reader,
 		bufferSrcCtx, bufferSinkCtx *ffmpeg.AVFilterContext,
@@ -779,11 +750,8 @@ func TestApplyLoudnormAndMeasureCloseErrorRemovesTemp(t *testing.T) {
 	) error {
 		return nil
 	}
-	t.Cleanup(func() {
-		loudnormRunFilterGraph = oldRun
-	})
 
-	_, err := applyLoudnormTest(t, testFile)
+	_, err := applyLoudnormTest(t, testFile, deps)
 	if !errors.Is(err, closeErr) {
 		t.Fatalf("applyLoudnormAndMeasure() error = %v, want wrapped close error", err)
 	}
@@ -804,18 +772,20 @@ func TestApplyLoudnormAndMeasureCloseErrorRemovesTemp(t *testing.T) {
 }
 
 func TestApplyLoudnormAndMeasureRenameErrorRemovesTemp(t *testing.T) {
+	t.Parallel()
+
 	testFile := generateLoudnormApplicationTestAudio(t)
 	encoder := &loudnormTestEncoder{}
-	replaceApplyLoudnormCreateEncoder(t, func(
+	deps := defaultLoudnormDeps()
+	deps.createEncoder = func(
 		string,
 		*audio.Metadata,
 		*ffmpeg.AVFilterContext,
 	) (loudnormOutputEncoder, error) {
 		return encoder, nil
-	})
+	}
 
-	oldRun := loudnormRunFilterGraph
-	loudnormRunFilterGraph = func(
+	deps.runFilterGraph = func(
 		_ context.Context,
 		reader *audio.Reader,
 		bufferSrcCtx, bufferSinkCtx *ffmpeg.AVFilterContext,
@@ -823,22 +793,19 @@ func TestApplyLoudnormAndMeasureRenameErrorRemovesTemp(t *testing.T) {
 	) error {
 		return nil
 	}
-	t.Cleanup(func() {
-		loudnormRunFilterGraph = oldRun
-	})
 
 	renameErr := errors.New("injected rename failure")
 	var tempPath string
-	replaceApplyLoudnormRename(t, func(oldPath, newPath string) error {
+	deps.rename = func(oldPath, newPath string) error {
 		tempPath = oldPath
 		requireLoudnormTempPath(t, testFile, oldPath)
 		if newPath != testFile {
 			t.Fatalf("rename target = %q, want %q", newPath, testFile)
 		}
 		return renameErr
-	})
+	}
 
-	_, err := applyLoudnormTest(t, testFile)
+	_, err := applyLoudnormTest(t, testFile, deps)
 	if !errors.Is(err, renameErr) {
 		t.Fatalf("applyLoudnormAndMeasure() error = %v, want wrapped rename error", err)
 	}
@@ -859,21 +826,23 @@ func TestApplyLoudnormAndMeasureRenameErrorRemovesTemp(t *testing.T) {
 }
 
 func TestApplyLoudnormAndMeasureSuccessParsesStatsFile(t *testing.T) {
+	t.Parallel()
+
 	testFile := generateLoudnormApplicationTestAudio(t)
 
 	// Write the fixture into the per-call stats file from the run hook (after
 	// graph setup, before the post-free readback), so applyLoudnormAndMeasure
 	// parses the controlled fixture as its Pass 4 LoudnormStats.
-	injectPass4StatsViaRun(t, testFile, loudnormCaptureTestJSON)
+	deps := injectPass4StatsViaRun(t, testFile, loudnormCaptureTestJSON)
 
 	var tempPath string
-	replaceApplyLoudnormRename(t, func(oldPath, newPath string) error {
+	deps.rename = func(oldPath, newPath string) error {
 		tempPath = oldPath
 		requireLoudnormTempPath(t, testFile, oldPath)
 		return os.Rename(oldPath, newPath)
-	})
+	}
 
-	result, err := applyLoudnormTest(t, testFile)
+	result, err := applyLoudnormTest(t, testFile, deps)
 	if err != nil {
 		t.Fatalf("applyLoudnormAndMeasure() error = %v", err)
 	}
@@ -911,18 +880,20 @@ func TestApplyLoudnormAndMeasureSuccessParsesStatsFile(t *testing.T) {
 }
 
 func TestApplyLoudnormAndMeasureMissingPass4StatsReturnsNilStatsWithoutError(t *testing.T) {
+	t.Parallel()
+
 	testFile := generateLoudnormApplicationTestAudio(t)
 
 	// Empty the per-call stats file so the post-free readback fails: nil stats,
 	// no error (the report's Norm Type diagnostic is omitted).
-	injectPass4StatsViaRun(t, testFile, "")
+	deps := injectPass4StatsViaRun(t, testFile, "")
 
-	replaceApplyLoudnormRename(t, func(oldPath, newPath string) error {
+	deps.rename = func(oldPath, newPath string) error {
 		requireLoudnormTempPath(t, testFile, oldPath)
 		return os.Rename(oldPath, newPath)
-	})
+	}
 
-	result, err := applyLoudnormTest(t, testFile)
+	result, err := applyLoudnormTest(t, testFile, deps)
 	if err != nil {
 		t.Fatalf("applyLoudnormAndMeasure() error = %v", err)
 	}
@@ -940,17 +911,19 @@ func TestApplyLoudnormAndMeasureMissingPass4StatsReturnsNilStatsWithoutError(t *
 }
 
 func TestApplyLoudnormAndMeasureMalformedPass4StatsReturnsNilStatsWithoutError(t *testing.T) {
+	t.Parallel()
+
 	testFile := generateLoudnormApplicationTestAudio(t)
 
 	// Malformed stats so the post-free readback fails to parse: nil stats, no error.
-	injectPass4StatsViaRun(t, testFile, "{not-json}")
+	deps := injectPass4StatsViaRun(t, testFile, "{not-json}")
 
-	replaceApplyLoudnormRename(t, func(oldPath, newPath string) error {
+	deps.rename = func(oldPath, newPath string) error {
 		requireLoudnormTempPath(t, testFile, oldPath)
 		return os.Rename(oldPath, newPath)
-	})
+	}
 
-	result, err := applyLoudnormTest(t, testFile)
+	result, err := applyLoudnormTest(t, testFile, deps)
 	if err != nil {
 		t.Fatalf("applyLoudnormAndMeasure() error = %v", err)
 	}
@@ -968,26 +941,29 @@ func TestApplyLoudnormAndMeasureMalformedPass4StatsReturnsNilStatsWithoutError(t
 }
 
 func TestApplyNormalisationProgressCadenceGuard(t *testing.T) {
+	t.Parallel()
+
 	testFile := generateLoudnormApplicationTestAudio(t)
-	replaceApplyLoudnormSetupFilterGraph(t, func(
+	deps := defaultLoudnormDeps()
+	deps.setupFilterGraph = func(
 		*ffmpeg.AVCodecContext,
 		string,
 	) (*ffmpeg.AVFilterGraph, *ffmpeg.AVFilterContext, *ffmpeg.AVFilterContext, error) {
 		return nil, nil, nil, nil
-	})
-	replaceApplyLoudnormCreateEncoder(t, func(
+	}
+	deps.createEncoder = func(
 		string,
 		*audio.Metadata,
 		*ffmpeg.AVFilterContext,
 	) (loudnormOutputEncoder, error) {
 		return &loudnormTestEncoder{}, nil
-	})
-	replaceApplyLoudnormRename(t, func(oldPath, _ string) error {
+	}
+	deps.rename = func(oldPath, _ string) error {
 		return os.Remove(oldPath)
-	})
+	}
 
 	var runCalls int
-	replaceLoudnormRunFilterGraph(t, func(
+	deps.runFilterGraph = func(
 		_ context.Context,
 		_ *audio.Reader,
 		_, _ *ffmpeg.AVFilterContext,
@@ -1010,10 +986,10 @@ func TestApplyNormalisationProgressCadenceGuard(t *testing.T) {
 		// file; feed the fixture so the Pass 3 measurement parse succeeds.
 		writeLoudnormStatsForInput(t, testFile, loudnormCaptureTestJSON)
 		return nil
-	})
+	}
 
 	var events []loudnormProgressEvent
-	_, err := ApplyNormalisation(
+	_, err := applyNormalisationWithDeps(
 		context.Background(),
 		testFile,
 		defaultNormalisationTestConfig(),
@@ -1023,6 +999,7 @@ func TestApplyNormalisationProgressCadenceGuard(t *testing.T) {
 			events = append(events, loudnormProgressEvent{pass: update.Pass, passName: update.PassName, progress: update.Progress})
 		},
 		nil,
+		deps,
 	)
 	if err != nil {
 		t.Fatalf("ApplyNormalisation() error = %v", err)

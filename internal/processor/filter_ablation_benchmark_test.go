@@ -972,7 +972,7 @@ func setupFullbenchLoudnormMeasurement(tb testing.TB, seed *fullbenchPass2Seed) 
 
 	config := *seed.Config
 	limiter := planLimiterForLoudnorm(seed.OutputMeasurements, &config)
-	measurement, err := measureWithLoudnorm(context.Background(), seed.OutputPath, &config, limiter.pass3Prefix, nil)
+	measurement, err := measureWithLoudnorm(context.Background(), seed.OutputPath, &config, limiter.pass3Prefix, nil, defaultLoudnormDeps())
 	if err != nil {
 		tb.Fatalf("failed to prepare fullbench loudnorm measurement: %v", err)
 	}

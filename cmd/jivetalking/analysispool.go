@@ -12,8 +12,7 @@ import (
 
 // analysisPoolAnalyze is the analysis-only entry point, a package var so tests
 // can substitute a fake to observe concurrency without running real FFmpeg. It
-// defaults to the real processor call, mirroring the poolProcessAudio seam in
-// cmd/jivetalking/pool.go.
+// defaults to the real processor call.
 var analysisPoolAnalyze = processor.AnalyzeOnlyDetailed
 
 // runAnalysisPool analyses files concurrently under a bounded worker pool

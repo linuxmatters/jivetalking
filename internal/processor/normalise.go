@@ -137,14 +137,28 @@ func parseLoudnormStatsFile(path string) (*LoudnormStats, error) {
 	return &stats, nil
 }
 
-var (
-	loudnormRunFilterGraph   = runFilterGraph
-	loudnormSetupFilterGraph = setupFilterGraph
-	loudnormCreateEncoder    = func(outputPath string, metadata *audio.Metadata, bufferSinkCtx *ffmpeg.AVFilterContext) (loudnormOutputEncoder, error) {
-		return createOutputEncoder(outputPath, metadata, bufferSinkCtx)
+// loudnormDeps injects the loudnorm passes' FFmpeg-touching collaborators
+// (graph setup, frame loop, encoder construction, output rename) so tests can
+// substitute fakes without mutating package state, following the
+// analysisOnlyDeps pattern in cmd/jivetalking/main.go. Production callers use
+// defaultLoudnormDeps().
+type loudnormDeps struct {
+	runFilterGraph   func(context.Context, *audio.Reader, *ffmpeg.AVFilterContext, *ffmpeg.AVFilterContext, FrameLoopConfig) error
+	setupFilterGraph func(*ffmpeg.AVCodecContext, string) (*ffmpeg.AVFilterGraph, *ffmpeg.AVFilterContext, *ffmpeg.AVFilterContext, error)
+	createEncoder    func(string, *audio.Metadata, *ffmpeg.AVFilterContext) (loudnormOutputEncoder, error)
+	rename           func(oldpath, newpath string) error
+}
+
+func defaultLoudnormDeps() loudnormDeps {
+	return loudnormDeps{
+		runFilterGraph:   runFilterGraph,
+		setupFilterGraph: setupFilterGraph,
+		createEncoder: func(outputPath string, metadata *audio.Metadata, bufferSinkCtx *ffmpeg.AVFilterContext) (loudnormOutputEncoder, error) {
+			return createOutputEncoder(outputPath, metadata, bufferSinkCtx)
+		},
+		rename: os.Rename,
 	}
-	loudnormRename = os.Rename
-)
+}
 
 type loudnormOutputEncoder interface {
 	WriteFrame(*ffmpeg.AVFrame) error
@@ -177,11 +191,12 @@ type LoudnormMeasurement struct {
 //   - filterPrefix: Optional filter chain to prepend before loudnorm (e.g. volume+alimiter);
 //     empty string preserves existing behaviour
 //   - progressCallback: Optional progress updates (pass 3)
+//   - deps: Injected collaborators (defaultLoudnormDeps() in production)
 //
 // Returns:
 //   - measurement: Loudnorm measurements for second pass
 //   - err: Error if measurement failed
-func measureWithLoudnorm(ctx context.Context, inputPath string, config *EffectiveFilterConfig, filterPrefix string, progressCallback ProgressCallback) (*LoudnormMeasurement, error) {
+func measureWithLoudnorm(ctx context.Context, inputPath string, config *EffectiveFilterConfig, filterPrefix string, progressCallback ProgressCallback, deps loudnormDeps) (*LoudnormMeasurement, error) {
 	// Open input file
 	reader, metadata, err := audio.OpenAudioFile(inputPath)
 	if err != nil {
@@ -226,7 +241,7 @@ func measureWithLoudnorm(ctx context.Context, inputPath string, config *Effectiv
 	}
 
 	// Create filter graph
-	filterGraph, bufferSrcCtx, bufferSinkCtx, err := loudnormSetupFilterGraph(
+	filterGraph, bufferSrcCtx, bufferSinkCtx, err := deps.setupFilterGraph(
 		reader.GetDecoderContext(),
 		filterSpec,
 	)
@@ -237,7 +252,7 @@ func measureWithLoudnorm(ctx context.Context, inputPath string, config *Effectiv
 
 	// Process all frames through loudnorm (no encoding - just measurement)
 	lenientHandler := func(err error) error { return nil }
-	loopErr := loudnormRunFilterGraph(ctx, reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
+	loopErr := deps.runFilterGraph(ctx, reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
 		OnPushError: lenientHandler,
 		OnPullError: lenientHandler,
 		OnInputFrame: func(inputFrame *ffmpeg.AVFrame) {
@@ -653,6 +668,21 @@ func ApplyNormalisation(
 	progressCallback ProgressCallback,
 	log debugLogger,
 ) (*NormalisationResult, error) {
+	return applyNormalisationWithDeps(ctx, inputPath, config, outputMeasurements, inputMeasurements, progressCallback, log, defaultLoudnormDeps())
+}
+
+// applyNormalisationWithDeps drives the normalisation passes with injected
+// dependencies for testing; ApplyNormalisation supplies the production set.
+func applyNormalisationWithDeps(
+	ctx context.Context,
+	inputPath string,
+	config *EffectiveFilterConfig,
+	outputMeasurements *OutputMeasurements,
+	inputMeasurements *AudioMeasurements,
+	progressCallback ProgressCallback,
+	log debugLogger,
+	deps loudnormDeps,
+) (*NormalisationResult, error) {
 	loudnorm := config.Loudnorm
 	if !loudnorm.Enabled {
 		return &NormalisationResult{Skipped: true}, nil
@@ -675,7 +705,7 @@ func ApplyNormalisation(
 	// Pass 3: Run loudnorm measurement pass on Pass 2 output.
 	// When a prefix is active, loudnorm measures the post-limiter signal,
 	// so its InputI/InputTP already reflect pre-gain and limiting.
-	measurement, err := measureWithLoudnorm(ctx, inputPath, config, limiter.pass3Prefix, progressCallback)
+	measurement, err := measureWithLoudnorm(ctx, inputPath, config, limiter.pass3Prefix, progressCallback, deps)
 	if err != nil {
 		return nil, fmt.Errorf("loudnorm measurement pass failed: %w", err)
 	}
@@ -746,7 +776,7 @@ func ApplyNormalisation(
 		inputMeasurements: inputMeasurements,
 		limiter:           limiter,
 		progress:          progressCallback,
-	}, log)
+	}, log, deps)
 	if err != nil {
 		return nil, fmt.Errorf("loudnorm application failed: %w", err)
 	}
@@ -807,8 +837,8 @@ func ApplyNormalisation(
 //
 // Returns the measured integrated loudness, true peak, full output measurements,
 // and loudnorm diagnostic stats.
-func applyLoudnormAndMeasure(ctx context.Context, request loudnormApplicationRequest, log debugLogger) (*loudnormApplicationResult, error) {
-	prep, err := prepareLoudnormApplication(ctx, request)
+func applyLoudnormAndMeasure(ctx context.Context, request loudnormApplicationRequest, log debugLogger, deps loudnormDeps) (*loudnormApplicationResult, error) {
+	prep, err := prepareLoudnormApplication(ctx, request, deps)
 	if err != nil {
 		return nil, err
 	}
@@ -832,7 +862,7 @@ func applyLoudnormAndMeasure(ctx context.Context, request loudnormApplicationReq
 		return stats
 	}
 
-	execution, err := executeAndPublishLoudnormApplication(ctx, prep, request, freeGraphAndReadStats, removeTemp)
+	execution, err := executeAndPublishLoudnormApplication(ctx, prep, request, freeGraphAndReadStats, removeTemp, deps)
 	if err != nil {
 		return &loudnormApplicationResult{loudnormStats: execution.loudnormStats}, err
 	}
@@ -842,7 +872,7 @@ func applyLoudnormAndMeasure(ctx context.Context, request loudnormApplicationReq
 	return finalizeLoudnormApplicationResult(ctx, request, execution, stats, log), nil
 }
 
-func prepareLoudnormApplication(ctx context.Context, request loudnormApplicationRequest) (*loudnormApplicationPreparation, error) {
+func prepareLoudnormApplication(ctx context.Context, request loudnormApplicationRequest, deps loudnormDeps) (*loudnormApplicationPreparation, error) {
 	// Abort before opening the input and allocating a filter graph if cancelled.
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -881,7 +911,7 @@ func prepareLoudnormApplication(ctx context.Context, request loudnormApplication
 		metadata.SampleRate,
 		statsPath,
 	)
-	filterGraph, bufferSrcCtx, bufferSinkCtx, err := loudnormSetupFilterGraph(
+	filterGraph, bufferSrcCtx, bufferSinkCtx, err := deps.setupFilterGraph(
 		reader.GetDecoderContext(),
 		filterSpec,
 	)
@@ -909,11 +939,12 @@ func executeAndPublishLoudnormApplication(
 	request loudnormApplicationRequest,
 	captureGraphStats func() *LoudnormStats,
 	removeTemp func(),
+	deps loudnormDeps,
 ) (*loudnormApplicationExecutionResult, error) {
 	result := &loudnormApplicationExecutionResult{}
 
 	// Create output encoder (same format as input)
-	encoder, err := loudnormCreateEncoder(prep.tempPath, prep.metadata, prep.bufferSinkCtx)
+	encoder, err := deps.createEncoder(prep.tempPath, prep.metadata, prep.bufferSinkCtx)
 	if err != nil {
 		result.loudnormStats = captureGraphStats()
 		removeTemp()
@@ -935,7 +966,7 @@ func executeAndPublishLoudnormApplication(
 	const progressUpdateInterval = 100 // Send progress update every N frames
 
 	lenientHandler := func(err error) error { return nil }
-	loopErr := loudnormRunFilterGraph(ctx, prep.reader, prep.bufferSrcCtx, prep.bufferSinkCtx, FrameLoopConfig{
+	loopErr := deps.runFilterGraph(ctx, prep.reader, prep.bufferSrcCtx, prep.bufferSinkCtx, FrameLoopConfig{
 		OnPushError: lenientHandler,
 		OnPullError: lenientHandler,
 		OnInputFrame: func(inputFrame *ffmpeg.AVFrame) {
@@ -999,7 +1030,7 @@ func executeAndPublishLoudnormApplication(
 	}
 
 	// Atomic rename: temp file → original file (in-place update)
-	if err := loudnormRename(prep.tempPath, request.inputPath); err != nil {
+	if err := deps.rename(prep.tempPath, request.inputPath); err != nil {
 		result.loudnormStats = captureGraphStats()
 		removeTemp()
 		return result, fmt.Errorf("failed to rename output: %w", err)
