@@ -14,47 +14,21 @@ Your files emerge at -16 LUFS, a common podcast target, with room rumble, backgr
 
 ---
 
-## The Four-Pass Pipeline
-
-Jivetalking treats audio processing as measurement science, not guesswork. It analyses your recording first, then adapts every filter to match. A dark-voiced narrator gets gentler de-essing, pre-compressed audio gets lighter compression, and a noisy home office gets different treatment than a clean studio.
-
-Four passes carry a raw recording to a broadcast-ready master:
-
-1. **Analyse:** measure loudness, noise floor, and speech; detect the room tone.
-2. **Process:** run the adapted filter chain.
-3. **Measure:** read the processed signal back so normalisation has accurate numbers.
-4. **Normalise:** set the final loudness to -16 LUFS / -1 dBTP.
-
-The Pass 2 filter chain, each stage handing the next a cleaner signal:
-
-```text
-downmix → rumble high-pass → band-limit low-pass → noise reduction → speech gate → levelling compressor → de-esser → analysis → resample
-```
-
-For the full walkthrough, see **[docs/Pipeline.md](docs/Pipeline.md)**: what each stage does, why it sits where it does, how the adaptive tuning works, and how normalisation reaches -16 LUFS honestly, with a diagram.
-
----
-
-## Quality Ratings
-
-When a file finishes, the completion box shows two star ratings:
+## The Typical Workflow
 
 ```
-Recording   ★★☆☆☆  Fair
-Processed   ★★★★★  Excellent
+Record → Process → Edit → Finalise
+  │         │         │         │
+  │         │         │         └─ Export at -16 LUFS (dual-mono)
+  │         │         │
+  │         │         └─ Import to Audacity, top/tail, mix to mono
+  │         │
+  │         └─ $ jivetalking *.flac (-16 LUFS, matched levels)
+  │
+  └─ Each presenter records separately, exports FLAC
 ```
 
-**Recording** grades your source capture, the raw audio you fed in. This is the one that varies, and the one you can act on. **Processed** grades the output against the -16 LUFS broadcast target, and it is usually five stars, because hitting that target is jivetalking's job and it reliably does. Side by side, the pair tells the story: we took your two-star capture to a five-star master.
-
-The Recording score looks at three things, in plain terms:
-
-- **Clean:** low background hiss and a healthy gap between your voice and the room
-- **Headroom:** no clipping; a capture recorded too hot scores zero here
-- **Level:** recorded at a sensible loudness, without wild swings
-
-Scores run 1 to 5 stars (Poor, Fair, Good, Great, Excellent). The scale is grounded on a real podcast corpus, so the stars mean something rather than being plucked from the air.
-
-A low Recording star is a hint to improve the capture next time: record in a quieter room, back the gain off so peaks do not clip, and get the level up if it is too quiet. Either way, jivetalking still rescues the file to a broadcast-ready master.
+**Include 10-15 seconds of room tone somewhere in your recording.** Just sit quietly and let the room breathe - at the start, between sections, or at the end. Jivetalking scans the entire file to find the cleanest room-tone section for building a noise profile, which calibrates the adaptive gate and highpass in Pass 2. The `anlmdn → afftdn` noise reduction runs regardless, so recordings without a clean room-tone section are still denoised.
 
 ---
 
@@ -93,6 +67,35 @@ mv jivetalking-darwin-amd64 ~/.local/bin/jivetalking
 chmod +x jivetalking-darwin-arm64
 mv jivetalking-darwin-arm64 ~/.local/bin/jivetalking
 ```
+
+---
+
+## The Four-Pass Pipeline
+
+Jivetalking treats audio processing as measurement science, not guesswork. It analyses your recording first, then adapts every filter to match. A dark-voiced narrator gets gentler de-essing, pre-compressed audio gets lighter compression, and a noisy home office gets different treatment than a clean studio.
+
+Four passes carry a raw recording to a broadcast-ready master:
+
+1. **Analyse:** measure loudness, noise floor, and speech; detect the room tone.
+2. **Process:** run the adapted filter chain.
+3. **Measure:** read the processed signal back so normalisation has accurate numbers.
+4. **Normalise:** set the final loudness to -16 LUFS / -1 dBTP.
+
+The Pass 2 filter chain, each stage handing the next a cleaner signal:
+
+```text
+downmix → rumble high-pass → band-limit low-pass → noise reduction → speech gate → levelling compressor → de-esser → analysis → resample
+```
+
+For the full walkthrough, see **[docs/Pipeline.md](docs/Pipeline.md)**: what each stage does, why it sits where it does, how the adaptive tuning works, and how normalisation reaches -16 LUFS honestly, with a diagram.
+
+---
+
+## Quality Ratings
+
+When a file finishes, the completion box shows two star ratings: **Recording** (your source capture, the one that varies) and **Processed** (the output against the -16 LUFS target, almost always five stars). The pair tells the story: a two-star capture taken to a five-star master.
+
+See **[docs/Usage.md](docs/Usage.md#quality-ratings)** for the three axes behind the Recording score and what a low star is telling you to fix.
 
 ---
 
@@ -152,60 +155,15 @@ jivetalking -a --room-tone-scan-duration=2m30s presenter1.flac
 
 ### Diagnostics
 
-`--diagnostics` writes extra artefacts beside the report for sweeps and before/after comparison. It changes no DSP, so the processed audio is byte-identical with the flag on or off; it only adds FFmpeg passes to render the extras. The flag emits:
+`--diagnostics` writes before/after spectrogram PNGs and `.intervals.jsonl` / `.candidates.jsonl` sidecars beside the report, for sweeps and side-by-side comparison. It changes no DSP, so the processed audio is byte-identical with the flag on or off.
 
-- **Before/after spectrogram PNGs**, named `<name>-LUFS-NN-processed.spectrogram-<kind>-<stage>.png`. `<kind>` is `whole`, `roomtone`, or `speech`; `<stage>` is `before` or `after`. Each before/after pair shares identical dimensions and scales for an honest side-by-side. Analysis-only emits `input` spectrograms (no "after"). The Markdown report links them in a `## Spectrograms` section.
-- **Interval sidecars** `<name>.intervals.jsonl` and `<name>.candidates.jsonl`, the raw 250 ms interval samples and scored room-tone candidates. The report's inline summaries cover the common case, so these are only needed for deep analysis.
+See **[docs/Usage.md](docs/Usage.md#diagnostics)** for the spectrogram naming scheme and sidecar formats.
 
 ### Analysis-Only Mode
 
-Pass `-a` to run only Pass 1 analysis. It writes a Markdown analysis report (`<input>-analysis.md`) next to each input and shows the Recording stars plus gain advice on screen, without producing any processed audio. Useful for quickly understanding what jivetalking sees in your recordings, diagnosing setup problems, or checking whether a file needs processing at all.
+Pass `-a` to run Pass 1 only. It writes `<input>-analysis.md` next to each input and shows the Recording stars plus a one-line gain verdict on screen, without producing any audio. Useful for checking a capture before you commit to a take.
 
-The analysis report covers:
-
-- **Loudness & dynamics**: integrated LUFS, true peak, loudness range, crest factor
-- **Room tone & speech detection**: candidate regions scored and elected for noise profiling and speech-aware metrics; voice-activated recording detected automatically (Riverside, Zencastr)
-- **Derived measurements**: noise floor, gate baseline, noise-to-speech headroom
-- **Filter adaptation**: the exact parameters jivetalking would apply, including highpass frequency, gate threshold, NR settings, de-esser intensity, and levelling-compressor configuration
-- **Spectral summary**: full spectral characterisation with objective metric definitions
-
-#### Gain advice
-
-Analysis mode is the place to fix your capture before you commit to a take. Alongside the Recording stars, each file gets a single-line verdict and a five-cell thermometer bar that fills with your input true peak, running cyan (quiet) through green (well set) to red (clipping):
-
-```
-Recording  ★★☆☆☆  Fair
-Gain       ▰▱▱▱▱  Quiet. Peaks at -14.2 ㏈TP. Raise input gain ~8 ㏈.
-```
-
-The verdict reads `Interpretation. Level. Advice.` and keys off the input true peak alone, with a target of -6 ㏈TP:
-
-| State | Input true peak | Advice |
-|-------|-----------------|--------|
-| **Clipping** | ≥ 0 ㏈TP | Lower input gain by the stated amount |
-| **Hot** | -1 to 0 ㏈TP | Lower input gain by the stated amount |
-| **Well set** | -12 to -1 ㏈TP | No action required |
-| **Quiet** | < -12 ㏈TP | Raise input gain by the stated amount |
-
-The stars and the gain advice are console-only: the Markdown report stays empirical and verdict-free.
-
----
-
-## The Typical Workflow
-
-```
-Record → Process → Edit → Finalise
-  │         │         │         │
-  │         │         │         └─ Export at -16 LUFS (dual-mono)
-  │         │         │
-  │         │         └─ Import to Audacity, top/tail, mix to mono
-  │         │
-  │         └─ $ jivetalking *.flac (-16 LUFS, matched levels)
-  │
-  └─ Each presenter records separately, exports FLAC
-```
-
-**Include 10-15 seconds of room tone somewhere in your recording.** Just sit quietly and let the room breathe - at the start, between sections, or at the end. Jivetalking scans the entire file to find the cleanest room-tone section for building a noise profile, which calibrates the adaptive gate and highpass in Pass 2. The `anlmdn → afftdn` noise reduction runs regardless, so recordings without a clean room-tone section are still denoised.
+See **[docs/Usage.md](docs/Usage.md#analysis-only-mode)** for what the report covers and how to read the gain-advice thermometer.
 
 ---
 
@@ -237,6 +195,7 @@ The full source layout, architecture, and contribution standards live in [AGENTS
 
 ### Design Documentation
 
+- [Usage Guide](docs/Usage.md): driving Jivetalking in depth, quality ratings, analysis-only mode, and diagnostics
 - [Audio Pipeline](docs/Pipeline.md): how and why the processing pipeline is built and tuned, with a diagram
 - [The hardware that taught me](docs/Inspiration.md): the influences and heritage behind jivetalking's processing approach
 - [Spectral Metrics Reference](docs/Spectral-Metrics-Reference.md): how measurements drive adaptation
