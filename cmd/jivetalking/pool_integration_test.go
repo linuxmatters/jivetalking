@@ -124,7 +124,8 @@ func TestRunWorkerPool_ConcurrentRaceClean(t *testing.T) {
 
 	// jobs == 2 so both workers run concurrently, forcing concurrent p.Send,
 	// sink writes, and CloneForWorker calls.
-	go runWorkerPool(context.Background(), p, files, base, sharedLog, 2, false, reportWarnings)
+	env := poolEnv{ctx: context.Background(), p: p, files: files, base: base, sharedLog: sharedLog, jobs: 2}
+	go runWorkerPool(env, false, reportWarnings, defaultWorkerPoolDeps())
 
 	if _, err := p.Run(); err != nil {
 		t.Fatalf("p.Run() error = %v", err)
@@ -246,9 +247,10 @@ func TestRunWorkerPool_CancellationNoTempResidue(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	reportWarnings := make(chan string, copies)
 
+	env := poolEnv{ctx: ctx, p: p, files: files, base: base, sharedLog: sharedLog, jobs: 2}
 	poolDone := make(chan struct{})
 	go func() {
-		runWorkerPool(ctx, p, files, base, sharedLog, 2, false, reportWarnings)
+		runWorkerPool(env, false, reportWarnings, defaultWorkerPoolDeps())
 		close(poolDone)
 	}()
 

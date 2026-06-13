@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/linuxmatters/jivetalking/internal/audio"
 	"github.com/linuxmatters/jivetalking/internal/processor"
 )
 
@@ -49,32 +48,31 @@ func TestRunAnalysisPool_CancellationAbortsPromptly(t *testing.T) {
 	entered := make(chan struct{}, n)
 	gate := make(chan struct{})
 
-	installAnalysisFake(t, func(ctx context.Context, _ string, _ *processor.BaseFilterConfig, _ processor.ProgressCallback) (*processor.AnalysisResult, error) {
+	analyse := func(ctx context.Context, _ string, _ *processor.BaseFilterConfig, _ processor.ProgressCallback) (*processor.AnalysisResult, error) {
 		started.Add(1)
 		entered <- struct{}{}
 		// Hold the semaphore slot until the gate opens so queued workers cannot
 		// acquire a freed slot during the skip assertion. Blocking on the gate
 		// alone (not ctx.Done()) keeps the slots occupied while ctx is cancelled,
 		// making the queued workers' skip deterministic. The in-flight ctx abort
-		// is the production analysisPoolAnalyse's job and is covered separately by
+		// is the production analyse seam's job and is covered separately by
 		// the seam returning context.Canceled; here the gate stands in so the slot
 		// stays held across the assertion.
 		<-gate
 		return nil, ctx.Err()
-	})
+	}
 
 	files := makeAnalysisFiles(t, n)
-	results := make([]*processor.AnalysisResult, len(files))
-	metas := make([]*audio.Metadata, len(files))
-	errs := make([]error, len(files))
+	slots := make([]analysisSlot, len(files))
 	base := processor.DefaultFilterConfig()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	env := poolEnv{ctx: ctx, p: nil, files: files, base: base, sharedLog: func(string, ...any) {}, jobs: jobs}
 	done := make(chan struct{})
 	go func() {
-		runAnalysisPool(ctx, nil, files, base, func(string, ...any) {}, jobs, results, metas, errs, stubOpenMetadata(t))
+		runAnalysisPool(env, slots, poolDepsWithAnalyse(t, analyse))
 		close(done)
 	}()
 
@@ -140,10 +138,6 @@ func TestRunAnalysisPool_ConcurrentRaceClean(t *testing.T) {
 		t.Skipf("testdata audio not found: %s", src)
 	}
 
-	// Pin the seam to the REAL analyse path. installAnalysisFake save/restores it,
-	// so a parallel seam-swapping test cannot leak its fake into this run.
-	installAnalysisFake(t, processor.AnalyseOnlyDetailed)
-
 	ext := filepath.Ext(src)
 	dir := t.TempDir()
 	files := []string{
@@ -164,24 +158,23 @@ func TestRunAnalysisPool_ConcurrentRaceClean(t *testing.T) {
 	base := processor.DefaultFilterConfig()
 	base.SetLogger(sharedLog)
 
-	results := make([]*processor.AnalysisResult, len(files))
-	metas := make([]*audio.Metadata, len(files))
-	errs := make([]error, len(files))
+	slots := make([]analysisSlot, len(files))
 
 	// jobs == len(files) so both real analyses run concurrently, forcing
 	// concurrent sink writes, CloneForWorker calls, and slot writes. p == nil so
-	// no real terminal is needed. openAudioMetadata is the production opener used
-	// by defaultAnalysisOnlyDeps.
-	runAnalysisPool(context.Background(), nil, files, base, sharedLog, len(files), results, metas, errs, openAudioMetadata)
+	// no real terminal is needed. The deps inject the REAL analyse path and the
+	// production openAudioMetadata opener used by defaultAnalysisPoolDeps.
+	env := poolEnv{ctx: context.Background(), p: nil, files: files, base: base, sharedLog: sharedLog, jobs: len(files)}
+	runAnalysisPool(env, slots, analysisPoolDeps{analyse: processor.AnalyseOnlyDetailed, openMetadata: openAudioMetadata})
 
 	for i := range files {
-		if errs[i] != nil {
-			t.Fatalf("errs[%d] = %v, want nil", i, errs[i])
+		if slots[i].err != nil {
+			t.Fatalf("errs[%d] = %v, want nil", i, slots[i].err)
 		}
-		if results[i] == nil {
+		if slots[i].result == nil {
 			t.Fatalf("results[%d] = nil, want populated", i)
 		}
-		if metas[i] == nil {
+		if slots[i].meta == nil {
 			t.Fatalf("metas[%d] = nil, want populated", i)
 		}
 	}
