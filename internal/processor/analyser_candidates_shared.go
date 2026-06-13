@@ -74,7 +74,7 @@ func getIntervalsInRange(intervals []IntervalSample, start, end time.Duration) [
 	}
 
 	// Find first interval at or after start time using binary search
-	// (intervals are sorted by timestamp from the collection loop in AnalyzeAudio)
+	// (intervals are sorted by timestamp from the collection loop in AnalyseAudio)
 	startIdx, _ := slices.BinarySearchFunc(intervals, start, func(iv IntervalSample, target time.Duration) int {
 		return cmp.Compare(iv.Timestamp, target)
 	})

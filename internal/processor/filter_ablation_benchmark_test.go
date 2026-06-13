@@ -915,7 +915,7 @@ func setupFullbenchAdaptedConfig(tb testing.TB, inputPath string) *fullbenchAdap
 	tb.Helper()
 
 	config := DefaultFilterConfig()
-	analysisResult, err := AnalyzeOnlyDetailed(context.Background(), inputPath, config, nil)
+	analysisResult, err := AnalyseOnlyDetailed(context.Background(), inputPath, config, nil)
 	if err != nil {
 		tb.Fatalf("failed to prepare fullbench adapted config: %v", err)
 	}

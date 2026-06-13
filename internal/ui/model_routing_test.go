@@ -24,8 +24,8 @@ func TestProgressMsgIndexRouting(t *testing.T) {
 	if m.Files[0].CurrentPass != processor.PassAnalysis {
 		t.Errorf("Files[0].CurrentPass = %v, want PassAnalysis", m.Files[0].CurrentPass)
 	}
-	if m.Files[0].Status != StatusAnalyzing {
-		t.Errorf("Files[0].Status = %v, want StatusAnalyzing", m.Files[0].Status)
+	if m.Files[0].Status != StatusAnalysing {
+		t.Errorf("Files[0].Status = %v, want StatusAnalysing", m.Files[0].Status)
 	}
 
 	if m.Files[1].Progress != 0.75 {

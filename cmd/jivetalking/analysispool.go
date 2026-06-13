@@ -10,10 +10,10 @@ import (
 	"github.com/linuxmatters/jivetalking/internal/ui"
 )
 
-// analysisPoolAnalyze is the analysis-only entry point, a package var so tests
+// analysisPoolAnalyse is the analysis-only entry point, a package var so tests
 // can substitute a fake to observe concurrency without running real FFmpeg. It
 // defaults to the real processor call.
-var analysisPoolAnalyze = processor.AnalyzeOnlyDetailed
+var analysisPoolAnalyse = processor.AnalyseOnlyDetailed
 
 // runAnalysisPool analyses files concurrently under a bounded worker pool
 // sharing one tea.Program. A buffered semaphore of size jobs caps in-flight
@@ -31,7 +31,7 @@ var analysisPoolAnalyze = processor.AnalyzeOnlyDetailed
 //
 // On cancellation a not-yet-started worker skips its work via the ctx.Done()
 // select at acquire, while an in-flight worker aborts mid-frame because ctx is
-// threaded into AnalyzeOnlyDetailed. Either way wg.Done() fires so wg.Wait()
+// threaded into AnalyseOnlyDetailed. Either way wg.Done() fires so wg.Wait()
 // returns and ui.AllCompleteMsg is sent.
 func runAnalysisPool(ctx context.Context, p *tea.Program, files []string, base *processor.BaseFilterConfig, sharedLog func(string, ...any), jobs int, results []*processor.AnalysisResult, metas []*audio.Metadata, errs []error, openMetadata func(string) (*audio.Metadata, error)) {
 	sem := make(chan struct{}, jobs)
@@ -94,8 +94,8 @@ func runAnalysisPool(ctx context.Context, p *tea.Program, files []string, base *
 				}
 			}
 
-			wlog("[ANALYSIS-POOL] Starting AnalyzeOnlyDetailed for %s", inputPath)
-			results[i], errs[i] = analysisPoolAnalyze(ctx, inputPath, clone, cb)
+			wlog("[ANALYSIS-POOL] Starting AnalyseOnlyDetailed for %s", inputPath)
+			results[i], errs[i] = analysisPoolAnalyse(ctx, inputPath, clone, cb)
 
 			if p != nil {
 				wlog("[ANALYSIS-POOL] Sending AnalysisCompleteMsg for file %d", i)

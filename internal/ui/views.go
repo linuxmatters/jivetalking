@@ -71,7 +71,7 @@ func renderFileEntry(file FileProgress, prog progress.Model, easedLevel, easedPr
 	case StatusComplete:
 		return renderDoneBox(file)
 
-	case StatusAnalyzing, StatusProcessing, StatusNormalising:
+	case StatusAnalysing, StatusProcessing, StatusNormalising:
 		// active file with detailed progress, with the filter-chain status boxes
 		// joined to the right of the Pass box.
 		icon := lipgloss.NewStyle().Foreground(cli.ColorOrange).Render("∿")

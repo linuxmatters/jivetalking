@@ -25,20 +25,20 @@ type AnalysisResult struct {
 	AdaptationDuration time.Duration
 }
 
-// AnalyzeOnlyDetailed performs Pass 1 analysis and returns stage timing details.
-func AnalyzeOnlyDetailed(ctx context.Context, inputPath string, config *BaseFilterConfig,
+// AnalyseOnlyDetailed performs Pass 1 analysis and returns stage timing details.
+func AnalyseOnlyDetailed(ctx context.Context, inputPath string, config *BaseFilterConfig,
 	progressCallback ProgressCallback,
 ) (*AnalysisResult, error) {
 	// Pass 1: Analysis
 	if progressCallback != nil {
 		progressCallback(ProgressUpdate{
 			Pass:     PassAnalysis,
-			PassName: "Analyzing",
+			PassName: "Analysing",
 		})
 	}
 
 	analysisStart := time.Now()
-	measurements, err := AnalyzeAudio(ctx, inputPath, config, progressCallback)
+	measurements, err := AnalyseAudio(ctx, inputPath, config, progressCallback)
 	if err != nil {
 		return nil, fmt.Errorf("analysis failed: %w", err)
 	}
@@ -47,7 +47,7 @@ func AnalyzeOnlyDetailed(ctx context.Context, inputPath string, config *BaseFilt
 	if progressCallback != nil {
 		progressCallback(ProgressUpdate{
 			Pass:         PassAnalysis,
-			PassName:     "Analyzing",
+			PassName:     "Analysing",
 			Progress:     1.0,
 			Duration:     measurements.Duration,
 			Measurements: measurements,
@@ -69,7 +69,7 @@ func AnalyzeOnlyDetailed(ctx context.Context, inputPath string, config *BaseFilt
 }
 
 // ProcessAudio performs complete four-pass audio processing:
-//   - Pass 1: Analyze audio to get measurements and noise floor estimate
+//   - Pass 1: Analyse audio to get measurements and noise floor estimate
 //   - Pass 2: Process audio through filter chain (downmix → ds201_highpass → ds201_lowpass → noiseremove[anlmdn+afftdn] → ds201_gate → la2a_compressor → deesser → analysis → resample)
 //     (Pass 3 measures loudnorm; Pass 4 applies alimiter (Volumax) + loudnorm + brickwall)
 //
@@ -80,11 +80,11 @@ func ProcessAudio(ctx context.Context, inputPath string, config *BaseFilterConfi
 	if progressCallback != nil {
 		progressCallback(ProgressUpdate{
 			Pass:     PassAnalysis,
-			PassName: "Analyzing",
+			PassName: "Analysing",
 		})
 	}
 
-	measurements, err := AnalyzeAudio(ctx, inputPath, config, progressCallback)
+	measurements, err := AnalyseAudio(ctx, inputPath, config, progressCallback)
 	if err != nil {
 		return nil, fmt.Errorf("pass 1 failed: %w", err)
 	}
@@ -92,7 +92,7 @@ func ProcessAudio(ctx context.Context, inputPath string, config *BaseFilterConfi
 	if progressCallback != nil {
 		progressCallback(ProgressUpdate{
 			Pass:         PassAnalysis,
-			PassName:     "Analyzing",
+			PassName:     "Analysing",
 			Progress:     1.0,
 			Duration:     measurements.Duration,
 			Measurements: measurements,

@@ -473,15 +473,15 @@ func TestProcessorSeedAndProgressCallbackBoundaries(t *testing.T) {
 			parameters:  4,
 		},
 		{
-			name:        "AnalyzeOnlyDetailed",
-			fn:          AnalyzeOnlyDetailed,
+			name:        "AnalyseOnlyDetailed",
+			fn:          AnalyseOnlyDetailed,
 			configArg:   2,
 			progressArg: 3,
 			parameters:  4,
 		},
 		{
-			name:        "AnalyzeAudio",
-			fn:          AnalyzeAudio,
+			name:        "AnalyseAudio",
+			fn:          AnalyseAudio,
 			configArg:   2,
 			progressArg: 3,
 			parameters:  4,
@@ -562,7 +562,7 @@ func TestProgressCallbackTypeCompiles(t *testing.T) {
 	}
 	callback(ProgressUpdate{
 		Pass:         PassAnalysis,
-		PassName:     "Analyzing",
+		PassName:     "Analysing",
 		Progress:     0.5,
 		Level:        -18.0,
 		Measurements: measurements,
@@ -571,8 +571,8 @@ func TestProgressCallbackTypeCompiles(t *testing.T) {
 	if got.Pass != PassAnalysis {
 		t.Fatalf("callback Pass = %d, want %d", got.Pass, PassAnalysis)
 	}
-	if got.PassName != "Analyzing" {
-		t.Fatalf("callback PassName = %q, want %q", got.PassName, "Analyzing")
+	if got.PassName != "Analysing" {
+		t.Fatalf("callback PassName = %q, want %q", got.PassName, "Analysing")
 	}
 	if got.Progress != 0.5 {
 		t.Fatalf("callback Progress = %.2f, want 0.50", got.Progress)
@@ -910,7 +910,7 @@ func TestProcessAudioFinalCollisionPreservesOutputAndCleansTemp(t *testing.T) {
 	}
 }
 
-func TestAnalyzeOnlyDetailedTimings(t *testing.T) {
+func TestAnalyseOnlyDetailedTimings(t *testing.T) {
 	testFile := generateTestAudio(t, TestAudioOptions{
 		DurationSecs: 2.0,
 		SampleRate:   44100,
@@ -934,19 +934,19 @@ func TestAnalyzeOnlyDetailedTimings(t *testing.T) {
 	config.DS201HighPass.Frequency = 95.0
 	baseFilterOrder := append([]FilterID(nil), config.FilterOrder...)
 
-	result, err := AnalyzeOnlyDetailed(context.Background(), testFile, config, nil)
+	result, err := AnalyseOnlyDetailed(context.Background(), testFile, config, nil)
 	if err != nil {
-		t.Fatalf("AnalyzeOnlyDetailed failed: %v", err)
+		t.Fatalf("AnalyseOnlyDetailed failed: %v", err)
 	}
 
 	if result.Measurements == nil {
-		t.Fatal("AnalyzeOnlyDetailed returned nil measurements")
+		t.Fatal("AnalyseOnlyDetailed returned nil measurements")
 	}
 	if result.Config == nil {
-		t.Fatal("AnalyzeOnlyDetailed returned nil config")
+		t.Fatal("AnalyseOnlyDetailed returned nil config")
 	}
 	if result.Diagnostics == nil {
-		t.Fatal("AnalyzeOnlyDetailed returned nil diagnostics")
+		t.Fatal("AnalyseOnlyDetailed returned nil diagnostics")
 	}
 	assertNoStaleEffectiveConfigFields(t)
 	if !reflect.DeepEqual(config.FilterOrder, baseFilterOrder) {

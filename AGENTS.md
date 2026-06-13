@@ -31,15 +31,15 @@ internal/
 ├── processor/
 │   ├── adaptive.go         # AdaptConfig() - derives effective filter settings + diagnostics from Pass 1 measurements
 │   ├── advice.go           # GainAdvice() - input-gain advice from input true peak (Clipping/Hot/Quiet/Fine vs -6 dBTP); GainAdviceResult.Message()
-│   ├── analyzer.go         # AnalyzeAudio() - Pass 1: ebur128 + astats + aspectralstats; room-tone/speech detection
-│   ├── analyzer_candidates.go  # Room-tone candidate scoring and election
-│   ├── analyzer_metrics.go     # IntervalSample, SpectralMetrics, per-250ms metric accumulation
-│   ├── analyzer_output.go      # MeasureOutputRegions() - before/after region comparison
+│   ├── analyser.go         # AnalyseAudio() - Pass 1: ebur128 + astats + aspectralstats; room-tone/speech detection
+│   ├── analyser_candidates.go  # Room-tone candidate scoring and election
+│   ├── analyser_metrics.go     # IntervalSample, SpectralMetrics, per-250ms metric accumulation
+│   ├── analyser_output.go      # MeasureOutputRegions() - before/after region comparison
 │   ├── encoder.go          # Output file encoder wrapper
 │   ├── filters.go          # BaseFilterConfig, EffectiveFilterConfig, AdaptiveDiagnostics, filter builders, BuildFilterSpec(), DefaultFilterConfig()
 │   ├── frame_processor.go  # runFilterGraph(), FrameLoopConfig - shared filter graph execution
 │   ├── normalise.go        # ApplyNormalisation() - Pass 3/4: loudnorm measurement + application
-│   ├── processor.go        # ProcessAudio(), AnalyzeOnlyDetailed() - pass orchestration
+│   ├── processor.go        # ProcessAudio(), AnalyseOnlyDetailed() - pass orchestration
 │   ├── quality.go          # ComputeQualityScore() - Processed star rating: output vs -16 LUFS spec (saturates at 5★)
 │   ├── recording.go        # ComputeRecordingScore(*AudioMeasurements) - Recording star rating: source capture, 3 weighted axes (1-5★); shared by processing + analysis-only
 │   ├── spectrogram.go      # frozenSpectrogramSpec, generateSpectrogram(), RenderSpectrogramImage() - audio→showspectrumpic→PNG render (--diagnostics)
@@ -60,7 +60,7 @@ internal/
 └── cli/                    # Help styling, version output, error formatting
 ```
 
-**Data flow (processing):** `main.go` resolves worker count via `resolveJobs()` (number of input files, capped at `NumCPU`, floored at 1; no flag), creates a cancellable `ctx`, then launches `runWorkerPool()` (`pool.go`) → up to `jobs` files run concurrently, each a goroutine bounded by a semaphore, taking a `CloneForWorker()` config copy and `FileIndex`-routed TUI messages → `ProcessAudio(ctx, …)` → Pass 1 (`AnalyzeAudio`) → `AdaptConfig()` → Pass 2 (filter chain) → Pass 3/4 (`ApplyNormalisation`) → `report.WriteMarkdownReport()` renders an always-on Markdown report (`<name>-LUFS-NN-processed.md`) from the run's `RunRecord` → sends `ui.*Msg` to TUI via `tea.Program.Send()`. After `WaitGroup` drains, the pool sends `ui.AllCompleteMsg`. `cancel()` fires after `p.Run()` returns; `runFilterGraph` checks `ctx.Err()` each frame so in-flight workers abort and run deferred temp cleanup.
+**Data flow (processing):** `main.go` resolves worker count via `resolveJobs()` (number of input files, capped at `NumCPU`, floored at 1; no flag), creates a cancellable `ctx`, then launches `runWorkerPool()` (`pool.go`) → up to `jobs` files run concurrently, each a goroutine bounded by a semaphore, taking a `CloneForWorker()` config copy and `FileIndex`-routed TUI messages → `ProcessAudio(ctx, …)` → Pass 1 (`AnalyseAudio`) → `AdaptConfig()` → Pass 2 (filter chain) → Pass 3/4 (`ApplyNormalisation`) → `report.WriteMarkdownReport()` renders an always-on Markdown report (`<name>-LUFS-NN-processed.md`) from the run's `RunRecord` → sends `ui.*Msg` to TUI via `tea.Program.Send()`. After `WaitGroup` drains, the pool sends `ui.AllCompleteMsg`. `cancel()` fires after `p.Run()` returns; `runFilterGraph` checks `ctx.Err()` each frame so in-flight workers abort and run deferred temp cleanup.
 
 With `--diagnostics`, each worker attaches the deterministic before/after PNG path list to the `RunRecord` synchronously (`DeriveSpectrogramImages`, pure string work) **before** the `.md`/`.json` write, so the report carries resolving image links; the actual `showspectrumpic` renders run in **bounded background goroutines** off the critical path (`RenderSpectrogramImage`), sharing the pool's semaphore budget and tracked by a `sync.WaitGroup` that gates program exit. Renders honour `ctx` (abort + remove partial PNGs on cancellation) and are non-fatal (a failed render surfaces a warning; audio/`.json`/`.md` still land). The flag touches no DSP, so the `.flac` output is byte-identical with it on or off.
 
@@ -150,13 +150,13 @@ Two separate message sets exist for the two TUI modes.
 - **DS201 gate detection:** Fixed RMS (safe for speech and tonal bleed). The former peak branch needed room-tone entropy > 0.7, which the corpus never reaches
 - **DS201 gate gentle mode:** Extreme LUFS gap (>= 25 dB) with low LRA (< 10 LU) overrides ratio to 1.2 and knee to 2.0 to prevent hunting on uniform quiet recordings (its knee override still wins over the fixed 3.0)
 - **LA-2A compressor:** Fixed params: ratio 3.0, attack 10 ms, release 200 ms, knee 4.0, mix 1.0, makeup 0 dB. One genuine adaptation: `threshold = SpeechProfile.RMSLevel + 9 dB` (clamped), falling back to `PeakLevel − 20 dB` when no `SpeechProfile` is elected. Speech-RMS-relative threshold engages compression consistently on the upper half of speech across the corpus's wide input-level spread (depth ~2.5-4.4 dB, output crest in the 8-12 dB range); peak−20 is the fallback only. All other params are fixed: ratio/attack/release/knee/mix collapsed to a single value across the real corpus on review; kurtosis, flux, centroid, and the high-crest override were removed as theatre. Note: FFmpeg's `acompressor` is a single-pole-release RMS compressor (`af_sidechaincompress.c`); it cannot reproduce the LA-2A's two-stage programme-dependent T4 release or level-dependent ratio. The LA-2A is the quality inspiration (gentle levelling, least treatment), not a faithful emulation
-- **De-esser intensity:** Only `i` adapts; `m` and `f` are fixed. Engagement is driven by the speech-region band excess `sibilanceExcess = SpeechProfile.SibBandRMS - BodyBandRMS` (dB), where the sibilant band is 6-9 kHz and the body band is 1-3 kHz, both measured over the elected speech region in Pass 1 (`analyzer_bands.go`, region-scoped `highpass,lowpass,astats` decode). Mapping: `< -6 dB → i=0.0` (OFF); `-6..-3 → ramp 0.0→0.6`; `-3..0 → ramp 0.6→0.85`; `> 0 → i=0.85` (cap). Requires a `SpeechProfile`; without one the de-esser stays OFF (full-file metrics are unreliable). Fixed params: `f=0.80` sets the attenuator corner at ~7.5 kHz so it acts on the sibilant band rather than vocal presence (per `af_deesser.c`, `f` maps to the split-band corner; the prior `f=0.5` corner sat at ~2 kHz); `m=0.50` caps the maximum cut depth (~12 dB, `af_deesser.c maxdess`). Note `i` follows a 5th-power law (`pow(i,5)`) in `af_deesser.c`, so the ramp endpoints are chosen to land in the audibly-active part of the curve.
+- **De-esser intensity:** Only `i` adapts; `m` and `f` are fixed. Engagement is driven by the speech-region band excess `sibilanceExcess = SpeechProfile.SibBandRMS - BodyBandRMS` (dB), where the sibilant band is 6-9 kHz and the body band is 1-3 kHz, both measured over the elected speech region in Pass 1 (`analyser_bands.go`, region-scoped `highpass,lowpass,astats` decode). Mapping: `< -6 dB → i=0.0` (OFF); `-6..-3 → ramp 0.0→0.6`; `-3..0 → ramp 0.6→0.85`; `> 0 → i=0.85` (cap). Requires a `SpeechProfile`; without one the de-esser stays OFF (full-file metrics are unreliable). Fixed params: `f=0.80` sets the attenuator corner at ~7.5 kHz so it acts on the sibilant band rather than vocal presence (per `af_deesser.c`, `f` maps to the split-band corner; the prior `f=0.5` corner sat at ~2 kHz); `m=0.50` caps the maximum cut depth (~12 dB, `af_deesser.c maxdess`). Note `i` follows a 5th-power law (`pow(i,5)`) in `af_deesser.c`, so the ramp endpoints are chosen to land in the audibly-active part of the curve.
 
 **Speech-aware metrics:** Filters processing speech content prefer `SpeechProfile` measurements (speech-only regions) over full-file analysis. Graceful fallback when speech metrics unavailable.
 
 ## Spectral metrics reference
 
-When working on audio analysis code (especially `internal/processor/analyzer.go`):
+When working on audio analysis code (especially `internal/processor/analyser.go`):
 
 - Consult `docs/Spectral-Metrics-Reference.md` (aligned with the `audio-metrics` skill) for what each metric is - definition, ffmpeg computation, units, range, source filter - when reading or producing audio measurements. It is an objective reference, not a source of thresholds or quality verdicts
 - Threshold values and scoring constants live in the code, justified against the validation corpus per the "no theatre - meaningful, exercised adaptation or a fixed correct value" principle and the bit-exact validation sweeps; do not derive them from documented "good ranges"

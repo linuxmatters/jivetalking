@@ -57,13 +57,13 @@ func stubOpenMetadata(t *testing.T) func(string) (*audio.Metadata, error) {
 	}
 }
 
-// installAnalysisFake swaps analysisPoolAnalyze for fn and restores it after the
+// installAnalysisFake swaps analysisPoolAnalyse for fn and restores it after the
 // test so tests stay isolated from each other and from main_test.go's swaps.
 func installAnalysisFake(t *testing.T, fn func(context.Context, string, *processor.BaseFilterConfig, processor.ProgressCallback) (*processor.AnalysisResult, error)) {
 	t.Helper()
-	orig := analysisPoolAnalyze
-	analysisPoolAnalyze = fn
-	t.Cleanup(func() { analysisPoolAnalyze = orig })
+	orig := analysisPoolAnalyse
+	analysisPoolAnalyse = fn
+	t.Cleanup(func() { analysisPoolAnalyse = orig })
 }
 
 // inflightAnalysisFake observes pool concurrency without real FFmpeg. It tracks

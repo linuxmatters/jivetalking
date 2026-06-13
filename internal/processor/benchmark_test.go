@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func BenchmarkAnalyzeAudioSynthetic5m(b *testing.B) {
+func BenchmarkAnalyseAudioSynthetic5m(b *testing.B) {
 	inputPath := generateBenchmarkAudio(b, b.TempDir(), 5*time.Minute)
 	defer cleanupTestAudio(b, inputPath)
 
@@ -18,8 +18,8 @@ func BenchmarkAnalyzeAudioSynthetic5m(b *testing.B) {
 	for range b.N {
 		config := newTestBaseConfig()
 		config.Analysis.Enabled = true
-		if _, err := AnalyzeAudio(context.Background(), inputPath, config, nil); err != nil {
-			b.Fatalf("AnalyzeAudio failed: %v", err)
+		if _, err := AnalyseAudio(context.Background(), inputPath, config, nil); err != nil {
+			b.Fatalf("AnalyseAudio failed: %v", err)
 		}
 	}
 }

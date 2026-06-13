@@ -134,9 +134,9 @@ func assertSpectralValues(t *testing.T, got SpectralMetrics) {
 	}
 }
 
-func TestAnalyzeAudio(t *testing.T) {
+func TestAnalyseAudio(t *testing.T) {
 	// Generate synthetic test audio: 5-second 440Hz tone at -23 LUFS with a 0.5s silence gap
-	// This provides known characteristics for validating the analyzer
+	// This provides known characteristics for validating the analyser
 	testFile := generateTestAudio(t, TestAudioOptions{
 		DurationSecs: 5.0,
 		SampleRate:   44100,
@@ -169,9 +169,9 @@ func TestAnalyzeAudio(t *testing.T) {
 			}
 		}
 
-		measurements, err := AnalyzeAudio(context.Background(), testFile, config, progressCallback)
+		measurements, err := AnalyseAudio(context.Background(), testFile, config, progressCallback)
 		if err != nil {
-			t.Fatalf("AnalyzeAudio failed: %v", err)
+			t.Fatalf("AnalyseAudio failed: %v", err)
 		}
 
 		// Log measurements
@@ -216,7 +216,7 @@ func TestAnalyzeAudio(t *testing.T) {
 	})
 }
 
-func TestAnalyzeAudioDoesNotMutateCallerConfig(t *testing.T) {
+func TestAnalyseAudioDoesNotMutateCallerConfig(t *testing.T) {
 	testFile := generateTestAudio(t, TestAudioOptions{
 		DurationSecs: 1.0,
 		SampleRate:   44100,
@@ -233,8 +233,8 @@ func TestAnalyzeAudioDoesNotMutateCallerConfig(t *testing.T) {
 	originalOrder := append([]FilterID(nil), config.FilterOrder...)
 	originalRoomToneScanDuration := config.Analysis.RoomToneScanDuration
 
-	if _, err := AnalyzeAudio(context.Background(), testFile, config, nil); err != nil {
-		t.Fatalf("AnalyzeAudio failed: %v", err)
+	if _, err := AnalyseAudio(context.Background(), testFile, config, nil); err != nil {
+		t.Fatalf("AnalyseAudio failed: %v", err)
 	}
 
 	if len(config.FilterOrder) != len(originalOrder) {
@@ -2973,7 +2973,7 @@ func TestDetectVoiceActivated(t *testing.T) {
 	}
 }
 
-func TestAnalyzeAudio_RoomToneScanDuration(t *testing.T) {
+func TestAnalyseAudio_RoomToneScanDuration(t *testing.T) {
 	// Deterministic synthetic input for the silence-scan-duration cap.
 	//
 	// Layout (85 seconds total):
@@ -3013,9 +3013,9 @@ func TestAnalyzeAudio_RoomToneScanDuration(t *testing.T) {
 	baselineConfig := newTestBaseConfig()
 	baselineConfig.Analysis.Enabled = true
 
-	baseline, err := AnalyzeAudio(context.Background(), testFile, baselineConfig, nil)
+	baseline, err := AnalyseAudio(context.Background(), testFile, baselineConfig, nil)
 	if err != nil {
-		t.Fatalf("baseline AnalyzeAudio failed: %v", err)
+		t.Fatalf("baseline AnalyseAudio failed: %v", err)
 	}
 	if baseline.Regions.NoiseProfile == nil {
 		t.Fatalf("baseline NoiseProfile is nil; the silence pipeline did not elect a region "+
@@ -3055,9 +3055,9 @@ func TestAnalyzeAudio_RoomToneScanDuration(t *testing.T) {
 		config.Analysis.Enabled = true
 		config.Analysis.RoomToneScanDuration = 0
 
-		got, err := AnalyzeAudio(context.Background(), testFile, config, nil)
+		got, err := AnalyseAudio(context.Background(), testFile, config, nil)
 		if err != nil {
-			t.Fatalf("AnalyzeAudio failed: %v", err)
+			t.Fatalf("AnalyseAudio failed: %v", err)
 		}
 
 		assertLoudnessMatches(t, got)
@@ -3084,9 +3084,9 @@ func TestAnalyzeAudio_RoomToneScanDuration(t *testing.T) {
 		config.Analysis.Enabled = true
 		config.Analysis.RoomToneScanDuration = 2 * time.Second
 
-		got, err := AnalyzeAudio(context.Background(), testFile, config, nil)
+		got, err := AnalyseAudio(context.Background(), testFile, config, nil)
 		if err != nil {
-			t.Fatalf("AnalyzeAudio failed: %v", err)
+			t.Fatalf("AnalyseAudio failed: %v", err)
 		}
 
 		if len(got.Regions.RoomToneRegions) != 0 {
@@ -3106,9 +3106,9 @@ func TestAnalyzeAudio_RoomToneScanDuration(t *testing.T) {
 		config.Analysis.Enabled = true
 		config.Analysis.RoomToneScanDuration = 60 * time.Second
 
-		got, err := AnalyzeAudio(context.Background(), testFile, config, nil)
+		got, err := AnalyseAudio(context.Background(), testFile, config, nil)
 		if err != nil {
-			t.Fatalf("AnalyzeAudio failed: %v", err)
+			t.Fatalf("AnalyseAudio failed: %v", err)
 		}
 
 		if got.Regions.NoiseProfile == nil {
@@ -3134,9 +3134,9 @@ func TestAnalyzeAudio_RoomToneScanDuration(t *testing.T) {
 		config.Analysis.Enabled = true
 		config.Analysis.RoomToneScanDuration = 60 * time.Second
 
-		got, err := AnalyzeAudio(context.Background(), testFile, config, nil)
+		got, err := AnalyseAudio(context.Background(), testFile, config, nil)
 		if err != nil {
-			t.Fatalf("AnalyzeAudio failed: %v", err)
+			t.Fatalf("AnalyseAudio failed: %v", err)
 		}
 
 		assertLoudnessMatches(t, got)

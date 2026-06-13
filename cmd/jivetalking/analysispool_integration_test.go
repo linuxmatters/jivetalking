@@ -56,7 +56,7 @@ func TestRunAnalysisPool_CancellationAbortsPromptly(t *testing.T) {
 		// acquire a freed slot during the skip assertion. Blocking on the gate
 		// alone (not ctx.Done()) keeps the slots occupied while ctx is cancelled,
 		// making the queued workers' skip deterministic. The in-flight ctx abort
-		// is the production analysisPoolAnalyze's job and is covered separately by
+		// is the production analysisPoolAnalyse's job and is covered separately by
 		// the seam returning context.Canceled; here the gate stands in so the slot
 		// stays held across the assertion.
 		<-gate
@@ -123,7 +123,7 @@ func waitForExtraEntry(entered <-chan struct{}, d time.Duration) bool {
 
 // TestRunAnalysisPool_ConcurrentRaceClean drives runAnalysisPool with jobs >= 2
 // over two distinct REAL fixture copies through the REAL
-// processor.AnalyzeOnlyDetailed and the REAL openAudioMetadata opener. Unlike the
+// processor.AnalyseOnlyDetailed and the REAL openAudioMetadata opener. Unlike the
 // seam-based 2.3 tests, it runs actual concurrent FFmpeg analysis so `-race`
 // observes the genuine concurrent paths: the shared debugSink-backed logger
 // (whole-line atomic writes), the per-worker CloneForWorker config clones, and the
@@ -140,9 +140,9 @@ func TestRunAnalysisPool_ConcurrentRaceClean(t *testing.T) {
 		t.Skipf("testdata audio not found: %s", src)
 	}
 
-	// Pin the seam to the REAL analyze path. installAnalysisFake save/restores it,
+	// Pin the seam to the REAL analyse path. installAnalysisFake save/restores it,
 	// so a parallel seam-swapping test cannot leak its fake into this run.
-	installAnalysisFake(t, processor.AnalyzeOnlyDetailed)
+	installAnalysisFake(t, processor.AnalyseOnlyDetailed)
 
 	ext := filepath.Ext(src)
 	dir := t.TempDir()

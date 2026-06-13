@@ -104,19 +104,19 @@ func TestProgressCallbackBoundariesUseProcessorEvent(t *testing.T) {
 	progressUpdateType := reflect.TypeFor[processor.ProgressUpdate]()
 
 	depsType := reflect.TypeFor[analysisOnlyDeps]()
-	analyzeDetailed, ok := depsType.FieldByName("analyzeDetailed")
+	analyseDetailed, ok := depsType.FieldByName("analyseDetailed")
 	if !ok {
-		t.Fatal("analysisOnlyDeps has no analyzeDetailed field")
+		t.Fatal("analysisOnlyDeps has no analyseDetailed field")
 	}
-	if analyzeDetailed.Type.Kind() != reflect.Func {
-		t.Fatalf("analysisOnlyDeps.analyzeDetailed = %s, want func", analyzeDetailed.Type)
+	if analyseDetailed.Type.Kind() != reflect.Func {
+		t.Fatalf("analysisOnlyDeps.analyseDetailed = %s, want func", analyseDetailed.Type)
 	}
-	if analyzeDetailed.Type.NumIn() != 4 {
-		t.Fatalf("analysisOnlyDeps.analyzeDetailed has %d parameters, want 4", analyzeDetailed.Type.NumIn())
+	if analyseDetailed.Type.NumIn() != 4 {
+		t.Fatalf("analysisOnlyDeps.analyseDetailed has %d parameters, want 4", analyseDetailed.Type.NumIn())
 	}
-	if analyzeDetailed.Type.In(3) != progressCallbackType {
-		t.Fatalf("analysisOnlyDeps.analyzeDetailed progress callback = %s, want %s",
-			analyzeDetailed.Type.In(3), progressCallbackType)
+	if analyseDetailed.Type.In(3) != progressCallbackType {
+		t.Fatalf("analysisOnlyDeps.analyseDetailed progress callback = %s, want %s",
+			analyseDetailed.Type.In(3), progressCallbackType)
 	}
 
 	callbackType := reflect.TypeOf((&progressHandler{}).callback)
@@ -134,9 +134,9 @@ func TestRunAnalysisOnlyWithDeps_NonTTYOmitsBenchPath(t *testing.T) {
 	config := processor.DefaultFilterConfig()
 	var output bytes.Buffer
 
-	analyze := func(_ context.Context, path string, cfg *processor.BaseFilterConfig, progress processor.ProgressCallback) (*processor.AnalysisResult, error) {
+	analyse := func(_ context.Context, path string, cfg *processor.BaseFilterConfig, progress processor.ProgressCallback) (*processor.AnalysisResult, error) {
 		if path != inputPath {
-			t.Fatalf("analyzeDetailed path = %q, want %q", path, inputPath)
+			t.Fatalf("analyseDetailed path = %q, want %q", path, inputPath)
 		}
 		effective, diagnostics := processor.AdaptConfig(cfg, makeAnalysisOnlyTestMeasurements())
 		return &processor.AnalysisResult{
@@ -147,9 +147,9 @@ func TestRunAnalysisOnlyWithDeps_NonTTYOmitsBenchPath(t *testing.T) {
 			AdaptationDuration: 100 * time.Millisecond,
 		}, nil
 	}
-	origAnalyze := analysisPoolAnalyze
-	analysisPoolAnalyze = analyze
-	t.Cleanup(func() { analysisPoolAnalyze = origAnalyze })
+	origAnalyse := analysisPoolAnalyse
+	analysisPoolAnalyse = analyse
+	t.Cleanup(func() { analysisPoolAnalyse = origAnalyse })
 
 	reports := newReportCapture()
 	runAnalysisOnlyWithDeps([]string{inputPath}, config, func(string, ...any) {}, 1, false, analysisOnlyDeps{
@@ -167,7 +167,7 @@ func TestRunAnalysisOnlyWithDeps_NonTTYOmitsBenchPath(t *testing.T) {
 				Channels:   1,
 			}, nil
 		},
-		analyzeDetailed: analyze,
+		analyseDetailed: analyse,
 		printError: func(message string) {
 			t.Fatalf("printError called: %s", message)
 		},
@@ -222,7 +222,7 @@ func TestRunAnalysisOnlyWithDeps_DiagnosticsGatesSidecars(t *testing.T) {
 	inputPath := "stem.wav"
 	config := processor.DefaultFilterConfig()
 
-	analyze := func(_ context.Context, _ string, cfg *processor.BaseFilterConfig, _ processor.ProgressCallback) (*processor.AnalysisResult, error) {
+	analyse := func(_ context.Context, _ string, cfg *processor.BaseFilterConfig, _ processor.ProgressCallback) (*processor.AnalysisResult, error) {
 		effective, diagnostics := processor.AdaptConfig(cfg, makeAnalysisOnlyTestMeasurements())
 		return &processor.AnalysisResult{
 			Measurements:       makeAnalysisOnlyTestMeasurements(),
@@ -232,9 +232,9 @@ func TestRunAnalysisOnlyWithDeps_DiagnosticsGatesSidecars(t *testing.T) {
 			AdaptationDuration: 100 * time.Millisecond,
 		}, nil
 	}
-	origAnalyze := analysisPoolAnalyze
-	analysisPoolAnalyze = analyze
-	t.Cleanup(func() { analysisPoolAnalyze = origAnalyze })
+	origAnalyse := analysisPoolAnalyse
+	analysisPoolAnalyse = analyse
+	t.Cleanup(func() { analysisPoolAnalyse = origAnalyse })
 
 	reportPath := report.AnalysisReportPath(inputPath)
 	wantRecordPath := strings.TrimSuffix(reportPath, filepath.Ext(reportPath)) + ".json"
@@ -247,7 +247,7 @@ func TestRunAnalysisOnlyWithDeps_DiagnosticsGatesSidecars(t *testing.T) {
 			openMetadata: func(string) (*audio.Metadata, error) {
 				return &audio.Metadata{Duration: 120, SampleRate: 48000, Channels: 1}, nil
 			},
-			analyzeDetailed: analyze,
+			analyseDetailed: analyse,
 			// The synthetic input (stem.wav) does not exist on disk, so the
 			// diagnostics-on spectrogram renders fail to open it and surface a
 			// non-fatal "Failed to render analysis spectrogram" message. That is
@@ -310,13 +310,13 @@ func TestRunAnalysisOnlyWithDeps_PassesPerWorkerConfigClones(t *testing.T) {
 		secondEffective,
 	}
 
-	var analyzedConfigs []*processor.BaseFilterConfig
+	var analysedConfigs []*processor.BaseFilterConfig
 
 	fileIndex := map[string]int{files[0]: 0, files[1]: 1}
 	var mu sync.Mutex
-	analyze := func(_ context.Context, path string, cfg *processor.BaseFilterConfig, progress processor.ProgressCallback) (*processor.AnalysisResult, error) {
+	analyse := func(_ context.Context, path string, cfg *processor.BaseFilterConfig, progress processor.ProgressCallback) (*processor.AnalysisResult, error) {
 		mu.Lock()
-		analyzedConfigs = append(analyzedConfigs, cfg)
+		analysedConfigs = append(analysedConfigs, cfg)
 		mu.Unlock()
 
 		index := fileIndex[path]
@@ -328,9 +328,9 @@ func TestRunAnalysisOnlyWithDeps_PassesPerWorkerConfigClones(t *testing.T) {
 			AdaptationDuration: 100 * time.Millisecond,
 		}, nil
 	}
-	origAnalyze := analysisPoolAnalyze
-	analysisPoolAnalyze = analyze
-	t.Cleanup(func() { analysisPoolAnalyze = origAnalyze })
+	origAnalyse := analysisPoolAnalyse
+	analysisPoolAnalyse = analyse
+	t.Cleanup(func() { analysisPoolAnalyse = origAnalyse })
 
 	reports := newReportCapture()
 	runAnalysisOnlyWithDeps(files, baseConfig, func(string, ...any) {}, 1, false, analysisOnlyDeps{
@@ -345,7 +345,7 @@ func TestRunAnalysisOnlyWithDeps_PassesPerWorkerConfigClones(t *testing.T) {
 				Channels:   1,
 			}, nil
 		},
-		analyzeDetailed: analyze,
+		analyseDetailed: analyse,
 		printError: func(message string) {
 			t.Fatalf("printError called: %s", message)
 		},
@@ -354,15 +354,15 @@ func TestRunAnalysisOnlyWithDeps_PassesPerWorkerConfigClones(t *testing.T) {
 		writeSidecars:       func(*processor.AudioMeasurements, string) error { return nil },
 	})
 
-	if len(analyzedConfigs) != len(files) {
-		t.Fatalf("analyzed config count = %d, want %d", len(analyzedConfigs), len(files))
+	if len(analysedConfigs) != len(files) {
+		t.Fatalf("analysed config count = %d, want %d", len(analysedConfigs), len(files))
 	}
 	// Each worker must receive its own config clone, never the shared base seed,
 	// so concurrent workers share no mutable config.
-	if analyzedConfigs[0] == baseConfig || analyzedConfigs[1] == baseConfig {
+	if analysedConfigs[0] == baseConfig || analysedConfigs[1] == baseConfig {
 		t.Fatal("analysis-only did not pass per-worker config clones to analysis calls")
 	}
-	if analyzedConfigs[0] == analyzedConfigs[1] {
+	if analysedConfigs[0] == analysedConfigs[1] {
 		t.Fatal("analysis-only reused one config clone across workers")
 	}
 	// Both files produce a Markdown report named after the source.
@@ -388,10 +388,10 @@ func TestRunAnalysisOnlyWithDeps_OrderedOutputParityAcrossJobs(t *testing.T) {
 	// finish earlier. At jobs=N all workers run concurrently, so completion
 	// order != submission order; at jobs=1 it is serial. Both runs must emit
 	// byte-for-byte identical, input-ordered reports.
-	analyze := func(_ context.Context, path string, _ *processor.BaseFilterConfig, _ processor.ProgressCallback) (*processor.AnalysisResult, error) { //nolint:unparam // signature must match processor.AnalyzeOnlyDetailed
+	analyse := func(_ context.Context, path string, _ *processor.BaseFilterConfig, _ processor.ProgressCallback) (*processor.AnalysisResult, error) { //nolint:unparam // signature must match processor.AnalyseOnlyDetailed
 		index, ok := fileIndex[path]
 		if !ok {
-			t.Fatalf("analysisPoolAnalyze unexpected path %q", path)
+			t.Fatalf("analysisPoolAnalyse unexpected path %q", path)
 		}
 
 		// Later indices sleep less, so under concurrency they complete first.
@@ -411,9 +411,9 @@ func TestRunAnalysisOnlyWithDeps_OrderedOutputParityAcrossJobs(t *testing.T) {
 			AdaptationDuration: 100 * time.Millisecond,
 		}, nil
 	}
-	origAnalyze := analysisPoolAnalyze
-	analysisPoolAnalyze = analyze
-	t.Cleanup(func() { analysisPoolAnalyze = origAnalyze })
+	origAnalyse := analysisPoolAnalyse
+	analysisPoolAnalyse = analyse
+	t.Cleanup(func() { analysisPoolAnalyse = origAnalyse })
 
 	run := func(jobs int) (string, *reportCapture) {
 		var output bytes.Buffer
@@ -433,7 +433,7 @@ func TestRunAnalysisOnlyWithDeps_OrderedOutputParityAcrossJobs(t *testing.T) {
 					Channels:   1,
 				}, nil
 			},
-			analyzeDetailed:     analyze,
+			analyseDetailed:     analyse,
 			writeMarkdownReport: reports.write,
 			printError: func(message string) {
 				t.Fatalf("printError called: %s", message)
@@ -499,10 +499,10 @@ func TestRunAnalysisOnlyWithDeps_NonTTYBannerThenOrderedReports(t *testing.T) {
 	// Staggered completion: later-submitted files sleep less and finish first,
 	// so with jobs >= len(files) the workers overlap and completion order !=
 	// submission order. The buffered slots must still print in input order.
-	analyze := func(_ context.Context, path string, _ *processor.BaseFilterConfig, _ processor.ProgressCallback) (*processor.AnalysisResult, error) {
+	analyse := func(_ context.Context, path string, _ *processor.BaseFilterConfig, _ processor.ProgressCallback) (*processor.AnalysisResult, error) {
 		index, ok := fileIndex[path]
 		if !ok {
-			t.Fatalf("analysisPoolAnalyze unexpected path %q", path)
+			t.Fatalf("analysisPoolAnalyse unexpected path %q", path)
 		}
 
 		delay := time.Duration(len(files)-index) * 20 * time.Millisecond
@@ -520,9 +520,9 @@ func TestRunAnalysisOnlyWithDeps_NonTTYBannerThenOrderedReports(t *testing.T) {
 			AdaptationDuration: 100 * time.Millisecond,
 		}, nil
 	}
-	origAnalyze := analysisPoolAnalyze
-	analysisPoolAnalyze = analyze
-	t.Cleanup(func() { analysisPoolAnalyze = origAnalyze })
+	origAnalyse := analysisPoolAnalyse
+	analysisPoolAnalyse = analyse
+	t.Cleanup(func() { analysisPoolAnalyse = origAnalyse })
 
 	reports := newReportCapture()
 	runAnalysisOnlyWithDeps(files, baseConfig, func(string, ...any) {}, len(files), false, analysisOnlyDeps{
@@ -540,7 +540,7 @@ func TestRunAnalysisOnlyWithDeps_NonTTYBannerThenOrderedReports(t *testing.T) {
 				Channels:   1,
 			}, nil
 		},
-		analyzeDetailed:     analyze,
+		analyseDetailed:     analyse,
 		writeMarkdownReport: reports.write,
 		printError: func(message string) {
 			t.Fatalf("printError called: %s", message)
@@ -612,10 +612,10 @@ func TestRunAnalysisOnlyWithDeps_FailureIsolation(t *testing.T) {
 	// One input fails with a plain (non-cancellation) error; the siblings
 	// return valid sentinels. A real error must not be suppressed by the
 	// cancellation filter, so the failing file reports through printError.
-	analyze := func(_ context.Context, path string, _ *processor.BaseFilterConfig, _ processor.ProgressCallback) (*processor.AnalysisResult, error) {
+	analyse := func(_ context.Context, path string, _ *processor.BaseFilterConfig, _ processor.ProgressCallback) (*processor.AnalysisResult, error) {
 		index, ok := fileIndex[path]
 		if !ok {
-			t.Fatalf("analysisPoolAnalyze unexpected path %q", path)
+			t.Fatalf("analysisPoolAnalyse unexpected path %q", path)
 		}
 		if index == failIndex {
 			return nil, boom
@@ -629,9 +629,9 @@ func TestRunAnalysisOnlyWithDeps_FailureIsolation(t *testing.T) {
 			AdaptationDuration: 100 * time.Millisecond,
 		}, nil
 	}
-	origAnalyze := analysisPoolAnalyze
-	analysisPoolAnalyze = analyze
-	t.Cleanup(func() { analysisPoolAnalyze = origAnalyze })
+	origAnalyse := analysisPoolAnalyse
+	analysisPoolAnalyse = analyse
+	t.Cleanup(func() { analysisPoolAnalyse = origAnalyse })
 
 	var printErrMu sync.Mutex
 	var printErrors []string
@@ -652,7 +652,7 @@ func TestRunAnalysisOnlyWithDeps_FailureIsolation(t *testing.T) {
 				Channels:   1,
 			}, nil
 		},
-		analyzeDetailed:     analyze,
+		analyseDetailed:     analyse,
 		writeMarkdownReport: reports.write,
 		printError: func(message string) {
 			printErrMu.Lock()

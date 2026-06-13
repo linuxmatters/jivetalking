@@ -94,7 +94,7 @@ type FileStatus int
 
 const (
 	StatusQueued FileStatus = iota
-	StatusAnalyzing
+	StatusAnalysing
 	StatusProcessing
 	StatusNormalising
 	StatusComplete
@@ -229,7 +229,7 @@ func meterTick() tea.Cmd {
 // meter should keep easing.
 func fileActive(s FileStatus) bool {
 	switch s {
-	case StatusAnalyzing, StatusProcessing, StatusNormalising:
+	case StatusAnalysing, StatusProcessing, StatusNormalising:
 		return true
 	default:
 		return false
@@ -276,7 +276,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case FileStartMsg:
 		if msg.FileIndex >= 0 && msg.FileIndex < len(m.Files) {
-			m.Files[msg.FileIndex].Status = StatusAnalyzing
+			m.Files[msg.FileIndex].Status = StatusAnalysing
 			m.Files[msg.FileIndex].StartTime = time.Now()
 		}
 		return m, nil
@@ -397,7 +397,7 @@ func updateFileProgress(fp FileProgress, msg ProgressMsg) FileProgress {
 
 	switch msg.Pass {
 	case processor.PassAnalysis:
-		fp.Status = StatusAnalyzing
+		fp.Status = StatusAnalysing
 	case processor.PassProcessing:
 		fp.Status = StatusProcessing
 	case processor.PassMeasuring, processor.PassNormalising:

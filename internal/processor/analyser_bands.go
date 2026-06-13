@@ -34,7 +34,7 @@ const speechBandAnalysisFilterFormat = "aformat=channel_layouts=mono,atrim=start
 
 // measureSpeechBandRMS measures the Overall RMS level (dBFS) of one frequency
 // band over a region of an already-opened audio file. It mirrors the
-// single-source/single-sink region measurement used by analyzer_output.go,
+// single-source/single-sink region measurement used by analyser_output.go,
 // band-limiting the downmixed signal before astats. Returns the RMS in dBFS and
 // ok=false when no RMS metadata was captured (e.g. region shorter than astats
 // warmup).

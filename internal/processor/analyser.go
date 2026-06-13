@@ -377,7 +377,7 @@ type OutputMeasurements struct {
 	SpeechSample *RegionSample `json:"speech_sample,omitempty"` // Measurements from same speech region
 }
 
-// AnalyzeAudio performs Pass 1: ebur128 + astats + aspectralstats analysis to get measurements
+// AnalyseAudio performs Pass 1: ebur128 + astats + aspectralstats analysis to get measurements
 // This is required for adaptive processing in Pass 2.
 //
 // Implementation note: ebur128 and astats write measurements to frame metadata with lavfi.r128.*
@@ -385,7 +385,7 @@ type OutputMeasurements struct {
 //
 // The noise floor and silence threshold are computed from interval data after the full pass,
 // avoiding the need for a separate pre-scan phase.
-func AnalyzeAudio(ctx stdcontext.Context, filename string, config *BaseFilterConfig, progressCallback ProgressCallback) (*AudioMeasurements, error) {
+func AnalyseAudio(ctx stdcontext.Context, filename string, config *BaseFilterConfig, progressCallback ProgressCallback) (*AudioMeasurements, error) {
 	// Default fallback threshold if interval analysis yields insufficient data
 	const defaultNoiseFloor = -50.0
 
@@ -701,7 +701,7 @@ func collectAnalysisFrames(ctx stdcontext.Context, filename string, config *Base
 				}
 				progressCallback(ProgressUpdate{
 					Pass:     context.Pass,
-					PassName: "Analyzing",
+					PassName: "Analysing",
 					Progress: progress,
 					Level:    currentLevel,
 					Duration: totalDuration,

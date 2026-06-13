@@ -46,7 +46,7 @@ const frozenSpectrogramSpec = "s=1024x512:scale=log:fscale=log:start=20:stop=200
 
 // regionBounds is an optional time window for a region spectrogram. Both fields
 // are in SECONDS, matching the atrim=start=%f:duration=%f precedent at
-// analyzer_output.go:18 and the record's Elected profile _s float seconds. A nil
+// analyser_output.go:18 and the record's Elected profile _s float seconds. A nil
 // *regionBounds means the whole-file path (no atrim, full stream).
 type regionBounds struct {
 	Start    float64

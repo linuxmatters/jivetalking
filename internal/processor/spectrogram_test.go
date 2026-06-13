@@ -78,7 +78,7 @@ func TestSpectrogramRegistryGate(t *testing.T) {
 //
 //   - nil bounds   → the bare frozen spec (whole file, no atrim, full stream).
 //   - bounds set   → atrim=start=%f:duration=%f,asetpts=PTS-STARTPTS, prepended,
-//     mirroring outputRegionAnalysisFilterFormat (analyzer_output.go:18) with the
+//     mirroring outputRegionAnalysisFilterFormat (analyser_output.go:18) with the
 //     astats,… tail swapped for showspectrumpic=<frozen>.
 func TestSpectrogramFilterSpecBranches(t *testing.T) {
 	t.Run("nil_bounds_whole_file", func(t *testing.T) {

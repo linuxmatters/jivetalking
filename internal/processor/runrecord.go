@@ -299,7 +299,7 @@ func newPass1Record(m *AudioMeasurements) *RunRecord {
 //     so the input sample is &SpeechProfile.RegionSample.
 //   - room-tone: the elected profile is a NoiseProfile, a slimmer struct with no
 //     RegionSample. The elected room-tone candidate's RegionSample is captured at
-//     election onto RegionMetrics.ElectedRoomToneSample (analyzer.go), so the input
+//     election onto RegionMetrics.ElectedRoomToneSample (analyser.go), so the input
 //     sample is that pointer when present, nil (omitempty) otherwise. The filtered
 //     and final room-tone samples still wire from OutputMeasurements.RoomToneSample.
 func newRegionsBlock(r *RegionMetrics) *RegionsBlock {
