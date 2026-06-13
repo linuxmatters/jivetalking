@@ -337,17 +337,7 @@ func separationBar(separationDB float64) string {
 	filled = max(0, min(filled, separationBarWidth))
 
 	ramp := lipgloss.Blend1D(separationBarWidth, cli.ColorRed, cli.ColorYellow, cli.ColorGreen)
-	var b strings.Builder
-	for i := range separationBarWidth {
-		var c color.Color = cli.ColorFill
-		ch := "▱"
-		if i < filled {
-			c = ramp[i]
-			ch = "▰"
-		}
-		b.WriteString(lipgloss.NewStyle().Foreground(c).Render(ch))
-	}
-	return b.String()
+	return renderFilledBar(separationBarWidth, filled, ramp)
 }
 
 // formatHz renders a frequency as "80 ㎐" below 1 kHz and "20.5 ㎑" at/above,

@@ -386,8 +386,15 @@ func GainBar(inputTP float64) string {
 	// zone colour directly: 3 cells = green (spot on), 4 = amber (hot), 5 = red
 	// (clipping).
 	ramp := lipgloss.Blend1D(gainBarWidth, cli.ColorCyanBright, cli.ColorBlue, cli.ColorGreen, cli.ColorOrange, cli.ColorRed)
+	return renderFilledBar(gainBarWidth, filled, ramp)
+}
+
+// renderFilledBar draws a width-cell coloured bar: the first filled cells use the
+// solid glyph styled by ramp[i], the rest use the empty glyph in cli.ColorFill.
+// Callers own the ramp construction and the filled-count rounding, which differ.
+func renderFilledBar(width, filled int, ramp []color.Color) string {
 	var b strings.Builder
-	for i := range gainBarWidth {
+	for i := range width {
 		var c color.Color = cli.ColorFill
 		ch := "▱"
 		if i < filled {
