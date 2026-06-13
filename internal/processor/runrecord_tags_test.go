@@ -212,30 +212,30 @@ func jsonKeySet(t *testing.T, v any) map[string]bool {
 // plumbing FilterOrder.
 func TestEffectiveFilterConfigJSON_HasCanonicalKeys(t *testing.T) {
 	cfg := EffectiveFilterConfig{
-		DS201HighPass: DS201HighPassConfig{Enabled: true, Frequency: 80, Poles: 2, Width: 0.707, Mix: 1.0, Transform: "tdii"},
-		DS201LowPass:  DS201LowPassConfig{Enabled: true, Frequency: 20500, Poles: 2, Width: 0.707, Mix: 1.0, Transform: "tdii"},
-		NoiseRemove:   NoiseRemoveConfig{Enabled: true, Strength: 0.002, PatchSec: 0.02, ResearchSec: 0.06, Smooth: 11, AfftdnEnabled: true, AfftdnNoiseReduction: 12, AfftdnNoiseType: "w", AfftdnTrackNoise: true},
-		DS201Gate:     DS201GateConfig{Enabled: true, Threshold: 0.01, Ratio: 2.0, Attack: 10, Release: 250, Range: 0.05, Knee: 3.0, Makeup: 1.0, Detection: "rms"},
-		LA2A:          LA2AConfig{Enabled: true, Threshold: -18, Ratio: 3.0, Attack: 10, Release: 200, Makeup: 0, Knee: 4.0, Mix: 1.0},
-		Deesser:       DeesserConfig{Enabled: true, Intensity: 0.6, Amount: 0.5, Frequency: 0.8},
+		RumbleHighPass:      RumbleHighPassConfig{Enabled: true, Frequency: 80, Poles: 2, Width: 0.707, Mix: 1.0, Transform: "tdii"},
+		BandlimitLowPass:    BandlimitLowPassConfig{Enabled: true, Frequency: 20500, Poles: 2, Width: 0.707, Mix: 1.0, Transform: "tdii"},
+		NoiseReduction:      NoiseReductionConfig{Enabled: true, Strength: 0.002, PatchSec: 0.02, ResearchSec: 0.06, Smooth: 11, AfftdnEnabled: true, AfftdnNoiseReduction: 12, AfftdnNoiseType: "w", AfftdnTrackNoise: true},
+		SpeechGate:          SpeechGateConfig{Enabled: true, Threshold: 0.01, Ratio: 2.0, Attack: 10, Release: 250, Range: 0.05, Knee: 3.0, Makeup: 1.0, Detection: "rms"},
+		LevellingCompressor: LevellingCompressorConfig{Enabled: true, Threshold: -18, Ratio: 3.0, Attack: 10, Release: 200, Makeup: 0, Knee: 4.0, Mix: 1.0},
+		Deesser:             DeesserConfig{Enabled: true, Intensity: 0.6, Amount: 0.5, Frequency: 0.8},
 		// Orchestration configs + FilterOrder must be excluded from the record.
 		Downmix:     DownmixConfig{Enabled: true},
 		Adeclick:    AdeclickConfig{Enabled: true, Threshold: 2.0},
-		FilterOrder: []FilterID{FilterDownmix, FilterDS201Gate},
+		FilterOrder: []FilterID{FilterDownmix, FilterSpeechGate},
 	}
 
 	keys := jsonKeySet(t, cfg)
 
 	for _, key := range []string{
 		// sub-config containers
-		"ds201_highpass", "ds201_lowpass", "noiseremove", "ds201_gate", "la2a", "deesser",
+		"rumble_highpass", "bandlimit_lowpass", "noise_reduction", "speech_gate", "levelling_compressor", "deesser",
 		// gate (§8.4)
 		"threshold_db", "ratio", "attack_ms", "release_ms", "range_db", "knee", "makeup", "detection",
-		// la2a
+		// levelling_compressor
 		"makeup_db",
 		// hp/lp
 		"frequency_hz", "poles_count", "width", "mix", "transform",
-		// noiseremove
+		// noise_reduction
 		"strength", "patch_s", "research_s", "smooth",
 		"afftdn_noise_reduction_db", "afftdn_noise_type", "afftdn_track_noise",
 		// deesser
@@ -264,21 +264,21 @@ func TestEffectiveFilterConfigJSON_HasCanonicalKeys(t *testing.T) {
 // retained processing-state diagnostics (§8.3): reason/clamp strings stay.
 func TestAdaptiveDiagnosticsJSON_HasCanonicalKeys(t *testing.T) {
 	diag := AdaptiveDiagnostics{
-		DS201LPReason:                "20.5 kHz band-limit (always on)",
-		DS201GateAggression:          0.45,
-		DS201GateDynamicRange:        14,
-		DS201GateQuietSpeechEstimate: -52,
-		DS201GateSpeechSeparation:    8,
-		DS201GateSpeechHeadroom:      3,
-		DS201GateThresholdUnclamped:  -45,
-		DS201GateClampReason:         "noise_floor",
-		DS201GateGentleMode:          false,
+		BandlimitLPReason:             "20.5 kHz band-limit (always on)",
+		SpeechGateAggression:          0.45,
+		SpeechGateDynamicRange:        14,
+		SpeechGateQuietSpeechEstimate: -52,
+		SpeechGateSpeechSeparation:    8,
+		SpeechGateSpeechHeadroom:      3,
+		SpeechGateThresholdUnclamped:  -45,
+		SpeechGateClampReason:         "noise_floor",
+		SpeechGateGentleMode:          false,
 	}
 
 	keys := jsonKeySet(t, diag)
 
 	for _, key := range []string{
-		"ds201_lowpass_reason", "aggression", "dynamic_range_db",
+		"bandlimit_lowpass_reason", "aggression", "dynamic_range_db",
 		"quiet_speech_estimate_dbfs", "separation_db", "speech_headroom_db",
 		"threshold_unclamped_db", "clamp_reason", "gentle_mode",
 	} {
@@ -288,7 +288,7 @@ func TestAdaptiveDiagnosticsJSON_HasCanonicalKeys(t *testing.T) {
 	}
 
 	for _, key := range []string{
-		"DS201GateAggression", "DS201GateSpeechSeparation", "DS201GateClampReason",
+		"SpeechGateAggression", "SpeechGateSpeechSeparation", "SpeechGateClampReason",
 		"separation", "aggression_index",
 	} {
 		if keys[key] {

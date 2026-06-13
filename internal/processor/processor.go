@@ -70,8 +70,8 @@ func AnalyseOnlyDetailed(ctx context.Context, inputPath string, config *BaseFilt
 
 // ProcessAudio performs complete four-pass audio processing:
 //   - Pass 1: Analyse audio to get measurements and noise floor estimate
-//   - Pass 2: Process audio through filter chain (downmix → ds201_highpass → ds201_lowpass → noiseremove[anlmdn+afftdn] → ds201_gate → la2a_compressor → deesser → analysis → resample)
-//     (Pass 3 measures loudnorm; Pass 4 applies alimiter (Volumax) + loudnorm + brickwall)
+//   - Pass 2: Process audio through filter chain (downmix → rumble_highpass → bandlimit_lowpass → noise_reduction[anlmdn+afftdn] → speech_gate → levelling_compressor → deesser → analysis → resample)
+//     (Pass 3 measures loudnorm; Pass 4 applies alimiter (levelling limiter) + loudnorm + brickwall)
 //
 // The output file will be named <basename>-LUFS-NN-processed.<ext> in the same directory as the input
 // If progressCallback is not nil, it will be called with progress updates

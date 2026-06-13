@@ -1620,7 +1620,7 @@ func TestBuildLoudnormFilterSpec_PreGain(t *testing.T) {
 			} else {
 				// The brickwall alimiter (attack=1) is always appended in Pass 4, so
 				// presence of "alimiter=" no longer signals a pre-limiter. Discriminate
-				// the pre-limiter Volumax specifically by its attack=5 signature
+				// the pre-limiter levelling limiter specifically by its attack=5 signature
 				// (buildPreLimiterPrefix), so this measures "was a pre-limiter added".
 				hasLimiter := strings.Contains(filterSpec, "attack=5")
 				if hasLimiter != needsLimiting {
@@ -1758,9 +1758,9 @@ func TestBuildLoudnormFilterSpecIgnoresNonNormalisationFields(t *testing.T) {
 
 	withUnrelatedFilterFields := *base
 	withUnrelatedFilterFields.FilterOrder = []FilterID{FilterAnalysis}
-	withUnrelatedFilterFields.DS201LowPass.Frequency = 12000
-	withUnrelatedFilterFields.DS201Gate.Ratio = 4.0
-	withUnrelatedFilterFields.LA2A.Threshold = -30.0
+	withUnrelatedFilterFields.BandlimitLowPass.Frequency = 12000
+	withUnrelatedFilterFields.SpeechGate.Ratio = 4.0
+	withUnrelatedFilterFields.LevellingCompressor.Threshold = -30.0
 
 	gotSpec := buildLoudnormFilterSpec(&withUnrelatedFilterFields, measurement, measurement.TargetOffset, 0, -1.0, false, 48000, "")
 	if gotSpec != controlSpec {

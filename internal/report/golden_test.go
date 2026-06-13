@@ -134,7 +134,7 @@ func TestRoundTripFromEmittedJSON(t *testing.T) {
 		"**Samples**",
 		"## Interval Summary",
 		"## Filter Chain",
-		"### DS201 gate",
+		"### Speech gate",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("round-trip report missing section that should survive: %q", want)

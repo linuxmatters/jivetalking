@@ -553,10 +553,10 @@ func TestProcessAudio(t *testing.T) {
 	config.Downmix.Enabled = true
 	config.Analysis.Enabled = true
 	config.Resample.Enabled = true
-	config.DS201HighPass.Enabled = true // Basic processing
+	config.RumbleHighPass.Enabled = true // Basic processing
 	// Non-default seed on purpose: the HP is fixed, so it must pass through
 	// AdaptConfig unchanged (asserted below). Do not "simplify" to 80.
-	config.DS201HighPass.Frequency = 95.0
+	config.RumbleHighPass.Frequency = 95.0
 	baseFilterOrder := append([]FilterID(nil), config.FilterOrder...)
 
 	// Process the audio with a no-op progress callback
@@ -613,8 +613,8 @@ func TestProcessAudio(t *testing.T) {
 	if !reflect.DeepEqual(config.FilterOrder, baseFilterOrder) {
 		t.Errorf("base FilterOrder = %v, want %v", config.FilterOrder, baseFilterOrder)
 	}
-	if config.DS201HighPass.Frequency != 95.0 {
-		t.Errorf("base DS201HighPass.Frequency = %.1f, want unchanged 95.0", config.DS201HighPass.Frequency)
+	if config.RumbleHighPass.Frequency != 95.0 {
+		t.Errorf("base RumbleHighPass.Frequency = %.1f, want unchanged 95.0", config.RumbleHighPass.Frequency)
 	}
 	if result.Config == nil {
 		t.Fatal("ProcessAudio returned nil config")
@@ -626,10 +626,10 @@ func TestProcessAudio(t *testing.T) {
 	if !reflect.DeepEqual(result.Config.FilterOrder, Pass2FilterOrder) {
 		t.Errorf("result config FilterOrder = %v, want %v", result.Config.FilterOrder, Pass2FilterOrder)
 	}
-	// The DS201 highpass is fixed and non-adaptive: the effective config carries
+	// The rumble highpass is fixed and non-adaptive: the effective config carries
 	// the seed frequency through unchanged (no tuning step overwrites it).
-	if result.Config.DS201HighPass.Frequency != 95.0 {
-		t.Errorf("result config DS201HighPass.Frequency = %.1f, want seed 95.0 passed through unchanged", result.Config.DS201HighPass.Frequency)
+	if result.Config.RumbleHighPass.Frequency != 95.0 {
+		t.Errorf("result config RumbleHighPass.Frequency = %.1f, want seed 95.0 passed through unchanged", result.Config.RumbleHighPass.Frequency)
 	}
 	result.Config.FilterOrder[0] = FilterDeesser
 	if config.FilterOrder[0] == FilterDeesser {
@@ -832,8 +832,8 @@ func TestAnalyseOnlyDetailedTimings(t *testing.T) {
 	config := newTestBaseConfig()
 	config.Downmix.Enabled = true
 	config.Analysis.Enabled = true
-	config.DS201HighPass.Enabled = true
-	config.DS201HighPass.Frequency = 95.0
+	config.RumbleHighPass.Enabled = true
+	config.RumbleHighPass.Frequency = 95.0
 	baseFilterOrder := append([]FilterID(nil), config.FilterOrder...)
 
 	result, err := AnalyseOnlyDetailed(context.Background(), testFile, config, nil)
@@ -854,8 +854,8 @@ func TestAnalyseOnlyDetailedTimings(t *testing.T) {
 	if !reflect.DeepEqual(config.FilterOrder, baseFilterOrder) {
 		t.Errorf("base FilterOrder = %v, want %v", config.FilterOrder, baseFilterOrder)
 	}
-	if config.DS201HighPass.Frequency != 95.0 {
-		t.Errorf("base DS201HighPass.Frequency = %.1f, want unchanged 95.0", config.DS201HighPass.Frequency)
+	if config.RumbleHighPass.Frequency != 95.0 {
+		t.Errorf("base RumbleHighPass.Frequency = %.1f, want unchanged 95.0", config.RumbleHighPass.Frequency)
 	}
 	if result.AnalysisDuration <= 0 {
 		t.Errorf("AnalysisDuration = %s, want > 0", result.AnalysisDuration)
@@ -883,7 +883,7 @@ func TestFilterChainBuilder(t *testing.T) {
 	}
 
 	// Enable additional filters for Pass 2 test
-	config.DS201HighPass.Enabled = true
+	config.RumbleHighPass.Enabled = true
 
 	filterSpec = config.BuildFilterSpec()
 	t.Logf("Pass 2 filter spec: %s", filterSpec)

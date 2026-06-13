@@ -375,7 +375,7 @@ func newSpeechCandidatesSummary(r *RegionMetrics) *CandidatesSummary {
 // reference value in the record (§8.3), not a verdict.
 const targetILUFS = -16.0
 
-// newFiltersBlock assembles the §8.1 filters block. The DS201 gate Threshold and
+// newFiltersBlock assembles the §8.1 filters block. The speech gate Threshold and
 // Range are stored as LINEAR amplitudes on the live config (FFmpeg agate
 // consumes linear) but tagged threshold_db/range_db; emitting the linear value
 // under a _db key is misleading. This converts both to honest dB on a LOCAL copy
@@ -384,11 +384,11 @@ const targetILUFS = -16.0
 // already correct units.
 func newFiltersBlock(cfg *EffectiveFilterConfig, diag *AdaptiveDiagnostics) *FiltersBlock {
 	local := *cfg // shallow copy; isolates the gate dB conversion from the DSP config
-	if local.DS201Gate.Threshold > 0 {
-		local.DS201Gate.Threshold = LinearToDb(local.DS201Gate.Threshold)
+	if local.SpeechGate.Threshold > 0 {
+		local.SpeechGate.Threshold = LinearToDb(local.SpeechGate.Threshold)
 	}
-	if local.DS201Gate.Range > 0 {
-		local.DS201Gate.Range = LinearToDb(local.DS201Gate.Range)
+	if local.SpeechGate.Range > 0 {
+		local.SpeechGate.Range = LinearToDb(local.SpeechGate.Range)
 	}
 	return &FiltersBlock{EffectiveFilterConfig: local, Diagnostics: diag}
 }

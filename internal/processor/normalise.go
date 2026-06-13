@@ -398,7 +398,8 @@ func calculatePreGain(measuredI, targetI, targetTP float64) (preGainDB, reDerive
 // Returns a comma-separated filter string fragment containing volume (when pre-gain
 // is active) and alimiter (when limiting is needed), or "" when no limiting is needed.
 //
-// CBS Volumax-inspired parameters for transparent peak limiting:
+// Parameters for transparent peak limiting (this is the levellingLimiter: the
+// prefix limiter that creates true-peak headroom so loudnorm stays in linear mode):
 //   - attack=5ms: Gentle attack preserves transient shape
 //   - release=100ms: Smooth recovery eliminates pumping
 //   - asc=1, asc_level=0.8: program-dependent release shaper, dormant on typical
@@ -424,17 +425,18 @@ func buildPreLimiterPrefix(preGainDB, ceiling float64, needsLimiting bool) strin
 	}
 
 	limiterCeilingLinear := Decibels(ceiling).LinearAmplitude().Float64()
-	limiterFilter := fmt.Sprintf(
+	levellingLimiterFilter := fmt.Sprintf(
 		"alimiter=limit=%.6f:attack=5:release=100:level_in=1:level_out=1:level=0:latency=1:asc=1:asc_level=0.8",
 		limiterCeilingLinear,
 	)
-	parts = append(parts, limiterFilter)
+	parts = append(parts, levellingLimiterFilter)
 
 	return strings.Join(parts, ",")
 }
 
-// buildBrickwallLimiter builds the final-stage source-rate brickwall limiter.
-// alimiter limits SAMPLE peak, so ceilingDBTP is the sample-peak ceiling: the
+// buildBrickwallLimiter builds the final-stage source-rate brickwall limiter (the
+// peakLimiter: it owns true-peak delivery). alimiter limits SAMPLE peak, so
+// ceilingDBTP is the sample-peak ceiling: the
 // caller sets it below the loudnorm true-peak target by the inter-sample
 // allowance (brickwallTruePeakHeadroomDB) so oversampled true peak still lands
 // under the target. This helper is a pure dBTP→string converter and applies no

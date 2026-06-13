@@ -121,15 +121,15 @@ func AdaptConfig(config *BaseFilterConfig, measurements *AudioMeasurements) (*Ef
 
 	// Tune each filter adaptively based on measurements
 	// Order matters: gate threshold calculated BEFORE denoise filters
-	// The DS201 highpass is fixed (80 Hz, 12 dB/oct) from defaultDS201HighPassConfig; no tuning step.
-	tuneDS201LowPass(effectiveConfig, diagnostics, measurements) // Unconditional 20.5 kHz band-limit
+	// The rumble highpass is fixed (80 Hz, 12 dB/oct) from defaultRumbleHighPassConfig; no tuning step.
+	tuneBandlimitLowPass(effectiveConfig, diagnostics, measurements) // Unconditional 20.5 kHz band-limit
 
-	// NoiseRemove (anlmdn + afftdn) has no adaptive tuning: anlmdn is fixed from
+	// NoiseReduction (anlmdn + afftdn) has no adaptive tuning: anlmdn is fixed from
 	// spike validation and afftdn nr is fixed at 12 to avoid warble.
 
-	tuneDS201Gate(effectiveConfig, diagnostics, measurements) // DS201-style soft expander gate
+	tuneSpeechGate(effectiveConfig, diagnostics, measurements) // Soft expander gate cleaning inter-speech gaps
 	tuneDeesser(effectiveConfig, measurements)
-	tuneLA2ACompressor(effectiveConfig, diagnostics, measurements, config.logger)
+	tuneLevellingCompressor(effectiveConfig, diagnostics, measurements, config.logger)
 	// The limiter lives in Pass 4 and is tuned from Pass 3 measurements, not here.
 
 	// Final safety checks
@@ -140,28 +140,28 @@ func AdaptConfig(config *BaseFilterConfig, measurements *AudioMeasurements) (*Ef
 
 // sanitizeConfig ensures no NaN or Inf values remain after adaptive tuning.
 func sanitizeConfig(config *EffectiveFilterConfig) {
-	sanitizeDS201HighPassConfig(&config.DS201HighPass)
-	sanitizeDS201LowPassConfig(&config.DS201LowPass)
-	sanitizeNoiseRemoveConfig(&config.NoiseRemove)
-	sanitizeDS201GateConfig(&config.DS201Gate)
-	sanitizeLA2AConfig(&config.LA2A)
+	sanitizeRumbleHighPassConfig(&config.RumbleHighPass)
+	sanitizeBandlimitLowPassConfig(&config.BandlimitLowPass)
+	sanitizeNoiseReductionConfig(&config.NoiseReduction)
+	sanitizeSpeechGateConfig(&config.SpeechGate)
+	sanitizeLevellingCompressorConfig(&config.LevellingCompressor)
 	sanitizeDeesserConfig(&config.Deesser)
 }
 
-func sanitizeDS201HighPassConfig(config *DS201HighPassConfig) {
-	config.Frequency = sanitizeFloat(config.Frequency, ds201HPDefaultFreq)
+func sanitizeRumbleHighPassConfig(config *RumbleHighPassConfig) {
+	config.Frequency = sanitizeFloat(config.Frequency, rumbleHPDefaultFreq)
 	config.Width = sanitizeFloat(config.Width, 0.707)
 	config.Mix = sanitizeFloat(config.Mix, 1.0)
 }
 
-func sanitizeDS201LowPassConfig(config *DS201LowPassConfig) {
-	config.Frequency = sanitizeFloat(config.Frequency, ds201LPBandLimitFreq)
+func sanitizeBandlimitLowPassConfig(config *BandlimitLowPassConfig) {
+	config.Frequency = sanitizeFloat(config.Frequency, bandlimitLPFreq)
 	config.Width = sanitizeFloat(config.Width, 0.707)
 	config.Mix = sanitizeFloat(config.Mix, 1.0)
 }
 
-func sanitizeNoiseRemoveConfig(config *NoiseRemoveConfig) {
-	defaults := defaultNoiseRemoveConfig()
+func sanitizeNoiseReductionConfig(config *NoiseReductionConfig) {
+	defaults := defaultNoiseReductionConfig()
 	config.Strength = sanitizeFloat(config.Strength, defaults.Strength)
 	config.PatchSec = sanitizeFloat(config.PatchSec, defaults.PatchSec)
 	config.ResearchSec = sanitizeFloat(config.ResearchSec, defaults.ResearchSec)
@@ -169,10 +169,10 @@ func sanitizeNoiseRemoveConfig(config *NoiseRemoveConfig) {
 	config.AfftdnNoiseReduction = sanitizeFloat(config.AfftdnNoiseReduction, defaults.AfftdnNoiseReduction)
 }
 
-func sanitizeDS201GateConfig(config *DS201GateConfig) {
-	defaults := defaultDS201GateConfig()
+func sanitizeSpeechGateConfig(config *SpeechGateConfig) {
+	defaults := defaultSpeechGateConfig()
 	if math.IsNaN(config.Threshold) || math.IsInf(config.Threshold, 0) || config.Threshold <= 0 {
-		config.Threshold = ds201DefaultGateThreshold
+		config.Threshold = speechGateDefaultThreshold
 	}
 	config.Ratio = sanitizeFloat(config.Ratio, defaults.Ratio)
 	config.Attack = sanitizeFloat(config.Attack, defaults.Attack)
@@ -182,10 +182,10 @@ func sanitizeDS201GateConfig(config *DS201GateConfig) {
 	config.Makeup = sanitizeFloat(config.Makeup, defaults.Makeup)
 }
 
-func sanitizeLA2AConfig(config *LA2AConfig) {
-	defaults := defaultLA2AConfig()
+func sanitizeLevellingCompressorConfig(config *LevellingCompressorConfig) {
+	defaults := defaultLevellingCompressorConfig()
 	config.Ratio = sanitizeFloat(config.Ratio, defaults.Ratio)
-	config.Threshold = sanitizeFloat(config.Threshold, defaultLA2AThreshold)
+	config.Threshold = sanitizeFloat(config.Threshold, defaultLevellingCompressorThreshold)
 	config.Attack = sanitizeFloat(config.Attack, defaults.Attack)
 	config.Release = sanitizeFloat(config.Release, defaults.Release)
 	config.Makeup = sanitizeFloat(config.Makeup, defaults.Makeup)

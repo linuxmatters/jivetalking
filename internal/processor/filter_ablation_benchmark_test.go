@@ -272,7 +272,7 @@ func fullbenchPass2AblationVariants() []fullbenchPass2AblationVariant {
 			ExtractMeasurements: true,
 			BuildSpec: func(config *EffectiveFilterConfig) string {
 				ablated := *config
-				ablated.NoiseRemove.AfftdnEnabled = false
+				ablated.NoiseReduction.AfftdnEnabled = false
 				return ablated.BuildFilterSpec()
 			},
 		},
@@ -281,8 +281,8 @@ func fullbenchPass2AblationVariants() []fullbenchPass2AblationVariant {
 			ExtractMeasurements: true,
 			BuildSpec: func(config *EffectiveFilterConfig) string {
 				ablated := *config
-				ablated.DS201Gate.Enabled = false
-				ablated.LA2A.Enabled = false
+				ablated.SpeechGate.Enabled = false
+				ablated.LevellingCompressor.Enabled = false
 				return ablated.BuildFilterSpec()
 			},
 		},
@@ -298,10 +298,10 @@ func buildFullbenchPass2WithoutAnlmdnSpec(config *EffectiveFilterConfig) string 
 
 	filters := make([]string, 0, len(order))
 	for _, id := range order {
-		if id == FilterNoiseRemove {
+		if id == FilterNoiseReduction {
 			// Drop anlmdn; keep only the afftdn tail of the noise block.
-			if ablated.NoiseRemove.Enabled {
-				if spec := ablated.NoiseRemove.buildAfftdnFilter(); spec != "" {
+			if ablated.NoiseReduction.Enabled {
+				if spec := ablated.NoiseReduction.buildAfftdnFilter(); spec != "" {
 					filters = append(filters, spec)
 				}
 			}
@@ -419,12 +419,12 @@ func extractFullbenchFilterClause(spec, prefix string) string {
 func TestFullbenchPass2AblationSpecs(t *testing.T) {
 	config := newFullbenchEffectiveTestConfig()
 	config.Downmix.Enabled = true
-	config.DS201HighPass.Enabled = true
-	config.DS201LowPass.Enabled = true
-	config.NoiseRemove.Enabled = true
-	config.NoiseRemove.AfftdnEnabled = true
-	config.DS201Gate.Enabled = true
-	config.LA2A.Enabled = true
+	config.RumbleHighPass.Enabled = true
+	config.BandlimitLowPass.Enabled = true
+	config.NoiseReduction.Enabled = true
+	config.NoiseReduction.AfftdnEnabled = true
+	config.SpeechGate.Enabled = true
+	config.LevellingCompressor.Enabled = true
 	config.Deesser.Enabled = true
 	config.Deesser.Intensity = 0.5
 	config.Analysis.Enabled = true
@@ -509,12 +509,12 @@ func TestFullbenchPass2AblationSpecs(t *testing.T) {
 func TestFullbenchPass2WithoutAnlmdnPreservesOrder(t *testing.T) {
 	config := newFullbenchEffectiveTestConfig()
 	config.Downmix.Enabled = true
-	config.DS201HighPass.Enabled = true
-	config.DS201LowPass.Enabled = true
-	config.NoiseRemove.Enabled = true
-	config.NoiseRemove.AfftdnEnabled = true
-	config.DS201Gate.Enabled = true
-	config.LA2A.Enabled = true
+	config.RumbleHighPass.Enabled = true
+	config.BandlimitLowPass.Enabled = true
+	config.NoiseReduction.Enabled = true
+	config.NoiseReduction.AfftdnEnabled = true
+	config.SpeechGate.Enabled = true
+	config.LevellingCompressor.Enabled = true
 	config.Deesser.Enabled = true
 	config.Deesser.Intensity = 0.5
 	config.Analysis.Enabled = true

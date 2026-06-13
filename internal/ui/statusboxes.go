@@ -214,7 +214,7 @@ func renderChainBox(s AdaptedSummary, height int) string {
 	w := chainLabelWidth
 	if !s.ChainReady {
 		rows := []string{
-			pendingRow("Mix", w),
+			pendingRow("Downmix", w),
 			pendingRow("Hi-pass", w),
 			pendingRow("Lo-pass", w),
 			pendingRow("Denoise", w),
@@ -259,7 +259,7 @@ func renderChainBox(s AdaptedSummary, height int) string {
 	}
 
 	rows := []string{
-		activeRow("Mix", w, 0, mix),
+		activeRow("Downmix", w, 0, mix),
 		activeRow("Hi-pass", w, 0, formatHz(s.HighPassHz)),
 		activeRow("Lo-pass", w, 0, formatHz(s.LowPassHz)),
 		activeRow("Denoise", w, 0, denoise),
@@ -283,7 +283,7 @@ func renderAnalysisBox(s AdaptedSummary, height int) string {
 			pendingRow("SNR Gap", w),
 			pendingRow("Dynamics", w),
 			pendingRow("True peak", w),
-			pendingRow("Soft Gate", w),
+			pendingRow("Soft gate", w),
 			pendingRow("Sibilance", w),
 			pendingRow("Loudness", w),
 		}
@@ -306,9 +306,9 @@ func renderAnalysisBox(s AdaptedSummary, height int) string {
 		sibilance = activeRow("Sibilance", w, 0, fmt.Sprintf("%.0f %s", s.SibilanceDB, unitDB))
 	}
 
-	gentle := offRow("Soft Gate", w, "OFF")
+	gentle := offRow("Soft gate", w, "OFF")
 	if s.GentleMode {
-		gentle = activeRow("Soft Gate", w, 0, "ON")
+		gentle = activeRow("Soft gate", w, 0, "ON")
 	}
 
 	// Soft Gate (gate gentle mode) on row 6 and Sibilance on row 7 so Sibilance lines up with the

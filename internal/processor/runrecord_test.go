@@ -35,8 +35,8 @@ func populatedProcessingResult() *ProcessingResult {
 	cfg := EffectiveFilterConfig(DefaultFilterConfig().filterConfigDefaults)
 	// Gate Threshold/Range are stored LINEAR on the live config; set realistic
 	// linear amplitudes so the dB conversion in the filters block is exercised.
-	cfg.DS201Gate.Threshold = Decibels(-45).LinearAmplitude().Float64()
-	cfg.DS201Gate.Range = Decibels(-22).LinearAmplitude().Float64()
+	cfg.SpeechGate.Threshold = Decibels(-45).LinearAmplitude().Float64()
+	cfg.SpeechGate.Range = Decibels(-22).LinearAmplitude().Float64()
 
 	final := populatedOutputMeasurements()
 
@@ -44,7 +44,7 @@ func populatedProcessingResult() *ProcessingResult {
 		OutputPath:           "/tmp/episode-LUFS-16-processed.flac",
 		Measurements:         populatedAudioMeasurements(),
 		Config:               &cfg,
-		Diagnostics:          &AdaptiveDiagnostics{DS201GateAggression: 0.4, DS201GateClampReason: "none"},
+		Diagnostics:          &AdaptiveDiagnostics{SpeechGateAggression: 0.4, SpeechGateClampReason: "none"},
 		FilteredMeasurements: populatedOutputMeasurements(),
 		NormResult: &NormalisationResult{
 			InputLUFS: -18, OutputLUFS: -16, EffectiveTargetI: -16,
@@ -436,7 +436,7 @@ func TestRunRecord_GateThresholdIsDecibels(t *testing.T) {
 	rec := NewRunRecord(populatedProcessingResult())
 	tree, _ := marshalRecordTree(t, rec)
 
-	gate := tree["filters"].(map[string]any)["ds201_gate"].(map[string]any)
+	gate := tree["filters"].(map[string]any)["speech_gate"].(map[string]any)
 
 	thr, ok := gate["threshold_db"].(float64)
 	if !ok {

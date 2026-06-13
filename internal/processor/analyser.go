@@ -33,10 +33,10 @@ type RoomToneRegion struct {
 
 // NoiseProfile contains measurements from the elected room tone region.
 // These measurements serve as a reference baseline for adaptive filter tuning:
-//   - MeasuredNoiseFloor → elected noise floor (Noise.Floor) feeding the DS201
+//   - MeasuredNoiseFloor → elected noise floor (Noise.Floor) feeding the speech
 //     gate threshold and de-esser/quality references.
-//   - CrestFactor/PeakLevel → peak-reference input to the legacy DS201 gate
-//     threshold path (calculateDS201GateThresholdLegacy via adaptive_ds201_gate.go),
+//   - CrestFactor/PeakLevel → peak-reference input to the legacy speech gate
+//     threshold path (calculateSpeechGateThresholdLegacy via adaptive_speech_gate.go),
 //     reached only when noise-to-speech separation is too small for the aggression maths.
 //
 // Entropy and the spectral fields are measured here for the report and
@@ -593,7 +593,7 @@ func assignInputNoiseFloor(measurements *AudioMeasurements, acc *metadataAccumul
 }
 
 func assignInputMeasurementSuggestions(measurements *AudioMeasurements) {
-	gateThresholdDB := calculateAdaptiveDS201GateThreshold(measurements.Noise.Floor, measurements.Dynamics.RMSTrough)
+	gateThresholdDB := calculateAdaptiveSpeechGateThreshold(measurements.Noise.Floor, measurements.Dynamics.RMSTrough)
 	measurements.SuggestedGateThreshold = math.Pow(10, gateThresholdDB/20.0)
 
 	if measurements.Dynamics.RMSLevel != 0 && measurements.Noise.Floor != 0 {
@@ -747,7 +747,7 @@ func collectAnalysisFrames(ctx stdcontext.Context, filename string, config *Base
 	}, nil
 }
 
-// calculateAdaptiveDS201GateThreshold computes a data-driven gate threshold based on
+// calculateAdaptiveSpeechGateThreshold computes a data-driven gate threshold based on
 // the measured noise floor and RMS trough (quiet speech indicator).
 //
 // Strategy:
@@ -764,7 +764,7 @@ func collectAnalysisFrames(ctx stdcontext.Context, filename string, config *Base
 // Safety bounds:
 //   - Never below noise floor (would gate during silence)
 //   - Never above -35dBFS (would cut quiet speech)
-func calculateAdaptiveDS201GateThreshold(noiseFloor, rmsTrough float64) float64 {
+func calculateAdaptiveSpeechGateThreshold(noiseFloor, rmsTrough float64) float64 {
 	// If RMSTrough is unavailable or invalid, use a sensible fallback
 	if rmsTrough == 0 || rmsTrough <= noiseFloor {
 		// Fallback: 6dB above noise floor (conservative default)

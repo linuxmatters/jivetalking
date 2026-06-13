@@ -19,12 +19,12 @@ type AdaptedSummary struct {
 	// Filter Chain rows.
 	DownmixMono  bool    // downmix to mono enabled
 	SampleRate   int     // output sample rate (Hz), e.g. 44100
-	HighPassHz   float64 // DS201 high-pass corner (Hz)
-	LowPassHz    float64 // DS201 low-pass corner (Hz)
+	HighPassHz   float64 // Rumble high-pass corner (Hz)
+	LowPassHz    float64 // Band-limit low-pass corner (Hz)
 	DenoiseNLM   bool    // anlmdn stage active
 	DenoiseFFT   bool    // afftdn stage active
-	GateThreshDB float64 // DS201 gate threshold (dB, from linear)
-	CompThreshDB float64 // LA-2A adapted threshold (dB)
+	GateThreshDB float64 // Speech gate threshold (dB, from linear)
+	CompThreshDB float64 // Levelling compressor adapted threshold (dB)
 	DeesserOn    bool    // de-esser engaged (Intensity > 0)
 	DeesserI     float64 // de-esser intensity
 
@@ -40,11 +40,11 @@ type AdaptedSummary struct {
 	NoiseFloorDB float64 // noise floor (dBFS)
 	SeparationDB float64 // voice / noise separation (dB)
 	InputLRA     float64 // input loudness range (LU)
-	GateRatio    float64 // DS201 gate ratio (x:1)
+	GateRatio    float64 // Speech gate ratio (x:1)
 	TruePeakDBTP float64 // input true peak (dBTP)
 	HasSibilance bool    // speech bands measured (sibilance available)
 	SibilanceDB  float64 // SibBandRMS - BodyBandRMS (dB)
-	GentleMode   bool    // DS201 gate gentle mode engaged
+	GentleMode   bool    // Speech gate gentle mode engaged
 	InputLUFS    float64 // input integrated loudness (LUFS)
 	TargetLUFS   float64 // loudnorm target (LUFS)
 }
@@ -65,19 +65,19 @@ func NewAdaptedSummary(cfg *processor.EffectiveFilterConfig, diag *processor.Ada
 	// Filter Chain.
 	s.DownmixMono = cfg.Downmix.Enabled
 	s.SampleRate = cfg.Resample.SampleRate
-	s.HighPassHz = cfg.DS201HighPass.Frequency
-	s.LowPassHz = cfg.DS201LowPass.Frequency
-	s.DenoiseNLM = cfg.NoiseRemove.Enabled
-	s.DenoiseFFT = cfg.NoiseRemove.AfftdnEnabled
-	s.GateThreshDB = processor.LinearToDb(cfg.DS201Gate.Threshold)
-	s.CompThreshDB = cfg.LA2A.Threshold
+	s.HighPassHz = cfg.RumbleHighPass.Frequency
+	s.LowPassHz = cfg.BandlimitLowPass.Frequency
+	s.DenoiseNLM = cfg.NoiseReduction.Enabled
+	s.DenoiseFFT = cfg.NoiseReduction.AfftdnEnabled
+	s.GateThreshDB = processor.LinearToDb(cfg.SpeechGate.Threshold)
+	s.CompThreshDB = cfg.LevellingCompressor.Threshold
 	s.DeesserI = cfg.Deesser.Intensity
 	s.DeesserOn = cfg.Deesser.Intensity > 0
 
 	// Analysis.
 	s.NoiseFloorDB = m.Noise.Floor
 	s.InputLRA = m.Loudness.InputLRA
-	s.GateRatio = cfg.DS201Gate.Ratio
+	s.GateRatio = cfg.SpeechGate.Ratio
 	s.TruePeakDBTP = m.Loudness.InputTP
 	s.InputLUFS = m.Loudness.InputI
 	s.TargetLUFS = cfg.Loudnorm.TargetI
@@ -95,7 +95,7 @@ func NewAdaptedSummary(cfg *processor.EffectiveFilterConfig, diag *processor.Ada
 	}
 
 	if diag != nil {
-		s.GentleMode = diag.DS201GateGentleMode
+		s.GentleMode = diag.SpeechGateGentleMode
 	}
 
 	return s

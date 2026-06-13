@@ -227,7 +227,7 @@ func TestAnalyseAudioDoesNotMutateCallerConfig(t *testing.T) {
 	defer cleanupTestAudio(t, testFile)
 
 	config := DefaultFilterConfig()
-	config.FilterOrder = []FilterID{FilterNoiseRemove, FilterAnalysis}
+	config.FilterOrder = []FilterID{FilterNoiseReduction, FilterAnalysis}
 	config.Analysis.RoomToneScanDuration = 250 * time.Millisecond
 
 	originalOrder := append([]FilterID(nil), config.FilterOrder...)
@@ -328,10 +328,10 @@ func TestCalculateAdaptiveGateThreshold(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := calculateAdaptiveDS201GateThreshold(tt.noiseFloor, tt.rmsTrough)
+			result := calculateAdaptiveSpeechGateThreshold(tt.noiseFloor, tt.rmsTrough)
 
 			if result < tt.wantMin || result > tt.wantMax {
-				t.Errorf("calculateAdaptiveDS201GateThreshold(%.1f, %.1f) = %.1f dB, want %.1f to %.1f dB [%s]",
+				t.Errorf("calculateAdaptiveSpeechGateThreshold(%.1f, %.1f) = %.1f dB, want %.1f to %.1f dB [%s]",
 					tt.noiseFloor, tt.rmsTrough, result, tt.wantMin, tt.wantMax, tt.desc)
 			}
 		})

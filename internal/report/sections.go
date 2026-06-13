@@ -689,9 +689,9 @@ func formatInt(n int) string {
 // =============================================================================
 
 // renderFilters renders the Pass-2 filter chain in PROCESSING ORDER (downmix →
-// high-pass → low-pass → noise removal → gate → LA-2A → de-esser), one
+// high-pass → low-pass → noise removal → gate → levelling compressor → de-esser), one
 // Parameter/Value sub-table per filter, plus the adaptive diagnostics block. Each
-// filter's heading carries the factual fixed-design label (e.g. "DS201 high-pass
+// filter's heading carries the factual fixed-design label (e.g. "Rumble high-pass
 // — 80 Hz, 12 dB/oct") as a STATIC descriptive statement, not a per-file verdict;
 // the rows carry the per-file parameters off filters.<filter>.*. The gate
 // threshold_db/range_db are already dB-converted at record assembly
@@ -709,71 +709,71 @@ func renderFilters(rec *processor.RunRecord) string {
 	b.WriteString("### Downmix\n\n")
 	b.WriteString("Stereo-to-mono downmix using FFmpeg's standard downmix matrix.\n\n")
 
-	b.WriteString("### DS201 high-pass\n\n")
+	b.WriteString("### Rumble high-pass\n\n")
 	b.WriteString("Removes subsonic rumble before the gate. Fixed corner, 2-pole Butterworth (12 dB/oct), non-adaptive.\n\n")
 	b.WriteString(renderParamTable([]paramRow{
-		{"Enabled", boolCell(f.DS201HighPass.Enabled)},
-		{"Frequency (Hz)", formatMetric(f.DS201HighPass.Frequency, 0)},
-		{"Poles", formatInt(f.DS201HighPass.Poles)},
-		{"Width (Q)", formatMetric(f.DS201HighPass.Width, 3)},
-		{"Mix", formatMetric(f.DS201HighPass.Mix, 2)},
-		{"Transform", stringCell(f.DS201HighPass.Transform)},
+		{"Enabled", boolCell(f.RumbleHighPass.Enabled)},
+		{"Frequency (Hz)", formatMetric(f.RumbleHighPass.Frequency, 0)},
+		{"Poles", formatInt(f.RumbleHighPass.Poles)},
+		{"Width (Q)", formatMetric(f.RumbleHighPass.Width, 3)},
+		{"Mix", formatMetric(f.RumbleHighPass.Mix, 2)},
+		{"Transform", stringCell(f.RumbleHighPass.Transform)},
 	}))
 	b.WriteString("\n")
 
-	b.WriteString("### DS201 low-pass\n\n")
+	b.WriteString("### Band-limit low-pass\n\n")
 	b.WriteString("Unconditional 20.5 kHz band-limit (2-pole, 12 dB/oct), giving the encoder a consistent bandwidth. Non-adaptive.\n\n")
 	b.WriteString(renderParamTable([]paramRow{
-		{"Enabled", boolCell(f.DS201LowPass.Enabled)},
-		{"Frequency (Hz)", formatMetric(f.DS201LowPass.Frequency, 0)},
-		{"Poles", formatInt(f.DS201LowPass.Poles)},
-		{"Width (Q)", formatMetric(f.DS201LowPass.Width, 3)},
-		{"Mix", formatMetric(f.DS201LowPass.Mix, 2)},
-		{"Transform", stringCell(f.DS201LowPass.Transform)},
+		{"Enabled", boolCell(f.BandlimitLowPass.Enabled)},
+		{"Frequency (Hz)", formatMetric(f.BandlimitLowPass.Frequency, 0)},
+		{"Poles", formatInt(f.BandlimitLowPass.Poles)},
+		{"Width (Q)", formatMetric(f.BandlimitLowPass.Width, 3)},
+		{"Mix", formatMetric(f.BandlimitLowPass.Mix, 2)},
+		{"Transform", stringCell(f.BandlimitLowPass.Transform)},
 	}))
 	b.WriteString("\n")
 
 	b.WriteString("### Noise removal\n\n")
 	b.WriteString("anlmdn Non-Local Means denoiser at the source rate, followed by an afftdn FFT spectral denoise tail.\n\n")
 	b.WriteString(renderParamTable([]paramRow{
-		{"Enabled", boolCell(f.NoiseRemove.Enabled)},
-		{"Strength (s)", formatMetric(f.NoiseRemove.Strength, 5)},
-		{"Patch (s)", formatMetric(f.NoiseRemove.PatchSec, 4)},
-		{"Research (s)", formatMetric(f.NoiseRemove.ResearchSec, 4)},
-		{"Smooth (m)", formatMetric(f.NoiseRemove.Smooth, 0)},
-		{"afftdn enabled", boolCell(f.NoiseRemove.AfftdnEnabled)},
-		{"afftdn noise reduction (dB)", formatMetric(f.NoiseRemove.AfftdnNoiseReduction, 0)},
-		{"afftdn noise type", stringCell(f.NoiseRemove.AfftdnNoiseType)},
-		{"afftdn track noise", boolCell(f.NoiseRemove.AfftdnTrackNoise)},
+		{"Enabled", boolCell(f.NoiseReduction.Enabled)},
+		{"Strength (s)", formatMetric(f.NoiseReduction.Strength, 5)},
+		{"Patch (s)", formatMetric(f.NoiseReduction.PatchSec, 4)},
+		{"Research (s)", formatMetric(f.NoiseReduction.ResearchSec, 4)},
+		{"Smooth (m)", formatMetric(f.NoiseReduction.Smooth, 0)},
+		{"afftdn enabled", boolCell(f.NoiseReduction.AfftdnEnabled)},
+		{"afftdn noise reduction (dB)", formatMetric(f.NoiseReduction.AfftdnNoiseReduction, 0)},
+		{"afftdn noise type", stringCell(f.NoiseReduction.AfftdnNoiseType)},
+		{"afftdn track noise", boolCell(f.NoiseReduction.AfftdnTrackNoise)},
 	}))
 	b.WriteString("\n")
 
-	b.WriteString("### DS201 gate\n\n")
+	b.WriteString("### Speech gate\n\n")
 	b.WriteString("Soft expander for inter-speech cleanup. Threshold and range are adapted per file; the threshold and range values below are in dB.\n\n")
 	b.WriteString(renderParamTable([]paramRow{
-		{"Enabled", boolCell(f.DS201Gate.Enabled)},
-		{"Threshold (dB)", formatMetric(f.DS201Gate.Threshold, 2)},
-		{"Ratio", formatMetric(f.DS201Gate.Ratio, 1)},
-		{"Attack (ms)", formatMetric(f.DS201Gate.Attack, 0)},
-		{"Release (ms)", formatMetric(f.DS201Gate.Release, 0)},
-		{"Range (dB)", formatMetric(f.DS201Gate.Range, 2)},
-		{"Knee", formatMetric(f.DS201Gate.Knee, 1)},
-		{"Makeup", formatMetric(f.DS201Gate.Makeup, 1)},
-		{"Detection", stringCell(f.DS201Gate.Detection)},
+		{"Enabled", boolCell(f.SpeechGate.Enabled)},
+		{"Threshold (dB)", formatMetric(f.SpeechGate.Threshold, 2)},
+		{"Ratio", formatMetric(f.SpeechGate.Ratio, 1)},
+		{"Attack (ms)", formatMetric(f.SpeechGate.Attack, 0)},
+		{"Release (ms)", formatMetric(f.SpeechGate.Release, 0)},
+		{"Range (dB)", formatMetric(f.SpeechGate.Range, 2)},
+		{"Knee", formatMetric(f.SpeechGate.Knee, 1)},
+		{"Makeup", formatMetric(f.SpeechGate.Makeup, 1)},
+		{"Detection", stringCell(f.SpeechGate.Detection)},
 	}))
 	b.WriteString("\n")
 
-	b.WriteString("### LA-2A compressor\n\n")
-	b.WriteString("LA-2A-inspired gentle levelling. Threshold is speech-RMS-relative (adapted per file); ratio, attack, release, knee are fixed.\n\n")
+	b.WriteString("### Levelling compressor\n\n")
+	b.WriteString("Gentle levelling. Threshold is speech-RMS-relative (adapted per file); ratio, attack, release, knee are fixed.\n\n")
 	b.WriteString(renderParamTable([]paramRow{
-		{"Enabled", boolCell(f.LA2A.Enabled)},
-		{"Threshold (dB)", formatMetric(f.LA2A.Threshold, 2)},
-		{"Ratio", formatMetric(f.LA2A.Ratio, 1)},
-		{"Attack (ms)", formatMetric(f.LA2A.Attack, 0)},
-		{"Release (ms)", formatMetric(f.LA2A.Release, 0)},
-		{"Makeup (dB)", formatMetric(f.LA2A.Makeup, 1)},
-		{"Knee", formatMetric(f.LA2A.Knee, 1)},
-		{"Mix", formatMetric(f.LA2A.Mix, 2)},
+		{"Enabled", boolCell(f.LevellingCompressor.Enabled)},
+		{"Threshold (dB)", formatMetric(f.LevellingCompressor.Threshold, 2)},
+		{"Ratio", formatMetric(f.LevellingCompressor.Ratio, 1)},
+		{"Attack (ms)", formatMetric(f.LevellingCompressor.Attack, 0)},
+		{"Release (ms)", formatMetric(f.LevellingCompressor.Release, 0)},
+		{"Makeup (dB)", formatMetric(f.LevellingCompressor.Makeup, 1)},
+		{"Knee", formatMetric(f.LevellingCompressor.Knee, 1)},
+		{"Mix", formatMetric(f.LevellingCompressor.Mix, 2)},
 	}))
 	b.WriteString("\n")
 
@@ -804,15 +804,15 @@ func renderFilterDiagnostics(d *processor.AdaptiveDiagnostics) string {
 	var b strings.Builder
 	b.WriteString("### Adaptation diagnostics\n\n")
 	b.WriteString(renderParamTable([]paramRow{
-		{"Low-pass reason", stringCell(d.DS201LPReason)},
-		{"Gate aggression", formatMetric(d.DS201GateAggression, 5)},
-		{"Gate dynamic range (dB)", formatMetric(d.DS201GateDynamicRange, 2)},
-		{"Quiet-speech estimate (dBFS)", formatMetricDB(d.DS201GateQuietSpeechEstimate, 2)},
-		{"Speech separation (dB)", formatMetric(d.DS201GateSpeechSeparation, 2)},
-		{"Speech headroom (dB)", formatMetric(d.DS201GateSpeechHeadroom, 2)},
-		{"Gate threshold unclamped (dB)", formatMetric(d.DS201GateThresholdUnclamped, 2)},
-		{"Clamp reason", stringCell(d.DS201GateClampReason)},
-		{"Gentle mode", boolCell(d.DS201GateGentleMode)},
+		{"Low-pass reason", stringCell(d.BandlimitLPReason)},
+		{"Gate aggression", formatMetric(d.SpeechGateAggression, 5)},
+		{"Gate dynamic range (dB)", formatMetric(d.SpeechGateDynamicRange, 2)},
+		{"Quiet-speech estimate (dBFS)", formatMetricDB(d.SpeechGateQuietSpeechEstimate, 2)},
+		{"Speech separation (dB)", formatMetric(d.SpeechGateSpeechSeparation, 2)},
+		{"Speech headroom (dB)", formatMetric(d.SpeechGateSpeechHeadroom, 2)},
+		{"Gate threshold unclamped (dB)", formatMetric(d.SpeechGateThresholdUnclamped, 2)},
+		{"Clamp reason", stringCell(d.SpeechGateClampReason)},
+		{"Gentle mode", boolCell(d.SpeechGateGentleMode)},
 	}))
 	return b.String()
 }
@@ -841,7 +841,7 @@ func renderNormalisation(rec *processor.RunRecord) string {
 
 	var b strings.Builder
 	b.WriteString("## Peak Limiter\n\n")
-	b.WriteString("Volumax-inspired transparent limiter that creates true-peak headroom so loudnorm reaches the target in linear mode. Pre-gain raises very quiet recordings before limiting.\n\n")
+	b.WriteString("Transparent limiter that creates true-peak headroom so loudnorm reaches the target in linear mode. Pre-gain raises very quiet recordings before limiting.\n\n")
 	b.WriteString(renderParamTable([]paramRow{
 		{"Enabled", boolCell(r.LimiterEnabled)},
 		{"Ceiling (dBTP)", formatMetricDB(r.LimiterCeiling, 2)},

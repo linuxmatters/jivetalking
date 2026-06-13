@@ -20,20 +20,20 @@ const (
 	FilterAnalysis FilterID = "analysis" // ebur128 + astats + aspectralstats (both passes)
 	FilterResample FilterID = "resample" // Output format: 44.1kHz/16-bit/mono (Pass 2 only)
 
-	// DS201-inspired frequency-conscious filtering (Pass 2 only)
-	// Drawmer DS201 pioneered HP/LP side-chain filtering for frequency-conscious gating.
-	// We apply these filters to the audio path before the gate for equivalent effect.
-	FilterDS201HighPass FilterID = "ds201_highpass" // fixed 80 Hz HP corner (part of DS201 side-chain)
-	FilterDS201LowPass  FilterID = "ds201_lowpass"  // unconditional 20.5 kHz band-limit (ultrasonic rejection)
-	FilterDS201Gate     FilterID = "ds201_gate"     // Soft expander inspired by DS201
+	// Frequency-conscious filtering (Pass 2 only)
+	// HP/LP side-chain filtering removes frequency extremes before the gate.
+	// Applied to the audio path before the gate for equivalent effect.
+	FilterRumbleHighPass   FilterID = "rumble_highpass"   // fixed 80 Hz HP corner (rumble removal)
+	FilterBandlimitLowPass FilterID = "bandlimit_lowpass" // #nosec G101 -- FFmpeg filter id, not a credential. Unconditional 20.5 kHz band-limit (ultrasonic rejection).
+	FilterSpeechGate       FilterID = "speech_gate"       // soft expander for inter-speech gaps
 
-	// NoiseRemove - anlmdn + afftdn noise reduction (Pass 2 only)
+	// NoiseReduction - anlmdn + afftdn noise reduction (Pass 2 only)
 	// Non-Local Means denoiser followed by an FFT spectral denoiser
-	FilterNoiseRemove FilterID = "noiseremove"
+	FilterNoiseReduction FilterID = "noise_reduction"
 
 	// Processing filters (Pass 2 only)
-	FilterLA2ACompressor FilterID = "la2a_compressor" // Teletronix LA-2A style optical compressor
-	FilterDeesser        FilterID = "deesser"
+	FilterLevellingCompressor FilterID = "levelling_compressor" // gentle levelling compressor
+	FilterDeesser             FilterID = "deesser"
 )
 
 // Pass1FilterOrder defines the filter chain for analysis pass.
@@ -48,21 +48,21 @@ var Pass1FilterOrder = []FilterID{
 // Pass2FilterOrder defines the filter chain for processing pass.
 // Order rationale:
 // - Downmix first: ensures all downstream filters work with mono
-// - DS201HighPass: removes subsonic rumble before other filters
-// - DS201LowPass: unconditional 20.5 kHz band-limit (removes inaudible ultrasonics)
-// - NoiseRemove: primary noise reduction using anlmdn + afftdn
-// - DS201Gate: soft expander for inter-speech cleanup (after denoising lowers floor)
-// - LA2ACompressor: LA-2A style optical compression evens dynamics before normalisation
+// - RumbleHighPass: removes subsonic rumble before other filters
+// - BandlimitLowPass: unconditional 20.5 kHz band-limit (removes inaudible ultrasonics)
+// - NoiseReduction: primary noise reduction using anlmdn + afftdn
+// - SpeechGate: soft expander for inter-speech cleanup (after denoising lowers floor)
+// - LevellingCompressor: gentle levelling evens dynamics before normalisation
 // - Deesser: after compression (which emphasises sibilance)
 // - Analysis: measures output for comparison with Pass 1 (ebur128 upsamples to 192kHz/f64)
 // - Resample: standardises output format (44.1kHz/16-bit/mono) - MUST be last
 var Pass2FilterOrder = []FilterID{
 	FilterDownmix,
-	FilterDS201HighPass,
-	FilterDS201LowPass,
-	FilterNoiseRemove,
-	FilterDS201Gate,
-	FilterLA2ACompressor,
+	FilterRumbleHighPass,
+	FilterBandlimitLowPass,
+	FilterNoiseReduction,
+	FilterSpeechGate,
+	FilterLevellingCompressor,
 	FilterDeesser,
 	FilterAnalysis,
 	FilterResample,
@@ -82,7 +82,7 @@ const (
 	NormToleranceLU = 0.5
 )
 
-// NoiseRemove production defaults.
+// NoiseReduction production defaults.
 //
 // The matrix spike at .bench/anlmdn-matrix-spike validated `r_min` (r=0.0020)
 // at native source rate against the previous 32 kHz cap path with r=0.0045,
@@ -90,23 +90,23 @@ const (
 // (m=3) was a free quality lever - matched cleanup at zero speed cost on both
 // fixtures.
 const (
-	noiseRemoveProductionStrength    = 0.00001
-	noiseRemoveProductionPatchSec    = 0.0060
-	noiseRemoveProductionResearchSec = 0.0020
-	noiseRemoveProductionSmooth      = 3.0
+	noiseReductionProductionStrength    = 0.00001
+	noiseReductionProductionPatchSec    = 0.0060
+	noiseReductionProductionResearchSec = 0.0020
+	noiseReductionProductionSmooth      = 3.0
 )
 
 const (
-	// DS201 high-pass is a FIXED 80 Hz, 12 dB/oct (2-pole Butterworth) corner,
+	// Rumble high-pass is a FIXED 80 Hz, 12 dB/oct (2-pole Butterworth) corner,
 	// applied to every file with no adaptation. 80 Hz clears every measured vocal
 	// fundamental with margin (lowest male F0 ~91 Hz; female ~165+ Hz, Anna 188 Hz
 	// an octave clear); the 2-pole/12 dB-oct slope is symmetric with the
 	// unconditional 20.5 kHz lowpass and removes subsonic rumble before the gate.
-	ds201HPDefaultFreq      = 80.0
-	ds201HPDefaultPoles     = 2
-	ds201HPDefaultWidth     = 0.707
-	ds201HPDefaultMix       = 1.0
-	ds201HPDefaultTransform = "tdii"
+	rumbleHPDefaultFreq      = 80.0
+	rumbleHPDefaultPoles     = 2
+	rumbleHPDefaultWidth     = 0.707
+	rumbleHPDefaultMix       = 1.0
+	rumbleHPDefaultTransform = "tdii"
 )
 
 type filterConfigDefaults struct {
@@ -117,12 +117,12 @@ type filterConfigDefaults struct {
 	Analysis AnalysisConfig `json:"-"`
 	Resample ResampleConfig `json:"-"`
 
-	DS201HighPass DS201HighPassConfig `json:"ds201_highpass"`
-	DS201LowPass  DS201LowPassConfig  `json:"ds201_lowpass"`
-	NoiseRemove   NoiseRemoveConfig   `json:"noiseremove"`
-	DS201Gate     DS201GateConfig     `json:"ds201_gate"`
-	LA2A          LA2AConfig          `json:"la2a"`
-	Deesser       DeesserConfig       `json:"deesser"`
+	RumbleHighPass      RumbleHighPassConfig      `json:"rumble_highpass"`
+	BandlimitLowPass    BandlimitLowPassConfig    `json:"bandlimit_lowpass"`
+	NoiseReduction      NoiseReductionConfig      `json:"noise_reduction"`
+	SpeechGate          SpeechGateConfig          `json:"speech_gate"`
+	LevellingCompressor LevellingCompressorConfig `json:"levelling_compressor"`
+	Deesser             DeesserConfig             `json:"deesser"`
 
 	Adeclick AdeclickConfig `json:"-"`
 	Loudnorm LoudnormConfig `json:"-"`
@@ -151,7 +151,7 @@ type ResampleConfig struct {
 	FrameSize  int
 }
 
-type DS201HighPassConfig struct {
+type RumbleHighPassConfig struct {
 	Enabled   bool    `json:"enabled"`
 	Frequency float64 `json:"frequency_hz"`
 	Poles     int     `json:"poles_count"`
@@ -160,7 +160,7 @@ type DS201HighPassConfig struct {
 	Transform string  `json:"transform"`
 }
 
-type DS201LowPassConfig struct {
+type BandlimitLowPassConfig struct {
 	Enabled   bool    `json:"enabled"`
 	Frequency float64 `json:"frequency_hz"`
 	Poles     int     `json:"poles_count"`
@@ -169,7 +169,7 @@ type DS201LowPassConfig struct {
 	Transform string  `json:"transform"`
 }
 
-type NoiseRemoveConfig struct {
+type NoiseReductionConfig struct {
 	Enabled     bool    `json:"enabled"`
 	Strength    float64 `json:"strength"`
 	PatchSec    float64 `json:"patch_s"`
@@ -187,7 +187,7 @@ type NoiseRemoveConfig struct {
 	AfftdnTrackNoise     bool    `json:"afftdn_track_noise"`
 }
 
-type DS201GateConfig struct {
+type SpeechGateConfig struct {
 	Enabled bool `json:"enabled"`
 	// Threshold and Range are stored as LINEAR amplitudes (FFmpeg agate consumes
 	// linear). The §8.4 keys carry the _db suffix because the catalogue (§2.2)
@@ -203,7 +203,7 @@ type DS201GateConfig struct {
 	Detection string  `json:"detection"`
 }
 
-type LA2AConfig struct {
+type LevellingCompressorConfig struct {
 	Enabled   bool    `json:"enabled"`
 	Threshold float64 `json:"threshold_db"`
 	Ratio     float64 `json:"ratio"`
@@ -269,16 +269,16 @@ type BaseFilterConfig struct {
 
 // AdaptiveDiagnostics holds report-only adaptation explanations.
 type AdaptiveDiagnostics struct {
-	DS201LPReason string `json:"ds201_lowpass_reason"`
+	BandlimitLPReason string `json:"bandlimit_lowpass_reason"`
 
-	DS201GateAggression          float64 `json:"aggression"`
-	DS201GateDynamicRange        float64 `json:"dynamic_range_db"`
-	DS201GateQuietSpeechEstimate float64 `json:"quiet_speech_estimate_dbfs"`
-	DS201GateSpeechSeparation    float64 `json:"separation_db"`
-	DS201GateSpeechHeadroom      float64 `json:"speech_headroom_db"`
-	DS201GateThresholdUnclamped  float64 `json:"threshold_unclamped_db"`
-	DS201GateClampReason         string  `json:"clamp_reason"`
-	DS201GateGentleMode          bool    `json:"gentle_mode"`
+	SpeechGateAggression          float64 `json:"aggression"`
+	SpeechGateDynamicRange        float64 `json:"dynamic_range_db"`
+	SpeechGateQuietSpeechEstimate float64 `json:"quiet_speech_estimate_dbfs"`
+	SpeechGateSpeechSeparation    float64 `json:"separation_db"`
+	SpeechGateSpeechHeadroom      float64 `json:"speech_headroom_db"`
+	SpeechGateThresholdUnclamped  float64 `json:"threshold_unclamped_db"`
+	SpeechGateClampReason         string  `json:"clamp_reason"`
+	SpeechGateGentleMode          bool    `json:"gentle_mode"`
 }
 
 // ProcessingFilterContext holds pass execution state outside caller-owned defaults.
@@ -294,15 +294,15 @@ type filterBuilderFunc func(*EffectiveFilterConfig) string
 // filterBuilders maps FilterID to its builder function.
 // This registry centralises filter spec generation and avoids per-call map allocation.
 var filterBuilders = map[FilterID]filterBuilderFunc{
-	FilterDownmix:        (*EffectiveFilterConfig).buildDownmixFilter,
-	FilterAnalysis:       (*EffectiveFilterConfig).buildAnalysisFilter,
-	FilterResample:       (*EffectiveFilterConfig).buildResampleFilter,
-	FilterDS201HighPass:  (*EffectiveFilterConfig).buildDS201HighpassFilter,
-	FilterDS201LowPass:   (*EffectiveFilterConfig).buildDS201LowPassFilter,
-	FilterNoiseRemove:    (*EffectiveFilterConfig).buildNoiseRemoveFilter,
-	FilterDS201Gate:      (*EffectiveFilterConfig).buildDS201GateFilter,
-	FilterLA2ACompressor: (*EffectiveFilterConfig).buildLA2ACompressorFilter,
-	FilterDeesser:        (*EffectiveFilterConfig).buildDeesserFilter,
+	FilterDownmix:             (*EffectiveFilterConfig).buildDownmixFilter,
+	FilterAnalysis:            (*EffectiveFilterConfig).buildAnalysisFilter,
+	FilterResample:            (*EffectiveFilterConfig).buildResampleFilter,
+	FilterRumbleHighPass:      (*EffectiveFilterConfig).buildRumbleHighpassFilter,
+	FilterBandlimitLowPass:    (*EffectiveFilterConfig).buildBandlimitLowPassFilter,
+	FilterNoiseReduction:      (*EffectiveFilterConfig).buildNoiseReductionFilter,
+	FilterSpeechGate:          (*EffectiveFilterConfig).buildSpeechGateFilter,
+	FilterLevellingCompressor: (*EffectiveFilterConfig).buildLevellingCompressorFilter,
+	FilterDeesser:             (*EffectiveFilterConfig).buildDeesserFilter,
 }
 
 // PassNumber identifies which processing pass is being executed.
@@ -348,11 +348,11 @@ func defaultFilterConfigDefaults() filterConfigDefaults {
 		defaultDownmixConfig(),
 		defaultAnalysisConfig(),
 		defaultResampleConfig(),
-		defaultDS201HighPassConfig(),
-		defaultDS201LowPassConfig(),
-		defaultNoiseRemoveConfig(),
-		defaultDS201GateConfig(),
-		defaultLA2AConfig(),
+		defaultRumbleHighPassConfig(),
+		defaultBandlimitLowPassConfig(),
+		defaultNoiseReductionConfig(),
+		defaultSpeechGateConfig(),
+		defaultLevellingCompressorConfig(),
 		defaultDeesserConfig(),
 		defaultAdeclickConfig(),
 		defaultLoudnormConfig(),
@@ -363,27 +363,27 @@ func assembleFilterDefaults(
 	downmix DownmixConfig,
 	analysis AnalysisConfig,
 	resample ResampleConfig,
-	ds201HighPass DS201HighPassConfig,
-	ds201LowPass DS201LowPassConfig,
-	noiseRemove NoiseRemoveConfig,
-	ds201Gate DS201GateConfig,
-	la2a LA2AConfig,
+	rumbleHighPass RumbleHighPassConfig,
+	bandlimitLowPass BandlimitLowPassConfig,
+	noiseReduction NoiseReductionConfig,
+	speechGate SpeechGateConfig,
+	levellingCompressor LevellingCompressorConfig,
 	deesser DeesserConfig,
 	adeclick AdeclickConfig,
 	loudnorm LoudnormConfig,
 ) filterConfigDefaults {
 	return filterConfigDefaults{
-		Downmix:       downmix,
-		Analysis:      analysis,
-		Resample:      resample,
-		DS201HighPass: ds201HighPass,
-		DS201LowPass:  ds201LowPass,
-		NoiseRemove:   noiseRemove,
-		DS201Gate:     ds201Gate,
-		LA2A:          la2a,
-		Deesser:       deesser,
-		Adeclick:      adeclick,
-		Loudnorm:      loudnorm,
+		Downmix:             downmix,
+		Analysis:            analysis,
+		Resample:            resample,
+		RumbleHighPass:      rumbleHighPass,
+		BandlimitLowPass:    bandlimitLowPass,
+		NoiseReduction:      noiseReduction,
+		SpeechGate:          speechGate,
+		LevellingCompressor: levellingCompressor,
+		Deesser:             deesser,
+		Adeclick:            adeclick,
+		Loudnorm:            loudnorm,
 
 		FilterOrder: Pass2FilterOrder,
 	}
@@ -406,19 +406,19 @@ func defaultResampleConfig() ResampleConfig {
 	}
 }
 
-func defaultDS201HighPassConfig() DS201HighPassConfig {
-	return DS201HighPassConfig{
+func defaultRumbleHighPassConfig() RumbleHighPassConfig {
+	return RumbleHighPassConfig{
 		Enabled:   true,
-		Frequency: ds201HPDefaultFreq,
-		Poles:     ds201HPDefaultPoles,
-		Width:     ds201HPDefaultWidth,
-		Mix:       ds201HPDefaultMix,
-		Transform: ds201HPDefaultTransform,
+		Frequency: rumbleHPDefaultFreq,
+		Poles:     rumbleHPDefaultPoles,
+		Width:     rumbleHPDefaultWidth,
+		Mix:       rumbleHPDefaultMix,
+		Transform: rumbleHPDefaultTransform,
 	}
 }
 
-func defaultDS201LowPassConfig() DS201LowPassConfig {
-	return DS201LowPassConfig{
+func defaultBandlimitLowPassConfig() BandlimitLowPassConfig {
+	return BandlimitLowPassConfig{
 		Enabled:   true,
 		Frequency: 20500.0,
 		Poles:     2,
@@ -428,13 +428,13 @@ func defaultDS201LowPassConfig() DS201LowPassConfig {
 	}
 }
 
-func defaultNoiseRemoveConfig() NoiseRemoveConfig {
-	return NoiseRemoveConfig{
+func defaultNoiseReductionConfig() NoiseReductionConfig {
+	return NoiseReductionConfig{
 		Enabled:     true,
-		Strength:    noiseRemoveProductionStrength,
-		PatchSec:    noiseRemoveProductionPatchSec,
-		ResearchSec: noiseRemoveProductionResearchSec,
-		Smooth:      noiseRemoveProductionSmooth,
+		Strength:    noiseReductionProductionStrength,
+		PatchSec:    noiseReductionProductionPatchSec,
+		ResearchSec: noiseReductionProductionResearchSec,
+		Smooth:      noiseReductionProductionSmooth,
 		// Fixed afftdn FFT denoise tail; nr is not adaptively tuned.
 		AfftdnEnabled:        true,
 		AfftdnNoiseReduction: 12,
@@ -443,8 +443,8 @@ func defaultNoiseRemoveConfig() NoiseRemoveConfig {
 	}
 }
 
-func defaultDS201GateConfig() DS201GateConfig {
-	return DS201GateConfig{
+func defaultSpeechGateConfig() SpeechGateConfig {
+	return SpeechGateConfig{
 		Enabled:   true,
 		Threshold: 0.01,
 		Ratio:     2.0,
@@ -457,8 +457,8 @@ func defaultDS201GateConfig() DS201GateConfig {
 	}
 }
 
-func defaultLA2AConfig() LA2AConfig {
-	return LA2AConfig{
+func defaultLevellingCompressorConfig() LevellingCompressorConfig {
+	return LevellingCompressorConfig{
 		Enabled:   true,
 		Threshold: -18,
 		Ratio:     3.0,
@@ -665,12 +665,12 @@ func (cfg *EffectiveFilterConfig) buildRequiredOutputFormatFilter() string {
 		resample.SampleRate, resample.Format, resample.FrameSize)
 }
 
-// buildDS201HighpassFilter builds the DS201-inspired high-pass filter.
+// buildRumbleHighpassFilter builds the rumble high-pass filter.
 // Removes subsonic rumble (HVAC, handling noise, etc.) before gating.
 //
-// The DS201's frequency-conscious gating uses side-chain HP/LP filters to prevent
-// false triggers. Since FFmpeg doesn't support side-chain filtering, we apply
-// frequency filtering to the audio path before gating to achieve the same effect.
+// Frequency-conscious gating uses side-chain HP/LP filters to prevent false
+// triggers. Since FFmpeg doesn't support side-chain filtering, we apply frequency
+// filtering to the audio path before gating to achieve the same effect.
 //
 // Parameters:
 // - frequency: cutoff frequency in Hz (fixed 80 Hz)
@@ -678,8 +678,8 @@ func (cfg *EffectiveFilterConfig) buildRequiredOutputFormatFilter() string {
 // - width: Q factor (0.707=Butterworth, fixed)
 // - transform: filter algorithm (tdii=best floating-point accuracy)
 // - mix: wet/dry blend (1.0=full filter, fixed)
-func (cfg *EffectiveFilterConfig) buildDS201HighpassFilter() string {
-	highpass := cfg.DS201HighPass
+func (cfg *EffectiveFilterConfig) buildRumbleHighpassFilter() string {
+	highpass := cfg.RumbleHighPass
 	if !highpass.Enabled {
 		return ""
 	}
@@ -710,13 +710,13 @@ func (cfg *EffectiveFilterConfig) buildDS201HighpassFilter() string {
 	return hpSpec
 }
 
-// buildDS201LowPassFilter builds the DS201-inspired low-pass filter specification.
-// Part of the DS201 frequency-conscious filtering chain, placed after highpass.
+// buildBandlimitLowPassFilter builds the band-limit low-pass filter specification.
+// Part of the frequency-conscious filtering chain, placed after highpass.
 //
 // Purpose: unconditional 20.5 kHz band-limit on all content, giving downstream
 // lossy encoders a consistent bandwidth and removing inaudible ultrasonics before
-// the gate. Non-adaptive (no content detection); the DS201 lineage is the
-// frequency-conscious side-chain inspiration, applied here to the audio path.
+// the gate. Non-adaptive (no content detection); the frequency-conscious side-chain
+// filter is applied here to the audio path.
 //
 // Parameters:
 // - f: cutoff frequency (removes frequencies above this)
@@ -725,9 +725,9 @@ func (cfg *EffectiveFilterConfig) buildDS201HighpassFilter() string {
 // - transform: filter algorithm (tdii=best floating-point accuracy)
 // - mix: wet/dry blend (1.0=full filter)
 //
-// Returns empty string if DS201LowPass.Enabled is false.
-func (cfg *EffectiveFilterConfig) buildDS201LowPassFilter() string {
-	lowpass := cfg.DS201LowPass
+// Returns empty string if BandlimitLowPass.Enabled is false.
+func (cfg *EffectiveFilterConfig) buildBandlimitLowPassFilter() string {
+	lowpass := cfg.BandlimitLowPass
 	if !lowpass.Enabled {
 		return ""
 	}
@@ -758,10 +758,10 @@ func (cfg *EffectiveFilterConfig) buildDS201LowPassFilter() string {
 	return lpSpec
 }
 
-// buildNoiseRemoveFilter builds the anlmdn+afftdn noise reduction filter.
+// buildNoiseReductionFilter builds the anlmdn+afftdn noise reduction filter.
 // Non-Local Means denoiser followed by an FFT spectral denoiser.
-// Runs at the source sample rate; downstream filters (gate, LA-2A, de-esser,
-// analysis) operate at the same rate.
+// Runs at the source sample rate; downstream filters (gate, levelling compressor,
+// de-esser, analysis) operate at the same rate.
 //
 // anlmdn parameters (matrix spike defaults at .bench/anlmdn-matrix-spike):
 // - s: strength (0.00001 = minimum, kept constant)
@@ -775,23 +775,23 @@ func (cfg *EffectiveFilterConfig) buildDS201LowPassFilter() string {
 // less floor modulation. nr is FIXED at 12: a per-presenter sweep showed the
 // noisiest voice must be capped at ~12 to avoid warble, so adaptive nr would be
 // counter-productive.
-func (cfg *EffectiveFilterConfig) buildNoiseRemoveFilter() string {
-	noiseRemove := cfg.NoiseRemove
-	if !noiseRemove.Enabled {
+func (cfg *EffectiveFilterConfig) buildNoiseReductionFilter() string {
+	noiseReduction := cfg.NoiseReduction
+	if !noiseReduction.Enabled {
 		return ""
 	}
 
 	filters := make([]string, 0, 2)
 	filters = append(filters, fmt.Sprintf("anlmdn=s=%.5f:p=%.4f:r=%.4f:m=%.0f",
-		noiseRemove.Strength,
-		noiseRemove.PatchSec,
-		noiseRemove.ResearchSec,
-		noiseRemove.Smooth,
+		noiseReduction.Strength,
+		noiseReduction.PatchSec,
+		noiseReduction.ResearchSec,
+		noiseReduction.Smooth,
 	))
 
 	// afftdn FFT spectral denoise tail, validated on the noisiest corpus stem.
 	// Fixed nr=12 (not adaptive); tn=1 tracks noise so no sample region is needed.
-	if spec := noiseRemove.buildAfftdnFilter(); spec != "" {
+	if spec := noiseReduction.buildAfftdnFilter(); spec != "" {
 		filters = append(filters, spec)
 	}
 
@@ -799,9 +799,9 @@ func (cfg *EffectiveFilterConfig) buildNoiseRemoveFilter() string {
 }
 
 // buildAfftdnFilter builds the afftdn FFT spectral denoise tail of the noise block.
-// Returns empty string when afftdn is disabled. Shared by buildNoiseRemoveFilter and
+// Returns empty string when afftdn is disabled. Shared by buildNoiseReductionFilter and
 // the ablation benchmark so the benchmark cannot drift from the production spec.
-func (cfg *NoiseRemoveConfig) buildAfftdnFilter() string {
+func (cfg *NoiseReductionConfig) buildAfftdnFilter() string {
 	if !cfg.AfftdnEnabled {
 		return ""
 	}
@@ -816,13 +816,13 @@ func (cfg *NoiseRemoveConfig) buildAfftdnFilter() string {
 	)
 }
 
-// buildDS201GateFilter builds the DS201-inspired gate filter specification.
+// buildSpeechGateFilter builds the speech gate filter specification.
 // Uses soft expander approach (1.5:1-2.5:1 ratio) rather than hard gate for natural speech.
 // Detection is fixed RMS (safe for speech and tonal bleed); the threshold, range,
 // ratio, and release adapt to Pass 1 measurements in adaptive.go. An empty
 // Detection field defaults to RMS here.
-func (cfg *EffectiveFilterConfig) buildDS201GateFilter() string {
-	gate := cfg.DS201Gate
+func (cfg *EffectiveFilterConfig) buildSpeechGateFilter() string {
+	gate := cfg.SpeechGate
 	if !gate.Enabled {
 		return ""
 	}
@@ -845,25 +845,25 @@ func (cfg *EffectiveFilterConfig) buildDS201GateFilter() string {
 	)
 }
 
-// buildLA2ACompressorFilter builds the LA-2A style compressor filter specification.
-// Uses FFmpeg's acompressor with settings tuned to emulate the Teletronix LA-2A
-// optical compressor's gentle, program-dependent character.
+// buildLevellingCompressorFilter builds the levelling compressor filter specification.
+// Uses FFmpeg's acompressor with settings tuned for gentle, programme-dependent
+// levelling.
 // Converts dB values to linear for FFmpeg's format.
-func (cfg *EffectiveFilterConfig) buildLA2ACompressorFilter() string {
-	la2a := cfg.LA2A
-	if !la2a.Enabled {
+func (cfg *EffectiveFilterConfig) buildLevellingCompressorFilter() string {
+	levellingCompressor := cfg.LevellingCompressor
+	if !levellingCompressor.Enabled {
 		return ""
 	}
 	return fmt.Sprintf(
 		"acompressor=threshold=%.6f:ratio=%.1f:attack=%.0f:release=%.0f:"+
 			"makeup=%.2f:knee=%.1f:detection=rms:mix=%.2f",
-		Decibels(la2a.Threshold).LinearAmplitude().Float64(),
-		la2a.Ratio,
-		la2a.Attack,
-		la2a.Release,
-		Decibels(la2a.Makeup).LinearAmplitude().Float64(),
-		la2a.Knee,
-		la2a.Mix,
+		Decibels(levellingCompressor.Threshold).LinearAmplitude().Float64(),
+		levellingCompressor.Ratio,
+		levellingCompressor.Attack,
+		levellingCompressor.Release,
+		Decibels(levellingCompressor.Makeup).LinearAmplitude().Float64(),
+		levellingCompressor.Knee,
+		levellingCompressor.Mix,
 	)
 }
 

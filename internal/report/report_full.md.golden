@@ -202,7 +202,7 @@
 
 Stereo-to-mono downmix using FFmpeg's standard downmix matrix.
 
-### DS201 high-pass
+### Rumble high-pass
 
 Removes subsonic rumble before the gate. Fixed corner, 2-pole Butterworth (12 dB/oct), non-adaptive.
 
@@ -215,7 +215,7 @@ Removes subsonic rumble before the gate. Fixed corner, 2-pole Butterworth (12 dB
 | Mix | 1.00 |
 | Transform | tdii |
 
-### DS201 low-pass
+### Band-limit low-pass
 
 Unconditional 20.5 kHz band-limit (2-pole, 12 dB/oct), giving the encoder a consistent bandwidth. Non-adaptive.
 
@@ -244,7 +244,7 @@ anlmdn Non-Local Means denoiser at the source rate, followed by an afftdn FFT sp
 | afftdn noise type | w |
 | afftdn track noise | yes |
 
-### DS201 gate
+### Speech gate
 
 Soft expander for inter-speech cleanup. Threshold and range are adapted per file; the threshold and range values below are in dB.
 
@@ -260,9 +260,9 @@ Soft expander for inter-speech cleanup. Threshold and range are adapted per file
 | Makeup | 1.0 |
 | Detection | rms |
 
-### LA-2A compressor
+### Levelling compressor
 
-LA-2A-inspired gentle levelling. Threshold is speech-RMS-relative (adapted per file); ratio, attack, release, knee are fixed.
+Gentle levelling. Threshold is speech-RMS-relative (adapted per file); ratio, attack, release, knee are fixed.
 
 | Parameter | Value |
 | --- | --- |
@@ -302,7 +302,7 @@ Sibilance reduction. Intensity is adapted from the speech-region sibilant-band e
 
 ## Peak Limiter
 
-Volumax-inspired transparent limiter that creates true-peak headroom so loudnorm reaches the target in linear mode. Pre-gain raises very quiet recordings before limiting.
+Transparent limiter that creates true-peak headroom so loudnorm reaches the target in linear mode. Pre-gain raises very quiet recordings before limiting.
 
 | Parameter | Value |
 | --- | --- |

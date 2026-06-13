@@ -18,23 +18,23 @@ func processingRecord() *processor.RunRecord {
 	cfg := processor.DefaultEffectiveFilterConfig()
 	// Adapted per-file values (gate threshold/range carried LINEAR on the config;
 	// newFiltersBlock converts them to dB for the record).
-	cfg.DS201Gate.Threshold = processor.DbToLinear(-67.67)
-	cfg.DS201Gate.Range = processor.DbToLinear(-22.0)
-	cfg.DS201Gate.Ratio = 1.5
-	cfg.DS201Gate.Release = 375
-	cfg.LA2A.Threshold = -36.38
+	cfg.SpeechGate.Threshold = processor.DbToLinear(-67.67)
+	cfg.SpeechGate.Range = processor.DbToLinear(-22.0)
+	cfg.SpeechGate.Ratio = 1.5
+	cfg.SpeechGate.Release = 375
+	cfg.LevellingCompressor.Threshold = -36.38
 	cfg.Deesser.Intensity = 0.0
 
 	diag := &processor.AdaptiveDiagnostics{
-		DS201LPReason:                "20.5 kHz band-limit (always on)",
-		DS201GateAggression:          0.25485,
-		DS201GateDynamicRange:        29.915058,
-		DS201GateQuietSpeechEstimate: -75.290897,
-		DS201GateSpeechSeparation:    9.297741,
-		DS201GateSpeechHeadroom:      -7.623852,
-		DS201GateThresholdUnclamped:  -67.667044,
-		DS201GateClampReason:         "none",
-		DS201GateGentleMode:          false,
+		BandlimitLPReason:             "20.5 kHz band-limit (always on)",
+		SpeechGateAggression:          0.25485,
+		SpeechGateDynamicRange:        29.915058,
+		SpeechGateQuietSpeechEstimate: -75.290897,
+		SpeechGateSpeechSeparation:    9.297741,
+		SpeechGateSpeechHeadroom:      -7.623852,
+		SpeechGateThresholdUnclamped:  -67.667044,
+		SpeechGateClampReason:         "none",
+		SpeechGateGentleMode:          false,
 	}
 
 	norm := &processor.NormalisationResult{
@@ -80,14 +80,14 @@ func TestRenderFiltersChainOrder(t *testing.T) {
 	got := renderFilters(processingRecord())
 
 	// Filter sub-sections must appear in PROCESSING ORDER: downmix -> high-pass ->
-	// low-pass -> noise removal -> gate -> LA-2A -> de-esser, diagnostics last.
+	// low-pass -> noise removal -> gate -> levelling compressor -> de-esser, diagnostics last.
 	order := []string{
 		"### Downmix",
-		"### DS201 high-pass",
-		"### DS201 low-pass",
+		"### Rumble high-pass",
+		"### Band-limit low-pass",
 		"### Noise removal",
-		"### DS201 gate",
-		"### LA-2A compressor",
+		"### Speech gate",
+		"### Levelling compressor",
 		"### De-esser",
 		"### Adaptation diagnostics",
 	}
@@ -111,11 +111,11 @@ func TestRenderFiltersParams(t *testing.T) {
 		"| Parameter | Value |",
 		"80",    // high-pass frequency
 		"20500", // low-pass frequency
-		"### DS201 gate",
+		"### Speech gate",
 		"-67.67", // gate threshold dB-converted at assembly
 		"-22.00", // gate range dB-converted at assembly
 		"1.5",    // gate ratio
-		"-36.38", // LA-2A threshold
+		"-36.38", // levelling compressor threshold
 		// Diagnostics rendered as objective values.
 		"20.5 kHz band-limit (always on)",
 		"0.25485", // aggression

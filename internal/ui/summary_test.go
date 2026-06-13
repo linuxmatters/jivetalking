@@ -13,13 +13,13 @@ func TestNewAdaptedSummaryFromConfig(t *testing.T) {
 	cfg := &processor.EffectiveFilterConfig{}
 	cfg.Downmix.Enabled = true
 	cfg.Resample.SampleRate = 44100
-	cfg.DS201HighPass.Frequency = 80
-	cfg.DS201LowPass.Frequency = 20500
-	cfg.NoiseRemove.Enabled = true
-	cfg.NoiseRemove.AfftdnEnabled = true
-	cfg.DS201Gate.Threshold = 0.0078 // linear ≈ -42.1 dB
-	cfg.DS201Gate.Ratio = 2.0
-	cfg.LA2A.Threshold = -11.9
+	cfg.RumbleHighPass.Frequency = 80
+	cfg.BandlimitLowPass.Frequency = 20500
+	cfg.NoiseReduction.Enabled = true
+	cfg.NoiseReduction.AfftdnEnabled = true
+	cfg.SpeechGate.Threshold = 0.0078 // linear ≈ -42.1 dB
+	cfg.SpeechGate.Ratio = 2.0
+	cfg.LevellingCompressor.Threshold = -11.9
 	cfg.Deesser.Intensity = 0
 	cfg.Loudnorm.TargetI = -16
 
@@ -35,7 +35,7 @@ func TestNewAdaptedSummaryFromConfig(t *testing.T) {
 	}
 	m.Regions.SpeechProfile.RMSLevel = -20.9
 
-	diag := &processor.AdaptiveDiagnostics{DS201GateGentleMode: true}
+	diag := &processor.AdaptiveDiagnostics{SpeechGateGentleMode: true}
 
 	s := NewAdaptedSummary(cfg, diag, m)
 

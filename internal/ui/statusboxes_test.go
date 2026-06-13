@@ -48,7 +48,7 @@ func TestChainBoxPendingRows(t *testing.T) {
 	if !strings.Contains(plain, "Filter Chain") {
 		t.Fatalf("chain box missing title:\n%s", plain)
 	}
-	for _, label := range []string{"Mix", "Hi-pass", "Lo-pass", "Denoise", "Gate", "Comp", "De-esser", "Limiter"} {
+	for _, label := range []string{"Downmix", "Hi-pass", "Lo-pass", "Denoise", "Gate", "Comp", "De-esser", "Limiter"} {
 		if !strings.Contains(plain, label) {
 			t.Errorf("chain box missing %q row:\n%s", label, plain)
 		}
@@ -202,7 +202,7 @@ func TestAnalysisBoxLitRows(t *testing.T) {
 		t.Errorf("Noise floor should have a 2-space gap before its value:\n%s", plain)
 	}
 	// Soft Gate on → ● ON (caps).
-	if !strings.Contains(plain, "Soft Gate") || !strings.Contains(plain, "ON") {
+	if !strings.Contains(plain, "Soft gate") || !strings.Contains(plain, "ON") {
 		t.Errorf("Soft Gate should show its state in caps:\n%s", plain)
 	}
 }
@@ -318,7 +318,7 @@ func TestBorderTitleInTopBorder(t *testing.T) {
 		title string
 		first string // a label expected on the first content row (line 1)
 	}{
-		{"chain", ansi.Strip(renderChainBox(litSummary(), 0)), "Filter Chain", "Mix"},
+		{"chain", ansi.Strip(renderChainBox(litSummary(), 0)), "Filter Chain", "Downmix"},
 		{"analysis", ansi.Strip(renderAnalysisBox(litSummary(), 0)), "Analysis", "Voice avg"},
 	} {
 		lines := strings.Split(tc.box, "\n")
@@ -366,7 +366,7 @@ func TestPassBoxTitleInBorder(t *testing.T) {
 // data row.
 func TestAnalysisRowOrder(t *testing.T) {
 	plain := ansi.Strip(renderAnalysisBox(litSummary(), 0))
-	gentle := strings.Index(plain, "Soft Gate")
+	gentle := strings.Index(plain, "Soft gate")
 	sibilance := strings.Index(plain, "Sibilance")
 	loudness := strings.Index(plain, "Loudness")
 	truePeak := strings.Index(plain, "True peak")

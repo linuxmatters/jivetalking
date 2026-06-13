@@ -29,8 +29,8 @@ func TestAdaptConfigReturnsEffectiveConfig(t *testing.T) {
 
 	base := newTestBaseConfig()
 	base.FilterOrder = []FilterID{FilterDeesser, FilterAnalysis}
-	base.DS201HighPass.Enabled = true
-	base.DS201HighPass.Frequency = 95.0
+	base.RumbleHighPass.Enabled = true
+	base.RumbleHighPass.Frequency = 95.0
 	base.Loudnorm.TargetI = -18.0
 
 	effective, diagnostics := AdaptConfig(base, measurements)
@@ -45,8 +45,8 @@ func TestAdaptConfigReturnsEffectiveConfig(t *testing.T) {
 	if !reflect.DeepEqual(base.FilterOrder, []FilterID{FilterDeesser, FilterAnalysis}) {
 		t.Errorf("base FilterOrder = %v, want unchanged custom order", base.FilterOrder)
 	}
-	if base.DS201HighPass.Frequency != 95.0 {
-		t.Errorf("base DS201HighPass.Frequency = %.1f, want unchanged 95.0", base.DS201HighPass.Frequency)
+	if base.RumbleHighPass.Frequency != 95.0 {
+		t.Errorf("base RumbleHighPass.Frequency = %.1f, want unchanged 95.0", base.RumbleHighPass.Frequency)
 	}
 	if base.Loudnorm.TargetI != -18.0 {
 		t.Errorf("base Loudnorm.TargetI = %.1f, want unchanged -18.0", base.Loudnorm.TargetI)
@@ -59,13 +59,13 @@ func TestAdaptConfigReturnsEffectiveConfig(t *testing.T) {
 	if base.FilterOrder[0] == FilterDownmix {
 		t.Fatal("effective FilterOrder mutation changed base FilterOrder")
 	}
-	// The DS201 highpass is fixed and non-adaptive: the effective config carries
+	// The rumble high-pass is fixed and non-adaptive: the effective config carries
 	// the seed frequency through unchanged (no tuning step overwrites it).
-	if effective.DS201HighPass.Frequency != 95.0 {
-		t.Errorf("effective DS201HighPass.Frequency = %.1f, want seed 95.0 passed through unchanged", effective.DS201HighPass.Frequency)
+	if effective.RumbleHighPass.Frequency != 95.0 {
+		t.Errorf("effective RumbleHighPass.Frequency = %.1f, want seed 95.0 passed through unchanged", effective.RumbleHighPass.Frequency)
 	}
-	if diagnostics.DS201LPReason != "20.5 kHz band-limit (always on)" {
-		t.Errorf("diagnostics DS201LPReason = %q, want 20.5 kHz band-limit (always on)", diagnostics.DS201LPReason)
+	if diagnostics.BandlimitLPReason != "20.5 kHz band-limit (always on)" {
+		t.Errorf("diagnostics BandlimitLPReason = %q, want 20.5 kHz band-limit (always on)", diagnostics.BandlimitLPReason)
 	}
 	assertNoStaleEffectiveConfigFields(t)
 }
@@ -82,7 +82,7 @@ func TestAdaptConfigOrderIndependence(t *testing.T) {
 	if firstDiagnostics == nil {
 		t.Fatal("AdaptConfig returned nil diagnostics for file A")
 	}
-	if !firstDiagnostics.DS201GateGentleMode {
+	if !firstDiagnostics.SpeechGateGentleMode {
 		t.Fatal("file A setup failed: expected gentle gate mode")
 	}
 
@@ -157,11 +157,11 @@ func TestAdaptConfigSeedParameterOwnershipBoundary(t *testing.T) {
 
 func newOrderIndependenceSeed() *BaseFilterConfig {
 	config := newTestBaseConfig()
-	config.DS201HighPass.Enabled = true
-	config.DS201LowPass.Enabled = true
-	config.NoiseRemove.Enabled = true
-	config.DS201Gate.Enabled = true
-	config.LA2A.Enabled = true
+	config.RumbleHighPass.Enabled = true
+	config.BandlimitLowPass.Enabled = true
+	config.NoiseReduction.Enabled = true
+	config.SpeechGate.Enabled = true
+	config.LevellingCompressor.Enabled = true
 	config.Loudnorm.TargetTP = -2.0
 	return config
 }
@@ -223,19 +223,19 @@ func assertOrderIndependentAdaptiveFields(t *testing.T, got, want *EffectiveFilt
 		got  any
 		want any
 	}{
-		{"DS201HighPass.Frequency", got.DS201HighPass.Frequency, want.DS201HighPass.Frequency},
-		{"DS201HighPass.Poles", got.DS201HighPass.Poles, want.DS201HighPass.Poles},
-		{"DS201HighPass.Width", got.DS201HighPass.Width, want.DS201HighPass.Width},
-		{"DS201HighPass.Mix", got.DS201HighPass.Mix, want.DS201HighPass.Mix},
-		{"DS201HighPass.Transform", got.DS201HighPass.Transform, want.DS201HighPass.Transform},
-		{"NoiseRemove.AfftdnEnabled", got.NoiseRemove.AfftdnEnabled, want.NoiseRemove.AfftdnEnabled},
-		{"NoiseRemove.AfftdnNoiseReduction", got.NoiseRemove.AfftdnNoiseReduction, want.NoiseRemove.AfftdnNoiseReduction},
-		{"DS201LowPass.Enabled", got.DS201LowPass.Enabled, want.DS201LowPass.Enabled},
-		{"DS201LowPass.Frequency", got.DS201LowPass.Frequency, want.DS201LowPass.Frequency},
-		{"LA2A.Threshold", got.LA2A.Threshold, want.LA2A.Threshold},
-		{"LA2A.Ratio", got.LA2A.Ratio, want.LA2A.Ratio},
-		{"LA2A.Release", got.LA2A.Release, want.LA2A.Release},
-		{"LA2A.Knee", got.LA2A.Knee, want.LA2A.Knee},
+		{"RumbleHighPass.Frequency", got.RumbleHighPass.Frequency, want.RumbleHighPass.Frequency},
+		{"RumbleHighPass.Poles", got.RumbleHighPass.Poles, want.RumbleHighPass.Poles},
+		{"RumbleHighPass.Width", got.RumbleHighPass.Width, want.RumbleHighPass.Width},
+		{"RumbleHighPass.Mix", got.RumbleHighPass.Mix, want.RumbleHighPass.Mix},
+		{"RumbleHighPass.Transform", got.RumbleHighPass.Transform, want.RumbleHighPass.Transform},
+		{"NoiseReduction.AfftdnEnabled", got.NoiseReduction.AfftdnEnabled, want.NoiseReduction.AfftdnEnabled},
+		{"NoiseReduction.AfftdnNoiseReduction", got.NoiseReduction.AfftdnNoiseReduction, want.NoiseReduction.AfftdnNoiseReduction},
+		{"BandlimitLowPass.Enabled", got.BandlimitLowPass.Enabled, want.BandlimitLowPass.Enabled},
+		{"BandlimitLowPass.Frequency", got.BandlimitLowPass.Frequency, want.BandlimitLowPass.Frequency},
+		{"LevellingCompressor.Threshold", got.LevellingCompressor.Threshold, want.LevellingCompressor.Threshold},
+		{"LevellingCompressor.Ratio", got.LevellingCompressor.Ratio, want.LevellingCompressor.Ratio},
+		{"LevellingCompressor.Release", got.LevellingCompressor.Release, want.LevellingCompressor.Release},
+		{"LevellingCompressor.Knee", got.LevellingCompressor.Knee, want.LevellingCompressor.Knee},
 	}
 
 	for _, tt := range tests {
@@ -253,15 +253,15 @@ func assertOrderIndependentAdaptiveDiagnostics(t *testing.T, got, want *Adaptive
 		got  any
 		want any
 	}{
-		{"DS201LPReason", got.DS201LPReason, want.DS201LPReason},
-		{"DS201GateGentleMode", got.DS201GateGentleMode, want.DS201GateGentleMode},
-		{"DS201GateAggression", got.DS201GateAggression, want.DS201GateAggression},
-		{"DS201GateDynamicRange", got.DS201GateDynamicRange, want.DS201GateDynamicRange},
-		{"DS201GateQuietSpeechEstimate", got.DS201GateQuietSpeechEstimate, want.DS201GateQuietSpeechEstimate},
-		{"DS201GateSpeechSeparation", got.DS201GateSpeechSeparation, want.DS201GateSpeechSeparation},
-		{"DS201GateSpeechHeadroom", got.DS201GateSpeechHeadroom, want.DS201GateSpeechHeadroom},
-		{"DS201GateThresholdUnclamped", got.DS201GateThresholdUnclamped, want.DS201GateThresholdUnclamped},
-		{"DS201GateClampReason", got.DS201GateClampReason, want.DS201GateClampReason},
+		{"BandlimitLPReason", got.BandlimitLPReason, want.BandlimitLPReason},
+		{"SpeechGateGentleMode", got.SpeechGateGentleMode, want.SpeechGateGentleMode},
+		{"SpeechGateAggression", got.SpeechGateAggression, want.SpeechGateAggression},
+		{"SpeechGateDynamicRange", got.SpeechGateDynamicRange, want.SpeechGateDynamicRange},
+		{"SpeechGateQuietSpeechEstimate", got.SpeechGateQuietSpeechEstimate, want.SpeechGateQuietSpeechEstimate},
+		{"SpeechGateSpeechSeparation", got.SpeechGateSpeechSeparation, want.SpeechGateSpeechSeparation},
+		{"SpeechGateSpeechHeadroom", got.SpeechGateSpeechHeadroom, want.SpeechGateSpeechHeadroom},
+		{"SpeechGateThresholdUnclamped", got.SpeechGateThresholdUnclamped, want.SpeechGateThresholdUnclamped},
+		{"SpeechGateClampReason", got.SpeechGateClampReason, want.SpeechGateClampReason},
 	}
 
 	for _, tt := range tests {
@@ -354,8 +354,8 @@ func TestDetectContentType(t *testing.T) {
 	}
 }
 
-func TestTuneDS201LowPass(t *testing.T) {
-	// The DS201 low-pass is an unconditional 20.5 kHz band-limit: always enabled
+func TestTuneBandlimitLowPass(t *testing.T) {
+	// The band-limit low-pass is an unconditional 20.5 kHz band-limit: always enabled
 	// at 20500 Hz with 12 dB/oct (poles=2), regardless of content type or HF-noise
 	// measurements. These cases span speech, music, mixed, dark-voice, ultrasonic,
 	// and HF-noise measurement profiles to prove no adaptive branch survives.
@@ -418,24 +418,24 @@ func TestTuneDS201LowPass(t *testing.T) {
 				Dynamics: DynamicsMetrics{ZeroCrossingsRate: tt.zcr},
 			}
 
-			tuneDS201LowPass(config, diagnostics, m)
+			tuneBandlimitLowPass(config, diagnostics, m)
 
-			if !config.DS201LowPass.Enabled {
-				t.Errorf("DS201LowPass.Enabled = false, want true [%s]", tt.desc)
+			if !config.BandlimitLowPass.Enabled {
+				t.Errorf("BandlimitLowPass.Enabled = false, want true [%s]", tt.desc)
 			}
-			if config.DS201LowPass.Frequency != ds201LPBandLimitFreq {
-				t.Errorf("DS201LowPass.Frequency = %.0f Hz, want %.0f Hz [%s]",
-					config.DS201LowPass.Frequency, ds201LPBandLimitFreq, tt.desc)
+			if config.BandlimitLowPass.Frequency != bandlimitLPFreq {
+				t.Errorf("BandlimitLowPass.Frequency = %.0f Hz, want %.0f Hz [%s]",
+					config.BandlimitLowPass.Frequency, bandlimitLPFreq, tt.desc)
 			}
-			if config.DS201LowPass.Poles != 2 {
-				t.Errorf("DS201LowPass.Poles = %d, want 2 [%s]", config.DS201LowPass.Poles, tt.desc)
+			if config.BandlimitLowPass.Poles != 2 {
+				t.Errorf("BandlimitLowPass.Poles = %d, want 2 [%s]", config.BandlimitLowPass.Poles, tt.desc)
 			}
-			if config.DS201LowPass.Mix != 1.0 {
-				t.Errorf("DS201LowPass.Mix = %.2f, want 1.0 [%s]", config.DS201LowPass.Mix, tt.desc)
+			if config.BandlimitLowPass.Mix != 1.0 {
+				t.Errorf("BandlimitLowPass.Mix = %.2f, want 1.0 [%s]", config.BandlimitLowPass.Mix, tt.desc)
 			}
-			if diagnostics.DS201LPReason != "20.5 kHz band-limit (always on)" {
-				t.Errorf("DS201LPReason = %q, want 20.5 kHz band-limit (always on) [%s]",
-					diagnostics.DS201LPReason, tt.desc)
+			if diagnostics.BandlimitLPReason != "20.5 kHz band-limit (always on)" {
+				t.Errorf("BandlimitLPReason = %q, want 20.5 kHz band-limit (always on) [%s]",
+					diagnostics.BandlimitLPReason, tt.desc)
 			}
 
 			assertNoStaleEffectiveConfigFields(t)
@@ -580,7 +580,7 @@ func TestTuneDeesser(t *testing.T) {
 	}
 }
 
-func TestTuneDS201Gate(t *testing.T) {
+func TestTuneSpeechGate(t *testing.T) {
 	// Tests the comprehensive gate tuning which calculates all gate parameters
 	// based on measurements including NoiseProfile (extracted from the elected
 	// room-tone region).
@@ -676,15 +676,15 @@ func TestTuneDS201Gate(t *testing.T) {
 					},
 				}
 
-				tuneDS201GateForTest(config, measurements)
+				tuneSpeechGateForTest(config, measurements)
 
-				actualDB := linearToDB(config.DS201Gate.Threshold)
+				actualDB := linearToDB(config.SpeechGate.Threshold)
 				diff := actualDB - tt.wantThresholdDB
 				if diff < 0 {
 					diff = -diff
 				}
 				if diff > tt.tolerance {
-					t.Errorf("DS201Gate.Threshold = %.1f dB, want %.1f dB ±%.1f [%s]",
+					t.Errorf("SpeechGate.Threshold = %.1f dB, want %.1f dB ±%.1f [%s]",
 						actualDB, tt.wantThresholdDB, tt.tolerance, tt.desc)
 				}
 			})
@@ -713,10 +713,10 @@ func TestTuneDS201Gate(t *testing.T) {
 					Loudness: InputLoudnessMetrics{InputLRA: tt.lra},
 				}
 
-				tuneDS201GateForTest(config, measurements)
+				tuneSpeechGateForTest(config, measurements)
 
-				if config.DS201Gate.Ratio != tt.wantRatio {
-					t.Errorf("DS201Gate.Ratio = %.1f, want %.1f [%s]", config.DS201Gate.Ratio, tt.wantRatio, tt.desc)
+				if config.SpeechGate.Ratio != tt.wantRatio {
+					t.Errorf("SpeechGate.Ratio = %.1f, want %.1f [%s]", config.SpeechGate.Ratio, tt.wantRatio, tt.desc)
 				}
 			})
 		}
@@ -743,10 +743,10 @@ func TestTuneDS201Gate(t *testing.T) {
 					Noise:    NoiseMetrics{Floor: -55.0},
 				}
 
-				tuneDS201GateForTest(config, measurements)
+				tuneSpeechGateForTest(config, measurements)
 
-				if config.DS201Gate.Attack != ds201GateAttackMS {
-					t.Errorf("DS201Gate.Attack = %.1f ms, want fixed %.1f ms", config.DS201Gate.Attack, ds201GateAttackMS)
+				if config.SpeechGate.Attack != speechGateAttackMS {
+					t.Errorf("SpeechGate.Attack = %.1f ms, want fixed %.1f ms", config.SpeechGate.Attack, speechGateAttackMS)
 				}
 			})
 		}
@@ -778,10 +778,10 @@ func TestTuneDS201Gate(t *testing.T) {
 					},
 				}
 
-				tuneDS201GateForTest(config, measurements)
+				tuneSpeechGateForTest(config, measurements)
 
-				if config.DS201Gate.Detection != "rms" {
-					t.Errorf("DS201Gate.Detection = %q, want fixed \"rms\"", config.DS201Gate.Detection)
+				if config.SpeechGate.Detection != "rms" {
+					t.Errorf("SpeechGate.Detection = %q, want fixed \"rms\"", config.SpeechGate.Detection)
 				}
 			})
 		}
@@ -808,10 +808,10 @@ func TestTuneDS201Gate(t *testing.T) {
 					Loudness: InputLoudnessMetrics{InputLRA: 15.0},
 				}
 
-				tuneDS201GateForTest(config, measurements)
+				tuneSpeechGateForTest(config, measurements)
 
-				if config.DS201Gate.Knee != ds201GateKneeFixed {
-					t.Errorf("DS201Gate.Knee = %.1f, want fixed %.1f", config.DS201Gate.Knee, ds201GateKneeFixed)
+				if config.SpeechGate.Knee != speechGateKneeFixed {
+					t.Errorf("SpeechGate.Knee = %.1f, want fixed %.1f", config.SpeechGate.Knee, speechGateKneeFixed)
 				}
 			})
 		}
@@ -826,10 +826,10 @@ func TestTuneDS201Gate(t *testing.T) {
 			wantRangeDB float64
 			desc        string
 		}{
-			{"clean floor - deeper range", -85.0, ds201GateRangeCleanDB, "very clean recording, deeper range"},
-			{"clean boundary - deeper range", -70.1, ds201GateRangeCleanDB, "just below clean threshold"},
-			{"standard floor - gentle range", -62.0, ds201GateRangeStandardDB, "noisier floor, standard range"},
-			{"standard boundary", -70.0, ds201GateRangeStandardDB, "at threshold counts as standard"},
+			{"clean floor - deeper range", -85.0, speechGateRangeCleanDB, "very clean recording, deeper range"},
+			{"clean boundary - deeper range", -70.1, speechGateRangeCleanDB, "just below clean threshold"},
+			{"standard floor - gentle range", -62.0, speechGateRangeStandardDB, "noisier floor, standard range"},
+			{"standard boundary", -70.0, speechGateRangeStandardDB, "at threshold counts as standard"},
 		}
 
 		for _, tt := range tests {
@@ -846,15 +846,15 @@ func TestTuneDS201Gate(t *testing.T) {
 					},
 				}
 
-				tuneDS201GateForTest(config, measurements)
+				tuneSpeechGateForTest(config, measurements)
 
-				actualDB := linearToDB(config.DS201Gate.Range)
+				actualDB := linearToDB(config.SpeechGate.Range)
 				diff := actualDB - tt.wantRangeDB
 				if diff < 0 {
 					diff = -diff
 				}
 				if diff > 0.5 {
-					t.Errorf("DS201Gate.Range = %.1f dB, want %.1f dB [%s]",
+					t.Errorf("SpeechGate.Range = %.1f dB, want %.1f dB [%s]",
 						actualDB, tt.wantRangeDB, tt.desc)
 				}
 			})
@@ -870,17 +870,17 @@ func TestTuneDS201Gate(t *testing.T) {
 		}
 
 		// Should not panic
-		tuneDS201GateForTest(config, measurements)
+		tuneSpeechGateForTest(config, measurements)
 
 		// Should still calculate threshold from noise floor
-		thresholdDB := linearToDB(config.DS201Gate.Threshold)
+		thresholdDB := linearToDB(config.SpeechGate.Threshold)
 		if thresholdDB < -70 || thresholdDB > -25 {
-			t.Errorf("DS201Gate.Threshold = %.1f dB, want within bounds [-70, -25]", thresholdDB)
+			t.Errorf("SpeechGate.Threshold = %.1f dB, want within bounds [-70, -25]", thresholdDB)
 		}
 
 		// Detection should default to RMS when no profile
-		if config.DS201Gate.Detection != "rms" {
-			t.Errorf("DS201Gate.Detection = %q, want 'rms' (default for missing profile)", config.DS201Gate.Detection)
+		if config.SpeechGate.Detection != "rms" {
+			t.Errorf("SpeechGate.Detection = %q, want 'rms' (default for missing profile)", config.SpeechGate.Detection)
 		}
 	})
 
@@ -919,11 +919,11 @@ func TestTuneDS201Gate(t *testing.T) {
 					},
 				}
 
-				tuneDS201GateForTest(config, measurements)
+				tuneSpeechGateForTest(config, measurements)
 
-				if config.DS201Gate.Release != tt.wantRelease {
-					t.Errorf("DS201Gate.Release = %.1f ms, want %.1f ms [%s]",
-						config.DS201Gate.Release, tt.wantRelease, tt.desc)
+				if config.SpeechGate.Release != tt.wantRelease {
+					t.Errorf("SpeechGate.Release = %.1f ms, want %.1f ms [%s]",
+						config.SpeechGate.Release, tt.wantRelease, tt.desc)
 				}
 			})
 		}
@@ -935,10 +935,10 @@ func TestTuneDS201Gate(t *testing.T) {
 		// open/close cycles that pump audibly. Longer release smooths this.
 		//
 		// Constants:
-		// ds201GateReleaseLRALow = 10.0 LU (below: extend release)
-		// ds201GateReleaseLRAVeryLow = 8.0 LU (below: maximum extension)
-		// ds201GateReleaseLRAExtension = 100ms (extension for low LRA)
-		// ds201GateReleaseLRAMaxExt = 150ms (max extension for very low LRA)
+		// speechGateReleaseLRALow = 10.0 LU (below: extend release)
+		// speechGateReleaseLRAVeryLow = 8.0 LU (below: maximum extension)
+		// speechGateReleaseLRAExtension = 100ms (extension for low LRA)
+		// speechGateReleaseLRAMaxExt = 150ms (max extension for very low LRA)
 
 		// Standard-tier base release (flux 0.02 → 250 + 50 hold + 75 tonal = 375ms),
 		// then LRA extension on top.
@@ -971,11 +971,11 @@ func TestTuneDS201Gate(t *testing.T) {
 					},
 				}
 
-				tuneDS201GateForTest(config, measurements)
+				tuneSpeechGateForTest(config, measurements)
 
-				if config.DS201Gate.Release != tt.wantRelease {
-					t.Errorf("DS201Gate.Release = %.1f ms (LRA=%.1f LU), want %.1f ms [%s]",
-						config.DS201Gate.Release, tt.lra, tt.wantRelease, tt.desc)
+				if config.SpeechGate.Release != tt.wantRelease {
+					t.Errorf("SpeechGate.Release = %.1f ms (LRA=%.1f LU), want %.1f ms [%s]",
+						config.SpeechGate.Release, tt.lra, tt.wantRelease, tt.desc)
 				}
 			})
 		}
@@ -983,7 +983,7 @@ func TestTuneDS201Gate(t *testing.T) {
 
 	t.Run("populates diagnostics with speech metrics", func(t *testing.T) {
 		config := newTestConfig()
-		diagnostics := tuneDS201GateForTest(config, &AudioMeasurements{
+		diagnostics := tuneSpeechGateForTest(config, &AudioMeasurements{
 			Spectral: SpectralMetrics{Flux: 0.02, Crest: 20.0},
 			Loudness: InputLoudnessMetrics{InputI: -48.0, InputLRA: 6.0},
 			Noise:    NoiseMetrics{Floor: -70.0},
@@ -997,50 +997,50 @@ func TestTuneDS201Gate(t *testing.T) {
 			},
 		})
 
-		if !diagnostics.DS201GateGentleMode {
+		if !diagnostics.SpeechGateGentleMode {
 			t.Fatal("expected first tuning to enable gentle mode")
 		}
-		if diagnostics.DS201GateAggression == 0 ||
-			diagnostics.DS201GateDynamicRange == 0 ||
-			diagnostics.DS201GateQuietSpeechEstimate == 0 ||
-			diagnostics.DS201GateSpeechSeparation == 0 ||
-			diagnostics.DS201GateThresholdUnclamped == 0 ||
-			diagnostics.DS201GateClampReason == "" {
+		if diagnostics.SpeechGateAggression == 0 ||
+			diagnostics.SpeechGateDynamicRange == 0 ||
+			diagnostics.SpeechGateQuietSpeechEstimate == 0 ||
+			diagnostics.SpeechGateSpeechSeparation == 0 ||
+			diagnostics.SpeechGateThresholdUnclamped == 0 ||
+			diagnostics.SpeechGateClampReason == "" {
 			t.Fatalf("expected tuning to populate gate diagnostics: %+v", diagnostics)
 		}
-		if config.DS201Gate.Ratio != ds201GateGentleRatio || config.DS201Gate.Knee != ds201GateGentleKnee {
+		if config.SpeechGate.Ratio != speechGateGentleRatio || config.SpeechGate.Knee != speechGateGentleKnee {
 			t.Fatalf("expected gentle mode to tune builder values, ratio=%.1f knee=%.1f",
-				config.DS201Gate.Ratio, config.DS201Gate.Knee)
+				config.SpeechGate.Ratio, config.SpeechGate.Knee)
 		}
 		assertNoStaleEffectiveConfigFields(t)
 	})
 
 	t.Run("fresh diagnostics without speech metrics", func(t *testing.T) {
 		config := newTestConfig()
-		diagnostics := tuneDS201GateForTest(config, &AudioMeasurements{
+		diagnostics := tuneSpeechGateForTest(config, &AudioMeasurements{
 			Spectral: SpectralMetrics{Flux: 0.02},
 			Loudness: InputLoudnessMetrics{InputI: -20.0, InputLRA: 16.0},
 			Noise:    NoiseMetrics{Floor: -55.0},
 		})
 
-		if diagnostics.DS201GateGentleMode {
-			t.Error("diagnostics DS201GateGentleMode = true, want false")
+		if diagnostics.SpeechGateGentleMode {
+			t.Error("diagnostics SpeechGateGentleMode = true, want false")
 		}
-		if diagnostics.DS201GateAggression != 0 ||
-			diagnostics.DS201GateDynamicRange != 0 ||
-			diagnostics.DS201GateQuietSpeechEstimate != 0 ||
-			diagnostics.DS201GateSpeechSeparation != 0 ||
-			diagnostics.DS201GateSpeechHeadroom != 0 ||
-			diagnostics.DS201GateThresholdUnclamped != 0 ||
-			diagnostics.DS201GateClampReason != "" {
+		if diagnostics.SpeechGateAggression != 0 ||
+			diagnostics.SpeechGateDynamicRange != 0 ||
+			diagnostics.SpeechGateQuietSpeechEstimate != 0 ||
+			diagnostics.SpeechGateSpeechSeparation != 0 ||
+			diagnostics.SpeechGateSpeechHeadroom != 0 ||
+			diagnostics.SpeechGateThresholdUnclamped != 0 ||
+			diagnostics.SpeechGateClampReason != "" {
 			t.Errorf("fresh gate diagnostics populated without speech metrics: %+v", diagnostics)
 		}
 	})
 }
 
-func tuneDS201GateForTest(config *EffectiveFilterConfig, measurements *AudioMeasurements) *AdaptiveDiagnostics {
+func tuneSpeechGateForTest(config *EffectiveFilterConfig, measurements *AudioMeasurements) *AdaptiveDiagnostics {
 	diagnostics := &AdaptiveDiagnostics{}
-	tuneDS201Gate(config, diagnostics, measurements)
+	tuneSpeechGate(config, diagnostics, measurements)
 	return diagnostics
 }
 
@@ -1205,16 +1205,16 @@ func TestSanitizeFloat(t *testing.T) {
 func TestSanitizeConfig(t *testing.T) {
 	t.Run("valid typed config passes through unchanged", func(t *testing.T) {
 		config := EffectiveFilterConfig{
-			DS201HighPass: DS201HighPassConfig{Frequency: 100.0, Width: 0.5, Mix: 0.8},
-			DS201LowPass:  DS201LowPassConfig{Frequency: 14000.0, Width: 0.7, Mix: 0.9},
-			NoiseRemove: NoiseRemoveConfig{
+			RumbleHighPass:   RumbleHighPassConfig{Frequency: 100.0, Width: 0.5, Mix: 0.8},
+			BandlimitLowPass: BandlimitLowPassConfig{Frequency: 14000.0, Width: 0.7, Mix: 0.9},
+			NoiseReduction: NoiseReductionConfig{
 				Strength:             0.00001,
 				PatchSec:             0.006,
 				ResearchSec:          0.0058,
 				Smooth:               11.0,
 				AfftdnNoiseReduction: 12.0,
 			},
-			DS201Gate: DS201GateConfig{
+			SpeechGate: SpeechGateConfig{
 				Threshold: 0.02,
 				Ratio:     2.0,
 				Attack:    12,
@@ -1223,8 +1223,8 @@ func TestSanitizeConfig(t *testing.T) {
 				Knee:      3.0,
 				Makeup:    1.0,
 			},
-			LA2A:    LA2AConfig{Threshold: -24.0, Ratio: 3.0, Attack: 10, Release: 200, Makeup: 0, Knee: 4.0, Mix: 1.0},
-			Deesser: DeesserConfig{Intensity: 0.3, Amount: 0.5, Frequency: 0.5},
+			LevellingCompressor: LevellingCompressorConfig{Threshold: -24.0, Ratio: 3.0, Attack: 10, Release: 200, Makeup: 0, Knee: 4.0, Mix: 1.0},
+			Deesser:             DeesserConfig{Intensity: 0.3, Amount: 0.5, Frequency: 0.5},
 		}
 		want := config
 
@@ -1237,16 +1237,16 @@ func TestSanitizeConfig(t *testing.T) {
 
 	t.Run("typed family non-finite values get defaults", func(t *testing.T) {
 		config := EffectiveFilterConfig{
-			DS201HighPass: DS201HighPassConfig{Frequency: math.NaN(), Width: math.Inf(1), Mix: math.Inf(-1)},
-			DS201LowPass:  DS201LowPassConfig{Frequency: math.Inf(1), Width: math.NaN(), Mix: math.Inf(-1)},
-			NoiseRemove: NoiseRemoveConfig{
+			RumbleHighPass:   RumbleHighPassConfig{Frequency: math.NaN(), Width: math.Inf(1), Mix: math.Inf(-1)},
+			BandlimitLowPass: BandlimitLowPassConfig{Frequency: math.Inf(1), Width: math.NaN(), Mix: math.Inf(-1)},
+			NoiseReduction: NoiseReductionConfig{
 				Strength:             math.NaN(),
 				PatchSec:             math.Inf(1),
 				ResearchSec:          math.Inf(-1),
 				Smooth:               math.NaN(),
 				AfftdnNoiseReduction: math.Inf(1),
 			},
-			DS201Gate: DS201GateConfig{
+			SpeechGate: SpeechGateConfig{
 				Threshold: math.NaN(),
 				Ratio:     math.Inf(1),
 				Attack:    math.Inf(-1),
@@ -1255,7 +1255,7 @@ func TestSanitizeConfig(t *testing.T) {
 				Knee:      math.Inf(-1),
 				Makeup:    math.NaN(),
 			},
-			LA2A: LA2AConfig{
+			LevellingCompressor: LevellingCompressorConfig{
 				Threshold: math.NaN(),
 				Ratio:     math.Inf(1),
 				Attack:    math.Inf(-1),
@@ -1269,36 +1269,36 @@ func TestSanitizeConfig(t *testing.T) {
 
 		sanitizeConfig(&config)
 
-		if config.DS201HighPass.Frequency != ds201HPDefaultFreq || config.DS201HighPass.Width != 0.707 || config.DS201HighPass.Mix != 1.0 {
-			t.Errorf("DS201HighPass sanitised to %+v, want frequency %.1f width 0.707 mix 1.0", config.DS201HighPass, ds201HPDefaultFreq)
+		if config.RumbleHighPass.Frequency != rumbleHPDefaultFreq || config.RumbleHighPass.Width != 0.707 || config.RumbleHighPass.Mix != 1.0 {
+			t.Errorf("RumbleHighPass sanitised to %+v, want frequency %.1f width 0.707 mix 1.0", config.RumbleHighPass, rumbleHPDefaultFreq)
 		}
-		if config.DS201LowPass.Frequency != ds201LPBandLimitFreq || config.DS201LowPass.Width != 0.707 || config.DS201LowPass.Mix != 1.0 {
-			t.Errorf("DS201LowPass sanitised to %+v, want frequency %.1f width 0.707 mix 1.0", config.DS201LowPass, ds201LPBandLimitFreq)
+		if config.BandlimitLowPass.Frequency != bandlimitLPFreq || config.BandlimitLowPass.Width != 0.707 || config.BandlimitLowPass.Mix != 1.0 {
+			t.Errorf("BandlimitLowPass sanitised to %+v, want frequency %.1f width 0.707 mix 1.0", config.BandlimitLowPass, bandlimitLPFreq)
 		}
 
 		// sanitizeConfig only repairs the non-finite float fields (Strength,
 		// PatchSec, ResearchSec, Smooth, AfftdnNoiseReduction); the boolean and
 		// string afftdn fields keep the zero values from the input literal.
-		defaultNoise := defaultNoiseRemoveConfig()
+		defaultNoise := defaultNoiseReductionConfig()
 		defaultNoise.Enabled = false
 		defaultNoise.AfftdnEnabled = false
 		defaultNoise.AfftdnNoiseType = ""
 		defaultNoise.AfftdnTrackNoise = false
-		if config.NoiseRemove != defaultNoise {
-			t.Errorf("NoiseRemove sanitised to %+v, want %+v", config.NoiseRemove, defaultNoise)
+		if config.NoiseReduction != defaultNoise {
+			t.Errorf("NoiseReduction sanitised to %+v, want %+v", config.NoiseReduction, defaultNoise)
 		}
 
-		defaultGate := defaultDS201GateConfig()
+		defaultGate := defaultSpeechGateConfig()
 		defaultGate.Enabled = false
 		defaultGate.Detection = ""
-		if config.DS201Gate != defaultGate {
-			t.Errorf("DS201Gate sanitised to %+v, want %+v", config.DS201Gate, defaultGate)
+		if config.SpeechGate != defaultGate {
+			t.Errorf("SpeechGate sanitised to %+v, want %+v", config.SpeechGate, defaultGate)
 		}
 
-		defaultLA2A := defaultLA2AConfig()
-		defaultLA2A.Enabled = false
-		if config.LA2A != defaultLA2A {
-			t.Errorf("LA2A sanitised to %+v, want %+v", config.LA2A, defaultLA2A)
+		defaultLevellingCompressor := defaultLevellingCompressorConfig()
+		defaultLevellingCompressor.Enabled = false
+		if config.LevellingCompressor != defaultLevellingCompressor {
+			t.Errorf("LevellingCompressor sanitised to %+v, want %+v", config.LevellingCompressor, defaultLevellingCompressor)
 		}
 
 		defaultDeesser := defaultDeesserConfig()
@@ -1310,134 +1310,134 @@ func TestSanitizeConfig(t *testing.T) {
 
 	t.Run("gate threshold keeps existing zero and negative clamp behaviour", func(t *testing.T) {
 		for _, threshold := range []float64{math.NaN(), math.Inf(1), math.Inf(-1), 0.0, -0.5} {
-			config := EffectiveFilterConfig{DS201Gate: DS201GateConfig{Threshold: threshold}}
+			config := EffectiveFilterConfig{SpeechGate: SpeechGateConfig{Threshold: threshold}}
 
 			sanitizeConfig(&config)
 
-			if config.DS201Gate.Threshold != ds201DefaultGateThreshold {
-				t.Errorf("DS201Gate.Threshold for input %v = %v, want %v", threshold, config.DS201Gate.Threshold, ds201DefaultGateThreshold)
+			if config.SpeechGate.Threshold != speechGateDefaultThreshold {
+				t.Errorf("SpeechGate.Threshold for input %v = %v, want %v", threshold, config.SpeechGate.Threshold, speechGateDefaultThreshold)
 			}
 		}
 	})
 
 	t.Run("zero values for non-gate typed fields pass through", func(t *testing.T) {
 		config := EffectiveFilterConfig{
-			DS201HighPass: DS201HighPassConfig{Frequency: 0.0, Width: 0.0, Mix: 0.0},
-			Deesser:       DeesserConfig{Intensity: 0.0},
-			LA2A:          LA2AConfig{Ratio: 0.0, Threshold: 0.0},
-			DS201Gate:     DS201GateConfig{Threshold: 1e-10},
+			RumbleHighPass:      RumbleHighPassConfig{Frequency: 0.0, Width: 0.0, Mix: 0.0},
+			Deesser:             DeesserConfig{Intensity: 0.0},
+			LevellingCompressor: LevellingCompressorConfig{Ratio: 0.0, Threshold: 0.0},
+			SpeechGate:          SpeechGateConfig{Threshold: 1e-10},
 		}
 
 		sanitizeConfig(&config)
 
-		if config.DS201HighPass.Frequency != 0.0 || config.DS201HighPass.Width != 0.0 || config.DS201HighPass.Mix != 0.0 {
-			t.Errorf("DS201HighPass zero values changed: %+v", config.DS201HighPass)
+		if config.RumbleHighPass.Frequency != 0.0 || config.RumbleHighPass.Width != 0.0 || config.RumbleHighPass.Mix != 0.0 {
+			t.Errorf("RumbleHighPass zero values changed: %+v", config.RumbleHighPass)
 		}
 		if config.Deesser.Intensity != 0.0 {
 			t.Errorf("Deesser.Intensity = %v, want 0.0", config.Deesser.Intensity)
 		}
-		if config.LA2A.Ratio != 0.0 || config.LA2A.Threshold != 0.0 {
-			t.Errorf("LA2A zero values changed: %+v", config.LA2A)
+		if config.LevellingCompressor.Ratio != 0.0 || config.LevellingCompressor.Threshold != 0.0 {
+			t.Errorf("LevellingCompressor zero values changed: %+v", config.LevellingCompressor)
 		}
-		if config.DS201Gate.Threshold != 1e-10 {
-			t.Errorf("DS201Gate.Threshold = %v, want 1e-10", config.DS201Gate.Threshold)
+		if config.SpeechGate.Threshold != 1e-10 {
+			t.Errorf("SpeechGate.Threshold = %v, want 1e-10", config.SpeechGate.Threshold)
 		}
 	})
 
-	t.Run("negative LA2A threshold passes through", func(t *testing.T) {
+	t.Run("negative LevellingCompressor threshold passes through", func(t *testing.T) {
 		config := EffectiveFilterConfig{
-			LA2A:      LA2AConfig{Threshold: -40.0, Ratio: 3.0},
-			DS201Gate: DS201GateConfig{Threshold: 0.02},
+			LevellingCompressor: LevellingCompressorConfig{Threshold: -40.0, Ratio: 3.0},
+			SpeechGate:          SpeechGateConfig{Threshold: 0.02},
 		}
 
 		sanitizeConfig(&config)
 
-		if config.LA2A.Threshold != -40.0 {
-			t.Errorf("LA2A.Threshold = %v, want -40.0", config.LA2A.Threshold)
+		if config.LevellingCompressor.Threshold != -40.0 {
+			t.Errorf("LevellingCompressor.Threshold = %v, want -40.0", config.LevellingCompressor.Threshold)
 		}
 	})
 }
 
-func TestTuneLA2AThresholdSpeechRMSAnchor(t *testing.T) {
+func TestTuneLevellingCompressorThresholdSpeechRMSAnchor(t *testing.T) {
 	config := newTestConfig()
 	measurements := &AudioMeasurements{
 		Dynamics: DynamicsMetrics{PeakLevel: -6.0},
 		Regions:  RegionMetrics{SpeechProfile: &SpeechCandidateMetrics{RegionSample: RegionSample{RMSLevel: -24.0}}},
 	}
 
-	tuneLA2AThreshold(config, measurements)
+	tuneLevellingCompressorThreshold(config, measurements)
 
-	want := -24.0 + la2aThresholdSpeechOffsetDB // -15.0
-	if math.Abs(config.LA2A.Threshold-want) > 0.001 {
-		t.Errorf("LA2A.Threshold = %.3f, want %.3f (speech RMS + offset)", config.LA2A.Threshold, want)
+	want := -24.0 + levellingCompressorThresholdSpeechOffsetDB // -15.0
+	if math.Abs(config.LevellingCompressor.Threshold-want) > 0.001 {
+		t.Errorf("LevellingCompressor.Threshold = %.3f, want %.3f (speech RMS + offset)", config.LevellingCompressor.Threshold, want)
 	}
 }
 
-func TestTuneLA2AThresholdSpeechRMSClampedHigh(t *testing.T) {
+func TestTuneLevellingCompressorThresholdSpeechRMSClampedHigh(t *testing.T) {
 	config := newTestConfig()
 	// Loud speech: RMS -10 + 9 = -1, above the -6 ceiling -> clamps to -6.
 	measurements := &AudioMeasurements{
 		Regions: RegionMetrics{SpeechProfile: &SpeechCandidateMetrics{RegionSample: RegionSample{RMSLevel: -10.0}}},
 	}
 
-	tuneLA2AThreshold(config, measurements)
+	tuneLevellingCompressorThreshold(config, measurements)
 
-	if math.Abs(config.LA2A.Threshold-la2aThresholdMax) > 0.001 {
-		t.Errorf("LA2A.Threshold = %.3f, want %.3f (clamp ceiling)", config.LA2A.Threshold, la2aThresholdMax)
+	if math.Abs(config.LevellingCompressor.Threshold-levellingCompressorThresholdMax) > 0.001 {
+		t.Errorf("LevellingCompressor.Threshold = %.3f, want %.3f (clamp ceiling)", config.LevellingCompressor.Threshold, levellingCompressorThresholdMax)
 	}
 }
 
-func TestTuneLA2AThresholdSpeechRMSClampedLow(t *testing.T) {
+func TestTuneLevellingCompressorThresholdSpeechRMSClampedLow(t *testing.T) {
 	config := newTestConfig()
 	// Very quiet speech: RMS -60 + 9 = -51, below the -45 floor -> clamps to -45.
 	measurements := &AudioMeasurements{
 		Regions: RegionMetrics{SpeechProfile: &SpeechCandidateMetrics{RegionSample: RegionSample{RMSLevel: -60.0}}},
 	}
 
-	tuneLA2AThreshold(config, measurements)
+	tuneLevellingCompressorThreshold(config, measurements)
 
-	if math.Abs(config.LA2A.Threshold-la2aThresholdMin) > 0.001 {
-		t.Errorf("LA2A.Threshold = %.3f, want %.3f (clamp floor)", config.LA2A.Threshold, la2aThresholdMin)
+	if math.Abs(config.LevellingCompressor.Threshold-levellingCompressorThresholdMin) > 0.001 {
+		t.Errorf("LevellingCompressor.Threshold = %.3f, want %.3f (clamp floor)", config.LevellingCompressor.Threshold, levellingCompressorThresholdMin)
 	}
 }
 
-func TestTuneLA2AThresholdPeakFallbackNoProfile(t *testing.T) {
+func TestTuneLevellingCompressorThresholdPeakFallbackNoProfile(t *testing.T) {
 	config := newTestConfig()
 	measurements := &AudioMeasurements{
 		Dynamics: DynamicsMetrics{PeakLevel: -6.0},
 	}
 
-	tuneLA2AThreshold(config, measurements)
+	tuneLevellingCompressorThreshold(config, measurements)
 
-	want := -6.0 - la2aFallbackPeakHeadroomDB // -26.0
-	if math.Abs(config.LA2A.Threshold-want) > 0.001 {
-		t.Errorf("LA2A.Threshold = %.3f, want %.3f (peak fallback)", config.LA2A.Threshold, want)
+	want := -6.0 - levellingCompressorFallbackPeakHeadroomDB // -26.0
+	if math.Abs(config.LevellingCompressor.Threshold-want) > 0.001 {
+		t.Errorf("LevellingCompressor.Threshold = %.3f, want %.3f (peak fallback)", config.LevellingCompressor.Threshold, want)
 	}
 }
 
-func TestTuneLA2AThresholdAcceptsZeroDBPeak(t *testing.T) {
+func TestTuneLevellingCompressorThresholdAcceptsZeroDBPeak(t *testing.T) {
 	config := newTestConfig()
 	measurements := &AudioMeasurements{
 		Dynamics: DynamicsMetrics{PeakLevel: 0.0},
 	}
 
-	tuneLA2AThreshold(config, measurements)
+	tuneLevellingCompressorThreshold(config, measurements)
 
-	if math.Abs(config.LA2A.Threshold-(-20.0)) > 0.001 {
-		t.Errorf("LA2A.Threshold = %.3f, want -20.000", config.LA2A.Threshold)
+	if math.Abs(config.LevellingCompressor.Threshold-(-20.0)) > 0.001 {
+		t.Errorf("LevellingCompressor.Threshold = %.3f, want -20.000", config.LevellingCompressor.Threshold)
 	}
 }
 
-func TestTuneLA2AThresholdFallsBackForInvalidPeak(t *testing.T) {
+func TestTuneLevellingCompressorThresholdFallsBackForInvalidPeak(t *testing.T) {
 	config := newTestConfig()
 	measurements := &AudioMeasurements{
 		Dynamics: DynamicsMetrics{PeakLevel: math.NaN()},
 	}
 
-	tuneLA2AThreshold(config, measurements)
+	tuneLevellingCompressorThreshold(config, measurements)
 
-	if math.Abs(config.LA2A.Threshold-defaultLA2AThreshold) > 0.001 {
-		t.Errorf("LA2A.Threshold = %.3f, want %.3f", config.LA2A.Threshold, defaultLA2AThreshold)
+	if math.Abs(config.LevellingCompressor.Threshold-defaultLevellingCompressorThreshold) > 0.001 {
+		t.Errorf("LevellingCompressor.Threshold = %.3f, want %.3f", config.LevellingCompressor.Threshold, defaultLevellingCompressorThreshold)
 	}
 }
 
