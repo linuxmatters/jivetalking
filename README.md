@@ -6,7 +6,7 @@ Raw microphone recordings into broadcast-ready audio in one command. No configur
 jivetalking LMP-81s-mark.flac LMP-81s-martin.flac LMP-81s-popey.flac
 ```
 
-Your files emerge at -16 LUFS / -1 dBTP, a common podcast target, with room rumble, background hiss, clicks, and harsh sibilance sorted automatically. Multiple files process in parallel, each with its own TUI progress row. Everything needed is embedded in the binary. This is not how audio tools usually work, and that is rather the point.
+Your files emerge at -16 LUFS / -1 dBTP, the loudness standard for spoken-word podcasts, with room rumble, background hiss, clicks, and harsh sibilance sorted automatically. Multiple files process in parallel, each with its own TUI progress row. Everything needed is embedded in the binary. This is not how audio tools usually work, and that is rather the point.
 
 ## Example Output
 
@@ -17,11 +17,11 @@ Your files emerge at -16 LUFS / -1 dBTP, a common podcast target, with room rumb
 ## The Typical Workflow
 
 ```
-Record → Process → Edit → Finalise
+Record → Process → Edit → Export
   │         │         │         │
-  │         │         │         └─ Export at -16 LUFS (dual-mono)
+  │         │         │         └─ Export
   │         │         │
-  │         │         └─ Import to Audacity, top/tail, mix to mono
+  │         │         └─ Import to Audacity, top/tail, edit
   │         │
   │         └─ $ jivetalking *.flac (-16 LUFS, matched levels)
   │
