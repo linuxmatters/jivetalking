@@ -50,8 +50,8 @@ const (
 	ds201GateRatioMod    = 2.0  // For moderate LRA
 	ds201GateRatioTight  = 2.5  // For narrow LRA (tighter control OK)
 
-	// Attack: fixed. Every corpus stem produces the 10ms floor; the transient
-	// tiers above it never fire on speech, so attack is no longer adaptive.
+	// Attack: fixed 10 ms. Speech never produces transients fast enough to need
+	// a shorter attack, so a single floor value is correct and is not adapted.
 	ds201GateAttackMS = 10.0 // ms - fixed minimum attack (prevents click artifacts on gate open)
 
 	// Release: based on speech sustain (flux/ZCR) and LRA.
@@ -82,12 +82,14 @@ const (
 	ds201GateRangeMinDB        = -36.0 // dB - minimum (deepest)
 	ds201GateRangeMaxDB        = -12.0 // dB - maximum (gentlest)
 
-	// Knee: fixed. The spectral-crest signal it used to key off is the wrong
-	// signal (per the de-esser/LA-2A reviews). The user may tune this by ear.
+	// Knee: fixed. Spectral crest is the wrong signal to key it off (per the
+	// de-esser/LA-2A reviews), so the knee is a single value. Gentle mode is the
+	// only override. The user may tune this by ear.
 	ds201GateKneeFixed = 3.0 // standard knee for all content
 
-	// Detection: fixed RMS. RMS is the safe choice for speech and tonal bleed;
-	// the peak branch needed entropy > 0.7, which the corpus never reaches.
+	// Detection: fixed RMS, the safe choice for speech and tonal bleed. A peak
+	// branch would need room-tone entropy > 0.7, which podcast speech never
+	// reaches, so RMS is the only mode used.
 
 	ds201DefaultGateThreshold = 0.01 // -40dBFS
 )
@@ -277,11 +279,12 @@ func calculateAggression(separation, lra float64) float64 {
 }
 
 // calculateDS201GateThresholdLegacy positions the threshold from the noise floor
-// (or room-tone peak for high-crest bleed). Since commit 098ef6c every corpus stem
-// elects a SpeechProfile, so this path is reached only via the <5 dB speech-to-noise
-// separation guard in calculateDS201GateThreshold, not via a missing profile.
-// roomTonePeakDB and roomToneCrestDB describe the noise profile extracted from the
-// elected room-tone region.
+// (or room-tone peak for high-crest bleed). It is the low-separation guard:
+// reached only when calculateDS201GateThreshold finds < 5 dB of speech-to-noise
+// separation (where the aggression maths is unreliable), or when no SpeechProfile
+// is elected. Speech sources reliably elect a profile, so the separation path is
+// the live one. roomTonePeakDB and roomToneCrestDB describe the noise profile
+// extracted from the elected room-tone region.
 func calculateDS201GateThresholdLegacy(
 	noiseFloorDB, roomTonePeakDB, roomToneCrestDB float64,
 	ratio, lufsGap float64,

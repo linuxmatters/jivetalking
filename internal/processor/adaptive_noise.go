@@ -1,7 +1,9 @@
 package processor
 
-// preferSpeechMetric returns speech-specific measurement if available,
-// otherwise falls back to full-file measurement.
+// preferSpeechMetric returns the speech-specific measurement when present,
+// otherwise the full-file measurement. Presence is inferred from speechProfile
+// being strictly positive, so this is safe only for metrics that cannot
+// legitimately be zero or negative; use preferSpeechMetricSigned for those.
 func preferSpeechMetric(fullFile, speechProfile float64) float64 {
 	if speechProfile > 0 {
 		return speechProfile

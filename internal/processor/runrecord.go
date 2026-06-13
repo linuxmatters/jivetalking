@@ -112,22 +112,21 @@ type FiltersBlock struct {
 // IntervalSummary is the §8.1 `interval_summary` block: the RMS distribution and
 // largest-gap summary derived from the full per-250ms IntervalSamples series. The
 // full series itself lands in the .intervals.jsonl sidecar (§8.5 call 2); only
-// this summary is inline. The values match the `.log` diagnostic for the same
-// file (computed by the same maths, intervalRMSSummary).
+// this summary is inline. newIntervalSummary owns the maths.
 type IntervalSummary struct {
 	Count int `json:"count"`
 
 	// RMS distribution over intervals above digital silence (dBFS). Present only
-	// when at least 10 such intervals exist (the .log threshold); nil otherwise.
+	// when at least 10 such intervals exist; nil otherwise.
 	RMS *RMSDistribution `json:"rms_distribution,omitempty"`
 
 	// LargestGapDB is the biggest jump between adjacent sorted RMS values (dB),
-	// the room-tone/speech boundary signal from the diagnostic. Present with RMS.
+	// the room-tone/speech boundary signal. Present with RMS.
 	LargestGapDB *float64 `json:"largest_gap_db,omitempty"`
 }
 
-// RMSDistribution holds the sorted-percentile RMS spread (dBFS) printed by the
-// .log "RMSLevel Dist" line, matching its index selection exactly.
+// RMSDistribution holds the sorted-percentile RMS spread (dBFS) over the
+// per-250ms intervals, using integer index selection (not interpolation).
 type RMSDistribution struct {
 	Min float64 `json:"min_dbfs"`
 	P10 float64 `json:"p10_dbfs"`

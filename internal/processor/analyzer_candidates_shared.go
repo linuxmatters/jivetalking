@@ -303,20 +303,8 @@ func scoreSpeechIntervalWindow(intervals []IntervalSample) float64 {
 	// Uses shared helper function for consistency with scoreSpeechCandidate.
 	fluxScore := calculateFluxScore(avgFlux)
 
-	// Weighted combination optimised for measurement stability
-	// Weights sum to 1.0
-	//
-	// Stability-focused weights:
-	//   - Voicing (0.15): high voiced content = predictable behaviour
-	//   - Consistency (0.10): low variance = stable across window
-	//   - Rolloff (0.15): moderate rolloff = stable after NR
-	//   - Flux (0.15): low flux = sustained voicing
-	//
-	// Quality weights (reduced from original):
-	//   - Kurtosis (0.15): harmonic clarity
-	//   - Flatness (0.10): tonal quality
-	//   - Centroid (0.10): voice-range frequency
-	//   - RMS (0.10): activity level
+	// Weighted combination optimised for measurement stability (weights sum to 1.0;
+	// see the named weight* constants and the function doc for the per-term rationale).
 	return kurtosisScore*weightKurtosis +
 		flatnessScore*weightFlatness +
 		centroidScore*weightCentroid +

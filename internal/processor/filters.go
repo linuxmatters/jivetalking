@@ -24,7 +24,7 @@ const (
 	// Drawmer DS201 pioneered HP/LP side-chain filtering for frequency-conscious gating.
 	// We apply these filters to the audio path before the gate for equivalent effect.
 	FilterDS201HighPass FilterID = "ds201_highpass" // fixed 80 Hz HP corner (part of DS201 side-chain)
-	FilterDS201LowPass  FilterID = "ds201_lowpass"  // LP for ultrasonic rejection (adaptive)
+	FilterDS201LowPass  FilterID = "ds201_lowpass"  // unconditional 20.5 kHz band-limit (ultrasonic rejection)
 	FilterDS201Gate     FilterID = "ds201_gate"     // Soft expander inspired by DS201
 
 	// NoiseRemove - anlmdn + afftdn noise reduction (Pass 2 only)
@@ -611,15 +611,18 @@ func (cfg *EffectiveFilterConfig) buildAnalysisFilter() string {
 	// Note: reset=0 (default) allows astats to accumulate statistics across all frames
 	// for whole-file measurements. Per-interval RMS is calculated directly from frame
 	// samples in Go for accurate silence detection.
-	// aspectralstats: comprehensive spectral analysis for adaptive filter tuning
-	//   - centroid: spectral brightness (Hz) - informs de-esser
+	// aspectralstats: comprehensive spectral analysis (measured every run; not every
+	// metric drives an adaptation - de-esser intensity keys off speech-region band
+	// RMS, not centroid/rolloff, and the compressor threshold is speech-RMS-relative,
+	// not crest-driven). Metrics measured:
+	//   - centroid: spectral brightness (Hz)
 	//   - spread: spectral bandwidth - voice fullness indicator
 	//   - skewness: spectral asymmetry - positive=bright, negative=dark
 	//   - kurtosis: spectral peakiness - tonal vs broadband content
 	//   - entropy: spectral randomness - noise classification
 	//   - flatness: noise vs tonal ratio (0-1) - noise type detection
-	//   - crest: spectral peak-to-RMS - transient indicator for compressor
-	//   - rolloff: high-frequency energy point - de-esser intensity
+	//   - crest: spectral peak-to-RMS - transient indicator
+	//   - rolloff: high-frequency energy point
 	//   - variance: spectral energy variation - dynamic content indicator
 	//   - mean, slope, decrease: additional spectral shape descriptors
 	// ebur128: provides integrated loudness (LUFS), true peak, sample peak, and LRA via metadata
@@ -710,9 +713,10 @@ func (cfg *EffectiveFilterConfig) buildDS201HighpassFilter() string {
 // buildDS201LowPassFilter builds the DS201-inspired low-pass filter specification.
 // Part of the DS201 frequency-conscious filtering chain, placed after highpass.
 //
-// Purpose: Remove ultrasonic content that could trigger false gate openings.
-// The Drawmer DS201 includes LP filtering in its side-chain to focus gate detection
-// on voice frequencies rather than high-frequency noise artifacts.
+// Purpose: unconditional 20.5 kHz band-limit on all content, giving downstream
+// lossy encoders a consistent bandwidth and removing inaudible ultrasonics before
+// the gate. Non-adaptive (no content detection); the DS201 lineage is the
+// frequency-conscious side-chain inspiration, applied here to the audio path.
 //
 // Parameters:
 // - f: cutoff frequency (removes frequencies above this)
@@ -813,9 +817,10 @@ func (cfg *NoiseRemoveConfig) buildAfftdnFilter() string {
 }
 
 // buildDS201GateFilter builds the DS201-inspired gate filter specification.
-// Uses soft expander approach (2:1-4:1 ratio) rather than hard gate for natural speech.
-// Minimum 10ms attack prevents click artifacts from rapid gain changes.
-// Detection mode is adaptive: RMS for tonal bleed, peak for clean recordings.
+// Uses soft expander approach (1.5:1-2.5:1 ratio) rather than hard gate for natural speech.
+// Detection is fixed RMS (safe for speech and tonal bleed); the threshold, range,
+// ratio, and release adapt to Pass 1 measurements in adaptive.go. An empty
+// Detection field defaults to RMS here.
 func (cfg *EffectiveFilterConfig) buildDS201GateFilter() string {
 	gate := cfg.DS201Gate
 	if !gate.Enabled {
@@ -882,10 +887,15 @@ func (cfg *EffectiveFilterConfig) buildDeesserFilter() string {
 // Uses interpolation to repair waveform discontinuities.
 // Applied in Pass 4 after loudnorm to catch clicks from limiter and gain changes.
 //
-// Parameters:
+// Production defaults are t=1.7, w=55, o=50, m=s (spline) for a ~75% Pass 4
+// runtime cut at metric-parity quality; the gentle limiter attack keeps source
+// clicks below the relaxed threshold.
+//
+// Parameters (valid ranges):
 // - t (threshold): Detection sensitivity (0.1-8.0, lower=more sensitive)
-// - w (window): Analysis window in ms (10-100, default 55)
-// - o (overlap): Window overlap percentage (50-95, default 75)
+// - w (window): Analysis window in ms (10-100)
+// - o (overlap): Window overlap percentage (50-95)
+// - m (method): interpolation method (a=autoregression, s=spline)
 func (cfg *EffectiveFilterConfig) buildAdeclickFilter() string {
 	adeclick := cfg.Adeclick
 	if !adeclick.Enabled {

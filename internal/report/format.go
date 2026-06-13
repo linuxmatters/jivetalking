@@ -7,8 +7,8 @@ import (
 
 // placeholder is the stable token rendered for any non-finite float leaf
 // (NaN, +Inf, -Inf). Every section renderer formats float cells through
-// formatFloat so the placeholder is uniform across the report. Locked here;
-// downstream numeric formatters (mdtable.go, 1.2) build on top of this rule.
+// formatFloat so the placeholder is uniform across the report; the numeric
+// formatters in mdtable.go build on top of this rule.
 const placeholder = "-"
 
 // formatFloat renders a float64 leaf to a cell string. Non-finite values

@@ -70,8 +70,8 @@ func AnalyzeOnlyDetailed(ctx context.Context, inputPath string, config *BaseFilt
 
 // ProcessAudio performs complete four-pass audio processing:
 //   - Pass 1: Analyze audio to get measurements and noise floor estimate
-//   - Pass 2: Process audio through filter chain (downmix → ds201_highpass → ds201_lowpass → noiseremove[anlmdn+afftdn] → agate → la2a → deesser → analysis → resample)
-//     (Pass 3 measures loudnorm; Pass 4 applies alimiter (Volumax) + loudnorm)
+//   - Pass 2: Process audio through filter chain (downmix → ds201_highpass → ds201_lowpass → noiseremove[anlmdn+afftdn] → ds201_gate → la2a_compressor → deesser → analysis → resample)
+//     (Pass 3 measures loudnorm; Pass 4 applies alimiter (Volumax) + loudnorm + brickwall)
 //
 // The output file will be named <basename>-LUFS-NN-processed.<ext> in the same directory as the input
 // If progressCallback is not nil, it will be called with progress updates
@@ -251,9 +251,8 @@ type ProcessingResult struct {
 	NormResult *NormalisationResult // nil if normalisation disabled or skipped
 }
 
-// processWithFilters performs audio processing using the standard single-input filter graph.
-// Applies the filter chain built by BuildFilterSpec() which includes asendcmd for noise profile learning
-// when NoiseProfileStart/End timestamps are set in the config.
+// processWithFilters performs Pass 2 audio processing through the single-input
+// filter graph built by BuildFilterSpec() (the adapted Pass2FilterOrder chain).
 // If outputMeasurements is non-nil, populates it with Pass 2 output analysis.
 func processWithFilters(ctx context.Context, inputPath, outputPath string, config *EffectiveFilterConfig, progressCallback ProgressCallback, measurements *AudioMeasurements, outputMeasurements **OutputMeasurements) (InputMetadata, error) {
 	// Open input audio file

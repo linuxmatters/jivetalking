@@ -9,7 +9,7 @@ import (
 	ffmpeg "github.com/linuxmatters/ffmpeg-statigo"
 )
 
-// Reader wraps ffmpeg-go demuxer and decoder for audio file reading
+// Reader wraps an ffmpeg-statigo demuxer and decoder for audio file reading.
 type Reader struct {
 	fmtCtx    *ffmpeg.AVFormatContext
 	decCtx    *ffmpeg.AVCodecContext
@@ -137,9 +137,11 @@ func OpenAudioFile(filename string) (*Reader, *Metadata, error) {
 // calling ReadFrame again and do not retain it.
 func (r *Reader) ReadFrame() (*ffmpeg.AVFrame, error) {
 	for {
-		// Try to receive a frame from the decoder
+		// Drain buffered frames first; only read a new packet once the decoder
+		// reports EAgain.
 		if _, err := ffmpeg.AVCodecReceiveFrame(r.decCtx, r.frame); err == nil {
-			// Set PTS for filter graph
+			// Carry the decode timestamp forward; the downstream filter graph
+			// keys frame ordering off PTS.
 			r.frame.SetPts(r.frame.BestEffortTimestamp())
 			return r.frame, nil
 		} else if !errors.Is(err, ffmpeg.EAgain) {
@@ -149,10 +151,10 @@ func (r *Reader) ReadFrame() (*ffmpeg.AVFrame, error) {
 			return nil, fmt.Errorf("failed to receive frame: %w", err)
 		}
 
-		// Need more packets, read from file
+		// Decoder is empty: pull the next packet from the file.
 		if _, err := ffmpeg.AVReadFrame(r.fmtCtx, r.packet); err != nil {
 			if errors.Is(err, ffmpeg.AVErrorEOF) {
-				// Flush decoder
+				// Send a nil packet to flush the decoder's remaining frames.
 				if _, err := ffmpeg.AVCodecSendPacket(r.decCtx, nil); err != nil {
 					return nil, fmt.Errorf("failed to flush decoder: %w", err)
 				}
@@ -181,7 +183,7 @@ func (r *Reader) GetDecoderContext() *ffmpeg.AVCodecContext {
 	return r.decCtx
 }
 
-// Seek seeks to the specified timestamp in AV_TIME_BASE units.
+// SeekTo seeks to the specified timestamp in AV_TIME_BASE units.
 // Use 0 to seek to the beginning of the file. After seeking, the decoder
 // buffers are flushed so that subsequent ReadFrame calls return fresh data.
 func (r *Reader) SeekTo(timestamp int64) error {

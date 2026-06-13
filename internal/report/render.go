@@ -10,8 +10,7 @@ import (
 // optional run metadata (pass durations, real-time factor) the record does not
 // carry; pass the zero value for analysis-only or when unavailable.
 //
-// Section order is criterion 3 of the proposal, with the Spectrograms slot after
-// Regions:
+// Section order, with the Spectrograms slot after Regions:
 //
 //	Header -> Processing Summary -> Loudness -> Dynamics -> Spectral ->
 //	Noise Floor -> Regions -> Spectrograms (slot) -> Interval Summary ->

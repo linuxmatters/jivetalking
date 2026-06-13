@@ -44,21 +44,27 @@ type AnalysisModel struct {
 	Height int
 }
 
-// AnalysisStartMsg signals analysis has started
+// The analysis-only message set lives here beside its model; the processing-mode
+// set lives in messages.go. Both are routed by FileIndex into the owning model's
+// pre-allocated per-file slots, so concurrent pool workers never share state.
+
+// AnalysisStartMsg signals analysis has started for the file at FileIndex.
 type AnalysisStartMsg struct {
 	FileIndex int
 	FileName  string
 	FilePath  string
 }
 
-// AnalysisProgressMsg signals progress update
+// AnalysisProgressMsg carries a progress (0.0-1.0) and current level update for
+// the file at FileIndex.
 type AnalysisProgressMsg struct {
 	FileIndex int
 	Progress  float64
 	Level     float64
 }
 
-// AnalysisCompleteMsg signals analysis has completed
+// AnalysisCompleteMsg signals analysis has completed for the file at FileIndex,
+// carrying the result or an error.
 type AnalysisCompleteMsg struct {
 	FileIndex    int
 	Result       *processor.AnalysisResult

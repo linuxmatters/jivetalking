@@ -10,7 +10,8 @@ import (
 
 // Room tone region scoring for measurement reference extraction.
 //
-// The "noise profile" is not afftdn training data (anlmdn is self-adapting).
+// The "noise profile" is not denoiser training data: the noise-removal stages
+// take no profile input (anlmdn self-adapts, afftdn uses a fixed nr).
 // These measurements serve as:
 // 1. Reference baseline for adaptive filter tuning (gate, highpass)
 // 2. Comparative measurement point (same region re-measured in later passes)

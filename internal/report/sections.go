@@ -27,10 +27,10 @@ func renderParamTable(rows []paramRow) string {
 	return mdTable([]string{"Parameter", "Value"}, body)
 }
 
-// This file holds the per-domain section renderers (task 1.4): Header,
-// Processing Summary, Loudness, Dynamics, Spectral. Each is a pure
-// func(...) string reading ONLY the run record (and Timings for the summary) -
-// no AudioMeasurements, no .json re-read, no internal/logging (criterion 6).
+// This file holds the per-domain section renderers: Header, Processing Summary,
+// Loudness, Dynamics, Spectral, and the rest. Each is a pure func(...) string
+// reading ONLY the run record (and Timings for the summary) - no
+// AudioMeasurements, no .json re-read, no internal/logging.
 //
 // The metric tables share one shape: column 0 Metric (label), column 1 the
 // objective definition gloss + unit, then one value column per present stage
@@ -111,7 +111,7 @@ func formatCell(getter func() (float64, bool), format metricFormat) string {
 // renderMetricTable builds a metric table: Metric | Definition | Input
 // [| Filtered] [| Final]. The Filtered/Final columns are omitted when no row
 // populates them. Each row's second column carries the definition gloss and unit
-// from Definitions, so every metric row is self-describing (criterion 4).
+// from Definitions, so every metric row is self-describing.
 func renderMetricTable(rows []metricRow) string {
 	hasFiltered, hasFinal := stageColumns(rows)
 
@@ -151,8 +151,7 @@ func metricLabel(key string) string {
 
 // metricDefinition returns the objective gloss with its unit appended in
 // parentheses, e.g. "Gated programme loudness... (LUFS)". Unit-less metrics omit
-// the parenthetical. Every loudness/dynamics/spectral row carries this gloss
-// (criterion 4).
+// the parenthetical. Every loudness/dynamics/spectral row carries this gloss.
 func metricDefinition(key string) string {
 	d, ok := DefinitionFor(key)
 	if !ok {
@@ -409,7 +408,7 @@ func renderSpectral(rec *processor.RunRecord) string {
 // and its source, the two distinct floor estimates (prescan, astats), the
 // adaptive room-tone detect level, the voice-activated flag, and the reduction
 // headroom. Reads only rec.Noise. Raw measured values only - no "Noise Reduction"
-// delta, no "Floor-Speech SNR", no "Character", no per-row verdict (criterion 5).
+// delta, no "Floor-Speech SNR", no "Character", no per-row verdict.
 // Returns the empty string when the record carries no noise block (defensive;
 // analysis and processing records both populate it).
 func renderNoiseFloor(rec *processor.RunRecord) string {
@@ -825,11 +824,11 @@ func renderFilterDiagnostics(d *processor.AdaptiveDiagnostics) string {
 // renderNormalisation renders the Pass 3/4 Peak Limiter and Loudnorm numbers from
 // normalisation.*. Reads the wrapped *NormalisationResult via the record's
 // Result() read seam (the wrapper type is unexported, like the elected-profile
-// seams in 1.5). Returns the empty string when the record carries no
+// seams in renderRegions). Returns the empty string when the record carries no
 // normalisation block (analysis-only).
 //
-// within_target is rendered as a RAW SIGNED LU deviation number (resolved
-// decision 4), NOT the legacy "✓ Within target / ⚠ Outside tolerance" boolean: it
+// within_target is rendered as a RAW SIGNED LU deviation number, NOT a
+// "✓ Within target / ⚠ Outside tolerance" boolean: it
 // is output_integrated_lufs (the loudnorm-measured output, normalisation.
 // loudnorm_measured.output_integrated_lufs, parsed from LoudnormStats.OutputI)
 // minus normalisation.effective_target_lufs (EffectiveTargetI), formatted via
@@ -878,9 +877,9 @@ func renderNormalisation(rec *processor.RunRecord) string {
 			paramRow{"Normalisation type", stringCell(stats.NormalizationType)},
 		)
 	}
-	// Raw signed LU deviation from the effective target (resolved decision 4): the
-	// loudnorm-measured output integrated loudness minus the effective target. A
-	// signed number, never a boolean or glyph.
+	// Raw signed LU deviation from the effective target: the loudnorm-measured
+	// output integrated loudness minus the effective target. A signed number,
+	// never a boolean or glyph.
 	rows = append(rows, paramRow{"Deviation from target (LU)", targetDeviationCell(r)})
 	b.WriteString(renderParamTable(rows))
 
@@ -960,8 +959,8 @@ var spectrogramStageOrder = []struct {
 // analysis-only records yield a single Input column. Cells are Markdown image
 // links to the record's relative basenames (![<kind> <stage>](<path>)). This
 // renderer is a PURE record consumer - it reads the slice and builds Markdown,
-// never calling ffmpeg/exec (criterion A11). An empty slice returns "" so the
-// orchestrator emits no heading (stage-2 empty-section discipline).
+// never calling ffmpeg/exec. An empty slice returns "" so the orchestrator emits
+// no heading, matching the empty-section discipline the other renderers follow.
 func renderSpectrograms(rec *processor.RunRecord) string {
 	if len(rec.Spectrograms) == 0 {
 		return ""

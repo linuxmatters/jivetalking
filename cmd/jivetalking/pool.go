@@ -16,11 +16,11 @@ import (
 
 // sendWarning delivers a non-fatal warning to the reportWarnings channel without
 // ever blocking the sending worker. The channel is buffered to len(files) and is
-// only drained after the pool fully unwinds, but a single file can now emit
-// several warnings (report, run record, sidecars, one per spectrogram), so a
-// burst of failures could otherwise fill the buffer and block a worker - which
-// would stall wg.Wait()/specWG.Wait() and deadlock the run. The warnings are
-// best-effort diagnostics, so dropping one under saturation is the safe trade.
+// only drained after the pool fully unwinds, yet a single file emits several
+// warnings (report, run record, sidecars, one per spectrogram), so a burst of
+// failures could fill the buffer and block a worker - which would stall
+// wg.Wait()/specWG.Wait() and deadlock the run. The warnings are best-effort
+// diagnostics, so dropping one under saturation is the safe trade.
 func sendWarning(ch chan<- string, msg string) {
 	select {
 	case ch <- msg:
@@ -60,18 +60,18 @@ func launchWorkerPool(ctx context.Context, p *tea.Program, files []string, base 
 // threaded into ProcessAudio. Either way wg.Done() fires so wg.Wait() returns
 // and ui.AllCompleteMsg is sent.
 //
-// diagnostics gates the bulk diagnostic artefacts (the .jsonl sidecars and, from
-// T4.1, the spectrogram PNGs). When false the always-on set (.flac/.md/.json)
-// still writes; only the opt-in sidecars are skipped.
+// diagnostics gates the bulk diagnostic artefacts (the .jsonl sidecars and the
+// spectrogram PNGs). When false the always-on set (.flac/.md/.json) still
+// writes; only the opt-in sidecars are skipped.
 func runWorkerPool(ctx context.Context, p *tea.Program, files []string, base *processor.BaseFilterConfig, sharedLog func(string, ...any), jobs int, diagnostics bool, reportWarnings chan<- string) {
 	sem := make(chan struct{}, jobs)
 	var wg sync.WaitGroup
 
 	// Spectrogram renders run in background goroutines off the file-worker critical
-	// path (proposal §4). specSem bounds them to the jobs budget shared across ALL
-	// files - one pool-level semaphore, never one unbounded goroutine per PNG, so
-	// ffmpeg is not oversubscribed beyond the worker budget. specWG tracks every
-	// render so the pool waits for all PNGs before AllCompleteMsg / program exit.
+	// path. specSem bounds them to the jobs budget shared across ALL files - one
+	// pool-level semaphore, never one unbounded goroutine per PNG, so ffmpeg is not
+	// oversubscribed beyond the worker budget. specWG tracks every render so the
+	// pool waits for all PNGs before AllCompleteMsg / program exit.
 	specSem := make(chan struct{}, jobs)
 	var specWG sync.WaitGroup
 
@@ -137,7 +137,7 @@ func runWorkerPool(ctx context.Context, p *tea.Program, files []string, base *pr
 			// Attach the spectrogram path list SYNCHRONOUSLY, before the .md/.json
 			// write, so both carry the links. This is pure string work (no ffmpeg);
 			// the PNGs themselves render in background goroutines launched after the
-			// writes. Off path: no list, no goroutines (proposal §4).
+			// writes. Off path: no list, no goroutines.
 			if diagnostics {
 				rec.Spectrograms = processor.DeriveSpectrogramImages(rec, outputStem, processor.ProcessingSpectrogramStages)
 			}
@@ -162,10 +162,10 @@ func runWorkerPool(ctx context.Context, p *tea.Program, files []string, base *pr
 			}
 
 			// Stream the full interval and candidate series to .jsonl sidecars
-			// beside the record (§8.5 call 2 / §9.3): the bulk data the summary
-			// stands in for. Opt-in behind --diagnostics; the always-on .json
-			// carries the inline summaries, so .md/.json stay populated when off.
-			// Same non-fatal contract as the record above.
+			// beside the record: the bulk data the summary stands in for. Opt-in
+			// behind --diagnostics; the always-on .json carries the inline summaries,
+			// so .md/.json stay populated when off. Same non-fatal contract as the
+			// record above.
 			if diagnostics {
 				if err := processor.WriteRunRecordSidecars(result.Measurements, recordPath); err != nil {
 					wlog("[POOL] Failed to write run record sidecars: %v", err)

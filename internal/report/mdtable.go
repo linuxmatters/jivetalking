@@ -66,50 +66,36 @@ func escapeCell(s string) string {
 }
 
 // =============================================================================
-// Numeric metric formatters (ported from internal/logging/table.go)
+// Numeric metric formatters
 //
-// Thresholds and rendered strings are replicated EXACTLY for golden-test parity
-// (task 1.8). Do not alter cutoffs or output tokens without regenerating the
-// golden. Ported one-for-one from logging/table.go:
-//   - digitalSilenceThreshold  <- table.go:128 (DigitalSilenceThreshold = -120.0)
-//   - lufsMeasurementFloor      <- table.go:170 (LUFSMeasurementFloor = -70.0)
-//   - spectralSilenceValue      <- table.go:206 (SpectralSilenceValue = "n/a")
-//   - isDigitalSilence          <- table.go:131
-//   - formatMetric              <- table.go:141
-//   - formatMetricDB            <- table.go:158
-//   - formatMetricLUFS          <- table.go:174
-//   - formatMetricPeak          <- table.go:188
-//   - formatMetricSpectral      <- table.go:210
-//   - formatMetricSigned        <- table.go:219
-//
-// NOT ported (resolved decision): normaliseForGain and the `†` gain-normalised
-// columns are dropped.
+// Thresholds and rendered strings match the legacy internal/logging table
+// formatters EXACTLY for golden-test parity. Do not alter cutoffs or output
+// tokens without regenerating the golden. The gain-normalised `†` columns are
+// deliberately not carried over.
 // =============================================================================
 
 // digitalSilenceThreshold is the dBFS level at or below which a signal is
 // treated as digital silence. FFmpeg reports -Inf for true digital zero;
 // anything at or below -120 dBFS is effectively silent.
-// (logging/table.go:128, DigitalSilenceThreshold)
 const digitalSilenceThreshold = -120.0
 
 // lufsMeasurementFloor is the lowest reliable LUFS measurement from ebur128;
 // values below it are too quiet to measure reliably.
-// (logging/table.go:170, LUFSMeasurementFloor)
 const lufsMeasurementFloor = -70.0
 
 // spectralSilenceValue is rendered for spectral metrics under digital silence,
-// where the spectrum is undefined. (logging/table.go:206, SpectralSilenceValue)
+// where the spectrum is undefined.
 const spectralSilenceValue = "n/a"
 
 // isDigitalSilence reports whether value represents digital silence: true zero
-// (-Inf) or at/below the measurement floor. (logging/table.go:131)
+// (-Inf) or at/below the measurement floor.
 func isDigitalSilence(value float64) bool {
 	return math.IsInf(value, -1) || value <= digitalSilenceThreshold
 }
 
 // formatMetric formats a numeric value with appropriate precision: scientific
 // notation for very small non-zero magnitudes (< 0.0001), the placeholder for
-// NaN/Inf, otherwise fixed decimals. (logging/table.go:141)
+// NaN/Inf, otherwise fixed decimals.
 func formatMetric(value float64, decimals int) string {
 	if math.IsNaN(value) || math.IsInf(value, 0) {
 		return placeholder
@@ -122,7 +108,6 @@ func formatMetric(value float64, decimals int) string {
 
 // formatMetricDB formats a dB value, rendering "< -120" for digital silence
 // (-Inf or at/below the floor) and the placeholder for NaN/+Inf.
-// (logging/table.go:158)
 func formatMetricDB(value float64, decimals int) string {
 	if math.IsNaN(value) || math.IsInf(value, 1) {
 		return placeholder
@@ -134,7 +119,7 @@ func formatMetricDB(value float64, decimals int) string {
 }
 
 // formatMetricLUFS formats a LUFS value, rendering "< -70" below the ebur128
-// measurement floor and the placeholder for NaN/+Inf. (logging/table.go:174)
+// measurement floor and the placeholder for NaN/+Inf.
 func formatMetricLUFS(value float64, decimals int) string {
 	if math.IsNaN(value) || math.IsInf(value, 1) {
 		return placeholder
@@ -147,7 +132,7 @@ func formatMetricLUFS(value float64, decimals int) string {
 
 // formatMetricPeak formats a linear peak (0.0-1.0) as dB, rendering "< -120"
 // for digital silence (peak <= 0 or converted dB below the floor) and the
-// placeholder for NaN. (logging/table.go:188)
+// placeholder for NaN.
 func formatMetricPeak(value float64, decimals int) string {
 	if math.IsNaN(value) {
 		return placeholder
@@ -164,7 +149,6 @@ func formatMetricPeak(value float64, decimals int) string {
 
 // formatMetricSpectral formats a spectral metric, rendering "n/a" under digital
 // silence (the spectrum is undefined) and otherwise delegating to formatMetric.
-// (logging/table.go:210)
 func formatMetricSpectral(value float64, decimals int, digitalSilence bool) string {
 	if digitalSilence {
 		return spectralSilenceValue
@@ -173,7 +157,7 @@ func formatMetricSpectral(value float64, decimals int, digitalSilence bool) stri
 }
 
 // formatMetricSigned formats a value with an explicit sign for positives (e.g.
-// "+2.5"), and the placeholder for NaN/Inf. (logging/table.go:219)
+// "+2.5"), and the placeholder for NaN/Inf.
 func formatMetricSigned(value float64, decimals int) string {
 	if math.IsNaN(value) || math.IsInf(value, 0) {
 		return placeholder
@@ -182,12 +166,11 @@ func formatMetricSigned(value float64, decimals int) string {
 }
 
 // =============================================================================
-// Run-metadata formatters (ported from internal/logging/report_common.go and
-// the RTF maths at report.go:writeProcessingSummary)
+// Run-metadata formatters
 // =============================================================================
 
-// formatDuration formats a duration as a human-readable string. Ported verbatim
-// from logging/report_common.go:45.
+// formatDuration formats a duration as a human-readable string: sub-minute as
+// seconds, then "Mm Ss", then "Hh Mm Ss".
 func formatDuration(d time.Duration) string {
 	if d < time.Minute {
 		return fmt.Sprintf("%.1fs", d.Seconds())
@@ -205,8 +188,8 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%dh %dm %ds", hours, minutes, seconds)
 }
 
-// channelName returns a human-readable channel-count name. Ported verbatim from
-// logging/report_common.go:63.
+// channelName returns a human-readable channel-count name ("mono", "stereo", or
+// "N channels").
 func channelName(channels int) string {
 	switch channels {
 	case 1:
@@ -234,10 +217,8 @@ func formatSampleRate(hz int) string {
 }
 
 // realTimeFactor computes the real-time factor: audio duration over wall-clock
-// processing time. Ported from report.go:writeProcessingSummary (lines 161-162),
-// where audioDuration = durationSecs * time.Second and rtf = audioDuration /
-// totalTime. Returns 0 when total is non-positive (the legacy guard renders the
-// factor only when audio duration is known and total time elapses).
+// processing time. Returns 0 when total is non-positive, so the factor renders
+// only once audio duration is known and time has elapsed.
 func realTimeFactor(audioDurationSecs float64, total time.Duration) float64 {
 	if total <= 0 {
 		return 0

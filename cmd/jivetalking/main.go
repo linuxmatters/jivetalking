@@ -31,6 +31,8 @@ var version = "dev"
 
 const debugLogPath = "jivetalking-debug.log"
 
+// createDebugLogFile is a package var over os.Create so tests can substitute a
+// fake and exercise openDebugLog without touching the filesystem.
 var createDebugLogFile = os.Create
 
 // CLI defines the command-line interface parsed by kong.
@@ -347,8 +349,8 @@ func runAnalysisOnly(files []string, config *processor.BaseFilterConfig, log fun
 
 // runAnalysisOnlyWithDeps drives the analysis-only path with injected
 // dependencies for testing. diagnostics gates the bulk diagnostic artefacts (the
-// .jsonl sidecars and, from T4.2, the input-only spectrogram PNGs). When false
-// the always-on set (.md/.json) still writes; only the opt-in sidecars skip.
+// .jsonl sidecars and the input-only spectrogram PNGs). When false the always-on
+// set (.md/.json) still writes; only the opt-in sidecars skip.
 func runAnalysisOnlyWithDeps(files []string, config *processor.BaseFilterConfig, log func(string, ...any), jobs int, diagnostics bool, deps analysisOnlyDeps) {
 	results := make([]*processor.AnalysisResult, len(files))
 	metas := make([]*audio.Metadata, len(files))
@@ -357,9 +359,9 @@ func runAnalysisOnlyWithDeps(files []string, config *processor.BaseFilterConfig,
 	runCtx, cancel := context.WithCancel(context.Background())
 
 	// Spectrogram renders run in background goroutines off the post-pool report
-	// loop, mirroring the processing pool (T4.1). specSem bounds them to the jobs
-	// budget shared across ALL files - one semaphore, never one unbounded goroutine
-	// per PNG. specWG tracks every render so the function waits for all input-only
+	// loop, mirroring the processing pool. specSem bounds them to the jobs budget
+	// shared across ALL files - one semaphore, never one unbounded goroutine per
+	// PNG. specWG tracks every render so the function waits for all input-only
 	// PNGs before it returns. specCtx is a FRESH context (not runCtx): runCtx is
 	// already cancelled by the unconditional cancel() below by the time the report
 	// loop runs, so renders launched there must not inherit that cancellation;
@@ -480,9 +482,9 @@ func runAnalysisOnlyWithDeps(files []string, config *processor.BaseFilterConfig,
 		}
 
 		// Stream the Pass-1 interval and candidate series to .jsonl sidecars
-		// beside the analysis record (§8.5 call 2 / §9.3). Opt-in behind
-		// --diagnostics; the always-on .json carries the inline summaries.
-		// Non-fatal, matching the record write above.
+		// beside the analysis record. Opt-in behind --diagnostics; the always-on
+		// .json carries the inline summaries. Non-fatal, matching the record write
+		// above.
 		if diagnostics {
 			if err := deps.writeSidecars(results[i].Measurements, recordPath); err != nil {
 				deps.printError(fmt.Sprintf("Failed to write analysis run record sidecars for %s: %v", files[i], err))

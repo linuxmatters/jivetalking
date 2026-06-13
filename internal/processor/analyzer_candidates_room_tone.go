@@ -53,12 +53,13 @@ const (
 )
 
 // roomToneScore calculates a 0-1 score indicating how likely an interval is room tone.
-// Room tone has characteristic spectral behaviour:
-// - Low SpectralFlux (stable, not changing)
-// - Relatively quiet (low RMS)
-// - More noise-like spectrum (higher flatness/entropy vs tonal speech)
+// Room tone is quiet and spectrally stable, so the score combines two cues:
+//   - Amplitude (weight roomToneAmplitudeWeight): quieter than the RMS median = more likely room tone.
+//   - Spectral flux (weight roomToneFluxWeight): lower than the flux median = stable, not changing.
 //
-// The score combines these factors with amplitude to identify room tone reliably.
+// Only amplitude and flux feed this per-interval likelihood; the richer spectral
+// metrics (flatness, entropy, centroid, kurtosis) enter later, at candidate
+// scoring (calculateSpectralScore, isLikelyCrosstalk).
 func roomToneScore(interval IntervalSample, rmsP50, fluxP50 float64) float64 {
 	// Amplitude component: quieter = more likely room tone
 	// Score 1.0 if at or below median, decreasing above

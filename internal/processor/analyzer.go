@@ -33,11 +33,15 @@ type RoomToneRegion struct {
 
 // NoiseProfile contains measurements from the elected room tone region.
 // These measurements serve as a reference baseline for adaptive filter tuning:
-//   - MeasuredNoiseFloor → gate threshold (DS201)
-//   - Entropy → gate release timing and range adaptation (DS201Gate)
-//     (See docs/Spectral-Metrics-Reference.md for entropy value interpretations:
-//     low entropy 0.08-0.30 = ordered/voiced; high entropy > 0.50 = disordered/noise)
-//   - CrestFactor/PeakLevel → transient detection mode selection
+//   - MeasuredNoiseFloor → elected noise floor (Noise.Floor) feeding the DS201
+//     gate threshold and de-esser/quality references.
+//   - CrestFactor/PeakLevel → peak-reference input to the legacy DS201 gate
+//     threshold path (calculateDS201GateThresholdLegacy via adaptive_ds201_gate.go),
+//     reached only when noise-to-speech separation is too small for the aggression maths.
+//
+// Entropy and the spectral fields are measured here for the report and
+// contamination detection; the current adaptive gate keys its release/range on
+// flux, LRA, and noise floor, not on room-tone entropy.
 //
 // Note: The room tone region is also re-measured in Pass 2 and Pass 4 for
 // before/after comparison of noise reduction effectiveness.
@@ -237,9 +241,9 @@ type RegionMetrics struct {
 }
 
 // BaseMeasurements contains fields shared between input (Pass 1) and output (Pass 2) measurements.
-// Embedded in OutputMeasurements; AudioMeasurements now carries the equivalent data
-// in nested domain blocks (Loudness/Dynamics/Noise/Regions). 1.4 migrates the output
-// side onto the shared LoudnessMetrics/DynamicsMetrics types.
+// Embedded in OutputMeasurements; AudioMeasurements carries the equivalent data
+// in nested domain blocks (Loudness/Dynamics/Noise/Regions), and the output side
+// uses the shared LoudnessMetrics/DynamicsMetrics types.
 type BaseMeasurements struct {
 	// Spectral analysis from aspectralstats (all measurements averaged across frames)
 	Spectral SpectralMetrics `json:"-"` // Kept flat in JSON by custom marshal helpers
@@ -276,9 +280,8 @@ type BaseMeasurements struct {
 }
 
 // Stage identifies one of the three measurement snapshots the pipeline produces
-// of the same regions/loudness/dynamics/spectral blocks (§8.1). The §8.4 stage
-// enum keys the per-stage maps assembled in RunRecord (task 2.4); this task only
-// defines the type and its constants.
+// of the same regions/loudness/dynamics/spectral blocks. The stage value keys the
+// per-stage maps assembled in RunRecord.
 type Stage string
 
 const (
@@ -294,7 +297,7 @@ type AudioMeasurements struct {
 	// Spectral analysis from aspectralstats (whole-file averaged). Kept directly
 	// accessible at measurements.Spectral so DSP/adaptive reads (m.Spectral.Flux,
 	// .Kurtosis, ...) keep resolving; the spectral.stages grouping is assembled at
-	// the RunRecord level in Phase 2.
+	// the RunRecord level.
 	Spectral SpectralMetrics `json:"-"`
 
 	// Domain blocks (8.1). Loudness/Dynamics use the shared metric types; Noise and
@@ -352,7 +355,7 @@ type OutputLoudnormMeasurement struct {
 type OutputMeasurements struct {
 	// Spectral analysis from aspectralstats (whole-file averaged). Kept directly
 	// accessible at FilteredMeasurements.Spectral; the spectral.stages grouping is
-	// assembled at the RunRecord level in Phase 2.
+	// assembled at the RunRecord level.
 	Spectral SpectralMetrics `json:"-"`
 
 	// Domain blocks (8.1). Loudness/Dynamics use the shared metric types.
