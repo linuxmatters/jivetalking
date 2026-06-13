@@ -21,7 +21,7 @@ import (
 // spectrogram_paths_test.go.
 
 // ---------------------------------------------------------------------------
-// 1. Registry gate (always runs, no testdata) — the cheap go/no-go guard.
+// 1. Registry gate (always runs, no testdata): the cheap go/no-go guard.
 // ---------------------------------------------------------------------------
 
 // TestSpectrogramRegistryGate confirms, AT RUN TIME against the linked static
@@ -140,7 +140,7 @@ func TestSpectrogramFilterSpecDeterministic(t *testing.T) {
 
 // TestSpectrogramFrozenParamSingleDefinition asserts the ONE frozen param string
 // is what spectrogramFilterSpec (and therefore generateSpectrogram, which calls
-// it) actually emits on both branches — no per-call mutation, one definition.
+// it) actually emits on both branches, no per-call mutation, one definition.
 // Pure-string, always runs. The render side of this contract (the frozen params
 // reaching ffmpeg unchanged) is exercised by the render tests below.
 func TestSpectrogramFrozenParamSingleDefinition(t *testing.T) {
@@ -151,7 +151,7 @@ func TestSpectrogramFrozenParamSingleDefinition(t *testing.T) {
 		if !strings.Contains(spec, frozenSpectrogramSpec) {
 			t.Fatalf("spec does not contain the frozen param string verbatim:\n spec:   %q\n frozen: %q", spec, frozenSpectrogramSpec)
 		}
-		// Exactly one occurrence — the params are never duplicated or recomputed.
+		// Exactly one occurrence, the params are never duplicated or recomputed.
 		if n := strings.Count(spec, frozenSpectrogramSpec); n != 1 {
 			t.Fatalf("frozen param string appears %d times in spec %q, want 1", n, spec)
 		}

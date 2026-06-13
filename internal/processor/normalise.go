@@ -44,7 +44,7 @@ const (
 	// inter-sample excess (final true_peak dBTP − sample_peak dBFS) peaked at
 	// 0.817 dB on LMP-76 popey, driven up by the Phase-2 loudness-cap relaxation
 	// (the former static loudnorm TP relax) from the 0.60 dB the earlier 0.7 value
-	// was sized for. The excess is positive on every file — realised true peak sits above
+	// was sized for. The excess is positive on every file, realised true peak sits above
 	// the sample ceiling on all of them. 0.9 dB covers the p100 of 0.817 with a
 	// ~0.08 dB safety allowance, so the sample-peak brickwall keeps oversampled
 	// true peak ≤ the loudnorm TargetTP on the whole corpus.
@@ -57,7 +57,7 @@ const (
 	// computes projectedPeak from measured_TP/measured_I; FFmpeg's loudnorm
 	// computes its own output-peak estimate at a different point. If loudnorm's
 	// estimate exceeds our projection by more than the cushion, loudnorm can trip
-	// to DYNAMIC mode — the failure the Pass-4 leveling limiter exists to prevent.
+	// to DYNAMIC mode, the failure the Pass-4 leveling limiter exists to prevent.
 	//
 	// Corpus-measured (testdata/validation-0.5.x-vs-0.6.x/out-final/*.json):
 	// delta = loudnorm_output_tp − projectedPeak is ≤ 0.05 dB across all 48 files,
@@ -1145,7 +1145,7 @@ func buildLoudnormFilterSpec(config *EffectiveFilterConfig, measurement *Loudnor
 	// The emitted TP= is clamped to FFmpeg's accepted range [loudnormTPMinDB,
 	// loudnormTPMaxDB] = [-9, 0]. On-corpus the prefix limiter holds projectedPeak
 	// ≤ TargetTP, so internalTP ≈ -0.7 (never near the upper clamp) and passes
-	// through UNCHANGED — clamping to [-9, 0] (NOT to TargetTP) preserves byte
+	// through UNCHANGED, clamping to [-9, 0] (NOT to TargetTP) preserves byte
 	// parity. The lower clamp only catches genuinely quiet off-corpus recordings
 	// whose peak is already below -9 dBTP, where loudnorm's internal limiter is
 	// inert anyway, so the clamp changes no on-corpus output. The linear-mode guard

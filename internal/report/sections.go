@@ -691,8 +691,8 @@ func formatInt(n int) string {
 // renderFilters renders the Pass-2 filter chain in PROCESSING ORDER (downmix →
 // high-pass → low-pass → noise removal → gate → levelling compressor → de-esser), one
 // Parameter/Value sub-table per filter, plus the adaptive diagnostics block. Each
-// filter's heading carries the factual fixed-design label (e.g. "Rumble high-pass
-// — 80 Hz, 12 dB/oct") as a STATIC descriptive statement, not a per-file verdict;
+// filter's heading carries the factual fixed-design label (e.g. "Rumble high-pass:
+// 80 Hz, 12 dB/oct") as a STATIC descriptive statement, not a per-file verdict;
 // the rows carry the per-file parameters off filters.<filter>.*. The gate
 // threshold_db/range_db are already dB-converted at record assembly
 // (newFiltersBlock), so they render as-is. Reads only rec.Filters. Returns the

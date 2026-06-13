@@ -16,50 +16,22 @@ Your files emerge at -16 LUFS, a common podcast target, with room rumble, backgr
 
 ## The Four-Pass Pipeline
 
-Jivetalking treats audio processing as measurement science, not guesswork. It analyses your recording first, then adapts every filter parameter to match. A dark-voiced narrator gets gentler de-essing. Pre-compressed audio gets lighter compression. Noisy home offices get different treatment than clean studios.
+Jivetalking treats audio processing as measurement science, not guesswork. It analyses your recording first, then adapts every filter to match. A dark-voiced narrator gets gentler de-essing, pre-compressed audio gets lighter compression, and a noisy home office gets different treatment than a clean studio.
 
-### Pass 1: Analysis
+Four passes carry a raw recording to a broadcast-ready master:
 
-Measures everything that matters:
+1. **Analyse:** measure loudness, noise floor, and speech; detect the room tone.
+2. **Process:** run the adapted filter chain.
+3. **Measure:** read the processed signal back so normalisation has accurate numbers.
+4. **Normalise:** set the final loudness to -16 LUFS / -1 dBTP.
 
-- **Loudness:** Integrated LUFS, true peak, loudness range (EBU R128)
-- **Noise profile:** Floor level and spectral signature
-- **Speech characteristics:** RMS level, crest factor, and spectral traits when speech is detected
-- **Dynamic behaviour:** Kurtosis and spectral flux for transient analysis
+The Pass 2 filter chain, each stage handing the next a cleaner signal:
 
-### Pass 2: Adaptive Processing
+```text
+downmix → rumble high-pass → band-limit low-pass → noise reduction → speech gate → levelling compressor → de-esser → analysis → resample
+```
 
-Filter chain tuned to your specific audio:
-
-| Filter | What it does |
-|--------|--------------|
-| **Downmix** | Folds the source to mono before any processing |
-| **Rumble high-pass (80 Hz)** | Removes subsonic rumble below every vocal fundamental |
-| **Band-limit low-pass (20.5 kHz)** | Caps bandwidth at the top of human hearing for consistent encoder input |
-| **Noise reduction** | `anlmdn` denoiser at the source sample rate (`r=0.0020`, `m=3`) followed by `afftdn` FFT spectral denoise (fixed `nr=12`) for residual suppression |
-| **Speech gate** | Soft expander for natural inter-phrase cleanup; threshold sits between noise floor and quiet speech level |
-| **Levelling compressor** | Gentle speech-relative levelling; threshold tracks measured speech RMS |
-| **De-esser** | Adaptive intensity driven by the speech-region sibilant-band excess |
-
-### Pass 3 & 4: Loudness Normalisation
-
-Two-stage EBU R128 normalisation:
-
-1. **Pre-gain and ceiling** are calculated from Pass 2 measurements before Pass 3 runs; when the ideal limiter ceiling falls below alimiter's -24.0 dBTP minimum, a pre-gain amount is derived to close the deficit
-2. **Limiter** creates headroom by reducing true peaks; Pass 3 measures through the same `volume -> alimiter` prefix that Pass 4 will apply, so its `measured_I`/`measured_TP` already reflect the post-limiter signal
-3. **Loudnorm** applies linear gain to reach -16 LUFS without clipping or dynamic processing
-
-This order matters. The limiter provides breathing room so loudnorm can use its transparent linear mode rather than falling back to dynamic compression. Calculating pre-gain before Pass 3 ensures measurement and application see the same signal, so no manual adjustment is needed when building the Pass 4 filter graph.
-
-### Why This Order Matters
-
-Each filter prepares audio for the next:
-
-1. **Rumble removal before denoising**: prevents low-frequency artifacts confusing noise profiling
-2. **Denoising before gating**: lowers noise floor so gate threshold can be optimal
-3. **Gating before compression**: removes silence before dynamics processing amplifies room tone
-4. **Compression before de-essing**: compression emphasises sibilance; de-essing corrects it
-5. **Normalisation last**: sees fully processed signal for accurate loudness targeting
+For the full walkthrough, see **[docs/Pipeline.md](docs/Pipeline.md)**: what each stage does, why it sits where it does, how the adaptive tuning works, and how normalisation reaches -16 LUFS honestly, with a diagram.
 
 ---
 
@@ -76,9 +48,9 @@ Processed   ★★★★★  Excellent
 
 The Recording score looks at three things, in plain terms:
 
-- **Clean** — low background hiss and a healthy gap between your voice and the room
-- **Headroom** — no clipping; a capture recorded too hot scores zero here
-- **Level** — recorded at a sensible loudness, without wild swings
+- **Clean:** low background hiss and a healthy gap between your voice and the room
+- **Headroom:** no clipping; a capture recorded too hot scores zero here
+- **Level:** recorded at a sensible loudness, without wild swings
 
 Scores run 1 to 5 stars (Poor, Fair, Good, Great, Excellent). The scale is grounded on a real podcast corpus, so the stars mean something rather than being plucked from the air.
 

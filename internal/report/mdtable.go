@@ -51,7 +51,7 @@ func mdTable(headers []string, rows [][]string) string {
 // escapeCell makes a value safe to drop into a Markdown table cell: a literal
 // pipe is backslash-escaped (GFM cell convention) and any newline or carriage
 // return collapses to a space, so neither character can split the row or column.
-// Image-link cells (![alt](path)) are unaffected — they carry no bare pipe or
+// Image-link cells (![alt](path)) are unaffected, they carry no bare pipe or
 // newline.
 func escapeCell(s string) string {
 	if !strings.ContainsAny(s, "|\n\r") {

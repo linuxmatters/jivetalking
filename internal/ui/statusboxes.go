@@ -13,7 +13,7 @@ import (
 // Filter-chain status boxes (Filter Chain + Analysis), drawn to the right of the
 // Pass box. They show ADAPTED CONFIG + MEASURED ANALYSIS, not live metering: the
 // values are fixed within a pass, so the boxes re-render only on AdaptedSummaryMsg,
-// never on the meter tick. Pure presentation — no DSP, no measurement.
+// never on the meter tick. Pure presentation, no DSP, no measurement.
 
 const (
 	// Box inner content widths (columns), excluding border + padding. Set to the
@@ -21,8 +21,8 @@ const (
 	// fitWidth trailing pad: only the box style's Padding(0,1) remains, giving a
 	// symmetric 1-space gutter on both sides. Widest rows (measured via
 	// lipgloss.Width, wide unit glyphs ㏈/㎑/㎐ count as 2):
-	//   chain    — Mix "● Mix       mono/44.1㎑"        = 23
-	//   analysis — Dynamics "● Dynamics     20.0 LU → 2.5:1" = 30
+	//   chain:    Mix "● Mix       mono/44.1㎑"        = 23
+	//   analysis: Dynamics "● Dynamics     20.0 LU → 2.5:1" = 30
 	// Sized against the widest plausible values (3-digit dB, 2-digit LRA, longest
 	// sample rate), so realistic values never overflow fitWidth's hard truncate.
 	chainBoxInnerWidth    = 23

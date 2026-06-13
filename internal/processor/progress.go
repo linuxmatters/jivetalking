@@ -14,7 +14,7 @@ type ProgressUpdate struct {
 	// adaptation diagnostics. They are populated ONLY on the Pass-2 start event
 	// (Progress 0.0, PassProcessing) so the TUI can light its filter-chain status
 	// boxes; every other event leaves them nil. This is read-only surfacing of the
-	// already-derived config — no DSP and no AdaptConfig behaviour changes.
+	// already-derived config, no DSP and no AdaptConfig behaviour changes.
 	Config      *EffectiveFilterConfig
 	Diagnostics *AdaptiveDiagnostics
 
@@ -22,7 +22,7 @@ type ProgressUpdate struct {
 	// Pass-4 (Normalising) start event, the moment planLimiterForLoudnorm has
 	// computed the ceiling. It is nil on every other event. This lets the TUI light
 	// its Limiter row WHILE the file is still processing, instead of only at
-	// completion. Read-only surfacing of an already-computed plan — no DSP and no
+	// completion. Read-only surfacing of an already-computed plan, no DSP and no
 	// limiter-maths changes.
 	Limiter *LimiterProgress
 }

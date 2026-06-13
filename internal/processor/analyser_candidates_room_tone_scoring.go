@@ -394,7 +394,7 @@ func scoreRoomToneCandidate(m *RoomToneCandidateMetrics, clusterP50, crestMedian
 //
 // Thresholds:
 //   - RMS variance: 0 dB² (perfect) to 9 dB² (3 dB std dev, poor)
-//     Note: 9 dB² represents a 3 dB standard deviation — intentional room tone
+//     Note: 9 dB² represents a 3 dB standard deviation, intentional room tone
 //     should show much lower variance (typically < 1 dB²).
 //   - Flux: 0 (perfect) to 0.02 (stability threshold)
 //     Aligned with Spectral-Metrics-Reference.md where < 0.005 = "Stable, continuous"

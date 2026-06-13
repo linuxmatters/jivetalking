@@ -373,7 +373,7 @@ func gainBar(inputTP float64) string {
 func GainBar(inputTP float64) string {
 	position := gainGlyphPosition(inputTP)
 	filled := int(math.Round(position * float64(gainBarWidth)))
-	// Floor at one cell so the cold/blue end always shows a pip — an empty bar
+	// Floor at one cell so the cold/blue end always shows a pip, an empty bar
 	// would lose the under-recorded signal. A clipping input (>= 0 dBTP) maxes
 	// the bar so the worst case reads as a full, red-tipped run.
 	filled = max(1, min(filled, gainBarWidth))
@@ -383,7 +383,7 @@ func GainBar(inputTP float64) string {
 
 	// Five fixed stops, one per cell (width == stop count, so Blend1D samples land
 	// exactly on the stops with no muddy interpolation): the fill tip reads its
-	// zone colour directly — 3 cells = green (spot on), 4 = amber (hot), 5 = red
+	// zone colour directly: 3 cells = green (spot on), 4 = amber (hot), 5 = red
 	// (clipping).
 	ramp := lipgloss.Blend1D(gainBarWidth, cli.ColorCyanBright, cli.ColorBlue, cli.ColorGreen, cli.ColorOrange, cli.ColorRed)
 	var b strings.Builder
@@ -499,10 +499,10 @@ const doneBoxLabelWidth = 12
 // 40-col box (no wrap). Right-aligning the numeric columns also lines up the
 // decimal points.
 //
-//	doneBoxValueWidth — before and after numeric columns (shared width).
-//	doneBoxUnitWidth  — unit column DISPLAY width; ㏈TP is 4 display cols (㏈ is
-//	                    East-Asian-wide = 2 + "TP"), LUFS 4, LU 2 (padded to 4).
-//	doneBoxDeltaWidth — signed %+.1f delta column.
+//	doneBoxValueWidth: before and after numeric columns (shared width).
+//	doneBoxUnitWidth:  unit column DISPLAY width; ㏈TP is 4 display cols (㏈ is
+//	                   East-Asian-wide = 2 + "TP"), LUFS 4, LU 2 (padded to 4).
+//	doneBoxDeltaWidth: signed %+.1f delta column.
 const (
 	doneBoxValueWidth = 5
 	doneBoxUnitWidth  = 4

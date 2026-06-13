@@ -21,8 +21,8 @@ import (
 
 // frozenSpectrogramSpec is the single, frozen showspectrumpic parameter string for
 // every spectrogram image. It is applied identically to both sides of every
-// before/after pair — the honest-comparison contract (decision #8, proposal
-// §"Honest comparison — the locked showspectrumpic parameters"). The example it is
+// before/after pair, the honest-comparison contract (decision #8, proposal
+// §"Honest comparison, the locked showspectrumpic parameters"). The example it is
 // derived from is docs/Spectral-Metrics-Reference.md:168.
 //
 // Why each term is load-bearing:
@@ -38,7 +38,7 @@ import (
 // legend=1 is RESOLVED (T1.4): the legend renders a FIXED 0 → -117 dBFS colour-to-dB
 // scale, NOT a per-image auto-scaled one. A real before/after pair (raw input vs its
 // -LUFS-NN-processed output) produced byte-identical legend strips (same SHA-256), so
-// the dB key matches across the pair — gain=1 pins the magnitude reference and legend
+// the dB key matches across the pair, gain=1 pins the magnitude reference and legend
 // reads off it. legend=1 is kept; no magnitude-pinning term was needed.
 //
 // One definition, never mutated or derived per call.
@@ -193,7 +193,7 @@ func spectrogramBounds(kind string, rec *RunRecord) (*regionBounds, error) {
 // (built like createBufferSource) feeds spec into a hand-allocated video
 // buffersink whose pixel format is pinned to rgb24 (the png encoder's input
 // format) before AVFilterInitStr. The whole spec is parsed through one
-// AVFilterGraphParsePtr pass — no need to drop to FilterGraph.Raw(). The caller
+// AVFilterGraphParsePtr pass, no need to drop to FilterGraph.Raw(). The caller
 // owns the returned graph and must free it.
 func setupSpectrumGraph(decCtx *ffmpeg.AVCodecContext, spec string) (
 	graph *ffmpeg.AVFilterGraph,

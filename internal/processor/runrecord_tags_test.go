@@ -149,7 +149,7 @@ func TestAudioMeasurementsJSON_HasCanonicalKeys(t *testing.T) {
 
 // TestRegionSampleJSON_HasNoElectionFields confirms the bare RegionSample used for
 // the Pass 2/4 output samples (regions.<kind>.samples.<stage>) carries only
-// amplitude/spectral/loudness keys — no scoring/stability/voicing/band keys that
+// amplitude/spectral/loudness keys, no scoring/stability/voicing/band keys that
 // would read as a real measurement when stale-zero (§8.2 last row).
 func TestRegionSampleJSON_HasNoElectionFields(t *testing.T) {
 	sample := RegionSample{
