@@ -135,7 +135,15 @@ func main() {
 
 	jobs := resolveJobs(len(cliArgs.Files), runtime.NumCPU())
 
-	poolDone := launchWorkerPool(runCtx, p, cliArgs.Files, config, log, jobs, cliArgs.Diagnostics, reportWarnings, defaultWorkerPoolDeps())
+	env := poolEnv{
+		ctx:       runCtx,
+		p:         p,
+		files:     cliArgs.Files,
+		base:      config,
+		sharedLog: log,
+		jobs:      jobs,
+	}
+	poolDone := launchWorkerPool(env, cliArgs.Diagnostics, reportWarnings, defaultWorkerPoolDeps())
 
 	finalModel, runErr := p.Run()
 
@@ -219,11 +227,12 @@ type analysisOnlyDeps struct {
 }
 
 func defaultAnalysisOnlyDeps() analysisOnlyDeps {
+	pool := defaultAnalysisPoolDeps()
 	return analysisOnlyDeps{
 		stdout:              os.Stdout,
 		hasTTY:              isTTY,
-		openMetadata:        openAudioMetadata,
-		analyseDetailed:     processor.AnalyseOnlyDetailed,
+		openMetadata:        pool.openMetadata,
+		analyseDetailed:     pool.analyse,
 		printError:          cli.PrintError,
 		writeMarkdownReport: report.WriteMarkdownReport,
 		writeRunRecord:      processor.WriteRunRecord,
@@ -336,9 +345,12 @@ func runAnalysisOnly(files []string, config *processor.BaseFilterConfig, log fun
 // .jsonl sidecars and the input-only spectrogram PNGs). When false the always-on
 // set (.md/.json) still writes; only the opt-in sidecars skip.
 func runAnalysisOnlyWithDeps(files []string, config *processor.BaseFilterConfig, log func(string, ...any), jobs int, diagnostics bool, deps analysisOnlyDeps) {
-	results := make([]*processor.AnalysisResult, len(files))
-	metas := make([]*audio.Metadata, len(files))
-	errs := make([]error, len(files))
+	slots := make([]analysisSlot, len(files))
+
+	poolDeps := analysisPoolDeps{
+		analyse:      deps.analyseDetailed,
+		openMetadata: deps.openMetadata,
+	}
 
 	runCtx, cancel := context.WithCancel(context.Background())
 
@@ -362,9 +374,10 @@ func runAnalysisOnlyWithDeps(files []string, config *processor.BaseFilterConfig,
 		model := ui.NewAnalysisModel(files)
 		p := tea.NewProgram(model)
 
+		env := poolEnv{ctx: runCtx, p: p, files: files, base: config, sharedLog: log, jobs: jobs}
 		poolDone := make(chan struct{})
 		go func() {
-			runAnalysisPool(runCtx, p, files, config, log, jobs, results, metas, errs, deps.openMetadata)
+			runAnalysisPool(env, slots, poolDeps)
 			close(poolDone)
 		}()
 
@@ -386,7 +399,8 @@ func runAnalysisOnlyWithDeps(files []string, config *processor.BaseFilterConfig,
 		log("[ANALYSIS] No TTY available, running without progress UI")
 		fmt.Fprintf(deps.stdout, "Analysing %d files…\n", len(files))
 
-		runAnalysisPool(runCtx, nil, files, config, log, jobs, results, metas, errs, deps.openMetadata)
+		env := poolEnv{ctx: runCtx, p: nil, files: files, base: config, sharedLog: log, jobs: jobs}
+		runAnalysisPool(env, slots, poolDeps)
 
 		cancel()
 	}
@@ -404,19 +418,19 @@ func runAnalysisOnlyWithDeps(files []string, config *processor.BaseFilterConfig,
 	render := analysisRenderScheduler{ctx: specCtx, sem: specSem, wg: &specWG}
 	noTTY := !deps.hasTTY()
 	for i := range files {
-		if errs[i] != nil {
-			if errors.Is(errs[i], context.Canceled) {
+		if slots[i].err != nil {
+			if errors.Is(slots[i].err, context.Canceled) {
 				continue
 			}
-			deps.printError(fmt.Sprintf("Analysis failed for %s: %v", files[i], errs[i]))
+			deps.printError(fmt.Sprintf("Analysis failed for %s: %v", files[i], slots[i].err))
 			continue
 		}
 
-		if results[i] == nil {
+		if slots[i].result == nil {
 			continue // cancelled before analysis ran
 		}
 
-		emitAnalysisReport(files[i], results[i], metas[i], diagnostics, noTTY, deps, render)
+		emitAnalysisReport(files[i], slots[i].result, slots[i].meta, diagnostics, noTTY, deps, render)
 	}
 }
 

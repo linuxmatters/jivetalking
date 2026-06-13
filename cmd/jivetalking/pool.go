@@ -67,6 +67,20 @@ func launchSpectrogramRenders(
 	}
 }
 
+// poolEnv bundles the environment both pools share: the cancellable ctx, the
+// shared tea.Program (nil on the no-TTY analysis path), the input files, the
+// caller-owned config seed each worker clones, the shared logger, and the worker
+// budget. Grouping the common prefix keeps the two pool signatures short and
+// stops same-typed args sitting adjacent where a caller could transpose them.
+type poolEnv struct {
+	ctx       context.Context
+	p         *tea.Program
+	files     []string
+	base      *processor.BaseFilterConfig
+	sharedLog func(string, ...any)
+	jobs      int
+}
+
 // workerPoolDeps injects the pool's processing entry point so tests can
 // substitute a fake to observe concurrency without running real FFmpeg or
 // mutating package state, following the analysisOnlyDeps pattern in main.go.
@@ -84,10 +98,10 @@ func defaultWorkerPoolDeps() workerPoolDeps {
 // cancelling the context so all workers' deferred temp cleanup runs before the
 // process exits, giving the no-residue-on-cancel guarantee. Keeping the launch
 // and join in one helper makes the wiring unit-testable apart from main().
-func launchWorkerPool(ctx context.Context, p *tea.Program, files []string, base *processor.BaseFilterConfig, sharedLog func(string, ...any), jobs int, diagnostics bool, reportWarnings chan<- string, deps workerPoolDeps) <-chan struct{} {
+func launchWorkerPool(env poolEnv, diagnostics bool, reportWarnings chan<- string, deps workerPoolDeps) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
-		runWorkerPool(ctx, p, files, base, sharedLog, jobs, diagnostics, reportWarnings, deps)
+		runWorkerPool(env, diagnostics, reportWarnings, deps)
 		close(done)
 	}()
 	return done
@@ -108,8 +122,8 @@ func launchWorkerPool(ctx context.Context, p *tea.Program, files []string, base 
 // diagnostics gates the bulk diagnostic artefacts (the .jsonl sidecars and the
 // spectrogram PNGs). When false the always-on set (.flac/.md/.json) still
 // writes; only the opt-in sidecars are skipped.
-func runWorkerPool(ctx context.Context, p *tea.Program, files []string, base *processor.BaseFilterConfig, sharedLog func(string, ...any), jobs int, diagnostics bool, reportWarnings chan<- string, deps workerPoolDeps) {
-	sem := make(chan struct{}, jobs)
+func runWorkerPool(env poolEnv, diagnostics bool, reportWarnings chan<- string, deps workerPoolDeps) {
+	sem := make(chan struct{}, env.jobs)
 	var wg sync.WaitGroup
 
 	// Spectrogram renders run in background goroutines off the file-worker critical
@@ -117,10 +131,11 @@ func runWorkerPool(ctx context.Context, p *tea.Program, files []string, base *pr
 	// pool-level semaphore, never one unbounded goroutine per PNG, so ffmpeg is not
 	// oversubscribed beyond the worker budget. specWG tracks every render so the
 	// pool waits for all PNGs before AllCompleteMsg / program exit.
-	specSem := make(chan struct{}, jobs)
+	specSem := make(chan struct{}, env.jobs)
 	var specWG sync.WaitGroup
+	render := processingRenderScheduler{sem: specSem, wg: &specWG}
 
-	for i, inputPath := range files {
+	for i, inputPath := range env.files {
 		wg.Add(1)
 		go func(i int, inputPath string) {
 			// Register wg.Done() before the acquire select so a worker skipped
@@ -134,34 +149,34 @@ func runWorkerPool(ctx context.Context, p *tea.Program, files []string, base *pr
 			select {
 			case sem <- struct{}{}:
 				defer func() { <-sem }()
-			case <-ctx.Done():
+			case <-env.ctx.Done():
 				return
 			}
 
 			fileStartTime := time.Now()
 
-			wlog := withFilePrefix(inputPath, sharedLog)
+			wlog := withFilePrefix(inputPath, env.sharedLog)
 
 			wlog("[POOL] Sending FileStartMsg for file %d: %s", i, inputPath)
-			p.Send(ui.FileStartMsg{
+			env.p.Send(ui.FileStartMsg{
 				FileIndex: i,
 				FileName:  inputPath,
 			})
 
 			ph := &progressHandler{
-				p:         p,
+				p:         env.p,
 				log:       wlog,
 				fileIndex: i,
 			}
 
-			clone := base.CloneForWorker(wlog)
+			clone := env.base.CloneForWorker(wlog)
 
 			pass2Start := time.Now()
 			wlog("[POOL] Starting ProcessAudio for %s", inputPath)
-			result, err := deps.processAudio(ctx, inputPath, clone, ph.callback)
+			result, err := deps.processAudio(env.ctx, inputPath, clone, ph.callback)
 			if err != nil {
 				wlog("[POOL] ProcessAudio failed: %v", err)
-				p.Send(ui.FileCompleteMsg{
+				env.p.Send(ui.FileCompleteMsg{
 					FileIndex: i,
 					Error:     err,
 				})
@@ -172,110 +187,7 @@ func runWorkerPool(ctx context.Context, p *tea.Program, files []string, base *pr
 			// passes the progress handler timed directly.
 			pass2Time := time.Since(pass2Start) - ph.pass1Time - ph.pass3Time - ph.pass4Time
 
-			// Build the run record once and reuse it for both the Markdown report
-			// and the .json: NewRunRecord(result) reads the same in-memory result,
-			// so building it twice would be wasted work.
-			rec := processor.NewRunRecord(result)
-
-			outputStem := strings.TrimSuffix(result.OutputPath, filepath.Ext(result.OutputPath))
-
-			// Attach the spectrogram path list SYNCHRONOUSLY, before the .md/.json
-			// write, so both carry the links. This is pure string work (no ffmpeg);
-			// the PNGs themselves render in background goroutines launched after the
-			// writes. Off path: no list, no goroutines.
-			if diagnostics {
-				rec.Spectrograms = processor.DeriveSpectrogramImages(rec, outputStem, processor.ProcessingSpectrogramStages)
-			}
-
-			// Write the Markdown report beside the processed audio: swap the output
-			// extension for .md → <name>-LUFS-NN-processed.md. A write failure is
-			// non-fatal: the processed audio and the .json are the product, the
-			// report a side artefact.
-			mdPath := outputStem + ".md"
-			if err := report.WriteMarkdownReport(rec, buildProcessingTimings(fileStartTime, ph.timings(pass2Time), result), mdPath); err != nil {
-				wlog("[POOL] Failed to write Markdown report: %v", err)
-				sendWarning(reportWarnings, fmt.Sprintf("Report was not written for %s: %v", inputPath, err))
-			}
-
-			// Emit the run record beside the .md. The .json path is derived from
-			// OutputPath exactly as the .md is, so they sit together. A write
-			// failure is non-fatal, matching the report write above.
-			recordPath := outputStem + ".json"
-			if err := processor.WriteRunRecord(rec, recordPath); err != nil {
-				wlog("[POOL] Failed to write run record: %v", err)
-				sendWarning(reportWarnings, fmt.Sprintf("Run record was not written for %s: %v", inputPath, err))
-			}
-
-			// Stream the full interval and candidate series to .jsonl sidecars
-			// beside the record: the bulk data the summary stands in for. Opt-in
-			// behind --diagnostics; the always-on .json carries the inline summaries,
-			// so .md/.json stay populated when off. Same non-fatal contract as the
-			// record above.
-			if diagnostics {
-				if err := processor.WriteRunRecordSidecars(result.Measurements, recordPath); err != nil {
-					wlog("[POOL] Failed to write run record sidecars: %v", err)
-					sendWarning(reportWarnings, fmt.Sprintf("Run record sidecars were not written for %s: %v", inputPath, err))
-				}
-			}
-
-			// Launch the spectrogram renders in background goroutines, OFF the
-			// critical path: the .md/.json/sidecars are written and FileCompleteMsg
-			// fires below without waiting for any PNG. Each render is bounded by the
-			// pool-level specSem (shared across files, sized to the jobs budget) and
-			// tracked on specWG, which the pool waits on before AllCompleteMsg so the
-			// process does not exit until every PNG lands. Render failure is
-			// non-fatal (reportWarnings); ctx cancellation aborts + cleans partials
-			// inside generateSpectrogram. The list is empty when --diagnostics is off,
-			// so the loop launches nothing.
-			destDir := filepath.Dir(result.OutputPath)
-			launchSpectrogramRenders(ctx, rec.Spectrograms, specSem, &specWG,
-				func(ctx context.Context, img processor.SpectrogramImage) error {
-					return processor.RenderSpectrogramImage(ctx, img, rec, inputPath, result.OutputPath, destDir)
-				},
-				func(img processor.SpectrogramImage, err error) {
-					wlog("[POOL] Failed to render spectrogram %s: %v", img.Path, err)
-					sendWarning(reportWarnings, fmt.Sprintf("Spectrogram %s was not written for %s: %v", img.Path, inputPath, err))
-				})
-
-			finalNoiseFloor, _ := processor.FinalNoiseFloor(result)
-
-			// Surface the final-output true peak and loudness range from NormResult for
-			// the done-box before→after rows. Read-only: both are measured by ebur128 on
-			// the final output during normalisation, never recomputed here. NormResult is
-			// nil when normalisation was disabled/skipped; FinalMeasurements may also be
-			// nil, so guard both and leave the value at 0 (the UI gates the row).
-			var outputTP, outputLRA float64
-			if result.NormResult != nil {
-				outputTP = result.NormResult.OutputTP
-				if fm := result.NormResult.FinalMeasurements; fm != nil {
-					outputLRA = fm.Loudness.OutputLRA
-				}
-			}
-
-			// Confirm the Limiter row at completion. The row already lit during Pass 4
-			// (progressHandler resends the summary with the ceiling on the Pass-4-start
-			// update), so this is a harmless final confirmation with the same ceiling
-			// from the authoritative NormResult. ph.summary already carries the Pass-4
-			// limiter merge, so WithLimiter here re-applies the identical value.
-			// State-change only; no per-frame work.
-			p.Send(ui.AdaptedSummaryMsg{
-				FileIndex: i,
-				Summary:   ph.summary.WithLimiter(result.NormResult),
-			})
-
-			wlog("[POOL] Sending FileCompleteMsg for file %d", i)
-			p.Send(ui.FileCompleteMsg{
-				FileIndex:        i,
-				InputLUFS:        result.InputLUFS,
-				OutputLUFS:       result.OutputLUFS,
-				FinalNoiseFloor:  finalNoiseFloor,
-				OutputTP:         outputTP,
-				OutputLRA:        outputLRA,
-				OutputPath:       result.OutputPath,
-				Quality:          processor.ComputeQualityScore(result),
-				RecordingQuality: processor.ComputeRecordingScore(result.Measurements),
-				ProcessingTime:   time.Since(fileStartTime),
-			})
+			emitProcessingReport(env, inputPath, result, ph, fileStartTime, pass2Time, diagnostics, reportWarnings, render)
 		}(i, inputPath)
 	}
 
@@ -289,6 +201,134 @@ func runWorkerPool(ctx context.Context, p *tea.Program, files []string, base *pr
 	// --diagnostics off nothing was launched, so this returns at once.
 	specWG.Wait()
 
-	sharedLog("[POOL] Sending AllCompleteMsg")
-	p.Send(ui.AllCompleteMsg{})
+	env.sharedLog("[POOL] Sending AllCompleteMsg")
+	env.p.Send(ui.AllCompleteMsg{})
+}
+
+// processingRenderScheduler bundles the pool-level background spectrogram-render
+// state shared across workers: the jobs-sized semaphore bounding concurrent
+// renders and the WaitGroup the pool drains before AllCompleteMsg so every PNG
+// lands. Renders honour env.ctx for cancellation (passed through at launch),
+// mirroring analysisRenderScheduler on the analysis-only path.
+type processingRenderScheduler struct {
+	sem chan struct{}
+	wg  *sync.WaitGroup
+}
+
+// emitProcessingReport writes one file's processing artefacts after a successful
+// 4-pass run and dispatches the final TUI messages: it builds the run record,
+// writes the always-on .md/.json, the opt-in .jsonl sidecars and before/after
+// spectrogram PNGs under --diagnostics, then sends the limiter-confirming
+// AdaptedSummaryMsg and the FileCompleteMsg. Every write failure is non-fatal and
+// isolated (reportWarnings) so the remaining artefacts still emit, mirroring
+// emitAnalysisReport on the analysis-only path. ph supplies the per-pass timings
+// and the retained filter-chain summary captured during ProcessAudio.
+func emitProcessingReport(env poolEnv, inputPath string, result *processor.ProcessingResult, ph *progressHandler, fileStartTime time.Time, pass2Time time.Duration, diagnostics bool, reportWarnings chan<- string, render processingRenderScheduler) {
+	wlog := ph.log
+	i := ph.fileIndex
+
+	// Build the run record once and reuse it for both the Markdown report
+	// and the .json: NewRunRecord(result) reads the same in-memory result,
+	// so building it twice would be wasted work.
+	rec := processor.NewRunRecord(result)
+
+	outputStem := strings.TrimSuffix(result.OutputPath, filepath.Ext(result.OutputPath))
+
+	// Attach the spectrogram path list SYNCHRONOUSLY, before the .md/.json
+	// write, so both carry the links. This is pure string work (no ffmpeg);
+	// the PNGs themselves render in background goroutines launched after the
+	// writes. Off path: no list, no goroutines.
+	if diagnostics {
+		rec.Spectrograms = processor.DeriveSpectrogramImages(rec, outputStem, processor.ProcessingSpectrogramStages)
+	}
+
+	// Write the Markdown report beside the processed audio: swap the output
+	// extension for .md → <name>-LUFS-NN-processed.md. A write failure is
+	// non-fatal: the processed audio and the .json are the product, the
+	// report a side artefact.
+	mdPath := outputStem + ".md"
+	if err := report.WriteMarkdownReport(rec, buildProcessingTimings(fileStartTime, ph.timings(pass2Time), result), mdPath); err != nil {
+		wlog("[POOL] Failed to write Markdown report: %v", err)
+		sendWarning(reportWarnings, fmt.Sprintf("Report was not written for %s: %v", inputPath, err))
+	}
+
+	// Emit the run record beside the .md. The .json path is derived from
+	// OutputPath exactly as the .md is, so they sit together. A write
+	// failure is non-fatal, matching the report write above.
+	recordPath := outputStem + ".json"
+	if err := processor.WriteRunRecord(rec, recordPath); err != nil {
+		wlog("[POOL] Failed to write run record: %v", err)
+		sendWarning(reportWarnings, fmt.Sprintf("Run record was not written for %s: %v", inputPath, err))
+	}
+
+	// Stream the full interval and candidate series to .jsonl sidecars
+	// beside the record: the bulk data the summary stands in for. Opt-in
+	// behind --diagnostics; the always-on .json carries the inline summaries,
+	// so .md/.json stay populated when off. Same non-fatal contract as the
+	// record above.
+	if diagnostics {
+		if err := processor.WriteRunRecordSidecars(result.Measurements, recordPath); err != nil {
+			wlog("[POOL] Failed to write run record sidecars: %v", err)
+			sendWarning(reportWarnings, fmt.Sprintf("Run record sidecars were not written for %s: %v", inputPath, err))
+		}
+	}
+
+	// Launch the spectrogram renders in background goroutines, OFF the
+	// critical path: the .md/.json/sidecars are written and FileCompleteMsg
+	// fires below without waiting for any PNG. Each render is bounded by the
+	// pool-level render.sem (shared across files, sized to the jobs budget) and
+	// tracked on render.wg, which the pool waits on before AllCompleteMsg so the
+	// process does not exit until every PNG lands. Render failure is
+	// non-fatal (reportWarnings); env.ctx cancellation aborts + cleans partials
+	// inside generateSpectrogram. The list is empty when --diagnostics is off,
+	// so the loop launches nothing.
+	destDir := filepath.Dir(result.OutputPath)
+	launchSpectrogramRenders(env.ctx, rec.Spectrograms, render.sem, render.wg,
+		func(ctx context.Context, img processor.SpectrogramImage) error {
+			return processor.RenderSpectrogramImage(ctx, img, rec, inputPath, result.OutputPath, destDir)
+		},
+		func(img processor.SpectrogramImage, err error) {
+			wlog("[POOL] Failed to render spectrogram %s: %v", img.Path, err)
+			sendWarning(reportWarnings, fmt.Sprintf("Spectrogram %s was not written for %s: %v", img.Path, inputPath, err))
+		})
+
+	finalNoiseFloor, _ := processor.FinalNoiseFloor(result)
+
+	// Surface the final-output true peak and loudness range from NormResult for
+	// the done-box before→after rows. Read-only: both are measured by ebur128 on
+	// the final output during normalisation, never recomputed here. NormResult is
+	// nil when normalisation was disabled/skipped; FinalMeasurements may also be
+	// nil, so guard both and leave the value at 0 (the UI gates the row).
+	var outputTP, outputLRA float64
+	if result.NormResult != nil {
+		outputTP = result.NormResult.OutputTP
+		if fm := result.NormResult.FinalMeasurements; fm != nil {
+			outputLRA = fm.Loudness.OutputLRA
+		}
+	}
+
+	// Confirm the Limiter row at completion. The row already lit during Pass 4
+	// (progressHandler resends the summary with the ceiling on the Pass-4-start
+	// update), so this is a harmless final confirmation with the same ceiling
+	// from the authoritative NormResult. ph.summary already carries the Pass-4
+	// limiter merge, so WithLimiter here re-applies the identical value.
+	// State-change only; no per-frame work.
+	env.p.Send(ui.AdaptedSummaryMsg{
+		FileIndex: i,
+		Summary:   ph.summary.WithLimiter(result.NormResult),
+	})
+
+	wlog("[POOL] Sending FileCompleteMsg for file %d", i)
+	env.p.Send(ui.FileCompleteMsg{
+		FileIndex:        i,
+		InputLUFS:        result.InputLUFS,
+		OutputLUFS:       result.OutputLUFS,
+		FinalNoiseFloor:  finalNoiseFloor,
+		OutputTP:         outputTP,
+		OutputLRA:        outputLRA,
+		OutputPath:       result.OutputPath,
+		Quality:          processor.ComputeQualityScore(result),
+		RecordingQuality: processor.ComputeRecordingScore(result.Measurements),
+		ProcessingTime:   time.Since(fileStartTime),
+	})
 }

@@ -57,13 +57,13 @@ func stubOpenMetadata(t *testing.T) func(string) (*audio.Metadata, error) {
 	}
 }
 
-// installAnalysisFake swaps analysisPoolAnalyse for fn and restores it after the
-// test so tests stay isolated from each other and from main_test.go's swaps.
-func installAnalysisFake(t *testing.T, fn func(context.Context, string, *processor.BaseFilterConfig, processor.ProgressCallback) (*processor.AnalysisResult, error)) {
+// poolDepsWithAnalyse builds an analysisPoolDeps that injects fn as the analyse
+// seam alongside the index-encoding stub openMetadata, so a test substitutes a
+// fake to observe concurrency without running real FFmpeg or mutating package
+// state.
+func poolDepsWithAnalyse(t *testing.T, fn func(context.Context, string, *processor.BaseFilterConfig, processor.ProgressCallback) (*processor.AnalysisResult, error)) analysisPoolDeps {
 	t.Helper()
-	orig := analysisPoolAnalyse
-	analysisPoolAnalyse = fn
-	t.Cleanup(func() { analysisPoolAnalyse = orig })
+	return analysisPoolDeps{analyse: fn, openMetadata: stubOpenMetadata(t)}
 }
 
 // inflightAnalysisFake observes pool concurrency without real FFmpeg. It tracks
@@ -102,25 +102,23 @@ func TestRunAnalysisPool_InFlightBoundedToJobs(t *testing.T) {
 	const jobs = 3
 
 	fake := &inflightAnalysisFake{t: t}
-	installAnalysisFake(t, fake.fn)
 
 	files := makeAnalysisFiles(t, n)
-	results := make([]*processor.AnalysisResult, len(files))
-	metas := make([]*audio.Metadata, len(files))
-	errs := make([]error, len(files))
+	slots := make([]analysisSlot, len(files))
 	base := processor.DefaultFilterConfig()
 
-	runAnalysisPool(context.Background(), nil, files, base, func(string, ...any) {}, jobs, results, metas, errs, stubOpenMetadata(t))
+	env := poolEnv{ctx: context.Background(), p: nil, files: files, base: base, sharedLog: func(string, ...any) {}, jobs: jobs}
+	runAnalysisPool(env, slots, poolDepsWithAnalyse(t, fake.fn))
 
 	maxSeen := fake.maxSeen.Load()
 	if maxSeen < 2 || maxSeen > jobs {
 		t.Fatalf("max in-flight with jobs=%d = %d, want in (1,%d]", jobs, maxSeen, jobs)
 	}
 	for i := range files {
-		if errs[i] != nil {
-			t.Fatalf("errs[%d] = %v, want nil", i, errs[i])
+		if slots[i].err != nil {
+			t.Fatalf("errs[%d] = %v, want nil", i, slots[i].err)
 		}
-		if results[i] == nil {
+		if slots[i].result == nil {
 			t.Fatalf("results[%d] = nil, want populated", i)
 		}
 	}
@@ -133,21 +131,19 @@ func TestRunAnalysisPool_SerialParityJobs1(t *testing.T) {
 	const n = 8
 
 	fake := &inflightAnalysisFake{t: t}
-	installAnalysisFake(t, fake.fn)
 
 	files := makeAnalysisFiles(t, n)
-	results := make([]*processor.AnalysisResult, len(files))
-	metas := make([]*audio.Metadata, len(files))
-	errs := make([]error, len(files))
+	slots := make([]analysisSlot, len(files))
 	base := processor.DefaultFilterConfig()
 
-	runAnalysisPool(context.Background(), nil, files, base, func(string, ...any) {}, 1, results, metas, errs, stubOpenMetadata(t))
+	env := poolEnv{ctx: context.Background(), p: nil, files: files, base: base, sharedLog: func(string, ...any) {}, jobs: 1}
+	runAnalysisPool(env, slots, poolDepsWithAnalyse(t, fake.fn))
 
 	if got := fake.maxSeen.Load(); got != 1 {
 		t.Fatalf("max in-flight with jobs=1 = %d, want 1", got)
 	}
 	for i := range files {
-		if results[i] == nil {
+		if slots[i].result == nil {
 			t.Fatalf("results[%d] = nil, want populated", i)
 		}
 	}
@@ -173,7 +169,7 @@ func TestRunAnalysisPool_JobsAboveFileCountNoCap(t *testing.T) {
 	barrier.Add(n)
 
 	fake := &inflightAnalysisFake{t: t}
-	installAnalysisFake(t, func(ctx context.Context, inputPath string, base *processor.BaseFilterConfig, cb processor.ProgressCallback) (*processor.AnalysisResult, error) {
+	analyse := func(ctx context.Context, inputPath string, base *processor.BaseFilterConfig, cb processor.ProgressCallback) (*processor.AnalysisResult, error) {
 		// Mark this worker in-flight and record the high-water mark before the
 		// barrier so maxSeen reflects all simultaneously-live workers.
 		cur := fake.live.Add(1)
@@ -191,24 +187,23 @@ func TestRunAnalysisPool_JobsAboveFileCountNoCap(t *testing.T) {
 		fake.live.Add(-1)
 		idx := analysisIndexFromPath(t, inputPath)
 		return &processor.AnalysisResult{AdaptationDuration: time.Duration(idx)}, nil
-	})
+	}
 
 	files := makeAnalysisFiles(t, n)
-	results := make([]*processor.AnalysisResult, len(files))
-	metas := make([]*audio.Metadata, len(files))
-	errs := make([]error, len(files))
+	slots := make([]analysisSlot, len(files))
 	base := processor.DefaultFilterConfig()
 
-	runAnalysisPool(context.Background(), nil, files, base, func(string, ...any) {}, jobs, results, metas, errs, stubOpenMetadata(t))
+	env := poolEnv{ctx: context.Background(), p: nil, files: files, base: base, sharedLog: func(string, ...any) {}, jobs: jobs}
+	runAnalysisPool(env, slots, poolDepsWithAnalyse(t, analyse))
 
 	if got := fake.maxSeen.Load(); got != n {
 		t.Fatalf("max in-flight with jobs=%d over %d files = %d, want %d (no cap below file count)", jobs, n, got, n)
 	}
 	for i := range files {
-		if errs[i] != nil {
-			t.Fatalf("errs[%d] = %v, want nil", i, errs[i])
+		if slots[i].err != nil {
+			t.Fatalf("errs[%d] = %v, want nil", i, slots[i].err)
 		}
-		if results[i] == nil {
+		if slots[i].result == nil {
 			t.Fatalf("results[%d] = nil, want populated", i)
 		}
 	}
@@ -227,24 +222,23 @@ func TestRunAnalysisPool_OrderedSlots(t *testing.T) {
 	var completionOrder []int
 	completion := make(chan int, n)
 
-	installAnalysisFake(t, func(_ context.Context, inputPath string, _ *processor.BaseFilterConfig, _ processor.ProgressCallback) (*processor.AnalysisResult, error) {
+	analyse := func(_ context.Context, inputPath string, _ *processor.BaseFilterConfig, _ processor.ProgressCallback) (*processor.AnalysisResult, error) {
 		idx := analysisIndexFromPath(t, inputPath)
 		// Earlier index sleeps longer, so index 0 finishes last and index n-1
 		// finishes first: completion order is the reverse of submission order.
 		time.Sleep(time.Duration(n-idx) * 10 * time.Millisecond)
 		completion <- idx
 		return &processor.AnalysisResult{AdaptationDuration: time.Duration(idx)}, nil
-	})
+	}
 
 	files := makeAnalysisFiles(t, n)
-	results := make([]*processor.AnalysisResult, len(files))
-	metas := make([]*audio.Metadata, len(files))
-	errs := make([]error, len(files))
+	slots := make([]analysisSlot, len(files))
 	base := processor.DefaultFilterConfig()
 
 	// jobs >= n so all workers run concurrently and the index-derived delays
 	// alone decide completion order.
-	runAnalysisPool(context.Background(), nil, files, base, func(string, ...any) {}, n, results, metas, errs, stubOpenMetadata(t))
+	env := poolEnv{ctx: context.Background(), p: nil, files: files, base: base, sharedLog: func(string, ...any) {}, jobs: n}
+	runAnalysisPool(env, slots, poolDepsWithAnalyse(t, analyse))
 
 	close(completion)
 	for idx := range completion {
@@ -265,19 +259,19 @@ func TestRunAnalysisPool_OrderedSlots(t *testing.T) {
 
 	// Despite reversed completion, each slot carries its own submission index.
 	for i := range files {
-		if errs[i] != nil {
-			t.Fatalf("errs[%d] = %v, want nil", i, errs[i])
+		if slots[i].err != nil {
+			t.Fatalf("errs[%d] = %v, want nil", i, slots[i].err)
 		}
-		if results[i] == nil {
+		if slots[i].result == nil {
 			t.Fatalf("results[%d] = nil, want populated", i)
 		}
-		if got := int(results[i].AdaptationDuration); got != i {
+		if got := int(slots[i].result.AdaptationDuration); got != i {
 			t.Fatalf("results[%d] carries index %d, want %d (slot mismatch)", i, got, i)
 		}
-		if metas[i] == nil {
+		if slots[i].meta == nil {
 			t.Fatalf("metas[%d] = nil, want populated", i)
 		}
-		if got := metas[i].SampleRate - 48000; got != i {
+		if got := slots[i].meta.SampleRate - 48000; got != i {
 			t.Fatalf("metas[%d] carries index %d, want %d (slot mismatch)", i, got, i)
 		}
 	}
@@ -293,25 +287,24 @@ func TestRunAnalysisPool_FailureIsolation(t *testing.T) {
 
 	sentinel := errors.New("analysisFake: synthetic analysis failure")
 
-	installAnalysisFake(t, func(_ context.Context, inputPath string, _ *processor.BaseFilterConfig, _ processor.ProgressCallback) (*processor.AnalysisResult, error) {
+	analyse := func(_ context.Context, inputPath string, _ *processor.BaseFilterConfig, _ processor.ProgressCallback) (*processor.AnalysisResult, error) {
 		idx := analysisIndexFromPath(t, inputPath)
 		if idx == failIdx {
 			return nil, sentinel
 		}
 		return &processor.AnalysisResult{AdaptationDuration: time.Duration(idx)}, nil
-	})
+	}
 
 	files := makeAnalysisFiles(t, n)
-	results := make([]*processor.AnalysisResult, len(files))
-	metas := make([]*audio.Metadata, len(files))
-	errs := make([]error, len(files))
+	slots := make([]analysisSlot, len(files))
 	base := processor.DefaultFilterConfig()
 
-	runAnalysisPool(context.Background(), nil, files, base, func(string, ...any) {}, 3, results, metas, errs, stubOpenMetadata(t))
+	env := poolEnv{ctx: context.Background(), p: nil, files: files, base: base, sharedLog: func(string, ...any) {}, jobs: 3}
+	runAnalysisPool(env, slots, poolDepsWithAnalyse(t, analyse))
 
 	// The failing slot carries its error.
-	if !errors.Is(errs[failIdx], sentinel) {
-		t.Fatalf("errs[%d] = %v, want sentinel", failIdx, errs[failIdx])
+	if !errors.Is(slots[failIdx].err, sentinel) {
+		t.Fatalf("errs[%d] = %v, want sentinel", failIdx, slots[failIdx].err)
 	}
 
 	// Every sibling ran to completion (no early abort): non-nil result, nil err.
@@ -319,13 +312,13 @@ func TestRunAnalysisPool_FailureIsolation(t *testing.T) {
 		if j == failIdx {
 			continue
 		}
-		if errs[j] != nil {
-			t.Fatalf("sibling errs[%d] = %v, want nil", j, errs[j])
+		if slots[j].err != nil {
+			t.Fatalf("sibling errs[%d] = %v, want nil", j, slots[j].err)
 		}
-		if results[j] == nil {
+		if slots[j].result == nil {
 			t.Fatalf("sibling results[%d] = nil, want populated (proof it ran)", j)
 		}
-		if got := int(results[j].AdaptationDuration); got != j {
+		if got := int(slots[j].result.AdaptationDuration); got != j {
 			t.Fatalf("sibling results[%d] carries index %d, want %d", j, got, j)
 		}
 	}

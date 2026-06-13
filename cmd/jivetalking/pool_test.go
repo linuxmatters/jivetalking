@@ -100,7 +100,8 @@ func runPoolWithFake(t *testing.T, jobs, n int) (*inflightFake, int, bool) {
 	base := processor.DefaultFilterConfig()
 	reportWarnings := make(chan string, n)
 
-	go runWorkerPool(context.Background(), p, files, base, func(string, ...any) {}, jobs, false, reportWarnings, workerPoolDeps{processAudio: fake.fn})
+	env := poolEnv{ctx: context.Background(), p: p, files: files, base: base, sharedLog: func(string, ...any) {}, jobs: jobs}
+	go runWorkerPool(env, false, reportWarnings, workerPoolDeps{processAudio: fake.fn})
 
 	if _, err := p.Run(); err != nil {
 		t.Fatalf("p.Run() error = %v", err)
@@ -241,7 +242,8 @@ func TestRunWorkerPool_FailureIsolation(t *testing.T) {
 	base := processor.DefaultFilterConfig()
 	reportWarnings := make(chan string, n)
 
-	go runWorkerPool(context.Background(), p, files, base, func(string, ...any) {}, 3, false, reportWarnings, workerPoolDeps{processAudio: fake.fn})
+	env := poolEnv{ctx: context.Background(), p: p, files: files, base: base, sharedLog: func(string, ...any) {}, jobs: 3}
+	go runWorkerPool(env, false, reportWarnings, workerPoolDeps{processAudio: fake.fn})
 
 	if _, err := p.Run(); err != nil {
 		t.Fatalf("p.Run() error = %v", err)
@@ -345,7 +347,8 @@ func TestLaunchWorkerPool_DoneClosesAfterPoolUnwinds(t *testing.T) {
 	base := processor.DefaultFilterConfig()
 	reportWarnings := make(chan string, len(files))
 
-	done := launchWorkerPool(context.Background(), p, files, base, func(string, ...any) {}, 1, false, reportWarnings, deps)
+	env := poolEnv{ctx: context.Background(), p: p, files: files, base: base, sharedLog: func(string, ...any) {}, jobs: 1}
+	done := launchWorkerPool(env, false, reportWarnings, deps)
 
 	select {
 	case <-started:
@@ -399,7 +402,8 @@ func TestLaunchWorkerPool_DoneClosesOnPreCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	done := launchWorkerPool(ctx, p, files, base, func(string, ...any) {}, 1, false, reportWarnings, deps)
+	env := poolEnv{ctx: ctx, p: p, files: files, base: base, sharedLog: func(string, ...any) {}, jobs: 1}
+	done := launchWorkerPool(env, false, reportWarnings, deps)
 
 	select {
 	case <-done:

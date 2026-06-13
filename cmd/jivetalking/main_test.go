@@ -147,9 +147,6 @@ func TestRunAnalysisOnlyWithDeps_NonTTYOmitsBenchPath(t *testing.T) {
 			AdaptationDuration: 100 * time.Millisecond,
 		}, nil
 	}
-	origAnalyse := analysisPoolAnalyse
-	analysisPoolAnalyse = analyse
-	t.Cleanup(func() { analysisPoolAnalyse = origAnalyse })
 
 	reports := newReportCapture()
 	runAnalysisOnlyWithDeps([]string{inputPath}, config, func(string, ...any) {}, 1, false, analysisOnlyDeps{
@@ -232,9 +229,6 @@ func TestRunAnalysisOnlyWithDeps_DiagnosticsGatesSidecars(t *testing.T) {
 			AdaptationDuration: 100 * time.Millisecond,
 		}, nil
 	}
-	origAnalyse := analysisPoolAnalyse
-	analysisPoolAnalyse = analyse
-	t.Cleanup(func() { analysisPoolAnalyse = origAnalyse })
 
 	reportPath := report.AnalysisReportPath(inputPath)
 	wantRecordPath := strings.TrimSuffix(reportPath, filepath.Ext(reportPath)) + ".json"
@@ -328,9 +322,6 @@ func TestRunAnalysisOnlyWithDeps_PassesPerWorkerConfigClones(t *testing.T) {
 			AdaptationDuration: 100 * time.Millisecond,
 		}, nil
 	}
-	origAnalyse := analysisPoolAnalyse
-	analysisPoolAnalyse = analyse
-	t.Cleanup(func() { analysisPoolAnalyse = origAnalyse })
 
 	reports := newReportCapture()
 	runAnalysisOnlyWithDeps(files, baseConfig, func(string, ...any) {}, 1, false, analysisOnlyDeps{
@@ -391,7 +382,7 @@ func TestRunAnalysisOnlyWithDeps_OrderedOutputParityAcrossJobs(t *testing.T) {
 	analyse := func(_ context.Context, path string, _ *processor.BaseFilterConfig, _ processor.ProgressCallback) (*processor.AnalysisResult, error) { //nolint:unparam // signature must match processor.AnalyseOnlyDetailed
 		index, ok := fileIndex[path]
 		if !ok {
-			t.Fatalf("analysisPoolAnalyse unexpected path %q", path)
+			t.Fatalf("analyseDetailed unexpected path %q", path)
 		}
 
 		// Later indices sleep less, so under concurrency they complete first.
@@ -411,9 +402,6 @@ func TestRunAnalysisOnlyWithDeps_OrderedOutputParityAcrossJobs(t *testing.T) {
 			AdaptationDuration: 100 * time.Millisecond,
 		}, nil
 	}
-	origAnalyse := analysisPoolAnalyse
-	analysisPoolAnalyse = analyse
-	t.Cleanup(func() { analysisPoolAnalyse = origAnalyse })
 
 	run := func(jobs int) (string, *reportCapture) {
 		var output bytes.Buffer
@@ -502,7 +490,7 @@ func TestRunAnalysisOnlyWithDeps_NonTTYBannerThenOrderedReports(t *testing.T) {
 	analyse := func(_ context.Context, path string, _ *processor.BaseFilterConfig, _ processor.ProgressCallback) (*processor.AnalysisResult, error) {
 		index, ok := fileIndex[path]
 		if !ok {
-			t.Fatalf("analysisPoolAnalyse unexpected path %q", path)
+			t.Fatalf("analyseDetailed unexpected path %q", path)
 		}
 
 		delay := time.Duration(len(files)-index) * 20 * time.Millisecond
@@ -520,9 +508,6 @@ func TestRunAnalysisOnlyWithDeps_NonTTYBannerThenOrderedReports(t *testing.T) {
 			AdaptationDuration: 100 * time.Millisecond,
 		}, nil
 	}
-	origAnalyse := analysisPoolAnalyse
-	analysisPoolAnalyse = analyse
-	t.Cleanup(func() { analysisPoolAnalyse = origAnalyse })
 
 	reports := newReportCapture()
 	runAnalysisOnlyWithDeps(files, baseConfig, func(string, ...any) {}, len(files), false, analysisOnlyDeps{
@@ -615,7 +600,7 @@ func TestRunAnalysisOnlyWithDeps_FailureIsolation(t *testing.T) {
 	analyse := func(_ context.Context, path string, _ *processor.BaseFilterConfig, _ processor.ProgressCallback) (*processor.AnalysisResult, error) {
 		index, ok := fileIndex[path]
 		if !ok {
-			t.Fatalf("analysisPoolAnalyse unexpected path %q", path)
+			t.Fatalf("analyseDetailed unexpected path %q", path)
 		}
 		if index == failIndex {
 			return nil, boom
@@ -629,9 +614,6 @@ func TestRunAnalysisOnlyWithDeps_FailureIsolation(t *testing.T) {
 			AdaptationDuration: 100 * time.Millisecond,
 		}, nil
 	}
-	origAnalyse := analysisPoolAnalyse
-	analysisPoolAnalyse = analyse
-	t.Cleanup(func() { analysisPoolAnalyse = origAnalyse })
 
 	var printErrMu sync.Mutex
 	var printErrors []string
