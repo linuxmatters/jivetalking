@@ -42,33 +42,17 @@ type CLI struct {
 	AnalysisOnly         bool          `short:"a" help:"Run analysis only (Pass 1), display results, skip processing"`
 	Diagnostics          bool          `name:"diagnostics" help:"Write bulk diagnostic artefacts for sweeps and quality comparison: the .intervals.jsonl and .candidates.jsonl sidecars plus before/after spectrogram PNGs (whole-file and elected room-tone/speech regions). Adds extra FFmpeg passes. Off by default." default:"false"`
 	RoomToneScanDuration time.Duration `name:"room-tone-scan-duration" help:"Cap room-tone-candidate scan to the first DURATION of input (e.g. 30s, 1m30s). Faster on long files at the cost of coverage; loudness, true peak, LRA, spectral, and speech analysis remain whole-file. Fewer room-tone candidates also reach voice-activated detection when capped. 0s means scan the whole file." placeholder:"DURATION" default:"0s"`
-	SilenceScanDuration  time.Duration `name:"silence-scan-duration" help:"[deprecated alias for --room-tone-scan-duration] Cap room-tone-candidate scan to the first DURATION of input. Supplying both flags with different non-zero values is rejected. 0s means scan the whole file." placeholder:"DURATION" default:"0s"`
 	Files                []string      `arg:"" name:"files" help:"Audio files to process" type:"existingfile" optional:""`
 }
 
-// resolveRoomToneScanDuration validates the room-tone scan duration flags and
-// returns the effective duration to use. The new --room-tone-scan-duration
-// flag is primary; --silence-scan-duration is a deprecated alias that emits a
-// one-line notice to deprecationOut when used. Supplying both flags with
-// different non-zero values is rejected. Negative values are rejected for
-// either flag.
-func resolveRoomToneScanDuration(roomTone, silence time.Duration, deprecationOut io.Writer) (time.Duration, error) {
+// resolveRoomToneScanDuration validates the --room-tone-scan-duration flag and
+// returns the effective duration to use. Negative values are rejected; 0s means
+// scan the whole file.
+func resolveRoomToneScanDuration(roomTone time.Duration) (time.Duration, error) {
 	if roomTone < 0 {
 		return 0, fmt.Errorf("--room-tone-scan-duration must be >= 0, got %s", roomTone)
 	}
-	if silence < 0 {
-		return 0, fmt.Errorf("--silence-scan-duration must be >= 0, got %s", silence)
-	}
-	if roomTone != 0 && silence != 0 && roomTone != silence {
-		return 0, fmt.Errorf("--room-tone-scan-duration (%s) and --silence-scan-duration (%s) conflict; supply only one", roomTone, silence)
-	}
-	if silence != 0 && deprecationOut != nil {
-		fmt.Fprintln(deprecationOut, "warning: --silence-scan-duration is deprecated; use --room-tone-scan-duration")
-	}
-	if roomTone != 0 {
-		return roomTone, nil
-	}
-	return silence, nil
+	return roomTone, nil
 }
 
 // resolveJobs derives the worker count from the number of input files, capped
@@ -112,7 +96,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	scanDuration, err := resolveRoomToneScanDuration(cliArgs.RoomToneScanDuration, cliArgs.SilenceScanDuration, os.Stderr)
+	scanDuration, err := resolveRoomToneScanDuration(cliArgs.RoomToneScanDuration)
 	if err != nil {
 		cli.PrintError(err.Error())
 		os.Exit(1)

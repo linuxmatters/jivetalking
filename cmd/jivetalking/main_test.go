@@ -766,50 +766,10 @@ func TestCLI_RoomToneScanDurationFlag_ParsesIntoStructField(t *testing.T) {
 	if cliArgs.RoomToneScanDuration != 30*time.Second {
 		t.Fatalf("RoomToneScanDuration = %s, want 30s", cliArgs.RoomToneScanDuration)
 	}
-	if cliArgs.SilenceScanDuration != 0 {
-		t.Fatalf("SilenceScanDuration = %s, want 0s", cliArgs.SilenceScanDuration)
-	}
 }
 
-func TestCLI_SilenceScanDurationFlag_StillParses(t *testing.T) {
-	fixture := makeFixtureFile(t)
-	cliArgs := parseCLIArgs(t, "--silence-scan-duration=45s", fixture)
-	if cliArgs.SilenceScanDuration != 45*time.Second {
-		t.Fatalf("SilenceScanDuration = %s, want 45s", cliArgs.SilenceScanDuration)
-	}
-	if cliArgs.RoomToneScanDuration != 0 {
-		t.Fatalf("RoomToneScanDuration = %s, want 0s", cliArgs.RoomToneScanDuration)
-	}
-}
-
-func TestCLI_HelpOutput_MarksSilenceFlagDeprecated(t *testing.T) {
-	cliArgs := &CLI{}
-	var helpBuf bytes.Buffer
-	parser, err := kong.New(cliArgs,
-		kong.Name("jivetalking"),
-		kong.Writers(&helpBuf, &helpBuf),
-		kong.Exit(func(int) {}),
-	)
-	if err != nil {
-		t.Fatalf("kong.New: %v", err)
-	}
-	if _, err := parser.Parse([]string{"--help"}); err != nil {
-		t.Fatalf("kong.Parse(--help) error = %v", err)
-	}
-	help := helpBuf.String()
-	if !strings.Contains(help, "--room-tone-scan-duration") {
-		t.Fatalf("help missing --room-tone-scan-duration:\n%s", help)
-	}
-	if !strings.Contains(help, "--silence-scan-duration") {
-		t.Fatalf("help missing --silence-scan-duration:\n%s", help)
-	}
-	if !strings.Contains(help, "deprecated alias") {
-		t.Fatalf("help missing deprecated alias marker:\n%s", help)
-	}
-}
-
-func TestResolveRoomToneScanDuration_NewFlagAlone(t *testing.T) {
-	got, err := resolveRoomToneScanDuration(30*time.Second, 0, io.Discard)
+func TestResolveRoomToneScanDuration_FlagSet(t *testing.T) {
+	got, err := resolveRoomToneScanDuration(30 * time.Second)
 	if err != nil {
 		t.Fatalf("resolveRoomToneScanDuration: %v", err)
 	}
@@ -818,72 +778,18 @@ func TestResolveRoomToneScanDuration_NewFlagAlone(t *testing.T) {
 	}
 }
 
-func TestResolveRoomToneScanDuration_DeprecatedAliasAlone(t *testing.T) {
-	var notice bytes.Buffer
-	got, err := resolveRoomToneScanDuration(0, 45*time.Second, &notice)
-	if err != nil {
-		t.Fatalf("resolveRoomToneScanDuration: %v", err)
-	}
-	if got != 45*time.Second {
-		t.Fatalf("got = %s, want 45s", got)
-	}
-	if !strings.Contains(notice.String(), "deprecated") {
-		t.Fatalf("expected deprecation notice, got %q", notice.String())
-	}
-	if !strings.Contains(notice.String(), "--silence-scan-duration") {
-		t.Fatalf("deprecation notice missing legacy flag name, got %q", notice.String())
-	}
-}
-
-func TestResolveRoomToneScanDuration_BothSameValueAccepted(t *testing.T) {
-	var notice bytes.Buffer
-	got, err := resolveRoomToneScanDuration(30*time.Second, 30*time.Second, &notice)
-	if err != nil {
-		t.Fatalf("resolveRoomToneScanDuration: %v", err)
-	}
-	if got != 30*time.Second {
-		t.Fatalf("got = %s, want 30s", got)
-	}
-	if !strings.Contains(notice.String(), "deprecated") {
-		t.Fatalf("expected deprecation notice when legacy flag set, got %q", notice.String())
-	}
-}
-
-func TestResolveRoomToneScanDuration_BothDifferentRejected(t *testing.T) {
-	_, err := resolveRoomToneScanDuration(30*time.Second, 45*time.Second, io.Discard)
+func TestResolveRoomToneScanDuration_NegativeRejected(t *testing.T) {
+	_, err := resolveRoomToneScanDuration(-1 * time.Second)
 	if err == nil {
-		t.Fatal("resolveRoomToneScanDuration with conflicting non-zero values: want error, got nil")
-	}
-	msg := err.Error()
-	for _, want := range []string{"--room-tone-scan-duration", "--silence-scan-duration", "conflict"} {
-		if !strings.Contains(msg, want) {
-			t.Fatalf("conflict error = %q, want substring %q", msg, want)
-		}
-	}
-}
-
-func TestResolveRoomToneScanDuration_NegativeRoomToneRejected(t *testing.T) {
-	_, err := resolveRoomToneScanDuration(-1*time.Second, 0, io.Discard)
-	if err == nil {
-		t.Fatal("resolveRoomToneScanDuration with negative room-tone value: want error, got nil")
+		t.Fatal("resolveRoomToneScanDuration with negative value: want error, got nil")
 	}
 	if !strings.Contains(err.Error(), "--room-tone-scan-duration") {
 		t.Fatalf("negative error = %q, want --room-tone-scan-duration", err.Error())
 	}
 }
 
-func TestResolveRoomToneScanDuration_NegativeSilenceRejected(t *testing.T) {
-	_, err := resolveRoomToneScanDuration(0, -1*time.Second, io.Discard)
-	if err == nil {
-		t.Fatal("resolveRoomToneScanDuration with negative silence value: want error, got nil")
-	}
-	if !strings.Contains(err.Error(), "--silence-scan-duration") {
-		t.Fatalf("negative error = %q, want --silence-scan-duration", err.Error())
-	}
-}
-
-func TestResolveRoomToneScanDuration_NeitherSetReturnsZero(t *testing.T) {
-	got, err := resolveRoomToneScanDuration(0, 0, io.Discard)
+func TestResolveRoomToneScanDuration_ZeroReturnsZero(t *testing.T) {
+	got, err := resolveRoomToneScanDuration(0)
 	if err != nil {
 		t.Fatalf("resolveRoomToneScanDuration: %v", err)
 	}
