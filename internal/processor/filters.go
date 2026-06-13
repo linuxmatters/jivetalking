@@ -493,7 +493,7 @@ func defaultLoudnormConfig() LoudnormConfig {
 	return LoudnormConfig{
 		Enabled:   true,
 		TargetI:   -16.0,
-		TargetTP:  -2.0,
+		TargetTP:  -1.0,
 		TargetLRA: 20.0,
 		DualMono:  true,
 		Linear:    true,
