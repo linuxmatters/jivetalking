@@ -92,19 +92,29 @@ func formatCell(getter func() (float64, bool), format metricFormat) string {
 	if !ok {
 		return placeholder
 	}
+	decimals := 2
+	if format == fmtSpectral {
+		decimals = 4
+	}
+	return formatByRule(value, format, decimals)
+}
+
+// formatByRule dispatches a value to the formatter named by the metric rule,
+// passing the caller-chosen decimal count. It holds the single format->formatter
+// mapping shared by formatCell and parseLoudnormCell; the callers own the decimal
+// count (formatCell uses 4 for spectral, 2 otherwise; parseLoudnormCell uses 2).
+func formatByRule(value float64, format metricFormat, decimals int) string {
 	switch format {
-	case fmtDB:
-		return formatMetricDB(value, 2)
+	case fmtDB, fmtPeakDB:
+		return formatMetricDB(value, decimals)
 	case fmtLUFS:
-		return formatMetricLUFS(value, 2)
-	case fmtPeakDB:
-		return formatMetricDB(value, 2)
+		return formatMetricLUFS(value, decimals)
 	case fmtSpectral:
-		return formatMetricSpectral(value, 4)
+		return formatMetricSpectral(value, decimals)
 	case fmtSigned:
-		return formatMetricSigned(value, 2)
+		return formatMetricSigned(value, decimals)
 	default:
-		return formatMetric(value, 2)
+		return formatMetric(value, decimals)
 	}
 }
 
@@ -910,18 +920,7 @@ func parseLoudnormCell(value string, format metricFormat) string {
 	if err != nil {
 		return placeholder
 	}
-	switch format {
-	case fmtDB, fmtPeakDB:
-		return formatMetricDB(f, 2)
-	case fmtLUFS:
-		return formatMetricLUFS(f, 2)
-	case fmtSpectral:
-		return formatMetricSpectral(f, 2)
-	case fmtSigned:
-		return formatMetricSigned(f, 2)
-	default:
-		return formatMetric(f, 2)
-	}
+	return formatByRule(f, format, 2)
 }
 
 // =============================================================================
