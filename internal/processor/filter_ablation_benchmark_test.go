@@ -569,7 +569,7 @@ func TestFullbenchLoudnormClauseMatchesProduction(t *testing.T) {
 	}
 	assertFullbenchSpecContains(t, benchmarkClause, []string{
 		"I=-17.25",
-		"TP=-2.25",
+		"TP=0.00", // per-file loudnorm-internal TP: measured_TP -4.50 + (TargetI -17.25 - measured_I -23.25) + cushion 0.3 = 1.80, clamped to FFmpeg's [-9, 0] range
 		"LRA=9.0",
 		"measured_I=-23.25",
 		"measured_TP=-4.50",
@@ -988,7 +988,7 @@ func setupFullbenchLoudnormMeasurement(tb testing.TB, seed *fullbenchPass2Seed) 
 		measurement.InputI,
 		measurement.InputTP,
 		config.Loudnorm.TargetI,
-		config.Loudnorm.TargetTP,
+		loudnormInternalTargetTP(config.Loudnorm, measurement.InputTP, measurement.InputI),
 	)
 	effectiveConfig := config
 	effectiveConfig.Loudnorm.TargetI = effectiveTargetI
@@ -1061,7 +1061,7 @@ func TestFullbenchSetupHelpersSyntheticSmoke(t *testing.T) {
 		loudnorm.Measurement.InputI,
 		loudnorm.Measurement.InputTP,
 		pass2Seed.Config.Loudnorm.TargetI,
-		pass2Seed.Config.Loudnorm.TargetTP,
+		loudnormInternalTargetTP(pass2Seed.Config.Loudnorm, loudnorm.Measurement.InputTP, loudnorm.Measurement.InputI),
 	)
 	if math.Abs(loudnorm.EffectiveConfig.Loudnorm.TargetI-effectiveTargetI) > 0.01 {
 		t.Fatalf("effective target mismatch: got %.2f, want %.2f", loudnorm.EffectiveConfig.Loudnorm.TargetI, effectiveTargetI)
