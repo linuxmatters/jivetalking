@@ -82,7 +82,7 @@ func main() {
 		kong.Vars{
 			"version": version,
 		},
-		kong.Help(cli.StyledHelpPrinter(kong.HelpOptions{Compact: true})),
+		kong.Help(cli.StyledHelpPrinter()),
 	)
 
 	if cliArgs.Version {

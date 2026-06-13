@@ -36,7 +36,7 @@ var (
 )
 
 // StyledHelpPrinter creates a custom help printer with Lipgloss styling
-func StyledHelpPrinter(options kong.HelpOptions) func(options kong.HelpOptions, ctx *kong.Context) error {
+func StyledHelpPrinter() func(kong.HelpOptions, *kong.Context) error {
 	return func(options kong.HelpOptions, ctx *kong.Context) error {
 		var sb strings.Builder
 
