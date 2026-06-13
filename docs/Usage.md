@@ -61,3 +61,18 @@ The stars and the gain advice are console-only: the Markdown report stays empiri
 
 - **Before/after spectrogram PNGs**, named `<name>-LUFS-NN-processed.spectrogram-<kind>-<stage>.png`. `<kind>` is `whole`, `roomtone`, or `speech`; `<stage>` is `before` or `after`. Each before/after pair shares identical dimensions and scales for an honest side-by-side. Analysis-only emits `input` spectrograms (no "after"). The Markdown report links them in a `## Spectrograms` section.
 - **Interval sidecars** `<name>.intervals.jsonl` and `<name>.candidates.jsonl`, the raw 250 ms interval samples and scored room-tone candidates. The report's inline summaries cover the common case, so these are only needed for deep analysis.
+
+## Limiting the room-tone scan
+
+Long recordings can spend disproportionate time scoring room-tone candidates across the whole file. `--room-tone-scan-duration` caps that scan to the first `DURATION` of input, trading coverage for speed. Loudness, true peak, LRA, spectral statistics, and speech detection still see the whole file; only room-tone candidate collection is constrained, so fewer candidates reach voice-activated detection when the cap is engaged. The flag accepts Go duration syntax (`30s`, `1m`, `2m30s`); the default `0s` scans the whole file. Works with `--analysis-only` as well. The legacy `--silence-scan-duration` flag remains accepted as a deprecated alias.
+
+```bash
+# Cap room-tone scanning to the first 30 seconds
+jivetalking --room-tone-scan-duration=30s presenter1.flac
+
+# One minute prefix
+jivetalking --room-tone-scan-duration=1m presenter1.flac
+
+# Two and a half minutes, analysis only
+jivetalking -a --room-tone-scan-duration=2m30s presenter1.flac
+```

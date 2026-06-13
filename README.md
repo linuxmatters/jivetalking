@@ -3,10 +3,10 @@
 Raw microphone recordings into broadcast-ready audio in one command. No configuration, and no surprises.
 
 ```bash
-jivetalking presenter1.flac presenter2.flac
+jivetalking LMP-81s-mark.flac LMP-81s-martin.flac LMP-81s-popey.flac
 ```
 
-Your files emerge at -16 LUFS, a common podcast target, with room rumble, background hiss, clicks, and harsh sibilance sorted automatically. Multiple files process in parallel, each with its own TUI progress row. Everything needed is embedded in the binary. This is not how audio tools usually work, and that is rather the point.
+Your files emerge at -16 LUFS / -1 dBTP, a common podcast target, with room rumble, background hiss, clicks, and harsh sibilance sorted automatically. Multiple files process in parallel, each with its own TUI progress row. Everything needed is embedded in the binary. This is not how audio tools usually work, and that is rather the point.
 
 ## Example Output
 
@@ -138,21 +138,6 @@ jivetalking --diagnostics presenter1.flac
 
 Processing always writes a Markdown report next to each processed output. For example, `recording-LUFS-16-processed.flac` gets `recording-LUFS-16-processed.md`. The report is empirical: every measurement and the exact adapted filter parameters, with objective metric definitions and no quality verdicts. Analysis-only runs write `<input>-analysis.md` instead.
 
-### Limiting room-tone scan duration
-
-Long recordings can spend disproportionate time scoring room-tone candidates across the whole file. `--room-tone-scan-duration` caps that scan to the first `DURATION` of input, trading coverage for speed. Loudness, true peak, LRA, spectral statistics, and speech detection still see the whole file; only room-tone candidate collection is constrained, so fewer candidates reach voice-activated detection when the cap is engaged. The flag accepts Go duration syntax (`30s`, `1m`, `2m30s`); the default `0s` scans the whole file. Works with `--analysis-only` as well. The legacy `--silence-scan-duration` flag remains accepted as a deprecated alias.
-
-```bash
-# Cap room-tone scanning to the first 30 seconds
-jivetalking --room-tone-scan-duration=30s presenter1.flac
-
-# One minute prefix
-jivetalking --room-tone-scan-duration=1m presenter1.flac
-
-# Two and a half minutes, analysis only
-jivetalking -a --room-tone-scan-duration=2m30s presenter1.flac
-```
-
 ### Diagnostics
 
 `--diagnostics` writes before/after spectrogram PNGs and `.intervals.jsonl` / `.candidates.jsonl` sidecars beside the report, for sweeps and side-by-side comparison. It changes no DSP, so the processed audio is byte-identical with the flag on or off.
@@ -195,7 +180,7 @@ The full source layout, architecture, and contribution standards live in [AGENTS
 
 ### Design Documentation
 
-- [Usage Guide](docs/Usage.md): driving Jivetalking in depth, quality ratings, analysis-only mode, and diagnostics
+- [Usage Guide](docs/Usage.md): driving Jivetalking in depth: quality ratings, analysis-only mode, diagnostics, and room-tone scan limiting
 - [Audio Pipeline](docs/Pipeline.md): how and why the processing pipeline is built and tuned, with a diagram
 - [The hardware that taught me](docs/Inspiration.md): the influences and heritage behind jivetalking's processing approach
 - [Spectral Metrics Reference](docs/Spectral-Metrics-Reference.md): how measurements drive adaptation
