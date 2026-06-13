@@ -17,7 +17,7 @@ const (
 	// ==========================================================================
 
 	// Threshold offset above speech RMS.
-	// The sweep (.bench/la2a-threshold-sweep/) picked +9 dB as the
+	// A corpus threshold-offset sweep picked +9 dB as the
 	// least-treatment-but-genuine offset: it gives consistent ~2.5-4.4 dB
 	// gain-reduction depth / output crest in the 8-12 dB sweet spot across the
 	// corpus's level spread.
