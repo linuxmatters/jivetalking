@@ -82,6 +82,17 @@ func stageColumns(rows []metricRow) (hasFiltered, hasFinal bool) {
 	return hasFiltered, hasFinal
 }
 
+// stageGetter builds a metricRow value getter for one stage struct: a nil stage
+// yields a nil getter (formatCell renders the placeholder), otherwise the getter
+// reads the metric off the stage and reports it present. It folds the nil-guarded
+// closure factory the section renderers share across their stage types.
+func stageGetter[T any](s *T, f func(*T) float64) func() (float64, bool) {
+	if s == nil {
+		return nil
+	}
+	return func() (float64, bool) { return f(s), true }
+}
+
 // formatCell formats one stage value through the row's metric rule, returning the
 // placeholder when the stage is absent (getter nil or reporting false).
 func formatCell(getter func() (float64, bool), format metricFormat) string {
@@ -245,69 +256,54 @@ func renderLoudness(rec *processor.RunRecord) string {
 	filt := rec.Loudness.Stages.Filtered
 	final := rec.Loudness.Stages.Final
 
-	// Per-key getters bridging the input vs output stage type split. Each returns
-	// the value and whether that stage is present.
-	inGet := func(f func(*processor.InputLoudnessMetrics) float64) func() (float64, bool) {
-		if in == nil {
-			return nil
-		}
-		return func() (float64, bool) { return f(in), true }
-	}
-	outGet := func(s *processor.OutputLoudnessMetrics, f func(*processor.OutputLoudnessMetrics) float64) func() (float64, bool) {
-		if s == nil {
-			return nil
-		}
-		return func() (float64, bool) { return f(s), true }
-	}
-
 	rows := []metricRow{
 		{
 			key: "integrated_lufs", format: fmtLUFS,
-			input: inGet(func(m *processor.InputLoudnessMetrics) float64 { return m.InputI }),
-			filt:  outGet(filt, func(m *processor.OutputLoudnessMetrics) float64 { return m.OutputI }),
-			final: outGet(final, func(m *processor.OutputLoudnessMetrics) float64 { return m.OutputI }),
+			input: stageGetter(in, func(m *processor.InputLoudnessMetrics) float64 { return m.InputI }),
+			filt:  stageGetter(filt, func(m *processor.OutputLoudnessMetrics) float64 { return m.OutputI }),
+			final: stageGetter(final, func(m *processor.OutputLoudnessMetrics) float64 { return m.OutputI }),
 		},
 		{
 			key: "true_peak_dbtp", format: fmtPeakDB,
-			input: inGet(func(m *processor.InputLoudnessMetrics) float64 { return m.InputTP }),
-			filt:  outGet(filt, func(m *processor.OutputLoudnessMetrics) float64 { return m.OutputTP }),
-			final: outGet(final, func(m *processor.OutputLoudnessMetrics) float64 { return m.OutputTP }),
+			input: stageGetter(in, func(m *processor.InputLoudnessMetrics) float64 { return m.InputTP }),
+			filt:  stageGetter(filt, func(m *processor.OutputLoudnessMetrics) float64 { return m.OutputTP }),
+			final: stageGetter(final, func(m *processor.OutputLoudnessMetrics) float64 { return m.OutputTP }),
 		},
 		{
 			key: "lra_lu", format: fmtSpectral,
-			input: inGet(func(m *processor.InputLoudnessMetrics) float64 { return m.InputLRA }),
-			filt:  outGet(filt, func(m *processor.OutputLoudnessMetrics) float64 { return m.OutputLRA }),
-			final: outGet(final, func(m *processor.OutputLoudnessMetrics) float64 { return m.OutputLRA }),
+			input: stageGetter(in, func(m *processor.InputLoudnessMetrics) float64 { return m.InputLRA }),
+			filt:  stageGetter(filt, func(m *processor.OutputLoudnessMetrics) float64 { return m.OutputLRA }),
+			final: stageGetter(final, func(m *processor.OutputLoudnessMetrics) float64 { return m.OutputLRA }),
 		},
 		{
 			key: "thresh_lufs", format: fmtLUFS,
-			input: inGet(func(m *processor.InputLoudnessMetrics) float64 { return m.InputThresh }),
-			filt:  outGet(filt, func(m *processor.OutputLoudnessMetrics) float64 { return m.OutputThresh }),
-			final: outGet(final, func(m *processor.OutputLoudnessMetrics) float64 { return m.OutputThresh }),
+			input: stageGetter(in, func(m *processor.InputLoudnessMetrics) float64 { return m.InputThresh }),
+			filt:  stageGetter(filt, func(m *processor.OutputLoudnessMetrics) float64 { return m.OutputThresh }),
+			final: stageGetter(final, func(m *processor.OutputLoudnessMetrics) float64 { return m.OutputThresh }),
 		},
 		{
 			key: "momentary_lufs", format: fmtLUFS,
-			input: inGet(func(m *processor.InputLoudnessMetrics) float64 { return m.MomentaryLoudness }),
-			filt:  outGet(filt, func(m *processor.OutputLoudnessMetrics) float64 { return m.MomentaryLoudness }),
-			final: outGet(final, func(m *processor.OutputLoudnessMetrics) float64 { return m.MomentaryLoudness }),
+			input: stageGetter(in, func(m *processor.InputLoudnessMetrics) float64 { return m.MomentaryLoudness }),
+			filt:  stageGetter(filt, func(m *processor.OutputLoudnessMetrics) float64 { return m.MomentaryLoudness }),
+			final: stageGetter(final, func(m *processor.OutputLoudnessMetrics) float64 { return m.MomentaryLoudness }),
 		},
 		{
 			key: "short_term_lufs", format: fmtLUFS,
-			input: inGet(func(m *processor.InputLoudnessMetrics) float64 { return m.ShortTermLoudness }),
-			filt:  outGet(filt, func(m *processor.OutputLoudnessMetrics) float64 { return m.ShortTermLoudness }),
-			final: outGet(final, func(m *processor.OutputLoudnessMetrics) float64 { return m.ShortTermLoudness }),
+			input: stageGetter(in, func(m *processor.InputLoudnessMetrics) float64 { return m.ShortTermLoudness }),
+			filt:  stageGetter(filt, func(m *processor.OutputLoudnessMetrics) float64 { return m.ShortTermLoudness }),
+			final: stageGetter(final, func(m *processor.OutputLoudnessMetrics) float64 { return m.ShortTermLoudness }),
 		},
 		{
 			key: "sample_peak_dbfs", format: fmtDB,
-			input: inGet(func(m *processor.InputLoudnessMetrics) float64 { return m.SamplePeak }),
-			filt:  outGet(filt, func(m *processor.OutputLoudnessMetrics) float64 { return m.SamplePeak }),
-			final: outGet(final, func(m *processor.OutputLoudnessMetrics) float64 { return m.SamplePeak }),
+			input: stageGetter(in, func(m *processor.InputLoudnessMetrics) float64 { return m.SamplePeak }),
+			filt:  stageGetter(filt, func(m *processor.OutputLoudnessMetrics) float64 { return m.SamplePeak }),
+			final: stageGetter(final, func(m *processor.OutputLoudnessMetrics) float64 { return m.SamplePeak }),
 		},
 		{
 			key: "target_offset_db", format: fmtSigned,
-			input: inGet(func(m *processor.InputLoudnessMetrics) float64 { return m.TargetOffset }),
-			filt:  outGet(filt, func(m *processor.OutputLoudnessMetrics) float64 { return m.TargetOffset }),
-			final: outGet(final, func(m *processor.OutputLoudnessMetrics) float64 { return m.TargetOffset }),
+			input: stageGetter(in, func(m *processor.InputLoudnessMetrics) float64 { return m.TargetOffset }),
+			filt:  stageGetter(filt, func(m *processor.OutputLoudnessMetrics) float64 { return m.TargetOffset }),
+			final: stageGetter(final, func(m *processor.OutputLoudnessMetrics) float64 { return m.TargetOffset }),
 		},
 	}
 
@@ -325,12 +321,6 @@ func renderLoudness(rec *processor.RunRecord) string {
 // *DynamicsMetrics Go type (input/filtered/final), so the getters read the same
 // fields off whichever stage is present.
 func renderDynamics(rec *processor.RunRecord) string {
-	get := func(s *processor.DynamicsMetrics, f func(*processor.DynamicsMetrics) float64) func() (float64, bool) {
-		if s == nil {
-			return nil
-		}
-		return func() (float64, bool) { return f(s), true }
-	}
 	in := rec.Dynamics.Stages.Input
 	filt := rec.Dynamics.Stages.Filtered
 	final := rec.Dynamics.Stages.Final
@@ -338,7 +328,7 @@ func renderDynamics(rec *processor.RunRecord) string {
 	row := func(key string, format metricFormat, f func(*processor.DynamicsMetrics) float64) metricRow {
 		return metricRow{
 			key: key, format: format,
-			input: get(in, f), filt: get(filt, f), final: get(final, f),
+			input: stageGetter(in, f), filt: stageGetter(filt, f), final: stageGetter(final, f),
 		}
 	}
 
@@ -371,12 +361,6 @@ func renderDynamics(rec *processor.RunRecord) string {
 // renderSpectral renders the aspectralstats table (the 13 spectral metrics). All
 // three stages share the *SpectralMetrics Go type.
 func renderSpectral(rec *processor.RunRecord) string {
-	get := func(s *processor.SpectralMetrics, f func(*processor.SpectralMetrics) float64) func() (float64, bool) {
-		if s == nil {
-			return nil
-		}
-		return func() (float64, bool) { return f(s), true }
-	}
 	in := rec.Spectral.Stages.Input
 	filt := rec.Spectral.Stages.Filtered
 	final := rec.Spectral.Stages.Final
@@ -384,7 +368,7 @@ func renderSpectral(rec *processor.RunRecord) string {
 	row := func(key string, f func(*processor.SpectralMetrics) float64) metricRow {
 		return metricRow{
 			key: key, format: fmtSpectral,
-			input: get(in, f), filt: get(filt, f), final: get(final, f),
+			input: stageGetter(in, f), filt: stageGetter(filt, f), final: stageGetter(final, f),
 		}
 	}
 
@@ -575,18 +559,12 @@ func renderCandidatesSummary(s *processor.CandidatesSummary) string {
 // absent stage's column is omitted (analysis-only carries Input only) and a nil
 // stage (e.g. room-tone Samples.Input) renders the placeholder.
 func renderRegionSamples(s processor.RegionSamples) string {
-	get := func(rs *processor.RegionSample, f func(*processor.RegionSample) float64) func() (float64, bool) {
-		if rs == nil {
-			return nil
-		}
-		return func() (float64, bool) { return f(rs), true }
-	}
 	in, filt, final := s.Input, s.Filtered, s.Final
 
 	row := func(key string, format metricFormat, f func(*processor.RegionSample) float64) metricRow {
 		return metricRow{
 			key: key, format: format,
-			input: get(in, f), filt: get(filt, f), final: get(final, f),
+			input: stageGetter(in, f), filt: stageGetter(filt, f), final: stageGetter(final, f),
 		}
 	}
 	spec := func(key string, f func(*processor.SpectralMetrics) float64) metricRow {
