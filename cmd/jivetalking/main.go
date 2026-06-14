@@ -445,18 +445,19 @@ type analysisRenderScheduler struct {
 }
 
 // emitAnalysisReport writes one file's analysis artefacts after a successful
-// Pass-1 run: the always-on .md/.json from the Pass-1-only run record, the opt-in
-// .jsonl sidecars and input-only spectrogram PNGs under --diagnostics, and (in
-// no-TTY mode, when the report landed) the one-line stdout confirmation. Every
-// write failure is non-fatal and isolated so the remaining artefacts still emit,
-// matching the processing path in pool.go.
+// Pass-1 run: it builds the Pass-1-only run record, runs the shared
+// artefact-emission spine (emitReportArtefacts: always-on .md/.json, opt-in
+// .jsonl sidecars and input-only spectrogram PNGs under --diagnostics), and (in
+// no-TTY mode, when the report landed) prints the one-line stdout confirmation.
+// Every write failure is non-fatal and isolated so the remaining artefacts still
+// emit, matching the processing path in pool.go.
 func emitAnalysisReport(inputPath string, result *processor.AnalysisResult, meta *audio.Metadata, diagnostics, noTTY bool, deps analysisOnlyDeps, render analysisRenderScheduler) {
 	// Emit the Pass-1-only run record beside the analysis report. The .json
 	// path is derived from AnalysisReportPath by swapping the .md extension, so
 	// both share the <stem>-<ext>-analysis basename. meta supplies provenance
 	// (sample rate, channels) that the Pass-1 record cannot carry on its own.
 	reportPath := report.AnalysisReportPath(inputPath)
-	recordPath := strings.TrimSuffix(reportPath, filepath.Ext(reportPath)) + ".json"
+	stem := strings.TrimSuffix(reportPath, filepath.Ext(reportPath))
 	record := processor.NewAnalysisRunRecord(inputPath, result.Measurements)
 	if meta != nil {
 		record.Run.SampleRateHz = meta.SampleRate
@@ -466,68 +467,47 @@ func emitAnalysisReport(inputPath string, result *processor.AnalysisResult, meta
 		}
 	}
 
-	// Attach the input-only spectrogram path list SYNCHRONOUSLY, before the
-	// .md/.json write, so both carry the links. AnalysisSpectrogramStages is the
-	// single input stage (no output exists in this mode, decision #5), so the list
-	// is whole-file + elected regions, up to 3, all input-stage. Pure string work
-	// (no ffmpeg); the PNGs render in background goroutines launched after the
-	// writes. Off path: no list, no goroutines.
-	stem := strings.TrimSuffix(reportPath, filepath.Ext(reportPath))
-	if diagnostics {
-		record.Spectrograms = processor.DeriveSpectrogramImages(record, stem, processor.AnalysisSpectrogramStages)
-	}
-
-	// Render the Markdown report from the same Pass-1-only record. Analysis and
-	// Adaptation are the only timings available (no Pass 1-4); the Processing
-	// Summary renders just those two non-zero rows. A write failure is
-	// non-fatal, matching the run record and sidecars below.
-	timings := report.Timings{
-		Analysis:   result.AnalysisDuration,
-		Adaptation: result.AdaptationDuration,
-	}
-	// A Markdown write failure is non-fatal and must NOT skip the rest: the
-	// run record and sidecars are independent artefacts, so keep emitting them
-	// (matching the processing path in pool.go, which logs and proceeds). Only
-	// the "source → report" confirmation is suppressed below, since the report
-	// it points at did not land.
+	// AnalysisSpectrogramStages is the single input stage (no output exists in
+	// this mode, decision #5), so the derived list is whole-file + elected
+	// regions, up to 3, all input-stage. The source is always the INPUT file;
+	// outputPath is unused for the input stage, so "". Analysis and Adaptation
+	// are the only timings available (no Pass 1-4); the Processing Summary
+	// renders just those two non-zero rows.
+	//
+	// A Markdown write failure must NOT skip the confirmation logic's siblings:
+	// emitReportArtefacts keeps emitting the independent .json and sidecars on a
+	// report-write failure. Only the "source → report" confirmation is
+	// suppressed below, so detect the report write here.
 	reportWritten := true
-	if err := deps.writeMarkdownReport(record, timings, reportPath); err != nil {
-		deps.printError(fmt.Sprintf("Failed to write analysis report for %s: %v", inputPath, err))
-		reportWritten = false
-	}
-
-	if err := deps.writeRunRecord(record, recordPath); err != nil {
-		deps.printError(fmt.Sprintf("Failed to write analysis run record for %s: %v", inputPath, err))
-	}
-
-	// Stream the Pass-1 interval and candidate series to .jsonl sidecars
-	// beside the analysis record. Opt-in behind --diagnostics; the always-on
-	// .json carries the inline summaries. Non-fatal, matching the record write
-	// above.
-	if diagnostics {
-		if err := deps.writeSidecars(result.Measurements, recordPath); err != nil {
-			deps.printError(fmt.Sprintf("Failed to write analysis run record sidecars for %s: %v", inputPath, err))
-		}
-	}
-
-	// Launch the input-only spectrogram renders in background goroutines, OFF the
-	// report loop: the .md/.json/sidecars are written and the loop moves on without
-	// waiting for any PNG. Each render is bounded by render.sem (shared across files,
-	// sized to the jobs budget) and tracked on render.wg, which the deferred wait drains
-	// before the function returns so every input-only PNG lands. The source is always
-	// the INPUT file (stage input); outputPath is unused for the input stage, so "".
-	// Render failure is non-fatal (deps.printError, matching this path's other write
-	// failures); render.ctx cancellation aborts + cleans partials inside
-	// generateSpectrogram. The list is empty when --diagnostics is off, so the loop
-	// launches nothing.
-	destDir := filepath.Dir(reportPath)
-	launchSpectrogramRenders(render.ctx, record.Spectrograms, render.sem, render.wg,
-		func(ctx context.Context, img processor.SpectrogramImage) error {
-			return processor.RenderSpectrogramImage(ctx, img, record, inputPath, "", destDir)
+	emitReportArtefacts(reportArtefacts{
+		rec:         record,
+		stem:        stem,
+		stages:      processor.AnalysisSpectrogramStages,
+		sidecarMeas: result.Measurements,
+		timings: report.Timings{
+			Analysis:   result.AnalysisDuration,
+			Adaptation: result.AdaptationDuration,
 		},
-		func(img processor.SpectrogramImage, err error) {
-			deps.printError(fmt.Sprintf("Failed to render analysis spectrogram %s for %s: %v", img.Path, inputPath, err))
-		})
+		diagnostics: diagnostics,
+		renderCtx:   render.ctx,
+		renderSem:   render.sem,
+		renderWG:    render.wg,
+		render: func(ctx context.Context, img processor.SpectrogramImage) error {
+			return processor.RenderSpectrogramImage(ctx, img, record, inputPath, "", filepath.Dir(reportPath))
+		},
+		reportErr: deps.printError,
+		errMsgs: reportErrorMessages{
+			inputPath:   inputPath,
+			report:      "Failed to write analysis report for %s: %v",
+			record:      "Failed to write analysis run record for %s: %v",
+			sidecars:    "Failed to write analysis run record sidecars for %s: %v",
+			spectrogram: "Failed to render analysis spectrogram %s for %s: %v",
+		},
+		writeMarkdown: deps.writeMarkdownReport,
+		writeRecord:   deps.writeRunRecord,
+		writeSidecars: deps.writeSidecars,
+		onReportFail:  func() { reportWritten = false },
+	})
 
 	if noTTY && reportWritten {
 		printAnalysisConfirmation(deps.stdout, inputPath, reportPath, result.Measurements)
