@@ -118,7 +118,7 @@ func TestNewAdaptedSummaryNilGuards(t *testing.T) {
 func TestWithLimiter(t *testing.T) {
 	base := litSummary()
 
-	enabled := base.WithLimiter(&processor.NormalisationResult{LimiterEnabled: true, LimiterCeiling: -2.8})
+	enabled := base.WithLimiter(&processor.NormalisationResult{LimiterDiagnostics: processor.LimiterDiagnostics{LimiterEnabled: true, LimiterCeiling: -2.8}})
 	if !enabled.LimiterReady || !enabled.LimiterEnabled || enabled.LimiterCeiling != -2.8 {
 		t.Errorf("WithLimiter(enabled) wrong: %+v", enabled)
 	}

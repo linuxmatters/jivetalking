@@ -168,8 +168,10 @@ func TestChainBoxDeesserEngaged(t *testing.T) {
 // summary carries the completion limiter data.
 func TestChainBoxLimiterLit(t *testing.T) {
 	s := litSummary().WithLimiter(&processor.NormalisationResult{
-		LimiterEnabled: true,
-		LimiterCeiling: -2.8,
+		LimiterDiagnostics: processor.LimiterDiagnostics{
+			LimiterEnabled: true,
+			LimiterCeiling: -2.8,
+		},
 	})
 	plain := ansi.Strip(renderChainBox(s, 0))
 
