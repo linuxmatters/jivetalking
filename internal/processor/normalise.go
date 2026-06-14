@@ -459,6 +459,20 @@ type limiterPlan struct {
 	filteredTP  float64 // Pass-2 filtered true peak (dBTP) the limiter acts on
 }
 
+// diagnostics projects the plan's six limiter values into the exported
+// LimiterDiagnostics carried by NormalisationResult, so the result assigns them
+// in one step instead of copying six fields by hand.
+func (p limiterPlan) diagnostics() LimiterDiagnostics {
+	return LimiterDiagnostics{
+		LimiterEnabled:    p.needed,
+		LimiterCeiling:    p.ceilingDB,
+		LimiterGain:       p.gainDB,
+		LimiterFilteredTP: p.filteredTP,
+		PreGainDB:         p.preGainDB,
+		LimiterClamped:    p.clamped,
+	}
+}
+
 type loudnormApplicationRequest struct {
 	inputPath         string
 	config            *EffectiveFilterConfig
@@ -587,6 +601,20 @@ func calculateLinearModeTarget(measuredI, measuredTP, desiredI, targetTP float64
 	return maxLinearTargetI, maxLinearTargetI - measuredI, false
 }
 
+// LimiterDiagnostics holds the Pass-4 pre-limiting values shared between the
+// internal limiterPlan and the exported NormalisationResult. It is embedded into
+// NormalisationResult (anonymous, no json tag) so the JSON object stays flat: the
+// six fields marshal under the same keys as before. limiterPlan.diagnostics()
+// produces it so the result fills these in one assignment.
+type LimiterDiagnostics struct {
+	LimiterEnabled    bool    `json:"limiter_enabled"` // True if pre-limiting was applied
+	LimiterCeiling    float64 `json:"ceiling_dbtp"`    // Ceiling in dBTP (only valid if LimiterEnabled)
+	LimiterGain       float64 `json:"gain_db"`         // Gain required that triggered limiting (dB)
+	LimiterFilteredTP float64 `json:"filtered_dbtp"`   // Pass-2 filtered true peak (dBTP) the limiter acts on
+	PreGainDB         float64 `json:"pre_gain_db"`     // Pre-gain amount in dB (0.0 when no pre-gain applied)
+	LimiterClamped    bool    `json:"limiter_clamped"` // True when calculateLimiterCeiling clamped ceiling to minimum
+}
+
 // NormalisationResult contains the outcome of the normalisation pass.
 type NormalisationResult struct {
 	InputLUFS         float64        `json:"input_lufs"`            // Pre-normalisation loudness (from Pass 2 loudnorm measurement)
@@ -602,14 +630,11 @@ type NormalisationResult struct {
 	LinearModeForced  bool           `json:"linear_mode_forced"`    // True if target was adjusted to force linear mode
 	ActualNormDynamic bool           `json:"actual_norm_dynamic"`   // True if loudnorm's reported normalization_type was "dynamic" (detective)
 
-	// Limiter diagnostics (Pass 4 pre-limiting)
-	LimiterEnabled    bool    `json:"limiter_enabled"`     // True if pre-limiting was applied
-	LimiterCeiling    float64 `json:"ceiling_dbtp"`        // Ceiling in dBTP (only valid if LimiterEnabled)
-	LimiterGain       float64 `json:"gain_db"`             // Gain required that triggered limiting (dB)
-	LimiterFilteredTP float64 `json:"filtered_dbtp"`       // Pass-2 filtered true peak (dBTP) the limiter acts on
-	PreGainDB         float64 `json:"pre_gain_db"`         // Pre-gain amount in dB (0.0 when no pre-gain applied)
-	LimiterClamped    bool    `json:"limiter_clamped"`     // True when calculateLimiterCeiling clamped ceiling to minimum
-	Pass3FilterPrefix string  `json:"pass3_filter_prefix"` // Filter prefix used for Pass 3 measurement (empty when no pre-gain/limiting)
+	// Limiter diagnostics (Pass 4 pre-limiting). The six limiter values live in
+	// the embedded LimiterDiagnostics (flattened into this JSON object); the Pass 3
+	// prefix stays a direct field.
+	LimiterDiagnostics
+	Pass3FilterPrefix string `json:"pass3_filter_prefix"` // Filter prefix used for Pass 3 measurement (empty when no pre-gain/limiting)
 
 	RegionMeasurementTime time.Duration `json:"region_measurement_ns"` // Final-output room tone/speech region measurement duration (ns)
 
@@ -670,6 +695,75 @@ func ApplyNormalisation(
 	return applyNormalisationWithDeps(ctx, inputPath, config, outputMeasurements, inputMeasurements, progressCallback, log, defaultLoudnormDeps())
 }
 
+// normProgressEmitter sends the normalisation passes' lifecycle progress updates,
+// gating the nil-callback check once so the orchestration reads as named steps.
+// duration is the audio length carried through every update.
+type normProgressEmitter struct {
+	callback ProgressCallback
+	duration float64
+}
+
+// measuring signals the Measuring pass start (no progress fraction yet).
+func (e normProgressEmitter) measuring() {
+	if e.callback == nil {
+		return
+	}
+	e.callback(ProgressUpdate{Pass: PassMeasuring, PassName: "Measuring", Duration: e.duration})
+}
+
+// measuringDoneNormalisingStart signals measurement complete then the Normalising
+// pass start, surfacing the limiter ceiling at the point it is known so the TUI
+// can light its Limiter row mid-render.
+func (e normProgressEmitter) measuringDoneNormalisingStart(limiter limiterPlan) {
+	if e.callback == nil {
+		return
+	}
+	e.callback(ProgressUpdate{Pass: PassMeasuring, PassName: "Measuring", Progress: 1.0, Duration: e.duration})
+	e.callback(ProgressUpdate{
+		Pass:     PassNormalising,
+		PassName: "Normalising",
+		Duration: e.duration,
+		Limiter:  &LimiterProgress{Enabled: limiter.needed, Ceiling: limiter.ceilingDB},
+	})
+}
+
+// normalisingDone signals the Normalising pass complete.
+func (e normProgressEmitter) normalisingDone() {
+	if e.callback == nil {
+		return
+	}
+	e.callback(ProgressUpdate{Pass: PassNormalising, PassName: "Normalising", Progress: 1.0, Duration: e.duration})
+}
+
+// buildNormalisationResult assembles the final NormalisationResult from the pass
+// outputs. Pure assembly: no FFmpeg work, no progress emission.
+func buildNormalisationResult(
+	measurement *LoudnormMeasurement,
+	application *loudnormApplicationResult,
+	limiter limiterPlan,
+	offset, requestedTargetI, effectiveTargetI float64,
+	withinTarget, linearPossible, actualNormDynamic bool,
+) *NormalisationResult {
+	return &NormalisationResult{
+		InputLUFS:             measurement.InputI,
+		InputTP:               measurement.InputTP,
+		OutputLUFS:            application.finalLUFS,
+		OutputTP:              application.finalTP,
+		GainApplied:           offset,
+		WithinTarget:          withinTarget,
+		Skipped:               false,
+		LoudnormStats:         application.loudnormStats,
+		RequestedTargetI:      requestedTargetI,
+		EffectiveTargetI:      effectiveTargetI,
+		LinearModeForced:      !linearPossible,
+		ActualNormDynamic:     actualNormDynamic,
+		LimiterDiagnostics:    limiter.diagnostics(),
+		Pass3FilterPrefix:     limiter.pass3Prefix,
+		RegionMeasurementTime: application.regionMeasurementTime,
+		FinalMeasurements:     application.finalMeasurements,
+	}
+}
+
 // applyNormalisationWithDeps drives the normalisation passes with injected
 // dependencies for testing; ApplyNormalisation supplies the production set.
 func applyNormalisationWithDeps(
@@ -687,14 +781,10 @@ func applyNormalisationWithDeps(
 		return &NormalisationResult{Skipped: true}, nil
 	}
 
+	progress := normProgressEmitter{callback: progressCallback, duration: normaliseDuration(inputMeasurements)}
+
 	// Signal pass start - first we measure, then we apply
-	if progressCallback != nil {
-		progressCallback(ProgressUpdate{
-			Pass:     PassMeasuring,
-			PassName: "Measuring",
-			Duration: normaliseDuration(inputMeasurements),
-		})
-	}
+	progress.measuring()
 
 	// Compute the limiter prefix from Pass 2 ebur128 measurements (before Pass 3).
 	// This allows Pass 3 to measure through the same volume+alimiter prefix
@@ -714,29 +804,12 @@ func applyNormalisationWithDeps(
 		return nil, fmt.Errorf("cannot normalise silent audio (measured %.1f LUFS)", measurement.InputI)
 	}
 
-	// Signal measurement complete, starting application
-	if progressCallback != nil {
-		progressCallback(ProgressUpdate{
-			Pass:     PassMeasuring,
-			PassName: "Measuring",
-			Progress: 1.0,
-			Duration: normaliseDuration(inputMeasurements),
-		})
-		progressCallback(ProgressUpdate{
-			Pass:     PassNormalising,
-			PassName: "Normalising",
-			Duration: normaliseDuration(inputMeasurements),
-			// Surface the limiter ceiling at Pass-4 start, the point it is known
-			// (planLimiterForLoudnorm above). This lets the TUI light its Limiter row
-			// while the file still renders, not only at completion. Read-only: the
-			// ceiling reported here is the same limiter.ceilingDB the final
-			// NormalisationResult carries.
-			Limiter: &LimiterProgress{
-				Enabled: limiter.needed,
-				Ceiling: limiter.ceilingDB,
-			},
-		})
-	}
+	// Signal measurement complete, starting application. Surface the limiter
+	// ceiling at Pass-4 start, the point it is known (planLimiterForLoudnorm
+	// above), so the TUI lights its Limiter row mid-render. Read-only: the ceiling
+	// reported here is the same limiter.ceilingDB the final NormalisationResult
+	// carries.
+	progress.measuringDoneNormalisingStart(limiter)
 
 	// Calculate effective target I that ensures linear mode (no dynamic fallback)
 	// Pass 3 measured through the same prefix chain as Pass 4, so
@@ -781,14 +854,7 @@ func applyNormalisationWithDeps(
 	}
 
 	// Signal pass complete
-	if progressCallback != nil {
-		progressCallback(ProgressUpdate{
-			Pass:     PassNormalising,
-			PassName: "Normalising",
-			Progress: 1.0,
-			Duration: normaliseDuration(inputMeasurements),
-		})
-	}
+	progress.normalisingDone()
 
 	// Validate result is within tolerance of the EFFECTIVE target (not the requested one)
 	finalDeviation := math.Abs(application.finalLUFS - effectiveTargetI)
@@ -799,29 +865,11 @@ func applyNormalisationWithDeps(
 	// not linearly normalised. Warn and record the actual result for the report.
 	actualNormDynamic := loudnormFellBackToDynamic(application.loudnormStats, inputPath, log)
 
-	return &NormalisationResult{
-		InputLUFS:             measurement.InputI,
-		InputTP:               measurement.InputTP,
-		OutputLUFS:            application.finalLUFS,
-		OutputTP:              application.finalTP,
-		GainApplied:           offset,
-		WithinTarget:          withinTarget,
-		Skipped:               false,
-		LoudnormStats:         application.loudnormStats,
-		RequestedTargetI:      loudnorm.TargetI,
-		EffectiveTargetI:      effectiveTargetI,
-		LinearModeForced:      !linearPossible,
-		ActualNormDynamic:     actualNormDynamic,
-		LimiterEnabled:        limiter.needed,
-		LimiterCeiling:        limiter.ceilingDB,
-		LimiterGain:           limiter.gainDB,
-		LimiterFilteredTP:     limiter.filteredTP,
-		PreGainDB:             limiter.preGainDB,
-		LimiterClamped:        limiter.clamped,
-		Pass3FilterPrefix:     limiter.pass3Prefix,
-		RegionMeasurementTime: application.regionMeasurementTime,
-		FinalMeasurements:     application.finalMeasurements,
-	}, nil
+	return buildNormalisationResult(
+		measurement, application, limiter,
+		offset, loudnorm.TargetI, effectiveTargetI,
+		withinTarget, linearPossible, actualNormDynamic,
+	), nil
 }
 
 // applyLoudnormAndMeasure applies loudnorm's second pass to the audio file and measures the result.
@@ -956,53 +1004,8 @@ func executeAndPublishLoudnormApplication(
 		}
 	}()
 
-	// Calculate total samples for accurate progress reporting
-	totalSamples := int64(prep.metadata.Duration * float64(prep.metadata.SampleRate))
-	var samplesProcessed int64
-	var inputFramesRead int64
-	// currentLevel holds the instantaneous per-frame output level for the live VU meter.
-	var currentLevel float64
-	const progressUpdateInterval = 100 // Send progress update every N frames
-
-	lenientHandler := func(err error) error { return nil }
-	loopErr := deps.runFilterGraph(ctx, prep.reader, prep.bufferSrcCtx, prep.bufferSinkCtx, FrameLoopConfig{
-		OnPushError: lenientHandler,
-		OnPullError: lenientHandler,
-		OnInputFrame: func(inputFrame *ffmpeg.AVFrame) {
-			// Drive progress from input-frame consumption so the bar advances
-			// monotonically. loudnorm and adeclick drain output frames in large
-			// bursts, so reporting on output drain alone makes the bar stall then
-			// sweep. samplesProcessed and totalSamples are both at the input rate.
-			samplesProcessed += int64(inputFrame.NbSamples())
-			inputFramesRead++
-
-			if request.progress != nil && inputFramesRead%progressUpdateInterval == 0 {
-				progress := min(0.99, float64(samplesProcessed)/float64(totalSamples))
-				request.progress(ProgressUpdate{
-					Pass:     PassNormalising,
-					PassName: "Normalising",
-					Progress: progress,
-					Level:    currentLevel,
-					Duration: prep.metadata.Duration,
-				})
-			}
-		},
-		OnFrame: func(inputFrame, filteredFrame *ffmpeg.AVFrame) error {
-			// Measure the instantaneous level of the final normalised output frame
-			// so the VU meter shows the processed result, consistent with Pass 2.
-			currentLevel = calculateFrameLevel(filteredFrame)
-
-			// Extract validation measurements using Pass 2's function
-			extractOutputFrameMetadata(filteredFrame.Metadata(), &result.acc)
-
-			// Encode frame
-			if err := encoder.WriteFrame(filteredFrame); err != nil {
-				return fmt.Errorf("encoding failed: %w", err)
-			}
-
-			return nil
-		},
-	})
+	loopErr := deps.runFilterGraph(ctx, prep.reader, prep.bufferSrcCtx, prep.bufferSinkCtx,
+		newLoudnormApplicationFrameLoop(prep, request.progress, encoder, &result.acc))
 	if loopErr != nil {
 		result.loudnormStats = captureGraphStats()
 		encoderClosed = true
@@ -1036,6 +1039,64 @@ func executeAndPublishLoudnormApplication(
 	}
 
 	return result, nil
+}
+
+// newLoudnormApplicationFrameLoop builds the FrameLoopConfig for the Pass-4
+// application loop. Progress is driven from input-frame consumption (loudnorm and
+// adeclick drain output frames in bursts, so output-drain reporting would stall
+// then sweep); each output frame's level feeds the VU meter, its metadata feeds
+// acc, and the frame is encoded. The progress counters and currentLevel live in
+// this builder's scope, shared between the two closures.
+func newLoudnormApplicationFrameLoop(
+	prep *loudnormApplicationPreparation,
+	progress ProgressCallback,
+	encoder loudnormOutputEncoder,
+	acc *outputMetadataAccumulators,
+) FrameLoopConfig {
+	totalSamples := int64(prep.metadata.Duration * float64(prep.metadata.SampleRate))
+	var samplesProcessed int64
+	var inputFramesRead int64
+	// currentLevel holds the instantaneous per-frame output level for the live VU meter.
+	var currentLevel float64
+	const progressUpdateInterval = 100 // Send progress update every N frames
+
+	lenientHandler := func(err error) error { return nil }
+	return FrameLoopConfig{
+		OnPushError: lenientHandler,
+		OnPullError: lenientHandler,
+		OnInputFrame: func(inputFrame *ffmpeg.AVFrame) {
+			// Drive progress from input-frame consumption so the bar advances
+			// monotonically. samplesProcessed and totalSamples are both at the input rate.
+			samplesProcessed += int64(inputFrame.NbSamples())
+			inputFramesRead++
+
+			if progress != nil && inputFramesRead%progressUpdateInterval == 0 {
+				fraction := min(0.99, float64(samplesProcessed)/float64(totalSamples))
+				progress(ProgressUpdate{
+					Pass:     PassNormalising,
+					PassName: "Normalising",
+					Progress: fraction,
+					Level:    currentLevel,
+					Duration: prep.metadata.Duration,
+				})
+			}
+		},
+		OnFrame: func(inputFrame, filteredFrame *ffmpeg.AVFrame) error {
+			// Measure the instantaneous level of the final normalised output frame
+			// so the VU meter shows the processed result, consistent with Pass 2.
+			currentLevel = calculateFrameLevel(filteredFrame)
+
+			// Extract validation measurements using Pass 2's function
+			extractOutputFrameMetadata(filteredFrame.Metadata(), acc)
+
+			// Encode frame
+			if err := encoder.WriteFrame(filteredFrame); err != nil {
+				return fmt.Errorf("encoding failed: %w", err)
+			}
+
+			return nil
+		},
+	}
 }
 
 func finalizeLoudnormApplicationResult(
@@ -1115,9 +1176,26 @@ func finalizeLoudnormOutputMeasurements(
 // makes the gain cap binding: when the cap lowers effectiveTargetI on a high-crest
 // stem, the matching offset pins the realised scalar gain to the capped I=, holding
 // the final true peak at targetTP. On a safe stem it equals the planned makeup.
+// loudnormTPTargets resolves the two Pass-4 true-peak targets from a file's
+// loudnorm measurement: the TP= value loudnorm emits for itself and the
+// sample-peak ceiling the downstream brickwall enforces.
+//
+// emittedTP is the per-file internal TP (loudnormInternalTargetTP) clamped to
+// FFmpeg's accepted [-9, 0] range. brickwallCeilingDBTP is loudnorm.TargetTP less
+// the inter-sample allowance (brickwallTruePeakHeadroomDB) so realised oversampled
+// true peak lands ≤ loudnorm.TargetTP. The two are distinct by design: loudnorm
+// targets its own internal TP while the brickwall owns delivered ceiling.
+func loudnormTPTargets(loudnorm LoudnormConfig, measurement *LoudnormMeasurement) (emittedTP, brickwallCeilingDBTP float64) {
+	internalTP := loudnormInternalTargetTP(loudnorm, measurement.InputTP, measurement.InputI)
+	emittedTP = max(loudnormTPMinDB, min(internalTP, loudnormTPMaxDB))
+	brickwallCeilingDBTP = loudnorm.TargetTP - brickwallTruePeakHeadroomDB
+	return emittedTP, brickwallCeilingDBTP
+}
+
 func buildLoudnormFilterSpec(config *EffectiveFilterConfig, measurement *LoudnormMeasurement, offset float64, preGainDB float64, ceiling float64, needsLimiting bool, sourceSampleRate int, statsPath string) string {
 	var filters []string
 	loudnorm := config.Loudnorm
+	emittedTP, brickwallCeilingDBTP := loudnormTPTargets(loudnorm, measurement)
 
 	// 1. Build pre-limiter prefix (volume + alimiter) from pre-computed values
 	prefix := buildPreLimiterPrefix(preGainDB, ceiling, needsLimiting)
@@ -1150,9 +1228,8 @@ func buildLoudnormFilterSpec(config *EffectiveFilterConfig, measurement *Loudnor
 	// whose peak is already below -9 dBTP, where loudnorm's internal limiter is
 	// inert anyway, so the clamp changes no on-corpus output. The linear-mode guard
 	// above keeps the UNCLAMPED value so "reach -16 in linear mode" still holds for
-	// those quiet files.
-	internalTP := loudnormInternalTargetTP(loudnorm, measurement.InputTP, measurement.InputI)
-	emittedTP := max(loudnormTPMinDB, min(internalTP, loudnormTPMaxDB))
+	// those quiet files. emittedTP (and the brickwall ceiling below) come from
+	// loudnormTPTargets.
 	loudnormFilter := fmt.Sprintf(
 		"loudnorm=I=%.2f:TP=%.2f:LRA=%.1f:measured_I=%.2f:measured_TP=%.2f:measured_LRA=%.2f:measured_thresh=%.2f:offset=%.2f:dual_mono=%s:linear=%s:print_format=json",
 		loudnorm.TargetI, // %.2f for precision on adjusted targets
@@ -1197,11 +1274,10 @@ func buildLoudnormFilterSpec(config *EffectiveFilterConfig, measurement *Loudnor
 		filters = append(filters, spec)
 	}
 
-	// alimiter limits sample peak; set its ceiling below the true-peak target by
-	// the corpus-derived inter-sample allowance so realised oversampled true peak
-	// lands ≤ loudnorm.TargetTP. The subtraction is explicit here, not buried in
-	// the helper, so the intent reads at the call site.
-	filters = append(filters, buildBrickwallLimiter(loudnorm.TargetTP-brickwallTruePeakHeadroomDB))
+	// alimiter limits sample peak; loudnormTPTargets set brickwallCeilingDBTP below
+	// the true-peak target by the corpus-derived inter-sample allowance so realised
+	// oversampled true peak lands ≤ loudnorm.TargetTP.
+	filters = append(filters, buildBrickwallLimiter(brickwallCeilingDBTP))
 
 	// 5. astats for amplitude measurements (same as Pass 2)
 	// Provides noise floor, dynamic range, RMS level, peak level, etc.
