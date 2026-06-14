@@ -187,7 +187,7 @@ func runWorkerPool(env poolEnv, diagnostics bool, reportWarnings chan<- string, 
 			// passes the progress handler timed directly.
 			pass2Time := time.Since(pass2Start) - ph.pass1Time - ph.pass3Time - ph.pass4Time
 
-			emitProcessingReport(env, inputPath, result, ph, fileStartTime, pass2Time, diagnostics, reportWarnings, render)
+			emitProcessingReport(env, inputPath, result, ph, processingTimings{fileStart: fileStartTime, pass2: pass2Time}, diagnostics, reportWarnings, render)
 		}(i, inputPath)
 	}
 
@@ -215,15 +215,133 @@ type processingRenderScheduler struct {
 	wg  *sync.WaitGroup
 }
 
+// reportArtefacts carries the per-mode parts of the artefact-emission spine that
+// emitReportArtefacts runs identically for both pools: the already-built run
+// record, the path stem the .md/.json derive from, the spectrogram stages
+// constant, the sidecar measurements, the report.Timings, the render context +
+// pool-level render scheduler, the render closure (varies: output path vs ""),
+// and a single error-reporting callback (the reportWarnings send on the
+// processing path, deps.printError on the analysis-only path). errMsgs supplies
+// the four per-artefact warning templates so each mode keeps its own wording.
+type reportArtefacts struct {
+	rec         *processor.RunRecord
+	stem        string
+	stages      []string
+	sidecarMeas *processor.AudioMeasurements
+	timings     report.Timings
+	diagnostics bool
+
+	renderCtx context.Context
+	renderSem chan struct{}
+	renderWG  *sync.WaitGroup
+	render    func(context.Context, processor.SpectrogramImage) error
+
+	// Write seams. The processing path passes the concrete report/processor
+	// functions; the analysis-only path passes its injected deps so tests can
+	// substitute fakes. onReportFail (optional) fires when the .md write fails,
+	// letting the analysis path suppress its "source → report" confirmation.
+	writeMarkdown func(*processor.RunRecord, report.Timings, string) error
+	writeRecord   func(*processor.RunRecord, string) error
+	writeSidecars func(*processor.AudioMeasurements, string) error
+	onReportFail  func()
+
+	reportErr func(string)
+	errMsgs   reportErrorMessages
+}
+
+// reportErrorMessages holds the four artefact-write warning templates. report,
+// record, and sidecars take (inputPath, err); spectrogram takes (img.Path,
+// inputPath, err). Each mode supplies its own wording so emitReportArtefacts can
+// format identical messages to the pre-extraction code.
+type reportErrorMessages struct {
+	inputPath   string
+	report      string
+	record      string
+	sidecars    string
+	spectrogram string
+}
+
+// emitReportArtefacts runs the shared artefact-emission spine for both pools:
+// derive the spectrogram path list under diagnostics (pure string work, before
+// the writes so the .md/.json carry resolving links), write the always-on .md
+// and .json, conditionally write the opt-in .jsonl sidecars, then launch the
+// bounded background spectrogram renders. The derive-then-write-then-launch
+// order is load-bearing and kept intact. Every write failure is non-fatal and
+// isolated through a.reportErr so the remaining artefacts still emit.
+func emitReportArtefacts(a reportArtefacts) {
+	// Attach the spectrogram path list SYNCHRONOUSLY, before the .md/.json
+	// write, so both carry the links. This is pure string work (no ffmpeg);
+	// the PNGs themselves render in background goroutines launched after the
+	// writes. Off path: no list, no goroutines.
+	if a.diagnostics {
+		a.rec.Spectrograms = processor.DeriveSpectrogramImages(a.rec, a.stem, a.stages)
+	}
+
+	// Write the Markdown report beside the audio/source. A write failure is
+	// non-fatal: the .json (and, on the processing path, the audio) is the
+	// product, the report a side artefact.
+	mdPath := a.stem + ".md"
+	if err := a.writeMarkdown(a.rec, a.timings, mdPath); err != nil {
+		a.reportErr(fmt.Sprintf(a.errMsgs.report, a.errMsgs.inputPath, err))
+		if a.onReportFail != nil {
+			a.onReportFail()
+		}
+	}
+
+	// Emit the run record beside the .md. The .json path shares the stem, so
+	// they sit together. A write failure is non-fatal, matching the report
+	// write above.
+	recordPath := a.stem + ".json"
+	if err := a.writeRecord(a.rec, recordPath); err != nil {
+		a.reportErr(fmt.Sprintf(a.errMsgs.record, a.errMsgs.inputPath, err))
+	}
+
+	// Stream the full interval and candidate series to .jsonl sidecars beside
+	// the record: the bulk data the summary stands in for. Opt-in behind
+	// --diagnostics; the always-on .json carries the inline summaries, so
+	// .md/.json stay populated when off. Same non-fatal contract as the record
+	// above.
+	if a.diagnostics {
+		if err := a.writeSidecars(a.sidecarMeas, recordPath); err != nil {
+			a.reportErr(fmt.Sprintf(a.errMsgs.sidecars, a.errMsgs.inputPath, err))
+		}
+	}
+
+	// Launch the spectrogram renders in background goroutines, OFF the critical
+	// path: the .md/.json/sidecars are written and the caller proceeds without
+	// waiting for any PNG. Each render is bounded by the pool-level semaphore
+	// (shared across files, sized to the jobs budget) and tracked on the
+	// WaitGroup the caller drains before exit so every PNG lands. Render failure
+	// is non-fatal; renderCtx cancellation aborts + cleans partials inside
+	// generateSpectrogram. The list is empty when --diagnostics is off, so the
+	// loop launches nothing.
+	launchSpectrogramRenders(a.renderCtx, a.rec.Spectrograms, a.renderSem, a.renderWG,
+		a.render,
+		func(img processor.SpectrogramImage, err error) {
+			a.reportErr(fmt.Sprintf(a.errMsgs.spectrogram, img.Path, a.errMsgs.inputPath, err))
+		})
+}
+
+// processingTimings is the timing data clump emitProcessingReport needs from the
+// pool worker: fileStart marks when the worker began (feeds both the report's
+// real-time factor and the FileCompleteMsg ProcessingTime), pass2 is the isolated
+// Pass-2 wall-clock the worker computes by subtracting the progress-handler-timed
+// passes. Bundling the pair keeps the emitProcessingReport signature short.
+type processingTimings struct {
+	fileStart time.Time
+	pass2     time.Duration
+}
+
 // emitProcessingReport writes one file's processing artefacts after a successful
 // 4-pass run and dispatches the final TUI messages: it builds the run record,
-// writes the always-on .md/.json, the opt-in .jsonl sidecars and before/after
-// spectrogram PNGs under --diagnostics, then sends the limiter-confirming
-// AdaptedSummaryMsg and the FileCompleteMsg. Every write failure is non-fatal and
-// isolated (reportWarnings) so the remaining artefacts still emit, mirroring
-// emitAnalysisReport on the analysis-only path. ph supplies the per-pass timings
-// and the retained filter-chain summary captured during ProcessAudio.
-func emitProcessingReport(env poolEnv, inputPath string, result *processor.ProcessingResult, ph *progressHandler, fileStartTime time.Time, pass2Time time.Duration, diagnostics bool, reportWarnings chan<- string, render processingRenderScheduler) {
+// runs the shared artefact-emission spine (emitReportArtefacts: always-on
+// .md/.json, opt-in .jsonl sidecars and before/after spectrogram PNGs under
+// --diagnostics), then sends the limiter-confirming AdaptedSummaryMsg and the
+// FileCompleteMsg. Every write failure is non-fatal and isolated (reportWarnings)
+// so the remaining artefacts still emit, mirroring emitAnalysisReport on the
+// analysis-only path. ph supplies the per-pass timings and the retained
+// filter-chain summary captured during ProcessAudio.
+func emitProcessingReport(env poolEnv, inputPath string, result *processor.ProcessingResult, ph *progressHandler, t processingTimings, diagnostics bool, reportWarnings chan<- string, render processingRenderScheduler) {
 	wlog := ph.log
 	i := ph.fileIndex
 
@@ -233,64 +351,36 @@ func emitProcessingReport(env poolEnv, inputPath string, result *processor.Proce
 	rec := processor.NewRunRecord(result)
 
 	outputStem := strings.TrimSuffix(result.OutputPath, filepath.Ext(result.OutputPath))
-
-	// Attach the spectrogram path list SYNCHRONOUSLY, before the .md/.json
-	// write, so both carry the links. This is pure string work (no ffmpeg);
-	// the PNGs themselves render in background goroutines launched after the
-	// writes. Off path: no list, no goroutines.
-	if diagnostics {
-		rec.Spectrograms = processor.DeriveSpectrogramImages(rec, outputStem, processor.ProcessingSpectrogramStages)
-	}
-
-	// Write the Markdown report beside the processed audio: swap the output
-	// extension for .md → <name>-LUFS-NN-processed.md. A write failure is
-	// non-fatal: the processed audio and the .json are the product, the
-	// report a side artefact.
-	mdPath := outputStem + ".md"
-	if err := report.WriteMarkdownReport(rec, buildProcessingTimings(fileStartTime, ph.timings(pass2Time), result), mdPath); err != nil {
-		wlog("[POOL] Failed to write Markdown report: %v", err)
-		sendWarning(reportWarnings, fmt.Sprintf("Report was not written for %s: %v", inputPath, err))
-	}
-
-	// Emit the run record beside the .md. The .json path is derived from
-	// OutputPath exactly as the .md is, so they sit together. A write
-	// failure is non-fatal, matching the report write above.
-	recordPath := outputStem + ".json"
-	if err := processor.WriteRunRecord(rec, recordPath); err != nil {
-		wlog("[POOL] Failed to write run record: %v", err)
-		sendWarning(reportWarnings, fmt.Sprintf("Run record was not written for %s: %v", inputPath, err))
-	}
-
-	// Stream the full interval and candidate series to .jsonl sidecars
-	// beside the record: the bulk data the summary stands in for. Opt-in
-	// behind --diagnostics; the always-on .json carries the inline summaries,
-	// so .md/.json stay populated when off. Same non-fatal contract as the
-	// record above.
-	if diagnostics {
-		if err := processor.WriteRunRecordSidecars(result.Measurements, recordPath); err != nil {
-			wlog("[POOL] Failed to write run record sidecars: %v", err)
-			sendWarning(reportWarnings, fmt.Sprintf("Run record sidecars were not written for %s: %v", inputPath, err))
-		}
-	}
-
-	// Launch the spectrogram renders in background goroutines, OFF the
-	// critical path: the .md/.json/sidecars are written and FileCompleteMsg
-	// fires below without waiting for any PNG. Each render is bounded by the
-	// pool-level render.sem (shared across files, sized to the jobs budget) and
-	// tracked on render.wg, which the pool waits on before AllCompleteMsg so the
-	// process does not exit until every PNG lands. Render failure is
-	// non-fatal (reportWarnings); env.ctx cancellation aborts + cleans partials
-	// inside generateSpectrogram. The list is empty when --diagnostics is off,
-	// so the loop launches nothing.
 	destDir := filepath.Dir(result.OutputPath)
-	launchSpectrogramRenders(env.ctx, rec.Spectrograms, render.sem, render.wg,
-		func(ctx context.Context, img processor.SpectrogramImage) error {
+
+	emitReportArtefacts(reportArtefacts{
+		rec:         rec,
+		stem:        outputStem,
+		stages:      processor.ProcessingSpectrogramStages,
+		sidecarMeas: result.Measurements,
+		timings:     buildProcessingTimings(t.fileStart, ph.timings(t.pass2), result),
+		diagnostics: diagnostics,
+		renderCtx:   env.ctx,
+		renderSem:   render.sem,
+		renderWG:    render.wg,
+		render: func(ctx context.Context, img processor.SpectrogramImage) error {
 			return processor.RenderSpectrogramImage(ctx, img, rec, inputPath, result.OutputPath, destDir)
 		},
-		func(img processor.SpectrogramImage, err error) {
-			wlog("[POOL] Failed to render spectrogram %s: %v", img.Path, err)
-			sendWarning(reportWarnings, fmt.Sprintf("Spectrogram %s was not written for %s: %v", img.Path, inputPath, err))
-		})
+		writeMarkdown: report.WriteMarkdownReport,
+		writeRecord:   processor.WriteRunRecord,
+		writeSidecars: processor.WriteRunRecordSidecars,
+		reportErr: func(msg string) {
+			wlog("[POOL] %s", msg)
+			sendWarning(reportWarnings, msg)
+		},
+		errMsgs: reportErrorMessages{
+			inputPath:   inputPath,
+			report:      "Report was not written for %s: %v",
+			record:      "Run record was not written for %s: %v",
+			sidecars:    "Run record sidecars were not written for %s: %v",
+			spectrogram: "Spectrogram %s was not written for %s: %v",
+		},
+	})
 
 	finalNoiseFloor, _ := processor.FinalNoiseFloor(result)
 
@@ -329,6 +419,6 @@ func emitProcessingReport(env poolEnv, inputPath string, result *processor.Proce
 		OutputPath:       result.OutputPath,
 		Quality:          processor.ComputeQualityScore(result),
 		RecordingQuality: processor.ComputeRecordingScore(result.Measurements),
-		ProcessingTime:   time.Since(fileStartTime),
+		ProcessingTime:   time.Since(t.fileStart),
 	})
 }
