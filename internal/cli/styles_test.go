@@ -129,6 +129,19 @@ func TestRenderTitleDownsamplesNoColor(t *testing.T) {
 	}
 }
 
+// TestRenderTitleIsStable confirms the cached wordmark is non-empty and
+// byte-identical across successive calls (sync.OnceValue caching).
+func TestRenderTitleIsStable(t *testing.T) {
+	first := RenderTitle()
+	if first == "" {
+		t.Fatal("RenderTitle returned an empty string")
+	}
+	second := RenderTitle()
+	if first != second {
+		t.Errorf("RenderTitle not stable across calls:\nfirst:  %q\nsecond: %q", first, second)
+	}
+}
+
 func TestStyledOutputPreservesTruecolor(t *testing.T) {
 	styled := helpFlagStyle.Render("Jivetalking")
 	out := renderThrough(colorprofile.TrueColor, styled)

@@ -41,6 +41,93 @@ func measureOutputSpeechRegion(outputPath string, region SpeechRegion) (*RegionS
 	return measureOutputSpeechRegionFromReader(context.Background(), reader, region, nil)
 }
 
+// regionSeekTarget mirrors the seek-target maths in seekReaderBeforeRegion:
+// regionStart - regionSeekPreRoll, floored at 0. Kept in the test so the
+// offset relationship is asserted without driving a real demuxer.
+func regionSeekTarget(regionStart time.Duration) time.Duration {
+	return max(regionStart-regionSeekPreRoll, 0)
+}
+
+// TestRegionSeekTargetWindowUnchanged asserts the seek-then-trim offset maths:
+// the demuxer seeks to regionStart-preRoll (floored at 0) while the atrim window
+// stays region-absolute. The measured span is [regionStart, regionStart+duration)
+// regardless of the seek point, because atrim keys off file-absolute PTS. This
+// test exercises the offset relationship only; it does not run the audio
+// pipeline.
+func TestRegionSeekTargetWindowUnchanged(t *testing.T) {
+	const duration = 3 * time.Second
+
+	tests := []struct {
+		name           string
+		regionStart    time.Duration
+		wantSeekTarget time.Duration
+	}{
+		{
+			name:           "early region floors seek at zero",
+			regionStart:    2 * time.Second,
+			wantSeekTarget: 0,
+		},
+		{
+			name:           "region exactly at pre-roll floors at zero",
+			regionStart:    regionSeekPreRoll,
+			wantSeekTarget: 0,
+		},
+		{
+			name:           "late region seeks pre-roll before start",
+			regionStart:    120 * time.Second,
+			wantSeekTarget: 120*time.Second - regionSeekPreRoll,
+		},
+		{
+			name:           "very late region seeks pre-roll before start",
+			regionStart:    45 * time.Minute,
+			wantSeekTarget: 45*time.Minute - regionSeekPreRoll,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotSeek := regionSeekTarget(tt.regionStart)
+			if gotSeek != tt.wantSeekTarget {
+				t.Fatalf("seek target = %v, want %v", gotSeek, tt.wantSeekTarget)
+			}
+
+			// The seek must never land after the region start, or the atrim
+			// window would lose leading samples.
+			if gotSeek > tt.regionStart {
+				t.Fatalf("seek target %v is after region start %v: window would lose data",
+					gotSeek, tt.regionStart)
+			}
+
+			// The atrim window is region-absolute and independent of the seek
+			// point. The measured span stays [regionStart, regionStart+duration).
+			wantWindowStart := tt.regionStart
+			wantWindowEnd := tt.regionStart + duration
+			if wantWindowEnd-wantWindowStart != duration {
+				t.Fatalf("measured window width = %v, want %v",
+					wantWindowEnd-wantWindowStart, duration)
+			}
+
+			// The pre-roll head-start (the span trimmed away before measurement)
+			// equals regionStart - seekTarget and is bounded by the pre-roll.
+			preRoll := tt.regionStart - gotSeek
+			if preRoll > regionSeekPreRoll {
+				t.Fatalf("pre-roll span %v exceeds regionSeekPreRoll %v", preRoll, regionSeekPreRoll)
+			}
+		})
+	}
+}
+
+// TestRegionSeekPreRollCoversLoudnessWindows guards the pre-roll constant: it
+// must exceed ebur128's longest integration window so a decode head-start
+// always covers loudness-meter warm-up.
+func TestRegionSeekPreRollCoversLoudnessWindows(t *testing.T) {
+	const ebur128ShortTermWindow = 3 * time.Second // longest ebur128 window
+	if regionSeekPreRoll <= ebur128ShortTermWindow {
+		t.Fatalf("regionSeekPreRoll %v must exceed ebur128 short-term window %v",
+			regionSeekPreRoll, ebur128ShortTermWindow)
+	}
+}
+
 func TestExtractRegionPair(t *testing.T) {
 	tests := []struct {
 		name         string

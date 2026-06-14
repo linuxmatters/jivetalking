@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"strings"
+	"sync"
 
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/compat"
@@ -64,11 +65,12 @@ var (
 			Foreground(ColorText)
 )
 
-// RenderTitle returns the "Jivetalking 🕺" wordmark drawn as a per-letter
-// cyan→sky-blue Blend1D gradient (bold per letter), with the 🕺 emoji appended
-// outside the gradient so it keeps its own colours. Shared by the version banner
-// and the processing-TUI header so both render the wordmark identically.
-func RenderTitle() string {
+// renderTitleOnce builds the wordmark once on first call and caches it. The
+// output never varies (string literal plus package-level colours resolved from
+// the terminal background detected once at startup), and RenderTitle is called
+// every TUI frame, so the work is hoisted off the 60fps path. Lazy so the first
+// call happens after terminal detection completes.
+var renderTitleOnce = sync.OnceValue(func() string {
 	letters := []rune("Jivetalking")
 	ramp := lipgloss.Blend1D(len(letters), ColorCyanBright, ColorSkyBlue)
 
@@ -82,7 +84,13 @@ func RenderTitle() string {
 	b.WriteString(" 🕺")
 
 	return b.String()
-}
+})
+
+// RenderTitle returns the "Jivetalking 🕺" wordmark drawn as a per-letter
+// cyan→sky-blue Blend1D gradient (bold per letter), with the 🕺 emoji appended
+// outside the gradient so it keeps its own colours. Shared by the version banner
+// and the processing-TUI header so both render the wordmark identically.
+func RenderTitle() string { return renderTitleOnce() }
 
 // PrintVersion prints version information
 func PrintVersion(version string) {

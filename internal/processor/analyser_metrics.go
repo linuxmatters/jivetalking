@@ -608,14 +608,44 @@ type metadataAccumulators struct {
 	ebur128Found    bool
 }
 
-// getFloatMetadata extracts a float value from the metadata dictionary
+// getFloatMetadata extracts a float value from the metadata dictionary.
+//
+// The Pass 1 OnFrame path calls this about 40 times per frame. Reading the value
+// via CStr.String() would copy each C string onto the Go heap (about 40
+// short-lived allocations per frame). Instead we view the NUL-terminated C bytes
+// as a Go string with no copy and parse that. strconv.ParseFloat does not retain
+// the string past the call, so the no-copy view is safe; the dictionary owns the
+// backing C memory and outlives this call. The parsed float64 is bit-identical to
+// the String() path because both feed the same decimal bytes to ParseFloat.
 func getFloatMetadata(metadata *ffmpeg.AVDictionary, key *ffmpeg.CStr) (float64, bool) {
-	if entry := ffmpeg.AVDictGet(metadata, key, nil, 0); entry != nil {
-		if value, err := strconv.ParseFloat(entry.Value().String(), 64); err == nil {
-			return value, true
-		}
+	entry := ffmpeg.AVDictGet(metadata, key, nil, 0)
+	if entry == nil {
+		return 0.0, false
+	}
+	ptr := entry.Value().RawPtr()
+	if ptr == nil {
+		return 0.0, false
+	}
+	if value, err := strconv.ParseFloat(cStringNoCopy(ptr), 64); err == nil {
+		return value, true
 	}
 	return 0.0, false
+}
+
+// cStringNoCopy returns the NUL-terminated C string at ptr as a Go string that
+// aliases the C memory without copying. The caller must not retain the returned
+// string beyond the lifetime of the C allocation, and must not mutate the bytes.
+// maxMetadataValueLen bounds the NUL scan so a missing terminator cannot run off
+// into unmapped memory; FFmpeg astats/ebur128/aspectralstats values are short
+// decimal numbers far below this cap.
+func cStringNoCopy(ptr unsafe.Pointer) string {
+	const maxMetadataValueLen = 256
+	bytes := unsafe.Slice((*byte)(ptr), maxMetadataValueLen)
+	n := 0
+	for n < maxMetadataValueLen && bytes[n] != 0 {
+		n++
+	}
+	return unsafe.String((*byte)(ptr), n)
 }
 
 // linearRatioToDB converts a linear ratio (e.g., Crest_factor) to decibels.

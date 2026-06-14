@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	ffmpeg "github.com/linuxmatters/ffmpeg-statigo"
 )
 
 const spectralTestEpsilon = 1e-9
@@ -310,6 +312,177 @@ func TestIntervalFrameMetrics_UsesSingleSpectralMetricsField(t *testing.T) {
 	if spectralFields[0].Type != reflect.TypeFor[SpectralMetrics]() {
 		t.Fatalf("spectral field type = %v, want SpectralMetrics", spectralFields[0].Type)
 	}
+}
+
+// newMetadataDict builds an *ffmpeg.AVDictionary from key/value string pairs and
+// registers its cleanup. Keys absent from the map are absent from the dict, so a
+// caller can model a frame that "misses" a key. The values are raw decimal text,
+// exactly as FFmpeg's astats/ebur128 filters emit them into frame metadata.
+func newMetadataDict(t *testing.T, pairs map[string]string) *ffmpeg.AVDictionary {
+	t.Helper()
+
+	var dict *ffmpeg.AVDictionary
+	for k, v := range pairs {
+		key := ffmpeg.ToCStr(k)
+		value := ffmpeg.ToCStr(v)
+		if _, err := ffmpeg.AVDictSet(&dict, key, value, 0); err != nil {
+			key.Free()
+			value.Free()
+			ffmpeg.AVDictFree(&dict)
+			t.Fatalf("AVDictSet(%q) error = %v", k, err)
+		}
+		key.Free()
+		value.Free()
+	}
+	t.Cleanup(func() { ffmpeg.AVDictFree(&dict) })
+	return dict
+}
+
+func TestGetFloatMetadata_ParsesValueFromCBytes(t *testing.T) {
+	dict := newMetadataDict(t, map[string]string{
+		"lavfi.astats.1.Dynamic_range": "42.5",
+		"lavfi.astats.1.RMS_level":     "-23.456789",
+		"lavfi.astats.1.Min_level":     "-0.5",
+	})
+
+	cases := []struct {
+		name string
+		key  *ffmpeg.CStr
+		want float64
+	}{
+		{"Dynamic_range", metaKeyDynamicRange, 42.5},
+		{"RMS_level", metaKeyRMSLevel, -23.456789},
+		{"Min_level", metaKeyMinLevel, -0.5},
+	}
+	for _, c := range cases {
+		got, ok := getFloatMetadata(dict, c.key)
+		if !ok {
+			t.Errorf("%s: ok = false, want true", c.name)
+			continue
+		}
+		// Bit-identical to the strconv.ParseFloat the previous String() path fed.
+		if got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestGetFloatMetadata_MissingKeyReportsNotFound(t *testing.T) {
+	dict := newMetadataDict(t, map[string]string{
+		"lavfi.astats.1.RMS_level": "-20.0",
+	})
+
+	if value, ok := getFloatMetadata(dict, metaKeyDynamicRange); ok {
+		t.Errorf("missing key: got (%v, true), want (_, false)", value)
+	}
+}
+
+func TestGetFloatMetadata_UnparseableValueReportsNotFound(t *testing.T) {
+	dict := newMetadataDict(t, map[string]string{
+		"lavfi.astats.1.Dynamic_range": "not-a-number",
+	})
+
+	if value, ok := getFloatMetadata(dict, metaKeyDynamicRange); ok {
+		t.Errorf("unparseable value: got (%v, true), want (_, false)", value)
+	}
+}
+
+// TestExtractAstatsMetadata_LatestFoundPerKeyWins is the core semantic guard for
+// task 1.2: astats values are cumulative ("latest non-missing wins"), so a late
+// frame that misses a key must NOT clobber the value an earlier frame supplied,
+// and the per-key found flag (astatsFound) must reflect any frame that supplied
+// Dynamic_range.
+func TestExtractAstatsMetadata_LatestFoundPerKeyWins(t *testing.T) {
+	var acc baseMetadataAccumulators
+
+	// Frame 1: supplies Dynamic_range and RMS_level.
+	acc.extractAstatsMetadata(newMetadataDict(t, map[string]string{
+		"lavfi.astats.1.Dynamic_range": "40.0",
+		"lavfi.astats.1.RMS_level":     "-25.0",
+		"lavfi.astats.1.RMS_trough":    "-60.0",
+	}), optionalFloat{})
+
+	// Frame 2 (later): supplies a newer RMS_level but MISSES Dynamic_range and
+	// RMS_trough. The earlier values for the missed keys must be retained, and
+	// the newer RMS_level must win.
+	acc.extractAstatsMetadata(newMetadataDict(t, map[string]string{
+		"lavfi.astats.1.RMS_level": "-22.0",
+	}), optionalFloat{})
+
+	if acc.astatsDynamicRange != 40.0 {
+		t.Errorf("astatsDynamicRange = %v, want 40.0 (earlier frame retained)", acc.astatsDynamicRange)
+	}
+	if acc.astatsRMSLevel != -22.0 {
+		t.Errorf("astatsRMSLevel = %v, want -22.0 (later frame wins)", acc.astatsRMSLevel)
+	}
+	if acc.astatsRMSTrough != -60.0 {
+		t.Errorf("astatsRMSTrough = %v, want -60.0 (earlier frame retained)", acc.astatsRMSTrough)
+	}
+	if !acc.astatsFound {
+		t.Error("astatsFound = false, want true (Dynamic_range was supplied)")
+	}
+}
+
+// TestExtractAstatsMetadata_FoundFlagStaysFalseWithoutDynamicRange confirms the
+// found flag tracks Dynamic_range specifically, matching the pre-change rule.
+func TestExtractAstatsMetadata_FoundFlagStaysFalseWithoutDynamicRange(t *testing.T) {
+	var acc baseMetadataAccumulators
+
+	acc.extractAstatsMetadata(newMetadataDict(t, map[string]string{
+		"lavfi.astats.1.RMS_level": "-20.0",
+	}), optionalFloat{})
+
+	if acc.astatsFound {
+		t.Error("astatsFound = true, want false (no Dynamic_range supplied)")
+	}
+}
+
+// TestExtractAstatsMetadata_AppliesConversions guards the dB conversions that sit
+// on top of the raw parse (Crest_factor, Min_level, Max_level), so the no-copy
+// parse change cannot silently shift a converted field.
+func TestExtractAstatsMetadata_AppliesConversions(t *testing.T) {
+	var acc baseMetadataAccumulators
+
+	acc.extractAstatsMetadata(newMetadataDict(t, map[string]string{
+		"lavfi.astats.1.Crest_factor": "10.0",
+		"lavfi.astats.1.Min_level":    "-0.5",
+		"lavfi.astats.1.Max_level":    "0.5",
+	}), optionalFloat{})
+
+	if want := linearRatioToDB(10.0); acc.astatsCrestFactor != want {
+		t.Errorf("astatsCrestFactor = %v, want %v", acc.astatsCrestFactor, want)
+	}
+	if want := linearSampleToDBFS(-0.5); acc.astatsMinLevel != want {
+		t.Errorf("astatsMinLevel = %v, want %v", acc.astatsMinLevel, want)
+	}
+	if want := linearSampleToDBFS(0.5); acc.astatsMaxLevel != want {
+		t.Errorf("astatsMaxLevel = %v, want %v", acc.astatsMaxLevel, want)
+	}
+}
+
+// BenchmarkGetFloatMetadata exercises the per-key parse on the hot Pass 1 path.
+// The no-copy CStr view should report fewer allocs/op than the prior String()
+// path. Run: go test -bench=BenchmarkGetFloatMetadata -benchmem.
+func BenchmarkGetFloatMetadata(b *testing.B) {
+	var dict *ffmpeg.AVDictionary
+	key := ffmpeg.ToCStr("lavfi.astats.1.RMS_level")
+	value := ffmpeg.ToCStr("-23.456789")
+	if _, err := ffmpeg.AVDictSet(&dict, key, value, 0); err != nil {
+		key.Free()
+		value.Free()
+		b.Fatalf("AVDictSet() error = %v", err)
+	}
+	key.Free()
+	value.Free()
+	b.Cleanup(func() { ffmpeg.AVDictFree(&dict) })
+
+	b.ReportAllocs()
+	var sink float64
+	for b.Loop() {
+		v, _ := getFloatMetadata(dict, metaKeyRMSLevel)
+		sink += v
+	}
+	_ = sink
 }
 
 func assertNoStaleSpectralPrimitiveFields[T any](t *testing.T) {

@@ -133,6 +133,16 @@ type FileProgress struct {
 	// only by the renderer; the meter tick never touches it.
 	Summary AdaptedSummary
 
+	// statusBoxCache memoises the rendered Filter Chain + Analysis panel strings so
+	// the side boxes are not rebuilt byte-for-byte on every 60 fps frame. The panels
+	// depend only on (Summary, Pass-box height): every other input is a compile-time
+	// constant (box widths, glyphs, units) or a palette colour fixed at startup. The
+	// cache is populated lazily in joinStatusBoxes during render and reused while the
+	// key matches; it is invalidated by clearing valid in the AdaptedSummaryMsg case
+	// (Summary change) and re-renders automatically when the Pass-box height changes
+	// (meter rows appear or disappear). Render-only state; the pool never touches it.
+	statusBoxCache statusBoxCache
+
 	// Processing statistics
 	CurrentLevel float64 // Current audio level in dB
 	PeakLevel    float64 // Peak level seen so far
@@ -157,6 +167,18 @@ type FileProgress struct {
 
 	// Error tracking
 	Error error
+}
+
+// statusBoxCache holds the memoised side-panel render keyed on the inputs the
+// render functions read. valid guards against a zero-value false positive (a
+// genuine key of {Summary{}, 0}). chain and analysis are the rendered box
+// strings; joinHeight is the Pass-box height they were rendered against.
+type statusBoxCache struct {
+	valid      bool
+	summary    AdaptedSummary
+	joinHeight int
+	chain      string
+	analysis   string
 }
 
 // Model is the Bubbletea model for the processing UI
@@ -287,6 +309,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// start (chain + analysis) and at completion (limiter ceiling).
 		if msg.FileIndex >= 0 && msg.FileIndex < len(m.Files) {
 			m.Files[msg.FileIndex].Summary = msg.Summary
+			// Invalidate the memoised side panels: the summary is the primary cache
+			// key, so a new one must force a re-render. joinStatusBoxes also re-checks
+			// the Pass-box height, so this clear plus the height check covers every
+			// input the panels read.
+			m.Files[msg.FileIndex].statusBoxCache.valid = false
 		}
 		return m, nil
 

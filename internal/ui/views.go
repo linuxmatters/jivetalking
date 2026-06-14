@@ -6,6 +6,7 @@ import (
 	"math"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"charm.land/bubbles/v2/progress"
@@ -54,7 +55,7 @@ func renderFileQueue(m Model, prog progress.Model) string {
 			easedProgress = m.meters[i].progPos
 			easedPeak = m.meters[i].peakPos
 		}
-		b.WriteString(renderFileEntry(m.Files[i], prog, easedLevel, easedProgress, easedPeak, m.Width))
+		b.WriteString(renderFileEntry(&m.Files[i], prog, easedLevel, easedProgress, easedPeak, m.Width))
 		b.WriteString("\n")
 	}
 
@@ -64,19 +65,19 @@ func renderFileQueue(m Model, prog progress.Model) string {
 // renderFileEntry renders a single file entry in the queue. termWidth gates the
 // side-by-side status boxes: they are dropped on narrow terminals so the Pass box
 // never wraps.
-func renderFileEntry(file FileProgress, prog progress.Model, easedLevel, easedProgress, easedPeak float64, termWidth int) string {
+func renderFileEntry(file *FileProgress, prog progress.Model, easedLevel, easedProgress, easedPeak float64, termWidth int) string {
 	fileName := filepath.Base(file.InputPath)
 
 	switch file.Status {
 	case StatusComplete:
-		return renderDoneBox(file)
+		return renderDoneBox(*file)
 
 	case StatusAnalysing, StatusProcessing, StatusNormalising:
 		// active file with detailed progress, with the filter-chain status boxes
 		// joined to the right of the Pass box.
 		icon := lipgloss.NewStyle().Foreground(cli.ColorOrange).Render("∿")
-		passBox := renderFileDetails(file, prog, easedLevel, easedProgress, easedPeak)
-		body := joinStatusBoxes(passBox, file.Summary, termWidth)
+		passBox := renderFileDetails(*file, prog, easedLevel, easedProgress, easedPeak)
+		body := joinStatusBoxes(passBox, file, termWidth)
 		return fmt.Sprintf(" %s %s\n%s", icon, fileName, body)
 
 	case StatusError:
@@ -210,6 +211,32 @@ func superscriptValue(value string) string {
 	return b.String()
 }
 
+// meterRamp builds the meterWidth-cell green→yellow→orange→red VU ramp once on
+// first call and caches it. Every input is a compile-time constant (meterWidth,
+// meterFloorDB, the -16 dB green-zone threshold, and the package-level palette
+// colours resolved from the terminal background detected once at startup), so the
+// ramp is identical every frame; building it per render wasted two Blend1D calls
+// and a fresh slice on the 60fps path for every active file. Lazy so the first
+// call happens after terminal detection completes; thread-safe because both TUIs
+// render from goroutines.
+//
+// Real VU meters keep green dominant across the low range and compress the warm
+// colours into the hot end, so the ramp is two piecewise Blend1D segments keyed
+// to the -16 dB threshold: green→yellow fills the low zone, then yellow→orange→red
+// is squeezed into the top ~16 dB.
+var meterRamp = sync.OnceValue(func() []color.Color {
+	width := meterWidth
+	minDB := meterFloorDB
+	maxDB := 0.0
+	greenZone := int((((-16.0) - minDB) / (maxDB - minDB)) * float64(width))
+	greenZone = max(0, min(greenZone, width))
+
+	ramp := make([]color.Color, 0, width)
+	ramp = append(ramp, lipgloss.Blend1D(greenZone, cli.ColorGreen, cli.ColorYellow)...)
+	ramp = append(ramp, lipgloss.Blend1D(width-greenZone, cli.ColorYellow, cli.ColorOrange, cli.ColorRed)...)
+	return ramp
+})
+
 // renderAudioLevelMeter renders a live audio level meter with dB visualization.
 // elapsed drives the gentle pulse of the peak-hold marker; it is the file's
 // running elapsed time, advanced once per meter tick, so no second tick loop is
@@ -236,17 +263,11 @@ func renderAudioLevelMeter(currentLevel, peakLevel float64, elapsed time.Duratio
 	// place the marker and elbow one cell beyond the bar.
 	peakPos := max(0, min(int(((peakLevel-minDB)/(maxDB-minDB))*float64(width)), width-1))
 
-	// Build a continuous green→yellow→orange→red colour ramp once per render.
-	// Real VU meters keep green dominant across the low range and compress the
-	// warm colours into the hot end, so the ramp is built from two piecewise
-	// Blend1D segments keyed to the -16 dB threshold: green→yellow fills the low
-	// zone, then yellow→orange→red is squeezed into the top ~16 dB.
-	greenZone := int((((-16.0) - minDB) / (maxDB - minDB)) * float64(width))
-	greenZone = max(0, min(greenZone, width))
-
-	ramp := make([]color.Color, 0, width)
-	ramp = append(ramp, lipgloss.Blend1D(greenZone, cli.ColorGreen, cli.ColorYellow)...)
-	ramp = append(ramp, lipgloss.Blend1D(width-greenZone, cli.ColorYellow, cli.ColorOrange, cli.ColorRed)...)
+	// The green→yellow→orange→red colour ramp is built once and cached (see
+	// meterRamp): its inputs (meterWidth, meterFloorDB, the -16 dB threshold, and
+	// the package-level colours) are all compile-time constants, so the ramp never
+	// varies per frame. Indexing the cached slice keeps this off the 60fps path.
+	ramp := meterRamp()
 
 	cellColor := func(i int) color.Color {
 		if i < 0 || i >= len(ramp) {
@@ -325,23 +346,37 @@ func renderAudioLevelMeter(currentLevel, peakLevel float64, elapsed time.Duratio
 	return b.String()
 }
 
+// peakMarkerDim and peakMarkerBright are the peak-pulse endpoints resolved to
+// 8-bit sRGB channels once at package init, so peakMarkerColor interpolates raw
+// integers each frame instead of resolving the palette colours per call.
+var (
+	peakMarkerDimR, peakMarkerDimG, peakMarkerDimB          = rgb8(cli.ColorOrangeDim)
+	peakMarkerBrightR, peakMarkerBrightG, peakMarkerBrightB = rgb8(cli.ColorOrange)
+)
+
 // peakMarkerColor returns the peak-hold marker colour for the current pulse
 // phase. It oscillates gently between a deep orange and the full orange at about
 // 1.2 Hz, driven by elapsed wall-clock time so it reuses the existing meter tick
 // cadence. The interpolation runs straight in sRGB between two oranges so the
-// marker stays a clear orange shade at both ends and never drifts off-hue.
+// marker stays a clear orange shade at both ends and never drifts off-hue. The
+// channel maths reproduces the former hex-string round-trip exactly: each channel
+// is `uint8(dim + phase*(bright-dim) + 0.5)`, the same value the old
+// `fmt.Sprintf("%02X", ...)` path formatted, then returned as a color.RGBA struct
+// (satisfies color.Color) rather than re-parsed from a hex string.
 func peakMarkerColor(elapsed time.Duration) color.Color {
 	const pulseHz = 1.2
 	// 0.0 at the dim trough, 1.0 at the bright crest.
 	phase := 0.5 * (1 + math.Sin(2*math.Pi*pulseHz*elapsed.Seconds()))
 
-	dr, dg, db := rgb8(cli.ColorOrangeDim)
-	br, bg, bb := rgb8(cli.ColorOrange)
 	lerp := func(a, b uint8) uint8 {
 		return uint8(float64(a) + phase*(float64(b)-float64(a)) + 0.5)
 	}
-	return lipgloss.Color(fmt.Sprintf("#%02X%02X%02X",
-		lerp(dr, br), lerp(dg, bg), lerp(db, bb)))
+	return color.RGBA{
+		R: lerp(peakMarkerDimR, peakMarkerBrightR),
+		G: lerp(peakMarkerDimG, peakMarkerBrightG),
+		B: lerp(peakMarkerDimB, peakMarkerBrightB),
+		A: 0xFF,
+	}
 }
 
 // gainBarWidth is the cell count of the horizontal gain bar, matching the
@@ -480,7 +515,7 @@ func renderCompletionSummary(m Model) string {
 
 	for i := range m.Files {
 		if m.Files[i].Status == StatusError {
-			b.WriteString(renderFileEntry(m.Files[i], m.progress, 0, 0, 0, m.Width))
+			b.WriteString(renderFileEntry(&m.Files[i], m.progress, 0, 0, 0, m.Width))
 			b.WriteString("\n")
 			continue
 		}

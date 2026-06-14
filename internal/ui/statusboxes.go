@@ -80,7 +80,7 @@ func statusBoxesFit(termWidth int) bool {
 // rendered Pass box via lipgloss.JoinHorizontal, matching their height to the Pass
 // box so the three panels line up at the top. On a narrow terminal the side boxes
 // are dropped and the Pass box is returned unchanged.
-func joinStatusBoxes(passBox string, s AdaptedSummary, termWidth int) string {
+func joinStatusBoxes(passBox string, file *FileProgress, termWidth int) string {
 	if !statusBoxesFit(termWidth) {
 		return passBox
 	}
@@ -89,10 +89,23 @@ func joinStatusBoxes(passBox string, s AdaptedSummary, termWidth int) string {
 	// meter rows only appear once a level is seen). lipgloss pads the shorter boxes
 	// with blank lines so the top edges align.
 	passHeight := lipgloss.Height(passBox)
-	chain := renderChainBox(s, passHeight)
-	analysis := renderAnalysisBox(s, passHeight)
 
-	return lipgloss.JoinHorizontal(lipgloss.Top, passBox, " ", chain, " ", analysis)
+	// Reuse the memoised panels when the cache key matches. The panels depend only
+	// on (Summary, passHeight): box widths/glyphs/units are compile-time constants
+	// and the palette is fixed at startup. termWidth never enters the panel render
+	// (the inner widths are constants), so it is not part of the key; it only gates
+	// the early return above. AdaptedSummary is comparable, so == is a complete key
+	// check. A height change (meter rows appearing/disappearing) re-renders here.
+	c := &file.statusBoxCache
+	if !c.valid || c.summary != file.Summary || c.joinHeight != passHeight {
+		c.chain = renderChainBox(file.Summary, passHeight)
+		c.analysis = renderAnalysisBox(file.Summary, passHeight)
+		c.summary = file.Summary
+		c.joinHeight = passHeight
+		c.valid = true
+	}
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, passBox, " ", c.chain, " ", c.analysis)
 }
 
 // statusBox builds a bordered status box from pre-rendered content rows. The

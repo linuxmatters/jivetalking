@@ -233,7 +233,7 @@ func TestAnalysisBoxNoSpeechDims(t *testing.T) {
 // title to the right of the Pass content.
 func TestJoinStatusBoxesLayout(t *testing.T) {
 	leftBox := "╭──────────╮\n│ passbox  │\n╰──────────╯"
-	out := ansi.Strip(joinStatusBoxes(leftBox, litSummary(), 160))
+	out := ansi.Strip(joinStatusBoxes(leftBox, &FileProgress{Summary: litSummary()}, 160))
 
 	if !strings.Contains(out, "Filter Chain") || !strings.Contains(out, "Analysis") {
 		t.Fatalf("joined layout missing the side boxes:\n%s", out)
@@ -264,7 +264,7 @@ func TestJoinStatusBoxesLayout(t *testing.T) {
 // lines); the 8-row status boxes are taller and must not be truncated.
 func TestJoinStatusBoxesHeightMatch(t *testing.T) {
 	leftBox := "╭──────────╮\n│ passbox  │\n╰──────────╯"
-	out := joinStatusBoxes(leftBox, litSummary(), 160)
+	out := joinStatusBoxes(leftBox, &FileProgress{Summary: litSummary()}, 160)
 	lines := strings.Count(out, "\n") + 1
 
 	// 8 data rows + 2 border rows (title in the top border) = 10 lines for a status
@@ -275,7 +275,7 @@ func TestJoinStatusBoxesHeightMatch(t *testing.T) {
 
 	// A tall Pass box (12 lines) must drive the side boxes to match, never truncate.
 	tallPanel := "╭────╮\n" + strings.Repeat("│ x  │\n", 10) + "╰────╯"
-	tallOut := joinStatusBoxes(tallPanel, litSummary(), 160)
+	tallOut := joinStatusBoxes(tallPanel, &FileProgress{Summary: litSummary()}, 160)
 	tallLines := strings.Count(tallOut, "\n") + 1
 	if tallLines < strings.Count(tallPanel, "\n")+1 {
 		t.Errorf("joined block must be at least the Pass box height, got %d:\n%s", tallLines, ansi.Strip(tallOut))
@@ -292,7 +292,7 @@ func TestJoinStatusBoxesHeightMatch(t *testing.T) {
 func TestJoinStatusBoxesNarrowDegrades(t *testing.T) {
 	leftBox := "╭──────────╮\n│ passbox  │\n╰──────────╯"
 
-	narrow := joinStatusBoxes(leftBox, litSummary(), 60)
+	narrow := joinStatusBoxes(leftBox, &FileProgress{Summary: litSummary()}, 60)
 	if narrow != leftBox {
 		t.Errorf("narrow terminal should return the Pass box unchanged, got:\n%s", ansi.Strip(narrow))
 	}
@@ -301,7 +301,7 @@ func TestJoinStatusBoxesNarrowDegrades(t *testing.T) {
 	}
 
 	// Wide terminal keeps them.
-	wide := joinStatusBoxes(leftBox, litSummary(), 160)
+	wide := joinStatusBoxes(leftBox, &FileProgress{Summary: litSummary()}, 160)
 	if !strings.Contains(ansi.Strip(wide), "Filter Chain") {
 		t.Errorf("wide terminal should keep the side boxes:\n%s", ansi.Strip(wide))
 	}
@@ -424,6 +424,120 @@ func TestStatusBoxGutterSymmetric(t *testing.T) {
 		if !strings.HasSuffix(got, want) {
 			t.Errorf("%s: widest row should hug the border with one space (…%q), got: %q", tc.name, want, got)
 		}
+	}
+}
+
+// uncachedJoin renders the joined panel via a one-shot FileProgress whose cache
+// starts empty, so it is the freshly-rendered (uncached) reference for a given
+// summary, Pass box and terminal width.
+func uncachedJoin(passBox string, s AdaptedSummary, termWidth int) string {
+	return joinStatusBoxes(passBox, &FileProgress{Summary: s}, termWidth)
+}
+
+// TestStatusBoxCacheByteIdentical confirms the cached panels match a freshly
+// rendered (uncached) panel byte-for-byte across every state: pre-Pass-2 (pending),
+// during Pass 2 (chain lit, limiter pending), and post-completion (limiter lit).
+// A single FileProgress is reused across frames so its cache is warm on the second
+// render; the output must equal a one-shot uncached render of the same summary.
+func TestStatusBoxCacheByteIdentical(t *testing.T) {
+	leftBox := "╭──────────╮\n│ passbox  │\n╰──────────╯"
+
+	pending := AdaptedSummary{}
+	duringPass2 := litSummary()
+	completed := litSummary().WithLimiterProgress(&processor.LimiterProgress{Enabled: true, Ceiling: -2.8})
+
+	for _, tc := range []struct {
+		name    string
+		summary AdaptedSummary
+	}{
+		{"pre-pass-2", pending},
+		{"during-pass-2", duringPass2},
+		{"post-completion", completed},
+	} {
+		// Warm cache: render twice through the same FileProgress (frame 1 fills the
+		// cache, frame 2 must reuse it).
+		fp := &FileProgress{Summary: tc.summary}
+		_ = joinStatusBoxes(leftBox, fp, 160)
+		if !fp.statusBoxCache.valid {
+			t.Errorf("%s: cache should be populated after the first render", tc.name)
+		}
+		cached := joinStatusBoxes(leftBox, fp, 160)
+
+		want := uncachedJoin(leftBox, tc.summary, 160)
+		if cached != want {
+			t.Errorf("%s: cached panel differs from uncached render:\ncached=%q\nwant=  %q",
+				tc.name, ansi.Strip(cached), ansi.Strip(want))
+		}
+	}
+}
+
+// TestStatusBoxCacheInvalidatesOnSummary confirms that changing the summary on the
+// same FileProgress re-renders rather than serving the stale cached panel. This is
+// the AdaptedSummaryMsg path: the model clears valid, but even without that the key
+// mismatch (summary != cached summary) must force a re-render.
+func TestStatusBoxCacheInvalidatesOnSummary(t *testing.T) {
+	leftBox := "╭──────────╮\n│ passbox  │\n╰──────────╯"
+
+	fp := &FileProgress{Summary: litSummary()}
+	first := joinStatusBoxes(leftBox, fp, 160)
+
+	// Limiter lights to its ceiling: a new summary on the same file.
+	fp.Summary = litSummary().WithLimiterProgress(&processor.LimiterProgress{Enabled: true, Ceiling: -2.8})
+	second := joinStatusBoxes(leftBox, fp, 160)
+
+	if first == second {
+		t.Errorf("summary change should re-render the panel, got identical output")
+	}
+	want := uncachedJoin(leftBox, fp.Summary, 160)
+	if second != want {
+		t.Errorf("post-change panel should match a fresh render:\ngot= %q\nwant=%q",
+			ansi.Strip(second), ansi.Strip(want))
+	}
+}
+
+// TestStatusBoxCacheInvalidatesOnHeight confirms the meter-rows-visible vs hidden
+// transition (a Pass-box height change) re-renders the side panels instead of
+// reusing a panel padded to the old height. The summary is unchanged, so height is
+// the only key input that varies; the cache must still re-render.
+func TestStatusBoxCacheInvalidatesOnHeight(t *testing.T) {
+	shortBox := "╭──────────╮\n│ passbox  │\n╰──────────╯"
+	tallBox := "╭──────────╮\n" + strings.Repeat("│ passbox  │\n", 6) + "╰──────────╯"
+
+	fp := &FileProgress{Summary: litSummary()}
+	shortOut := joinStatusBoxes(shortBox, fp, 160)
+	tallOut := joinStatusBoxes(tallBox, fp, 160)
+
+	if shortOut == tallOut {
+		t.Errorf("Pass-box height change should re-render the side panels")
+	}
+	// The re-rendered tall output must match a fresh render at the tall height.
+	want := uncachedJoin(tallBox, fp.Summary, 160)
+	if tallOut != want {
+		t.Errorf("height-change re-render should match a fresh render:\ngot= %q\nwant=%q",
+			ansi.Strip(tallOut), ansi.Strip(want))
+	}
+	// And the cache now holds the tall height.
+	if fp.statusBoxCache.joinHeight != lipgloss.Height(tallBox) {
+		t.Errorf("cache should record the new Pass-box height, got %d want %d",
+			fp.statusBoxCache.joinHeight, lipgloss.Height(tallBox))
+	}
+}
+
+// TestModelInvalidatesCacheOnAdaptedSummaryMsg confirms the AdaptedSummaryMsg case
+// in Update clears the cache valid flag so the next render rebuilds the panels.
+func TestModelInvalidatesCacheOnAdaptedSummaryMsg(t *testing.T) {
+	m := NewModel([]string{"in.flac"})
+	// Pre-warm the cache so we can observe it being invalidated.
+	m.Files[0].statusBoxCache = statusBoxCache{valid: true, chain: "stale", analysis: "stale"}
+
+	updated, _ := m.Update(AdaptedSummaryMsg{FileIndex: 0, Summary: litSummary()})
+	m2 := updated.(Model)
+
+	if m2.Files[0].statusBoxCache.valid {
+		t.Errorf("AdaptedSummaryMsg should invalidate the status-box cache")
+	}
+	if m2.Files[0].Summary != litSummary() {
+		t.Errorf("AdaptedSummaryMsg should store the new summary")
 	}
 }
 
