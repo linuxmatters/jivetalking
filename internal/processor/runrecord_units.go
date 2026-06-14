@@ -73,39 +73,61 @@ func toInt64(v any) (int64, bool) {
 	}
 }
 
+// recordWrapper holds the single source pointer the three unit-honesty wrappers
+// share, plus the mechanical scaffolding common to all of them: the nil-checked
+// accessor and the null-on-nil sanitise-then-marshal core. The per-type key
+// transforms stay explicit on each wrapper's MarshalJSON; only this boilerplate is
+// shared. The source pointer is unexported so JSON marshalling stays
+// representation-controlled.
+type recordWrapper[T any] struct {
+	src *T
+}
+
+// source returns the wrapped pointer. Callers must nil-check the concrete wrapper
+// before calling, since promotion through a nil embedding pointer would panic
+// (the per-type accessors below own that guard).
+func (w *recordWrapper[T]) source() *T {
+	return w.src
+}
+
+// marshalWithTransform sanitises the source (null on nil), applies the per-type
+// key transform, then marshals. Non-finite floats are nulled by the shared
+// sanitiser before the transform runs.
+func (w recordWrapper[T]) marshalWithTransform(transform func(map[string]any)) ([]byte, error) {
+	m := sanitisedSourceMap(w.src)
+	if m == nil {
+		return []byte("null"), nil
+	}
+	transform(m)
+	return json.Marshal(m)
+}
+
 // noiseProfileRecord wraps the elected room-tone NoiseProfile for the record,
 // presenting its time bounds as _s floats (§8.4) while reading every other field
 // straight off the source by reflection (no drift). The source NoiseProfile is
 // untouched.
 type noiseProfileRecord struct {
-	src *NoiseProfile
+	recordWrapper[NoiseProfile]
 }
 
 // MarshalJSON sanitises the source NoiseProfile then swaps its ns duration keys
-// for _s seconds keys. Non-finite floats inside the profile are already nulled by
-// the shared sanitiser.
+// for _s seconds keys.
 func (p noiseProfileRecord) MarshalJSON() ([]byte, error) {
-	m := sanitisedSourceMap(p.src)
-	if m == nil {
-		return []byte("null"), nil
-	}
-	durationKeySeconds(m, "start", "start_s")
-	durationKeySeconds(m, "duration", "duration_s")
-	durationKeySeconds(m, "original_start", "original_start_s")
-	durationKeySeconds(m, "original_duration", "original_duration_s")
-	return json.Marshal(m)
+	return p.marshalWithTransform(func(m map[string]any) {
+		durationKeySeconds(m, "start", "start_s")
+		durationKeySeconds(m, "duration", "duration_s")
+		durationKeySeconds(m, "original_start", "original_start_s")
+		durationKeySeconds(m, "original_duration", "original_duration_s")
+	})
 }
 
-// Profile exposes the wrapped NoiseProfile for read-only consumers of the record
-// (e.g. the Markdown renderer in internal/report) that need the elected room-tone
-// metrics off rec.Regions.RoomTone.Elected. The wrapper and its source pointer are
-// unexported so the JSON marshalling stays representation-controlled; this
-// accessor is the read seam. Returns nil when no profile is wrapped.
+// Profile exposes the wrapped NoiseProfile for read-only consumers (off
+// rec.Regions.RoomTone.Elected). Returns nil when no profile is wrapped.
 func (p *noiseProfileRecord) Profile() *NoiseProfile {
 	if p == nil {
 		return nil
 	}
-	return p.src
+	return p.source()
 }
 
 // speechProfileRecord wraps the elected speech candidate for the record. Its
@@ -113,35 +135,30 @@ func (p *noiseProfileRecord) Profile() *NoiseProfile {
 // other candidate fields (region-sample, bands, voicing, score) pass through the
 // shared sanitiser unchanged. The source SpeechCandidateMetrics is untouched.
 type speechProfileRecord struct {
-	src *SpeechCandidateMetrics
+	recordWrapper[SpeechCandidateMetrics]
 }
 
 // MarshalJSON sanitises the source candidate then converts its region and
 // refinement durations to _s seconds keys.
 func (s speechProfileRecord) MarshalJSON() ([]byte, error) {
-	m := sanitisedSourceMap(s.src)
-	if m == nil {
-		return []byte("null"), nil
-	}
-	if region, ok := m["region"].(map[string]any); ok {
-		durationKeySeconds(region, "start", "start_s")
-		durationKeySeconds(region, "end", "end_s")
-		durationKeySeconds(region, "duration", "duration_s")
-	}
-	durationKeySeconds(m, "original_start", "original_start_s")
-	durationKeySeconds(m, "original_duration", "original_duration_s")
-	return json.Marshal(m)
+	return s.marshalWithTransform(func(m map[string]any) {
+		if region, ok := m["region"].(map[string]any); ok {
+			durationKeySeconds(region, "start", "start_s")
+			durationKeySeconds(region, "end", "end_s")
+			durationKeySeconds(region, "duration", "duration_s")
+		}
+		durationKeySeconds(m, "original_start", "original_start_s")
+		durationKeySeconds(m, "original_duration", "original_duration_s")
+	})
 }
 
-// Profile exposes the wrapped SpeechCandidateMetrics for read-only consumers of
-// the record (e.g. the Markdown renderer in internal/report) that need the elected
-// speech metrics off rec.Regions.Speech.Elected. The read seam mirrors
-// noiseProfileRecord.Profile. Returns nil when no profile is wrapped.
+// Profile exposes the wrapped SpeechCandidateMetrics for read-only consumers (off
+// rec.Regions.Speech.Elected). Returns nil when no profile is wrapped.
 func (s *speechProfileRecord) Profile() *SpeechCandidateMetrics {
 	if s == nil {
 		return nil
 	}
-	return s.src
+	return s.source()
 }
 
 // normalisationRecord wraps NormalisationResult for the record. It presents the
@@ -151,33 +168,26 @@ func (s *speechProfileRecord) Profile() *SpeechCandidateMetrics {
 // cannot drift. The source NormalisationResult (and its LoudnormStats) are
 // untouched - LoudnormStats stays the FFmpeg parse target.
 type normalisationRecord struct {
-	src *NormalisationResult
+	recordWrapper[NormalisationResult]
 }
 
 // MarshalJSON sanitises the source result, then (a) swaps region_measurement_ns
 // for region_measurement_s seconds and (b) replaces the raw-string
 // loudnorm_measured with the §8.4 numeric sub-block.
 func (n normalisationRecord) MarshalJSON() ([]byte, error) {
-	m := sanitisedSourceMap(n.src)
-	if m == nil {
-		return []byte("null"), nil
-	}
-	durationKeySeconds(m, "region_measurement_ns", "region_measurement_s")
-	m["loudnorm_measured"] = loudnormMeasuredNumeric(n.src.LoudnormStats)
-	return json.Marshal(m)
+	return n.marshalWithTransform(func(m map[string]any) {
+		durationKeySeconds(m, "region_measurement_ns", "region_measurement_s")
+		m["loudnorm_measured"] = loudnormMeasuredNumeric(n.src.LoudnormStats)
+	})
 }
 
-// Result exposes the wrapped NormalisationResult for read-only consumers of the
-// record (e.g. the Markdown renderer in internal/report) that need the Pass 3/4
-// limiter and loudnorm numbers off rec.Normalisation. The wrapper and its source
-// pointer are unexported so the JSON marshalling stays representation-controlled;
-// this accessor is the read seam, mirroring noiseProfileRecord.Profile. Returns
-// nil when no result is wrapped.
+// Result exposes the wrapped NormalisationResult for read-only consumers (off
+// rec.Normalisation). Returns nil when no result is wrapped.
 func (n *normalisationRecord) Result() *NormalisationResult {
 	if n == nil {
 		return nil
 	}
-	return n.src
+	return n.source()
 }
 
 // loudnormMeasuredNumeric converts FFmpeg's string-keyed LoudnormStats into the

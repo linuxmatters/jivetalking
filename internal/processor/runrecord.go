@@ -237,7 +237,7 @@ func NewRunRecord(result *ProcessingResult) *RunRecord {
 				rec.Regions.Speech.Samples.Final = fm.SpeechSample
 			}
 		}
-		rec.Normalisation = &normalisationRecord{src: result.NormResult}
+		rec.Normalisation = &normalisationRecord{recordWrapper[NormalisationResult]{src: result.NormResult}}
 	}
 
 	if result.Config != nil {
@@ -315,10 +315,10 @@ func newRegionsBlock(r *RegionMetrics) *RegionsBlock {
 	// Wrap the elected profiles so their time bounds emit as _s floats (§8.4); a
 	// missing profile leaves the wrapper pointer nil so omitempty drops `elected`.
 	if r.NoiseProfile != nil {
-		block.RoomTone.Elected = &noiseProfileRecord{src: r.NoiseProfile}
+		block.RoomTone.Elected = &noiseProfileRecord{recordWrapper[NoiseProfile]{src: r.NoiseProfile}}
 	}
 	if r.SpeechProfile != nil {
-		block.Speech.Elected = &speechProfileRecord{src: r.SpeechProfile}
+		block.Speech.Elected = &speechProfileRecord{recordWrapper[SpeechCandidateMetrics]{src: r.SpeechProfile}}
 	}
 
 	// Speech input sample: the elected profile embeds RegionSample by reference.

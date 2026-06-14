@@ -307,8 +307,10 @@ func TestNormalisationResultJSON_HasCanonicalKeys(t *testing.T) {
 		LoudnormStats:    &LoudnormStats{InputI: "-18.0", NormalizationType: "linear", TargetOffset: "0.1"},
 		RequestedTargetI: -16, EffectiveTargetI: -16,
 		LinearModeForced: false, ActualNormDynamic: false,
-		LimiterEnabled: true, LimiterCeiling: -2.4, LimiterGain: 6,
-		LimiterFilteredTP: -1, PreGainDB: 0, LimiterClamped: false,
+		LimiterDiagnostics: LimiterDiagnostics{
+			LimiterEnabled: true, LimiterCeiling: -2.4, LimiterGain: 6,
+			LimiterFilteredTP: -1, PreGainDB: 0, LimiterClamped: false,
+		},
 		Pass3FilterPrefix:     "volume=...,alimiter=...",
 		RegionMeasurementTime: 1234,
 		FinalMeasurements:     &OutputMeasurements{},
