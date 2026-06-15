@@ -179,6 +179,48 @@ func measureRoomToneCandidateFromIntervals(region RoomToneRegion, intervals []In
 	}
 }
 
+// calculateStabilityScore computes a 0-1 score for intra-region stability.
+// Higher stability = more consistent measurements = likely intentional recording.
+//
+// The score combines two factors:
+//   - RMS variance: low variance indicates consistent amplitude (steady room tone)
+//   - Average spectral flux: low flux indicates stable spectral content
+//
+// Thresholds:
+//   - RMS variance: 0 dB² (perfect) to 9 dB² (3 dB std dev, poor)
+//     Note: 9 dB² represents a 3 dB standard deviation, intentional room tone
+//     should show much lower variance (typically < 1 dB²).
+//   - Flux: 0 (perfect) to 0.02 (stability threshold)
+//     Aligned with Spectral-Metrics-Reference.md where < 0.005 = "Stable, continuous"
+//     and > 0.02 = "High variation" (consonant transitions, transients).
+//
+// Weighting: RMS variance 60%, flux stability 40% (RMS is the primary discriminator).
+func calculateStabilityScore(intervals []IntervalSample) float64 {
+	if len(intervals) < 2 {
+		return 0.5
+	}
+
+	var rmsSum, rmsSquaredSum float64
+	for _, iv := range intervals {
+		rmsSum += iv.RMSLevel
+		rmsSquaredSum += iv.RMSLevel * iv.RMSLevel
+	}
+	n := float64(len(intervals))
+	rmsMean := rmsSum / n
+	rmsVariance := (rmsSquaredSum / n) - (rmsMean * rmsMean)
+
+	var fluxSum float64
+	for _, iv := range intervals {
+		fluxSum += iv.Spectral.Flux
+	}
+	avgFlux := fluxSum / n
+
+	rmsStabilityScore := max(0.0, min(1.0-(rmsVariance/9.0), 1.0))
+	fluxStabilityScore := max(0.0, min(1.0-(avgFlux/0.02), 1.0))
+
+	return rmsStabilityScore*0.6 + fluxStabilityScore*0.4
+}
+
 // scoreIntervalWindow calculates a quality score for a contiguous window of intervals.
 // Returns average RMS level in dBFS (lower = better/quieter).
 // Could be extended to incorporate spectral stability (flux variance) if needed.

@@ -217,32 +217,6 @@ func otsuSplit(h histogram) float64 {
 	return h.minLevel + float64(bestIdx+1)*h.binWidth
 }
 
-// medianFloat64 returns the median of the values. It sorts a copy, leaving the input
-// untouched. For even-length input it returns the upper-middle element (matching the
-// existing percentile convention in computeSilenceMedians). Moved here from the
-// room-tone scoring file; still used by the room-tone crosstalk maths until that
-// path is deleted (Phase 8).
-func medianFloat64(values []float64) float64 {
-	sorted := slices.Clone(values)
-	slices.Sort(sorted)
-	return sorted[len(sorted)/2]
-}
-
-// medianAndMAD returns the median of values and their median absolute deviation
-// about that median. The MAD is the median of |v - median|, a scale-invariant
-// spread measure. Returns (0, 0) for an empty input.
-func medianAndMAD(values []float64) (median, mad float64) {
-	if len(values) == 0 {
-		return 0, 0
-	}
-	median = medianFloat64(values)
-	deviations := make([]float64, len(values))
-	for i, v := range values {
-		deviations[i] = math.Abs(v - median)
-	}
-	return median, medianFloat64(deviations)
-}
-
 // vadNoiseFloorPercentile is the low percentile of the per-interval level set
 // taken as the noise floor (minimum-statistics logic). 10th percentile sits in
 // the research-suggested 5th-to-10th band. It ignores the occasional quiet
@@ -487,9 +461,7 @@ func buildSpeechRuns(intervals []IntervalSample, split, margin float64, tol int,
 
 // idealDurationMin and idealDurationMax bound the duration the noise-profile
 // extraction treats as ideal; outside this range it emits a short/long
-// extraction warning. Moved here from the room-tone scoring file with
-// extractNoiseProfileFromIntervals; calculateDurationScore still reads them
-// until that path is deleted (Phase 8).
+// extraction warning. Read by extractNoiseProfileFromIntervals below.
 const (
 	idealDurationMin = 8 * time.Second  // Ideal range lower bound
 	idealDurationMax = 18 * time.Second // Ideal range upper bound

@@ -2,53 +2,14 @@ package processor
 
 import (
 	"math"
-	"slices"
 	"time"
 )
 
-// roomToneSpan carries the elected room-tone region for speech-search exclusion.
-// It mirrors the Start/End field shape of RoomToneRegion for caller readability.
-// Present is the explicit "none" sentinel: the zero value (Present == false)
-// means no room tone was elected, so no interval is excluded.
-// The span is half-open [Start, End): an interval at Timestamp t is inside the
-// span when t >= Start && t < End, matching getIntervalsInRange semantics.
-type roomToneSpan struct {
-	Start   time.Duration
-	End     time.Duration
-	Present bool
-}
-
-// contains reports whether the timestamp falls inside the half-open span
-// [Start, End). A non-present span contains nothing.
-func (s roomToneSpan) contains(t time.Duration) bool {
-	return s.Present && t >= s.Start && t < s.End
-}
-
 // Speech detection constants for interval-based analysis
 const (
-	// minimumSpeechIntervals is the minimum consecutive intervals for a speech candidate.
-	// 10 seconds / 250ms = 40 intervals
-	minimumSpeechIntervals = 40
-
-	// speechInterruptionToleranceIntervals allows natural pauses within speech.
-	// 8 intervals = 2 seconds tolerance for breaths, brief pauses.
-	speechInterruptionToleranceIntervals = 8
-
-	// voiceActivatedSpeechInterruptionToleranceIntervals is the widened tolerance
-	// for voice-activated recordings where digital silence gaps replace natural pauses.
-	// 40 intervals = 10 seconds, bridging platform-inserted gaps up to 10s.
-	voiceActivatedSpeechInterruptionToleranceIntervals = 40
-
 	// Voice frequency range for centroid validation
 	speechCentroidMin = 200.0  // Hz - lower bound for speech
 	speechCentroidMax = 6000.0 // Hz - upper bound for speech
-
-	// speechRMSMinimumDefault is the fallback minimum RMS level to be considered speech (not silence).
-	// Used when adaptive computation is not possible (zero or -Inf measurements).
-	speechRMSMinimumDefault = -40.0 // dBFS
-
-	// speechRMSMinimumOffset is the dB below RMS level for the adaptive speech threshold.
-	speechRMSMinimumOffset = 12.0
 
 	// speechRMSMinimumNoiseMargin is the dB above noise floor for the adaptive speech threshold.
 	speechRMSMinimumNoiseMargin = 6.0
@@ -57,16 +18,6 @@ const (
 	// Pure noise approaches 1.0; speech is typically 0.3-0.7.
 	speechEntropyMax = 0.70
 )
-
-// computeSpeechRMSMinimum returns the adaptive minimum RMS level for speech detection.
-// Formula: max(rmsLevel - 12, noiseFloor + 6).
-// Falls back to speechRMSMinimumDefault when measurements are zero or -Inf.
-func computeSpeechRMSMinimum(rmsLevel, noiseFloor float64) float64 {
-	if rmsLevel == 0 || noiseFloor == 0 || math.IsInf(rmsLevel, -1) || math.IsInf(noiseFloor, -1) {
-		return speechRMSMinimumDefault
-	}
-	return max(rmsLevel-speechRMSMinimumOffset, noiseFloor+speechRMSMinimumNoiseMargin)
-}
 
 // Speech window stability scoring constants
 const (
@@ -238,154 +189,6 @@ func refineToGoldenSpeechSubregion(candidate *SpeechRegion, intervals []Interval
 	}
 
 	return &SpeechRegion{Start: start, End: end, Duration: dur}
-}
-
-// speechScore calculates how speech-like an interval is.
-// Returns 0.0-1.0 where higher = more likely to be speech.
-// Inverts silence detection criteria: rewards amplitude, voice-range centroid, low entropy.
-func speechScore(interval IntervalSample, rmsP50 float64, speechRMSMin float64) float64 {
-	// Reject if too quiet (likely silence/room tone)
-	if interval.RMSLevel < speechRMSMin {
-		return 0.0
-	}
-
-	// Amplitude score: louder relative to median = better
-	// Score decays below median, peaks at +6dB above median
-	ampScore := 0.0
-	if interval.RMSLevel >= rmsP50 {
-		// Above median: score increases up to +6dB
-		boost := interval.RMSLevel - rmsP50
-		ampScore = max(0.0, min(boost/6.0, 1.0))
-	}
-
-	// Centroid score: voice range (200-4500 Hz) = good
-	centroidScore := 0.0
-	if interval.Spectral.Centroid >= speechCentroidMin && interval.Spectral.Centroid <= speechCentroidMax {
-		// In voice range - score based on how central
-		voiceMid := (speechCentroidMin + speechCentroidMax) / 2
-		voiceHalfWidth := (speechCentroidMax - speechCentroidMin) / 2
-		distFromMid := math.Abs(interval.Spectral.Centroid - voiceMid)
-		centroidScore = 1.0 - (distFromMid / voiceHalfWidth * 0.5)
-	}
-
-	// Entropy score: lower entropy = more structured = more speech-like
-	entropyScore := 0.0
-	if interval.Spectral.Entropy < speechEntropyMax {
-		entropyScore = 1.0 - (interval.Spectral.Entropy / speechEntropyMax)
-	}
-
-	// Weighted combination: amplitude most important, then centroid, then entropy
-	return ampScore*0.5 + centroidScore*0.3 + entropyScore*0.2
-}
-
-// findSpeechCandidatesFromIntervals identifies speech regions from interval samples.
-// Searches the whole file from the first interval to EOF, so speech is found both
-// before and after the elected room tone. The elected room-tone span is used only
-// to exclude its own intervals from speech runs (forced non-speech), never to set
-// a search floor. A non-present span excludes nothing.
-// Uses a speech score approach that rewards amplitude, voice-range centroid, and low entropy.
-//
-// Detection algorithm:
-// 1. Calculate reference values (medians) over non-excluded intervals for speech scoring
-// 2. Score each interval for "speech likelihood"
-// 3. Force room-tone-span intervals to non-speech so a run is cut at the span boundary
-// 4. Find consecutive runs that meet minimum duration (10 seconds)
-// 5. Allow brief interruptions (2s) for natural pauses
-func findSpeechCandidatesFromIntervals(intervals []IntervalSample, span roomToneSpan, voiceActivated bool, rmsLevel, noiseFloor float64) []SpeechRegion {
-	if len(intervals) < minimumSpeechIntervals {
-		return nil
-	}
-
-	speechRMSMin := computeSpeechRMSMinimum(rmsLevel, noiseFloor)
-
-	// Calculate medians for speech scoring over non-excluded intervals only, so the
-	// quiet room tone does not pull the median down and bias every interval's ampScore.
-	// When no span is present, this is the whole-file set.
-	rmsLevels := make([]float64, 0, len(intervals))
-	for _, interval := range intervals {
-		if span.contains(interval.Timestamp) {
-			continue
-		}
-		rmsLevels = append(rmsLevels, interval.RMSLevel)
-	}
-	slices.Sort(rmsLevels)
-
-	rmsP50 := rmsLevels[len(rmsLevels)/2]
-
-	// Speech score threshold (lower than the room-tone candidate threshold since speech varies more)
-	const speechScoreThreshold = 0.4
-
-	// Select interruption tolerance based on voice-activated status
-	interruptionTolerance := speechInterruptionToleranceIntervals
-	if voiceActivated {
-		interruptionTolerance = voiceActivatedSpeechInterruptionToleranceIntervals
-	}
-
-	var candidates []SpeechRegion
-	var speechStart time.Duration
-	var speechIntervalCount int
-	var interruptionCount int
-	inSpeech := false
-
-	for i := range len(intervals) {
-		interval := intervals[i]
-		score := speechScore(interval, rmsP50, speechRMSMin)
-		isSpeech := score >= speechScoreThreshold
-
-		// Mask room-tone-span intervals in place as forced non-speech. Routed through
-		// the interruption branch below, this cuts a run at the room-tone boundary
-		// rather than bridging two runs across it. The slice is never spliced.
-		if span.contains(interval.Timestamp) {
-			isSpeech = false
-		}
-
-		if isSpeech {
-			if !inSpeech {
-				// Start of potential speech region
-				speechStart = interval.Timestamp
-				speechIntervalCount = 1
-				interruptionCount = 0
-				inSpeech = true
-			} else {
-				speechIntervalCount++
-				interruptionCount = 0
-			}
-		} else if inSpeech {
-			// Not speech - count as interruption
-			interruptionCount++
-
-			if interruptionCount > interruptionTolerance {
-				// Too many consecutive interruptions - end speech region
-				lastSpeechIdx := i - interruptionCount
-				if speechIntervalCount >= minimumSpeechIntervals && lastSpeechIdx >= 0 && lastSpeechIdx < len(intervals) {
-					endTime := intervals[lastSpeechIdx].Timestamp + 250*time.Millisecond
-					duration := endTime - speechStart
-					candidates = append(candidates, SpeechRegion{
-						Start:    speechStart,
-						End:      endTime,
-						Duration: duration,
-					})
-				}
-				inSpeech = false
-				speechIntervalCount = 0
-				interruptionCount = 0
-			}
-		}
-	}
-
-	// Handle speech extending to end of file
-	if inSpeech && speechIntervalCount >= minimumSpeechIntervals {
-		lastInterval := intervals[len(intervals)-1]
-		endTime := lastInterval.Timestamp + 250*time.Millisecond
-		duration := endTime - speechStart
-		candidates = append(candidates, SpeechRegion{
-			Start:    speechStart,
-			End:      endTime,
-			Duration: duration,
-		})
-	}
-
-	return candidates
 }
 
 // findBestSpeechRegionResult contains the selected region and all evaluated candidates.
