@@ -278,6 +278,34 @@ func scoreSpeechIntervalWindow(intervals []IntervalSample) float64 {
 		fluxScore*weightFlux
 }
 
+// levelVariance returns the population variance of the per-interval level on the
+// chosen axis across the region intervals. Lower variance means a steadier sample,
+// which the grounded candidate scorer uses as a consistency tie-break. It is a
+// separate measure from scoreSpeechIntervalWindow's consistency term (variance of
+// KURTOSIS, not of the level axis), and that function is unchanged. The two-pass
+// mean-then-variance shape mirrors the kurtosis-variance code in
+// scoreSpeechIntervalWindow. Returns 0 for an empty region.
+func levelVariance(regionIntervals []IntervalSample, axis levelAxis) float64 {
+	n := float64(len(regionIntervals))
+	if n == 0 {
+		return 0
+	}
+
+	var sum float64
+	for _, interval := range regionIntervals {
+		sum += intervalLevel(interval, axis)
+	}
+	mean := sum / n
+
+	var varianceSum float64
+	for _, interval := range regionIntervals {
+		diff := intervalLevel(interval, axis) - mean
+		varianceSum += diff * diff
+	}
+
+	return varianceSum / n
+}
+
 // measureSpeechCandidateFromIntervals computes metrics for a speech region using pre-collected interval data.
 // This avoids re-reading the audio file - all measurements come from Pass 1's interval samples.
 // Returns nil if no intervals fall within the region.
