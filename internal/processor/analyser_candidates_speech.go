@@ -6,6 +6,24 @@ import (
 	"time"
 )
 
+// roomToneSpan carries the elected room-tone region for speech-search exclusion.
+// It mirrors the Start/End field shape of RoomToneRegion for caller readability.
+// Present is the explicit "none" sentinel: the zero value (Present == false)
+// means no room tone was elected, so no interval is excluded.
+// The span is half-open [Start, End): an interval at Timestamp t is inside the
+// span when t >= Start && t < End, matching getIntervalsInRange semantics.
+type roomToneSpan struct {
+	Start   time.Duration
+	End     time.Duration
+	Present bool
+}
+
+// contains reports whether the timestamp falls inside the half-open span
+// [Start, End). A non-present span contains nothing.
+func (s roomToneSpan) contains(t time.Duration) bool {
+	return s.Present && t >= s.Start && t < s.End
+}
+
 // Speech detection constants for interval-based analysis
 const (
 	// minimumSpeechIntervals is the minimum consecutive intervals for a speech candidate.
@@ -20,10 +38,6 @@ const (
 	// for voice-activated recordings where digital silence gaps replace natural pauses.
 	// 40 intervals = 10 seconds, bridging platform-inserted gaps up to 10s.
 	voiceActivatedSpeechInterruptionToleranceIntervals = 40
-
-	// speechSearchStartBuffer adds time after the elected room-tone region end before searching for speech.
-	// Allows transition from room tone to actual speech content.
-	speechSearchStartBuffer = 2 * time.Second
 
 	// Voice frequency range for centroid validation
 	speechCentroidMin = 200.0  // Hz - lower bound for speech
@@ -265,46 +279,34 @@ func speechScore(interval IntervalSample, rmsP50 float64, speechRMSMin float64) 
 }
 
 // findSpeechCandidatesFromIntervals identifies speech regions from interval samples.
-// Only searches after roomToneEnd to ensure speech follows the elected room-tone candidate.
+// Searches the whole file from the first interval to EOF, so speech is found both
+// before and after the elected room tone. The elected room-tone span is used only
+// to exclude its own intervals from speech runs (forced non-speech), never to set
+// a search floor. A non-present span excludes nothing.
 // Uses a speech score approach that rewards amplitude, voice-range centroid, and low entropy.
 //
 // Detection algorithm:
-// 1. Start searching after roomToneEnd + buffer
-// 2. Calculate reference values (medians) for speech scoring
-// 3. Score each interval for "speech likelihood"
-// 4. Find consecutive runs that meet minimum duration (30 seconds)
+// 1. Calculate reference values (medians) over non-excluded intervals for speech scoring
+// 2. Score each interval for "speech likelihood"
+// 3. Force room-tone-span intervals to non-speech so a run is cut at the span boundary
+// 4. Find consecutive runs that meet minimum duration (10 seconds)
 // 5. Allow brief interruptions (2s) for natural pauses
-func findSpeechCandidatesFromIntervals(intervals []IntervalSample, roomToneEnd time.Duration, voiceActivated bool, rmsLevel, noiseFloor float64) []SpeechRegion {
+func findSpeechCandidatesFromIntervals(intervals []IntervalSample, span roomToneSpan, voiceActivated bool, rmsLevel, noiseFloor float64) []SpeechRegion {
 	if len(intervals) < minimumSpeechIntervals {
 		return nil
 	}
 
 	speechRMSMin := computeSpeechRMSMinimum(rmsLevel, noiseFloor)
 
-	// Find start index: after elected room-tone region end + buffer
-	searchStart := roomToneEnd + speechSearchStartBuffer
-	startIdx := -1
-	for i, interval := range intervals {
-		if interval.Timestamp >= searchStart {
-			startIdx = i
-			break
+	// Calculate medians for speech scoring over non-excluded intervals only, so the
+	// quiet room tone does not pull the median down and bias every interval's ampScore.
+	// When no span is present, this is the whole-file set.
+	rmsLevels := make([]float64, 0, len(intervals))
+	for _, interval := range intervals {
+		if span.contains(interval.Timestamp) {
+			continue
 		}
-	}
-
-	if startIdx < 0 {
-		return nil // No intervals found at or after search start
-	}
-
-	if len(intervals)-startIdx < minimumSpeechIntervals {
-		return nil // Not enough intervals after the elected room-tone region
-	}
-
-	searchIntervals := intervals[startIdx:]
-
-	// Calculate medians for speech scoring
-	rmsLevels := make([]float64, len(searchIntervals))
-	for i, interval := range searchIntervals {
-		rmsLevels[i] = interval.RMSLevel
+		rmsLevels = append(rmsLevels, interval.RMSLevel)
 	}
 	slices.Sort(rmsLevels)
 
@@ -325,10 +327,17 @@ func findSpeechCandidatesFromIntervals(intervals []IntervalSample, roomToneEnd t
 	var interruptionCount int
 	inSpeech := false
 
-	for i := range len(searchIntervals) {
-		interval := searchIntervals[i]
+	for i := range len(intervals) {
+		interval := intervals[i]
 		score := speechScore(interval, rmsP50, speechRMSMin)
 		isSpeech := score >= speechScoreThreshold
+
+		// Mask room-tone-span intervals in place as forced non-speech. Routed through
+		// the interruption branch below, this cuts a run at the room-tone boundary
+		// rather than bridging two runs across it. The slice is never spliced.
+		if span.contains(interval.Timestamp) {
+			isSpeech = false
+		}
 
 		if isSpeech {
 			if !inSpeech {
@@ -348,8 +357,8 @@ func findSpeechCandidatesFromIntervals(intervals []IntervalSample, roomToneEnd t
 			if interruptionCount > interruptionTolerance {
 				// Too many consecutive interruptions - end speech region
 				lastSpeechIdx := i - interruptionCount
-				if speechIntervalCount >= minimumSpeechIntervals && lastSpeechIdx >= 0 && lastSpeechIdx < len(searchIntervals) {
-					endTime := searchIntervals[lastSpeechIdx].Timestamp + 250*time.Millisecond
+				if speechIntervalCount >= minimumSpeechIntervals && lastSpeechIdx >= 0 && lastSpeechIdx < len(intervals) {
+					endTime := intervals[lastSpeechIdx].Timestamp + 250*time.Millisecond
 					duration := endTime - speechStart
 					candidates = append(candidates, SpeechRegion{
 						Start:    speechStart,
@@ -366,7 +375,7 @@ func findSpeechCandidatesFromIntervals(intervals []IntervalSample, roomToneEnd t
 
 	// Handle speech extending to end of file
 	if inSpeech && speechIntervalCount >= minimumSpeechIntervals {
-		lastInterval := searchIntervals[len(searchIntervals)-1]
+		lastInterval := intervals[len(intervals)-1]
 		endTime := lastInterval.Timestamp + 250*time.Millisecond
 		duration := endTime - speechStart
 		candidates = append(candidates, SpeechRegion{
