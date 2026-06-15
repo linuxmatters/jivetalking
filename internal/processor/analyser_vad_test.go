@@ -437,10 +437,16 @@ func buildBimodal(lowCentre, highCentre float64) histogram {
 // vadSpeechRich is a speech interval at -16 LUFS with a fuller spectral profile
 // so the reused scoring lifts it clear of the minimum acceptable score.
 func vadSpeechRich(idx int) IntervalSample {
-	const momentaryLUFS = -16.0
-	s := vadInterval(idx, momentaryLUFS)
-	s.RMSLevel = momentaryLUFS
-	s.PeakLevel = momentaryLUFS + 12 // crest ~12 dB, ideal for speech scoring
+	return vadSpeechRichAt(idx, -16.0)
+}
+
+// vadSpeechRichAt is vadSpeechRich with an explicit RMS level (and momentary set
+// to the same value), so a test can vary a run's SNR margin against a noise
+// floor while keeping it above the run-building split and passing the veto.
+func vadSpeechRichAt(idx int, rms float64) IntervalSample {
+	s := vadInterval(idx, rms)
+	s.RMSLevel = rms
+	s.PeakLevel = rms + 12 // crest ~12 dB, ideal for speech scoring
 	s.Spectral.Kurtosis = 6.0
 	s.Spectral.Rolloff = 6000.0
 	s.Spectral.Flux = 0.004
@@ -452,37 +458,44 @@ func TestElectSpeechProfile(t *testing.T) {
 	hop := analysisIntervalHop
 	var iv []IntervalSample
 	idx := 0
-	// Run A: 45 speech intervals.
-	for range 45 {
-		iv = append(iv, vadSpeechRich(idx))
+	// Run A: 140 intervals (35s, above the 30s duration adequacy minimum), loud at
+	// -16 dBFS RMS -> wide SNR margin over the -60 dBFS floor.
+	runAStart := time.Duration(idx) * hop
+	for range 140 {
+		iv = append(iv, vadSpeechRichAt(idx, -16.0))
 		idx++
 	}
 	// Long gap to split the runs.
 	for range 20 {
-		iv = append(iv, vadInterval(idx, -60))
+		iv = append(iv, vadInterval(idx, -75))
 		idx++
 	}
-	// Run B: 70 speech intervals (the longer run).
-	for range 70 {
-		iv = append(iv, vadSpeechRich(idx))
+	// Run B: 200 intervals (50s, the LONGER run) but quiet at -34 dBFS RMS ->
+	// narrow SNR margin. Momentary stays at -34, above the -45 split.
+	for range 200 {
+		iv = append(iv, vadSpeechRichAt(idx, -34.0))
 		idx++
 	}
 
-	runs := buildSpeechRuns(iv, -30, 3, intervalsForDuration(vadGapToleranceFloor, hop), axisMomentaryLUFS, hop)
+	// Split at -45 so both runs are above it; floor at -60.
+	runs := buildSpeechRuns(iv, -45, 3, intervalsForDuration(vadGapToleranceFloor, hop), axisMomentaryLUFS, hop)
 	if len(runs) != 2 {
 		t.Fatalf("expected 2 runs for the elect test, got %d", len(runs))
 	}
 
-	profile, candidates := electSpeechProfile(runs, iv, nil, nil)
+	noiseProfile := &NoiseProfile{MeasuredNoiseFloor: -60.0}
+	profile, candidates := electSpeechProfile(runs, iv, noiseProfile, nil)
 	if profile == nil {
 		t.Fatal("electSpeechProfile returned nil, want elected region")
 	}
 	if len(candidates) == 0 {
 		t.Error("electSpeechProfile returned no candidates")
 	}
-	// The longer run (B) starts later; findBestSpeechRegion prefers longest.
-	if profile.Region.Start != runs[1].Start {
-		t.Errorf("elected region start = %v, want longest run start %v", profile.Region.Start, runs[1].Start)
+	// Highest-score election (was longest-wins): the shorter but wider-SNR run A
+	// must beat the longer, quieter run B. Both clear the duration adequacy
+	// minimum, so duration saturates and SNR margin decides.
+	if profile.Region.Start != runAStart {
+		t.Errorf("elected region start = %v, want wide-SNR run A start %v (highest score, not longest)", profile.Region.Start, runAStart)
 	}
 	// Contract fields are non-zero for a populated region.
 	if profile.RMSLevel == 0 || profile.CrestFactor == 0 {

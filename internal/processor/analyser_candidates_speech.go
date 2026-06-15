@@ -76,11 +76,14 @@ const (
 	// candidate; below it, spectral metrics measure noise rather than speech.
 	minSNRMargin = 20.0 // dB
 
-	// Crest factor scoring parameters
-	// Reference: Spectral-Metrics-Reference.md shows spoken word optimal is 9-14 dB
-	crestFactorMin   = 9.0  // dB - minimum acceptable
-	crestFactorMax   = 18.0 // dB - maximum acceptable
-	crestFactorIdeal = 12.0 // dB - optimal for spoken word
+	// snrSaturationMargin is the SNR margin (dB) at which extra margin stops
+	// raising the SNR score: candidates at or above it score the SNR maximum.
+	// Set by the Phase 3 inform sweep (52-stem corpus, 1040 candidates): it sits at
+	// the clean-stem (floor <= -65 dBFS) cleanest-candidate p90 (40.2 dB) and corpus
+	// candidate p99 (39.6 dB), below the absolute max (41.9 dB), so only the cleanest
+	// stems saturate while the [minSNRMargin, 40] band spreads the axis across the
+	// bulk of elected candidates (cleanest-candidate p50 28.7 to p90 38.6 dB).
+	snrSaturationMargin = 40.0 // dB (Phase 3 sweep: clean-stem cleanest-candidate p90 / corpus p99)
 )
 
 // Scoring weight constants for scoreSpeechIntervalWindow
@@ -96,18 +99,6 @@ const (
 	weightFlux        = 0.15 // Stability: low spectral change
 )
 
-// Scoring weight constants for scoreSpeechCandidate
-// Weights sum to 1.0, split between stability (0.40) and quality (0.60)
-const (
-	candidateWeightAmplitude = 0.20 // Quality: louder = better sample
-	candidateWeightCentroid  = 0.15 // Quality: voice range
-	candidateWeightCrest     = 0.15 // Quality: typical speech dynamics
-	candidateWeightDuration  = 0.10 // Quality: longer = more representative
-	candidateWeightVoicing   = 0.10 // Stability: voiced content proportion
-	candidateWeightRolloff   = 0.15 // Stability: moderate rolloff
-	candidateWeightFlux      = 0.15 // Stability: low spectral change
-)
-
 const (
 	// Golden speech region refinement constants
 	// After selecting the best speech candidate, refine to a representative sub-window
@@ -115,6 +106,18 @@ const (
 	goldenSpeechWindowDuration = 60 * time.Second // Target: 60s of representative speech
 	goldenSpeechWindowMinimum  = 30 * time.Second // Minimum acceptable window
 )
+
+// speechDurationAdequacyMinimum is the run length at which the grounded scorer's
+// duration term saturates: at or above it a run earns full duration credit, so a
+// longer run does NOT outrank a shorter adequate one on duration alone. This is
+// the single term protecting voice-activated election, since a sparse short run
+// that clears the minimum is not docked for being short.
+// Confirmed at 30s by the Phase 3 inform sweep (52 stems): the elected-candidate
+// duration distribution stabilises here (p10 = 29.8s, only 7/52 stems elect below
+// 30s and all are healthy high-SNR elections), and the shortest voice-activated
+// elections (LMP-81s-martin 20.3s, LMP-81s-mark 29.4s) must not be docked, so the
+// minimum stays at goldenSpeechWindowMinimum rather than rising.
+const speechDurationAdequacyMinimum = goldenSpeechWindowMinimum // Phase 3 sweep: elected-duration p10 ~30s; protects sparse voice-activated runs
 
 // calculateRolloffScore returns a score (0.0-1.0) for spectral rolloff stability.
 // Regions with rolloff in the ideal range (4000-8000 Hz) score 1.0.
@@ -211,8 +214,18 @@ func findBestSpeechRegion(regions []SpeechRegion, intervals []IntervalSample, no
 		return result
 	}
 
+	// noiseFloorDB feeds the grounded scorer's SNR term. With no noise profile,
+	// pass a sentinel far below any level so the SNR margin saturates equally for
+	// every candidate, making the term neutral within the file rather than crashing.
+	noiseFloorDB := math.Inf(-1)
+	if noiseProfile != nil {
+		noiseFloorDB = noiseProfile.MeasuredNoiseFloor
+	} else {
+		log.Logf("SNR margin folded as neutral: no noise profile available")
+	}
+
 	var bestCandidate *SpeechRegion
-	var bestDuration time.Duration
+	var bestScore float64
 	var fallbackCandidate *SpeechRegion
 	var fallbackScore float64
 	hasFallback := false
@@ -226,28 +239,14 @@ func findBestSpeechRegion(regions []SpeechRegion, intervals []IntervalSample, no
 			continue
 		}
 
-		// Score the candidate
-		score := scoreSpeechCandidate(metrics)
+		// Score the candidate with the grounded scorer: SNR margin (primary),
+		// duration adequacy (saturating), and within-region level consistency
+		// (tie-break). The SNR penalty is folded into the score, so no post-hoc
+		// penalty runs here.
+		regionIntervals := getIntervalsInRange(intervals, candidate.Start, candidate.End)
+		levelVar := levelVariance(regionIntervals, axisMomentaryLUFS)
+		score := scoreSpeechCandidateGrounded(metrics, noiseFloorDB, levelVar)
 		metrics.Score = score
-
-		// SNR margin check: penalise candidates too close to noise floor.
-		// These will show dramatic spectral shifts after denoising because
-		// the metrics are measuring noise contribution rather than speech.
-		// Both RMSLevel and MeasuredNoiseFloor are in dBFS.
-		if noiseProfile != nil {
-			snrMargin := metrics.RMSLevel - noiseProfile.MeasuredNoiseFloor
-			if snrMargin < minSNRMargin {
-				log.Logf("Speech candidate at %.1fs has low SNR margin: %.1f dB < %.1f dB minimum",
-					candidate.Start.Seconds(), snrMargin, minSNRMargin)
-				// Apply penalty factor rather than rejecting outright
-				// This allows selection if no better candidates exist
-				snrPenalty := snrMargin / minSNRMargin // 0.0 to 1.0
-				score *= max(0.1, min(snrPenalty, 1.0))
-				metrics.Score = score
-			}
-		} else {
-			log.Logf("SNR margin check skipped: no noise profile available")
-		}
 
 		// Store for reporting
 		result.Candidates = append(result.Candidates, *metrics)
@@ -259,11 +258,13 @@ func findBestSpeechRegion(regions []SpeechRegion, intervals []IntervalSample, no
 			hasFallback = true
 		}
 
-		// Selection: longest candidate above minimum quality
-		const minAcceptableSpeechScore = 0.3
-		if score >= minAcceptableSpeechScore && candidate.Duration > bestDuration {
+		// Selection: highest score above the sanity floor. The grounded score
+		// already encodes "long enough" (duration adequacy) and "clean enough"
+		// (SNR), so longest-wins is redundant and removed.
+		const minViableSpeechScore = 0.3
+		if score >= minViableSpeechScore && (bestCandidate == nil || score > bestScore) {
 			bestCandidate = candidate
-			bestDuration = candidate.Duration
+			bestScore = score
 		}
 	}
 
@@ -284,7 +285,9 @@ func findBestSpeechRegion(regions []SpeechRegion, intervals []IntervalSample, no
 				// Re-measure the refined region
 				refinedMetrics := measureSpeechCandidateFromIntervals(*refined, intervals)
 				if refinedMetrics != nil {
-					refinedMetrics.Score = scoreSpeechCandidate(refinedMetrics)
+					refinedIntervals := getIntervalsInRange(intervals, refined.Start, refined.End)
+					refinedLevelVar := levelVariance(refinedIntervals, axisMomentaryLUFS)
+					refinedMetrics.Score = scoreSpeechCandidateGrounded(refinedMetrics, noiseFloorDB, refinedLevelVar)
 
 					// Store refinement metadata
 					refinedMetrics.WasRefined = true
@@ -310,55 +313,95 @@ func findBestSpeechRegion(regions []SpeechRegion, intervals []IntervalSample, no
 	return result
 }
 
-// scoreSpeechCandidate computes a composite score for a speech region candidate.
-// Higher scores indicate better candidates for speech profiling.
-func scoreSpeechCandidate(m *SpeechCandidateMetrics) float64 {
+// Grounded scorer term weights. SNR margin is primary and duration adequacy
+// secondary; the consistency tie-break is a small additive term scaled so it can
+// only order candidates that are level on the two primary axes, never overturn an
+// SNR or adequacy difference.
+const (
+	groundedSNRWeight              = 0.6
+	groundedDurationWeight         = 0.4
+	groundedConsistencyTieBreakMax = 0.02 // additive ceiling for the tie-break
+
+	// groundedConsistencyVarianceCap is the level variance at which the
+	// consistency tie-break reaches zero credit; steadier (lower-variance) runs
+	// earn up to groundedConsistencyTieBreakMax. The cap only sets the tie-break
+	// resolution, not the ranking between candidates that differ on SNR or
+	// duration, so it is not a swept threshold.
+	groundedConsistencyVarianceCap = 25.0
+)
+
+// scoreSpeechCandidateGrounded computes a grounded score for a speech candidate
+// from three ordered terms: SNR margin (primary), duration adequacy (saturating),
+// and within-region level consistency (tie-break). It folds the former post-hoc
+// SNR penalty into the score by taking the noise floor as a parameter, so the
+// election helper no longer carries scoring maths (god-function mitigation).
+//
+// Design note (proposal Risk 5/6; VAD-RESEARCH.md:920-927): the old composite
+// clustered candidates at 0.58-0.65 and never ranked them, so the SNR axis here
+// MUST spread across the candidates within a file. The SNR term is
+// relative-within-file: it depends on RMSLevel - noiseFloorDB, so a constant floor
+// offset shifts every candidate equally and does not change their ranking. The SNR
+// saturation point (snrSaturationMargin) is a placeholder set by the Phase 3
+// inform sweep from the corpus SNR-margin distribution; the duration adequacy
+// minimum (speechDurationAdequacyMinimum) defaults to goldenSpeechWindowMinimum
+// until the same sweep confirms it.
+//
+// Voice-band centroid, entropy, flatness, rolloff, and flux are NOT terms here:
+// they are the VAD veto (passesSpectralVeto, analyser_vad.go), already applied per
+// interval before a run reaches election.
+//
+// noiseFloorDB is the measured noise floor in dBFS. Pass a value at or below the
+// quietest level (e.g. math.Inf(-1) sentinel handling by the caller) to make the
+// SNR term neutral when no noise profile exists.
+func scoreSpeechCandidateGrounded(m *SpeechCandidateMetrics, noiseFloorDB float64, levelVar float64) float64 {
 	if m == nil {
 		return 0.0
 	}
 
-	// Amplitude score: louder speech = better sample
-	ampScore := 0.0
-	if m.RMSLevel > -30.0 {
-		ampScore = max(0.0, min((m.RMSLevel-(-30.0))/18.0, 1.0))
+	snrScore := groundedSNRScore(m.RMSLevel - noiseFloorDB)
+	durScore := groundedDurationScore(m.Region.Duration)
+	tieBreak := groundedConsistencyTieBreak(levelVar)
+
+	return snrScore*groundedSNRWeight + durScore*groundedDurationWeight + tieBreak
+}
+
+// groundedSNRScore maps an SNR margin (dB) to a rising, saturating score in
+// [0, 1]. Below minSNRMargin the score falls continuously toward 0 (a hard
+// penalty, never a hard reject, so a file with only low-SNR runs still elects
+// something); at minSNRMargin it reaches 0.5; from there it ramps to 1.0 at
+// snrSaturationMargin and saturates. Monotonic in snr, so wider margin never
+// scores lower and a below-minimum candidate scores strictly below an
+// at-or-above-minimum one.
+func groundedSNRScore(snr float64) float64 {
+	switch {
+	case snr <= 0:
+		return 0.0
+	case snr < minSNRMargin:
+		return 0.5 * (snr / minSNRMargin)
+	case snr >= snrSaturationMargin:
+		return 1.0
+	default:
+		return 0.5 + 0.5*(snr-minSNRMargin)/(snrSaturationMargin-minSNRMargin)
 	}
+}
 
-	// Centroid score: voice range = good
-	centroidScore := 0.0
-	if m.Spectral.Centroid >= speechCentroidMin && m.Spectral.Centroid <= speechCentroidMax {
-		centroidScore = 1.0
+// groundedDurationScore is the SATURATING duration-adequacy gate: full credit
+// (1.0) once the run clears speechDurationAdequacyMinimum, reduced credit below
+// it. It is NOT linear past the minimum, so a longer adequate run does not outrank
+// a shorter adequate one on duration, and a run at the minimum is not docked
+// relative to a longer one. This is the term that protects sparse voice-activated
+// delivery.
+func groundedDurationScore(duration time.Duration) float64 {
+	if duration >= speechDurationAdequacyMinimum {
+		return 1.0
 	}
+	return max(0.0, min(duration.Seconds()/speechDurationAdequacyMinimum.Seconds(), 1.0))
+}
 
-	// Crest factor score: typical speech crest (9-14 dB optimal) = good
-	// Reference: Spectral-Metrics-Reference.md shows spoken word optimal is 9-14 dB
-	crestScore := 0.0
-	if m.CrestFactor >= crestFactorMin && m.CrestFactor <= crestFactorMax {
-		distFromIdeal := math.Abs(m.CrestFactor - crestFactorIdeal)
-		maxDist := max(crestFactorIdeal-crestFactorMin, crestFactorMax-crestFactorIdeal)
-		crestScore = max(0.0, min(1.0-(distFromIdeal/maxDist), 1.0))
-	}
-
-	// Duration score: longer = better (up to 60s, then plateau)
-	durScore := max(0.0, min(m.Region.Duration.Seconds()/60.0, 1.0))
-
-	// Voicing density score: prefer high voiced content proportion
-	// Uses shared helper function for consistency with scoreSpeechIntervalWindow
-	voicingScore := calculateVoicingScore(m.VoicingDensity)
-
-	// Rolloff score: prefer moderate rolloff for processing stability
-	// Uses shared helper function for consistency with scoreSpeechIntervalWindow
-	rolloffScore := calculateRolloffScore(m.Spectral.Rolloff)
-
-	// Flux score: prefer low flux for processing stability
-	// Uses shared helper function for consistency with scoreSpeechIntervalWindow
-	fluxScore := calculateFluxScore(m.Spectral.Flux)
-
-	// Weighted combination using named constants
-	return ampScore*candidateWeightAmplitude +
-		centroidScore*candidateWeightCentroid +
-		crestScore*candidateWeightCrest +
-		durScore*candidateWeightDuration +
-		voicingScore*candidateWeightVoicing +
-		rolloffScore*candidateWeightRolloff +
-		fluxScore*candidateWeightFlux
+// groundedConsistencyTieBreak maps within-region level variance to a small
+// additive term in [0, groundedConsistencyTieBreakMax]: steadier (lower-variance)
+// runs earn more. Bounded so it only orders candidates level on SNR and duration.
+func groundedConsistencyTieBreak(levelVar float64) float64 {
+	steadiness := max(0.0, min(1.0-(levelVar/groundedConsistencyVarianceCap), 1.0))
+	return steadiness * groundedConsistencyTieBreakMax
 }
