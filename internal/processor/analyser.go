@@ -424,15 +424,15 @@ func selectNoiseProfile(measurements *AudioMeasurements, intervals, silenceInter
 }
 
 func selectSpeechProfile(measurements *AudioMeasurements, intervals []IntervalSample, noiseSelection noiseProfileSelection, log debugLogger) {
-	speechSearchStart := 30 * time.Second
-	switch {
-	case noiseSelection.roomToneResult != nil && noiseSelection.roomToneResult.BestRegion != nil:
-		speechSearchStart = noiseSelection.roomToneResult.BestRegion.End
-	case len(measurements.Regions.RoomToneRegions) > 0:
-		speechSearchStart = measurements.Regions.RoomToneRegions[0].End
+	// Speech searches the whole file. The elected room-tone region (when present)
+	// only excludes its own intervals from speech runs; it never sets a search floor.
+	var span roomToneSpan
+	if noiseSelection.roomToneResult != nil && noiseSelection.roomToneResult.BestRegion != nil {
+		best := noiseSelection.roomToneResult.BestRegion
+		span = roomToneSpan{Start: best.Start, End: best.End, Present: true}
 	}
 
-	measurements.Regions.SpeechRegions = findSpeechCandidatesFromIntervals(intervals, speechSearchStart, measurements.Noise.VoiceActivated, measurements.Dynamics.RMSLevel, measurements.Noise.Floor)
+	measurements.Regions.SpeechRegions = findSpeechCandidatesFromIntervals(intervals, span, measurements.Noise.VoiceActivated, measurements.Dynamics.RMSLevel, measurements.Noise.Floor)
 
 	speechResult := findBestSpeechRegion(measurements.Regions.SpeechRegions, intervals, noiseSelection.noiseProfile, log)
 	measurements.Regions.SpeechCandidates = speechResult.Candidates

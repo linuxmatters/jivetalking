@@ -1230,7 +1230,7 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 		intervals = append(intervals, roomToneIntervals...)
 		intervals = append(intervals, speechIntervals...)
 
-		candidates := findSpeechCandidatesFromIntervals(intervals, 10*time.Second, false, -20.0, -55.0)
+		candidates := findSpeechCandidatesFromIntervals(intervals, roomToneSpan{}, false, -20.0, -55.0)
 
 		if len(candidates) == 0 {
 			t.Fatal("expected at least one speech candidate")
@@ -1253,7 +1253,7 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 		intervals = append(intervals, speechIntervals...)
 		intervals = append(intervals, tailIntervals...)
 
-		candidates := findSpeechCandidatesFromIntervals(intervals, 10*time.Second, false, -20.0, -55.0)
+		candidates := findSpeechCandidatesFromIntervals(intervals, roomToneSpan{}, false, -20.0, -55.0)
 
 		if len(candidates) != 0 {
 			t.Errorf("expected no candidates, got %d", len(candidates))
@@ -1268,7 +1268,7 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 		speech2 := makeVariedSpeechIntervals(86500*time.Millisecond, 300, true) // 75s more
 		intervals := append(append(speech1, pause...), speech2...)
 
-		candidates := findSpeechCandidatesFromIntervals(intervals, 5*time.Second, false, -20.0, -55.0)
+		candidates := findSpeechCandidatesFromIntervals(intervals, roomToneSpan{}, false, -20.0, -55.0)
 
 		if len(candidates) == 0 {
 			t.Fatal("expected speech candidate bridging pause")
@@ -1279,24 +1279,33 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 		}
 	})
 
-	t.Run("respects room-tone end boundary", func(t *testing.T) {
-		// Speech before and after the elected room-tone region end - only speech after should be detected
-		// Need 480+ intervals for late speech to have enough high-scoring intervals
+	t.Run("excludes room-tone span without dropping earlier speech", func(t *testing.T) {
+		// Speech before and after an elected room-tone span. Under the decoupled
+		// search both are found, and no candidate spans across the room-tone interval.
 		earlyIntervals := makeVariedSpeechIntervals(0, 200, true)             // 50s speech at start
+		roomTone := makeVariedSpeechIntervals(50*time.Second, 40, false)      // 10s room tone in the gap
 		lateIntervals := makeVariedSpeechIntervals(60*time.Second, 500, true) // 125s speech later
-		intervals := make([]IntervalSample, 0, len(earlyIntervals)+len(lateIntervals))
+		intervals := make([]IntervalSample, 0, len(earlyIntervals)+len(roomTone)+len(lateIntervals))
 		intervals = append(intervals, earlyIntervals...)
+		intervals = append(intervals, roomTone...)
 		intervals = append(intervals, lateIntervals...)
 
-		// Search starts at 50s (after early speech ends)
-		candidates := findSpeechCandidatesFromIntervals(intervals, 50*time.Second, false, -20.0, -55.0)
+		// The elected room tone sits in the 50-60s gap between the two speech runs.
+		span := roomToneSpan{Start: 50 * time.Second, End: 60 * time.Second, Present: true}
+		candidates := findSpeechCandidatesFromIntervals(intervals, span, false, -20.0, -55.0)
 
 		if len(candidates) == 0 {
-			t.Fatal("expected speech candidate after room-tone region end")
+			t.Fatal("expected speech candidate before the room-tone span")
 		}
-		// First candidate should start after 50s + 2s buffer = 52s
-		if candidates[0].Start < 52*time.Second {
-			t.Errorf("speech start %v should be after room-tone region end + buffer (52s)", candidates[0].Start)
+		// Early speech is now found: the first candidate starts at or near t=0.
+		if candidates[0].Start > 250*time.Millisecond {
+			t.Errorf("early speech start %v should be at or near t=0", candidates[0].Start)
+		}
+		// No candidate spans across the room-tone interval [50s, 60s).
+		for _, c := range candidates {
+			if c.Start < span.End && c.End > span.Start {
+				t.Errorf("candidate [%v, %v) overlaps room-tone span [%v, %v)", c.Start, c.End, span.Start, span.End)
+			}
 		}
 	})
 
@@ -1304,7 +1313,7 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 		// Only 30 intervals (7.5s) - less than minimum 40 (10s)
 		intervals := makeVariedSpeechIntervals(0, 30, true)
 
-		candidates := findSpeechCandidatesFromIntervals(intervals, 0, false, -20.0, -55.0)
+		candidates := findSpeechCandidatesFromIntervals(intervals, roomToneSpan{}, false, -20.0, -55.0)
 
 		if candidates != nil {
 			t.Errorf("expected nil for insufficient intervals, got %d candidates", len(candidates))
@@ -1320,7 +1329,7 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 		speech2 := makeVariedSpeechIntervals(21*time.Second, 32, true) // 8s more
 		intervals := append(append(speech1, pause...), speech2...)
 
-		candidates := findSpeechCandidatesFromIntervals(intervals, 5*time.Second, false, -20.0, -55.0)
+		candidates := findSpeechCandidatesFromIntervals(intervals, roomToneSpan{}, false, -20.0, -55.0)
 
 		// Neither segment alone meets the 10s minimum, so no candidates expected
 		if len(candidates) != 0 {
@@ -1337,9 +1346,9 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 		intervals := append(append(speech1, gap...), speech2...)
 
 		// Default tolerance: gap exceeds 2s, splits into two regions
-		defaultCandidates := findSpeechCandidatesFromIntervals(intervals, 5*time.Second, false, -20.0, -55.0)
+		defaultCandidates := findSpeechCandidatesFromIntervals(intervals, roomToneSpan{}, false, -20.0, -55.0)
 		// Widened tolerance: gap within 10s, bridges into one region
-		widenedCandidates := findSpeechCandidatesFromIntervals(intervals, 5*time.Second, true, -20.0, -55.0)
+		widenedCandidates := findSpeechCandidatesFromIntervals(intervals, roomToneSpan{}, true, -20.0, -55.0)
 
 		if len(defaultCandidates) < 2 {
 			t.Fatalf("expected default tolerance to split gap into 2+ regions, got %d", len(defaultCandidates))
@@ -1362,10 +1371,115 @@ func TestFindSpeechCandidatesFromIntervals(t *testing.T) {
 		speech2 := makeVariedSpeechIntervals(97500*time.Millisecond, 300, true) // 75s speech
 		intervals := append(append(speech1, gap...), speech2...)
 
-		candidates := findSpeechCandidatesFromIntervals(intervals, 5*time.Second, true, -20.0, -55.0)
+		candidates := findSpeechCandidatesFromIntervals(intervals, roomToneSpan{}, true, -20.0, -55.0)
 
 		if len(candidates) < 2 {
 			t.Errorf("expected gap >10s to split even with widened tolerance, got %d candidates", len(candidates))
+		}
+	})
+
+	t.Run("speech before a late room tone is found", func(t *testing.T) {
+		// A speech run from t=0, then a late room-tone span, then no speech.
+		// The old floor searched only after the room tone and returned nil; the decoupled
+		// search finds the early speech. The run uses 240 intervals: the varied pattern
+		// scores about a quarter above the median, so ~60 speech intervals clear the 40 gate.
+		speechIntervals := makeVariedSpeechIntervals(0, 240, true)       // 60s speech from t=0
+		roomTone := makeVariedSpeechIntervals(60*time.Second, 40, false) // 10s room tone
+		intervals := make([]IntervalSample, 0, len(speechIntervals)+len(roomTone))
+		intervals = append(intervals, speechIntervals...)
+		intervals = append(intervals, roomTone...)
+
+		span := roomToneSpan{Start: 60 * time.Second, End: 70 * time.Second, Present: true}
+		candidates := findSpeechCandidatesFromIntervals(intervals, span, false, -20.0, -55.0)
+
+		if len(candidates) == 0 {
+			t.Fatal("expected the early speech run to be found")
+		}
+		if candidates[0].Start > 250*time.Millisecond {
+			t.Errorf("candidate start %v should be at or near t=0", candidates[0].Start)
+		}
+		if candidates[0].End > span.Start {
+			t.Errorf("candidate end %v should not extend past the room-tone span start %v", candidates[0].End, span.Start)
+		}
+	})
+
+	t.Run("two runs either side of the span stay distinct", func(t *testing.T) {
+		// A speech run before the span and a separate run after it, with the room-tone
+		// span filled by quiet intervals so masking has samples to mask. The masked
+		// span (40 intervals) is wider than the default 8-interval tolerance, so the
+		// runs must not bridge across the excised span. This is the primary guard
+		// against the splice-vs-mask run-bridging regression.
+		earlyIntervals := makeVariedSpeechIntervals(0, 240, true)             // 60s speech from t=0
+		roomTone := makeVariedSpeechIntervals(60*time.Second, 40, false)      // 10s room tone in the gap
+		lateIntervals := makeVariedSpeechIntervals(70*time.Second, 240, true) // 60s speech later
+		intervals := make([]IntervalSample, 0, len(earlyIntervals)+len(roomTone)+len(lateIntervals))
+		intervals = append(intervals, earlyIntervals...)
+		intervals = append(intervals, roomTone...)
+		intervals = append(intervals, lateIntervals...)
+
+		span := roomToneSpan{Start: 60 * time.Second, End: 70 * time.Second, Present: true}
+		candidates := findSpeechCandidatesFromIntervals(intervals, span, false, -20.0, -55.0)
+
+		if len(candidates) != 2 {
+			t.Fatalf("expected exactly two distinct candidates, got %d", len(candidates))
+		}
+		for _, c := range candidates {
+			if c.Start < span.End && c.End > span.Start {
+				t.Errorf("candidate [%v, %v) spans the room-tone interval [%v, %v)", c.Start, c.End, span.Start, span.End)
+			}
+		}
+	})
+
+	t.Run("no room-tone span searches from t=0", func(t *testing.T) {
+		// The "none" sentinel applies no exclusion; a t=0 speech run is found.
+		intervals := makeVariedSpeechIntervals(0, 240, true) // 60s speech from t=0
+
+		candidates := findSpeechCandidatesFromIntervals(intervals, roomToneSpan{}, false, -20.0, -55.0)
+
+		if len(candidates) == 0 {
+			t.Fatal("expected a candidate with no exclusion applied")
+		}
+		if candidates[0].Start > 250*time.Millisecond {
+			t.Errorf("candidate start %v should be at or near t=0", candidates[0].Start)
+		}
+	})
+
+	t.Run("median computed over non-excluded intervals", func(t *testing.T) {
+		// Loud speech plus a long quiet room-tone span. The quiet intervals outnumber
+		// the speech intervals, so a naive whole-file median would land in the quiet
+		// region and depress every ampScore. Excluding the span from rmsP50 keeps the
+		// median measuring speech-vs-speech, so run membership matches a no-span control.
+		speechIntervals := makeVariedSpeechIntervals(0, 240, true)         // 60s loud speech from t=0
+		quietSpan := makeVariedSpeechIntervals(60*time.Second, 280, false) // 70s quiet room tone
+		intervals := make([]IntervalSample, 0, len(speechIntervals)+len(quietSpan))
+		intervals = append(intervals, speechIntervals...)
+		intervals = append(intervals, quietSpan...)
+
+		span := roomToneSpan{Start: 60 * time.Second, End: 130 * time.Second, Present: true}
+		withSpan := findSpeechCandidatesFromIntervals(intervals, span, false, -20.0, -55.0)
+
+		// Control: same speech, no quiet tail, no span.
+		control := findSpeechCandidatesFromIntervals(speechIntervals, roomToneSpan{}, false, -20.0, -55.0)
+
+		if len(withSpan) == 0 {
+			t.Fatal("expected speech detected with the quiet span excluded from the median")
+		}
+		if len(control) == 0 {
+			t.Fatal("expected speech detected in the no-span control")
+		}
+		if len(withSpan) != len(control) {
+			t.Errorf("run count differs: with span %d, control %d", len(withSpan), len(control))
+		}
+		// Same Start and near-identical duration prove run membership is equivalent.
+		// The small duration slack is the run ending at the span boundary rather than
+		// at EOF; it is the trailing sub-threshold intervals, not a median shift (a
+		// shifted median would collapse the run or move its Start).
+		if withSpan[0].Start != control[0].Start {
+			t.Errorf("run start differs: with span %v, control %v", withSpan[0].Start, control[0].Start)
+		}
+		const boundarySlack = time.Second
+		if d := withSpan[0].Duration - control[0].Duration; d > boundarySlack || d < -boundarySlack {
+			t.Errorf("run duration differs beyond boundary slack: with span %v, control %v", withSpan[0].Duration, control[0].Duration)
 		}
 	})
 }
@@ -3238,7 +3352,7 @@ func TestFindSpeechCandidatesFromIntervals_ConversationalSpeakerElects(t *testin
 	const runLen = 45
 	intervals := buildConversationalIntervals(runLen, 10, 3)
 
-	candidates := findSpeechCandidatesFromIntervals(intervals, 0, false, -20.0, -55.0)
+	candidates := findSpeechCandidatesFromIntervals(intervals, roomToneSpan{}, false, -20.0, -55.0)
 
 	if len(candidates) == 0 {
 		t.Fatal("expected >=1 speech candidate for conversational speaker at 40-interval gate")
