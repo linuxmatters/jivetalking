@@ -41,7 +41,7 @@ const (
 
 	// Voice frequency range for centroid validation
 	speechCentroidMin = 200.0  // Hz - lower bound for speech
-	speechCentroidMax = 4500.0 // Hz - upper bound for speech
+	speechCentroidMax = 6000.0 // Hz - upper bound for speech
 
 	// speechRMSMinimumDefault is the fallback minimum RMS level to be considered speech (not silence).
 	// Used when adaptive computation is not possible (zero or -Inf measurements).
