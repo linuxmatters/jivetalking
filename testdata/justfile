@@ -105,3 +105,124 @@ process-all:
     for e in {{ episodes_list }}; do
         just ep="$e" diagnostics="{{ diagnostics }}" process-presenters
     done
+
+# Run the whole corpus through one binary version, collect artefacts for A/B analysis
+process-corpus ver="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Collects artefacts into testdata/corpus-<label>/out/ for later LLM A/B analysis.
+    #   `just process-corpus`        -> source build (./jivetalking), label "source", --diagnostics
+    #   `just process-corpus 0.5.1`  -> fetch release 0.5.1, no report flag
+    #   `just process-corpus 0.6.0`  -> fetch release 0.6.0, --diagnostics
+    # Floor 0.5.1 (inclusive). Needs util-linux `script` (GNU/util-linux flags
+    # -qefc); macOS/BSD `script` differs and is out of scope. Release path needs an
+    # authenticated `gh` on PATH.
+    die() { echo "ERROR: $*" >&2; exit 1; }
+
+    ver="{{ ver }}"
+
+    # --- Preflight: tools -----------------------------------------------------
+    # PTY wrap is unconditional (the processing TUI has no no-TTY fallback).
+    command -v script >/dev/null 2>&1 || die "util-linux 'script' not found; needed to allocate a PTY for the processing TUI"
+    if [[ -n "$ver" ]]; then
+        command -v gh >/dev/null 2>&1 || die "gh CLI not found on PATH; needed to download release $ver"
+    fi
+
+    # --- Version gate (inclusive floor 0.5.1) ---------------------------------
+    # sort -V so 0.5.10 > 0.5.1 (not a string compare). Empty ver = source path.
+    if [[ -n "$ver" ]]; then
+        lowest="$(printf '%s\n%s\n' "0.5.1" "$ver" | sort -V | head -1)"
+        [[ "$lowest" == "0.5.1" ]] || die "version $ver < 0.5.1 not supported"
+    fi
+
+    # --- Label + bounded purge of out/ ----------------------------------------
+    if [[ -z "$ver" ]]; then
+        label="source"
+    else
+        label="$ver"
+    fi
+    [[ -n "$label" ]] || die "internal error: empty label"
+    outdir="{{ testdata }}/corpus-$label/out"
+    rm -rf "$outdir"
+    mkdir -p "$outdir"
+
+    # --- Binary selection -----------------------------------------------------
+    if [[ -z "$ver" ]]; then
+        # Source path: just build (never go build; needs CGO + ldflags).
+        just build
+        BIN="./jivetalking"
+    else
+        # Release path: download host asset, chmod, verify --version, cache.
+        GOOS="$(go env GOOS)"
+        GOARCH="$(go env GOARCH)"
+        BIN="{{ testdata }}/corpus-$ver/bin/jivetalking"
+        mkdir -p "$(dirname "$BIN")"
+        if [[ -x "$BIN" ]] && "$BIN" --version 2>&1 | grep -q "$ver"; then
+            echo "cached binary already reports $ver: $BIN"
+        else
+            gh release download "$ver" -R linuxmatters/jivetalking \
+                --pattern "jivetalking-$GOOS-$GOARCH" \
+                --output "$BIN" \
+                --clobber
+            chmod +x "$BIN"
+            "$BIN" --version 2>&1 | grep -q "$ver" || die "fetched binary != $ver"
+        fi
+    fi
+
+    # --- Flag selection per tier ----------------------------------------------
+    # Source or > 0.5.1 -> --diagnostics. Exactly 0.5.1 -> no report flag.
+    # Never --logs (a removed 0.3.1 flag; Kong rejects unknown flags).
+    REPORT_FLAGS=()
+    if [[ -z "$ver" ]]; then
+        REPORT_FLAGS=(--diagnostics)
+    else
+        lowest="$(printf '%s\n%s\n' "0.5.1" "$ver" | sort -V | head -1)"
+        if [[ "$ver" != "0.5.1" && "$lowest" == "0.5.1" ]]; then
+            REPORT_FLAGS=(--diagnostics)
+        fi
+    fi
+
+    # --- Corpus enumeration ---------------------------------------------------
+    # Glob with [[ -f ]] guards (corpus is multi-prefix, mixed extensions).
+    # fixture-5m.flac is excluded (a test fixture, not a recording).
+    files=()
+    for f in \
+        {{ testdata }}/LMP-{68..83}-{mark,martin,popey}.flac \
+        {{ testdata }}/LMP-81s-{mark,martin,popey}.flac \
+        {{ testdata }}/TT-202-{anna,marius,patrick}.wav \
+        {{ testdata }}/BF-08-stephen.wav; do
+        [[ -f "$f" ]] && files+=("$f")
+    done
+    (( ${#files[@]} )) || die "no corpus inputs found under testdata/"
+
+    # --- Stale-clear beside inputs (corpus stems only) ------------------------
+    for src in "${files[@]}"; do
+        stem="${src%.*}"
+        rm -f "$stem"-*-processed.* "$stem"-analysis.*
+    done
+
+    # --- Single PTY-wrapped run over the whole corpus -------------------------
+    # One invocation so the native numCPU pool parallelises. Capture exit code
+    # without set -e aborting, so collect always runs.
+    cmd="$(printf '%q ' "$BIN" "${REPORT_FLAGS[@]}" "${files[@]}")"
+    rc=0
+    script -qefc "$cmd" "$outdir/run.tui.log" || rc=$?
+
+    # --- Collect artefacts into out/ (always) ---------------------------------
+    # <stem>-LUFS-*-processed.* catches 0.5.1 .log and newer .md/.json/.jsonl/.png.
+    shopt -s nullglob
+    for src in "${files[@]}"; do
+        stem="${src%.*}"
+        for art in "$stem"-LUFS-*-processed.*; do
+            mv -f "$art" "$outdir/$(basename "$art")"
+        done
+    done
+    shopt -u nullglob
+
+    # --- Provenance + final exit ----------------------------------------------
+    if [[ -z "$ver" ]]; then
+        git describe --tags --always --dirty > "$outdir/VERSION.txt"
+    else
+        echo "$ver" > "$outdir/VERSION.txt"
+    fi
+    exit "$rc"
