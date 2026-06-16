@@ -295,7 +295,7 @@ func renderAnalysisBox(s AdaptedSummary, height int) string {
 	if !s.ChainReady {
 		return pendingBox("Analysis", analysisBoxInnerWidth, w, height, []string{
 			"Voice avg", "Noise floor", "SNR Gap", "Dynamics",
-			"True peak", "Soft gate", "Sibilance", "Loudness",
+			"True peak", "Gate depth", "Sibilance", "Loudness",
 		})
 	}
 
@@ -315,12 +315,12 @@ func renderAnalysisBox(s AdaptedSummary, height int) string {
 		sibilance = activeRow("Sibilance", w, fmt.Sprintf("%.0f %s", s.SibilanceDB, unitDB))
 	}
 
-	gentle := offRow("Soft gate", w, "OFF")
-	if s.GentleMode {
-		gentle = activeRow("Soft gate", w, "ON")
+	gateDepth := offRow("Gate depth", w, valuePending)
+	if s.GateDepthDB > 0 {
+		gateDepth = activeRow("Gate depth", w, fmt.Sprintf("%.0f %s", s.GateDepthDB, unitDB))
 	}
 
-	// Soft Gate (gate gentle mode) on row 6 and Sibilance on row 7 so Sibilance lines up with the
+	// Gate depth on row 6 and Sibilance on row 7 so Sibilance lines up with the
 	// De-esser at Filter Chain row 7 (its driver). Loudness stays the bottom row.
 	rows := []string{
 		voiceAvg,
@@ -328,7 +328,7 @@ func renderAnalysisBox(s AdaptedSummary, height int) string {
 		separation,
 		activeRow("Dynamics", w, fmt.Sprintf("%.1f LU → %.1f:1", s.InputLRA, s.GateRatio)),
 		activeRow("True peak", w, fmt.Sprintf("%.1f %s", s.TruePeakDBTP, unitDBTP)),
-		gentle,
+		gateDepth,
 		sibilance,
 		activeRow("Loudness", w, fmt.Sprintf("%.1f LUFS", s.InputLUFS)),
 	}

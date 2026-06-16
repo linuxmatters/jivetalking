@@ -175,6 +175,14 @@
 | Spectral decrease | Relative spectral decrease from the first bin, sum((mag[n]-mag[0])/n)/sum(mag[n]). | 0.0000 |
 | Spectral roll-off | Frequency below which 85% of the cumulative magnitude lies. (Hz) | 0.0000 |
 
+### Gate Statistics
+
+| Metric | Definition | Value |
+| --- | --- | --- |
+| Voiced low percentile | 10th percentile of voiced-speech momentary loudness over the elected region: the quiet edge of speech. (dBFS) | -34.20 |
+| Noise high percentile | 95th percentile of below-split momentary loudness: the loud edge of the noise. (dBFS) | -78.50 |
+| Gate separation | Difference between the voiced low percentile and the noise high percentile. (dB) | 44.30 |
+
 ## Interval Summary
 
 | Metric | Definition | Value |
@@ -246,7 +254,7 @@ Soft expander for inter-speech cleanup. Threshold and range are adapted per file
 | Enabled | yes |
 | Threshold (dB) | -67.67 |
 | Ratio | 1.5 |
-| Attack (ms) | 12 |
+| Attack (ms) | 5 |
 | Release (ms) | 375 |
 | Range (dB) | -22.00 |
 | Knee | 3.0 |
@@ -291,7 +299,7 @@ Sibilance reduction. Intensity is adapted from the speech-region sibilant-band e
 | Speech headroom (dB) | -7.62 |
 | Gate threshold unclamped (dB) | -67.67 |
 | Clamp reason | none |
-| Gentle mode | no |
+| Gate depth (dB) | 14.00 |
 
 ## Peak Limiter
 

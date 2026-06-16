@@ -277,7 +277,17 @@ type AdaptiveDiagnostics struct {
 	SpeechGateSpeechHeadroom      float64 `json:"speech_headroom_db"`
 	SpeechGateThresholdUnclamped  float64 `json:"threshold_unclamped_db"`
 	SpeechGateClampReason         string  `json:"clamp_reason"`
-	SpeechGateGentleMode          bool    `json:"gentle_mode"`
+	// SpeechGateDepthDB is the emitted gate attenuation depth as a positive dB
+	// value (the depth calculateSpeechGateRangeDB returns: the fixed moderate
+	// depth on a wide gap, the gentler depth on a narrow gap). It surfaces the
+	// gate depth to the TUI as a value rather than the former gentle-mode on/off.
+	SpeechGateDepthDB float64 `json:"speech_gate_depth_db"`
+
+	// SpeechGateNarrowGap is set when the voiced-anchored threshold cannot clear
+	// the loud noise (voiced p10 minus the speech margin sits below noise p95 plus
+	// the noise margin). The threshold stays on the speech side; this signal tells
+	// the depth step (Phase 4 task 4.3) to back off rather than over-gate.
+	SpeechGateNarrowGap bool `json:"narrow_gap"`
 }
 
 // ProcessingFilterContext holds pass execution state outside caller-owned defaults.
@@ -446,10 +456,12 @@ func defaultSpeechGateConfig() SpeechGateConfig {
 		Enabled:   true,
 		Threshold: 0.01,
 		Ratio:     2.0,
-		Attack:    12,
-		Release:   350,
-		Range:     0.0625,
-		Knee:      3.0,
+		Attack:    speechGateAttackMS,
+		Release:   speechGateReleaseFixedMS,
+		// Range is a linear amplitude floor (attenuation), so the fixed 14 dB depth
+		// is the negative-dB conversion: Decibels(-14).LinearAmplitude() ~= 0.19953.
+		Range:     Decibels(-speechGateDepthFixedDB).LinearAmplitude().Float64(),
+		Knee:      speechGateKneeFixed,
 		Makeup:    1.0,
 		Detection: "rms",
 	}
@@ -812,7 +824,10 @@ func (cfg *EffectiveFilterConfig) buildSpeechGateFilter() string {
 	}
 	detection := gate.Detection
 	if detection == "" {
-		detection = "rms" // Safe default for speech
+		// Kept as a live guard: callers that build a bare SpeechGateConfig (no
+		// adaptation, no defaultSpeechGateConfig) leave Detection empty, so this
+		// fills in rms. There is no peak branch to remove.
+		detection = "rms"
 	}
 	// Note: attack/release use %.2f to support sub-millisecond values (0.5ms minimum)
 	return fmt.Sprintf(

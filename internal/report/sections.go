@@ -467,6 +467,31 @@ func renderRegions(rec *processor.RunRecord) string {
 	b.WriteString(renderCandidatesSummary(rec.Regions.Speech.CandidatesSummary))
 	b.WriteString(renderRegionSamples(rec.Regions.Speech.Samples))
 
+	b.WriteString(renderGateStatistics(rec.Regions.GateStatistics))
+
+	return b.String()
+}
+
+// renderGateStatistics renders the gate-window measurements derived from the one
+// Pass 1 VAD split: the voiced-speech low percentile, the noise high percentile,
+// and their separation. The two percentiles are on the VAD level axis (momentary
+// LUFS); the separation is a dB difference. Returns the empty string when the
+// record carries no gate statistics.
+func renderGateStatistics(g *processor.GateStatistics) string {
+	if g == nil {
+		return ""
+	}
+
+	rows := [][]string{
+		valueRow("voiced_low_percentile_dbfs", formatMetricDB(g.VoicedLowPercentile, 2)),
+		valueRow("noise_high_percentile_dbfs", formatMetricDB(g.NoiseHighPercentile, 2)),
+		valueRow("gate_separation_db", formatMetric(g.SeparationDB, 2)),
+	}
+
+	var b strings.Builder
+	b.WriteString("### Gate Statistics\n\n")
+	b.WriteString(mdTable([]string{"Metric", "Definition", "Value"}, rows))
+	b.WriteString("\n")
 	return b.String()
 }
 
@@ -781,7 +806,7 @@ func renderFilters(rec *processor.RunRecord) string {
 
 // renderFilterDiagnostics renders the adaptive-adaptation rationale from
 // filters.diagnostics.* as objective values (aggression, separation, clamp
-// reason, gentle mode, etc.) - no verdicts. Returns the empty string when no
+// reason, gate depth, etc.) - no verdicts. Returns the empty string when no
 // diagnostics block is present.
 func renderFilterDiagnostics(d *processor.AdaptiveDiagnostics) string {
 	if d == nil {
@@ -799,7 +824,7 @@ func renderFilterDiagnostics(d *processor.AdaptiveDiagnostics) string {
 		{"Speech headroom (dB)", formatMetric(d.SpeechGateSpeechHeadroom, 2)},
 		{"Gate threshold unclamped (dB)", formatMetric(d.SpeechGateThresholdUnclamped, 2)},
 		{"Clamp reason", stringCell(d.SpeechGateClampReason)},
-		{"Gentle mode", boolCell(d.SpeechGateGentleMode)},
+		{"Gate depth (dB)", formatMetric(d.SpeechGateDepthDB, 2)},
 	}))
 	return b.String()
 }

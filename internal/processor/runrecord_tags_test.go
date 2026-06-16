@@ -108,6 +108,8 @@ func TestAudioMeasurementsJSON_HasCanonicalKeys(t *testing.T) {
 		"centroid_hz", "spread_hz", "rolloff_hz",
 		// regions
 		"speech_regions", "speech_candidates", "speech_profile", "noise_profile",
+		// regions gate statistics
+		"voiced_low_percentile_dbfs", "noise_high_percentile_dbfs", "gate_separation_db",
 		// region-sample / candidate fields
 		"crest_factor_db", "speech_band_body_rms_dbfs", "speech_band_sib_rms_dbfs",
 		// noise profile fields
@@ -267,7 +269,7 @@ func TestAdaptiveDiagnosticsJSON_HasCanonicalKeys(t *testing.T) {
 		SpeechGateSpeechHeadroom:      3,
 		SpeechGateThresholdUnclamped:  -45,
 		SpeechGateClampReason:         "noise_floor",
-		SpeechGateGentleMode:          false,
+		SpeechGateDepthDB:             14,
 	}
 
 	keys := jsonKeySet(t, diag)
@@ -275,7 +277,7 @@ func TestAdaptiveDiagnosticsJSON_HasCanonicalKeys(t *testing.T) {
 	for _, key := range []string{
 		"bandlimit_lowpass_reason", "aggression", "dynamic_range_db",
 		"quiet_speech_estimate_dbfs", "separation_db", "speech_headroom_db",
-		"threshold_unclamped_db", "clamp_reason", "gentle_mode",
+		"threshold_unclamped_db", "clamp_reason", "speech_gate_depth_db",
 	} {
 		if !keys[key] {
 			t.Errorf("missing canonical §8.4 diagnostics key %q", key)

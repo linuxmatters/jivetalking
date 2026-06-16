@@ -196,6 +196,13 @@ type RegionMetrics struct {
 	SpeechProfile    *SpeechCandidateMetrics  `json:"speech_profile,omitempty"`    // Elected best speech candidate (pointer into SpeechCandidates)
 	NoiseProfile     *NoiseProfile            `json:"noise_profile,omitempty"`     // Metrics from elected room tone region; nil if extraction failed
 
+	// Gate statistics on the VAD level axis (dBFS-relative momentary LUFS). These
+	// anchor the speech-gate threshold and depth in Phase 4; written from the
+	// elected region's voiced and noise interval populations during Pass 1.
+	VoicedLowPercentile float64 `json:"voiced_low_percentile_dbfs"` // Voiced-speech low percentile (p10) over in-region intervals at or above the clamped Otsu split passing the spectral veto (dBFS-relative momentary LUFS)
+	NoiseHighPercentile float64 `json:"noise_high_percentile_dbfs"` // Noise high percentile (p95) over below-split intervals (dBFS-relative momentary LUFS)
+	GateSeparationDB    float64 `json:"gate_separation_db"`         // Separation between VoicedLowPercentile and NoiseHighPercentile (dB)
+
 	// ElectedRoomToneSample is the RegionSample measured from the elected room-tone
 	// (low-cluster) region. NoiseProfile is a slimmer struct without a RegionSample,
 	// so the record cannot reach the elected region's bare amplitude/spectral/loudness
@@ -226,11 +233,6 @@ type AudioMeasurements struct {
 	// Duration is the total audio length in seconds, captured at file open. It is
 	// in-memory UI plumbing only and excluded from the report JSON contract.
 	Duration float64 `json:"-"`
-
-	// SuggestedGateThreshold is an early gate-threshold estimate (linear amplitude).
-	// Not part of the §8.1 domain skeleton (display-only "Gate Baseline"); excluded
-	// from the record JSON.
-	SuggestedGateThreshold float64 `json:"-"`
 }
 
 // OutputLoudnessMetrics is the Filtered/Final-stage loudness domain block: the
@@ -423,9 +425,6 @@ func assignInputNoiseFloor(measurements *AudioMeasurements, acc *metadataAccumul
 }
 
 func assignInputMeasurementSuggestions(measurements *AudioMeasurements) {
-	gateThresholdDB := calculateAdaptiveSpeechGateThreshold(measurements.Noise.Floor, measurements.Dynamics.RMSTrough)
-	measurements.SuggestedGateThreshold = math.Pow(10, gateThresholdDB/20.0)
-
 	if measurements.Dynamics.RMSLevel != 0 && measurements.Noise.Floor != 0 {
 		measurements.Noise.ReductionHeadroom = measurements.Dynamics.RMSLevel - measurements.Noise.Floor
 		measurements.Noise.ReductionHeadroom = max(0, min(60, measurements.Noise.ReductionHeadroom))
@@ -569,63 +568,6 @@ func collectAnalysisFrames(ctx stdcontext.Context, filename string, config *Base
 		silenceMedians:   computeSilenceMedians(silenceIntervals),
 		totalDuration:    totalDuration,
 	}, nil
-}
-
-// calculateAdaptiveSpeechGateThreshold computes a data-driven gate threshold based on
-// the measured noise floor and RMS trough (quiet speech indicator).
-//
-// Strategy:
-//   - The gate threshold should be above the noise floor but below quiet speech
-//   - RMSTrough represents the quietest RMS segments (breaths, quiet consonants)
-//   - We place the threshold at a data-driven position between noise and quiet speech
-//
-// Calculation:
-//   - Gap = RMSTrough - NoiseFloor (how much "room" between noise and speech)
-//   - If gap is small (<10dB): recording is noisy, threshold at 30% into gap
-//   - If gap is moderate (10-20dB): typical, threshold at 40% into gap
-//   - If gap is large (>20dB): clean recording, threshold at 50% into gap
-//
-// Safety bounds:
-//   - Never below noise floor (would gate during silence)
-//   - Never above -35dBFS (would cut quiet speech)
-func calculateAdaptiveSpeechGateThreshold(noiseFloor, rmsTrough float64) float64 {
-	// If RMSTrough is unavailable or invalid, use a sensible fallback
-	if rmsTrough == 0 || rmsTrough <= noiseFloor {
-		// Fallback: 6dB above noise floor (conservative default)
-		threshold := noiseFloor + 6.0
-		if threshold > -35.0 {
-			threshold = -35.0
-		}
-		return threshold
-	}
-
-	// Calculate the gap between quiet speech and noise
-	gap := rmsTrough - noiseFloor
-
-	// Determine the adaptive offset percentage based on gap size
-	var offsetPercent float64
-	switch {
-	case gap < 10.0:
-		// Noisy recording: small gap, be conservative (30% into gap)
-		// This preserves more speech at the cost of some noise bleed
-		offsetPercent = 0.30
-	case gap < 20.0:
-		// Typical recording: moderate gap (40% into gap)
-		offsetPercent = 0.40
-	default:
-		// Clean recording: large gap, more aggressive (50% into gap)
-		offsetPercent = 0.50
-	}
-
-	// Calculate threshold: noise floor + (gap * percentage)
-	threshold := noiseFloor + (gap * offsetPercent)
-
-	// Safety bounds: always at least 3dB above noise floor,
-	// never gate above -35dBFS (would cut quiet speech). The -35dBFS
-	// ceiling applies last and wins if the bounds invert (high noise floor).
-	threshold = min(-35.0, max(noiseFloor+3.0, threshold))
-
-	return threshold
 }
 
 // createAnalysisFilterGraph creates an AVFilterGraph for Pass 1 analysis.

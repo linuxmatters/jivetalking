@@ -34,7 +34,7 @@ func processingRecord() *processor.RunRecord {
 		SpeechGateSpeechHeadroom:      -7.623852,
 		SpeechGateThresholdUnclamped:  -67.667044,
 		SpeechGateClampReason:         "none",
-		SpeechGateGentleMode:          false,
+		SpeechGateDepthDB:             14,
 	}
 
 	norm := &processor.NormalisationResult{

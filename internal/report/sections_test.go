@@ -301,10 +301,13 @@ func regionsRecord() *processor.RunRecord {
 			ReductionHeadroom:   40.12,
 		},
 		Regions: processor.RegionMetrics{
-			NoiseProfile:     &noise,
-			SpeechProfile:    &speech,
-			SpeechCandidates: []processor.SpeechCandidateMetrics{speech, {Score: 0.4}},
-			IntervalSamples:  intervals,
+			NoiseProfile:        &noise,
+			SpeechProfile:       &speech,
+			SpeechCandidates:    []processor.SpeechCandidateMetrics{speech, {Score: 0.4}},
+			IntervalSamples:     intervals,
+			VoicedLowPercentile: -34.20,
+			NoiseHighPercentile: -78.50,
+			GateSeparationDB:    44.30,
 		},
 		Duration: 2856.9,
 	}
@@ -374,6 +377,35 @@ func TestRenderRegionsElected(t *testing.T) {
 		}
 		if !strings.Contains(got, d.Gloss) {
 			t.Errorf("regions output missing gloss for %q", key)
+		}
+	}
+}
+
+func TestRenderGateStatistics(t *testing.T) {
+	got := renderRegions(regionsRecord())
+	for _, want := range []string{
+		"### Gate Statistics",
+		"Voiced low percentile",
+		"-34.20",
+		"Noise high percentile",
+		"-78.50",
+		"Gate separation",
+		"44.30",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("gate statistics missing %q\n%s", want, got)
+		}
+	}
+	// Every gate-statistic row carries its definition gloss.
+	for _, key := range []string{
+		"voiced_low_percentile_dbfs", "noise_high_percentile_dbfs", "gate_separation_db",
+	} {
+		d, ok := DefinitionFor(key)
+		if !ok {
+			t.Fatalf("missing definition for %q", key)
+		}
+		if !strings.Contains(got, d.Gloss) {
+			t.Errorf("gate statistics output missing gloss for %q", key)
 		}
 	}
 }

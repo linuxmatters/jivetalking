@@ -786,6 +786,216 @@ func TestPickLowClusterRegion(t *testing.T) {
 	}
 }
 
+func TestDeriveGateStatistics(t *testing.T) {
+	const split = -30.0
+
+	t.Run("voiced p10, noise p95, separation match hand-computed", func(t *testing.T) {
+		var iv []IntervalSample
+		idx := 0
+		// Noise set: 20 below-split intervals from -60 to -41 dB (1 dB steps).
+		// p95 nearest-rank index = int(0.95 * 19) = 18 -> -42 dB.
+		for i := range 20 {
+			iv = append(iv, vadInterval(idx, -60+float64(i)))
+			idx++
+		}
+		// Voiced set: 21 in-region speech intervals from -25 to -5 dB (1 dB steps).
+		// All above the split and passing the veto. p10 index = int(0.10 * 20) = 2
+		// -> -23 dB. The region must span exactly these intervals.
+		regionStart := time.Duration(idx) * analysisIntervalHop
+		for i := range 21 {
+			iv = append(iv, vadInterval(idx, -25+float64(i)))
+			idx++
+		}
+		regionEnd := time.Duration(idx) * analysisIntervalHop
+
+		region := &SpeechRegion{Start: regionStart, End: regionEnd, Duration: regionEnd - regionStart}
+		got := deriveGateStatistics(iv, split, axisMomentaryLUFS, region)
+
+		const wantVoiced = -23.0
+		const wantNoise = -42.0
+		if math.Abs(got.VoicedLowPercentile-wantVoiced) > 0.001 {
+			t.Errorf("VoicedLowPercentile = %.3f, want %.3f", got.VoicedLowPercentile, wantVoiced)
+		}
+		if math.Abs(got.NoiseHighPercentile-wantNoise) > 0.001 {
+			t.Errorf("NoiseHighPercentile = %.3f, want %.3f", got.NoiseHighPercentile, wantNoise)
+		}
+		if math.Abs(got.SeparationDB-(wantVoiced-wantNoise)) > 0.001 {
+			t.Errorf("SeparationDB = %.3f, want %.3f", got.SeparationDB, wantVoiced-wantNoise)
+		}
+	})
+
+	t.Run("in-region veto failures excluded from the voiced set", func(t *testing.T) {
+		// All 11 region intervals are above the split, but the loud non-speech ones
+		// fail the spectral veto and must not enter the voiced set. The voiced p10
+		// is computed only over the veto-passing speech intervals.
+		var iv []IntervalSample
+		idx := 0
+		regionStart := time.Duration(idx) * analysisIntervalHop
+		// 11 speech intervals at -20..-10 dB (veto passes). p10 index = int(0.10*10)
+		// = 1 -> -19 dB.
+		for i := range 11 {
+			iv = append(iv, vadInterval(idx, -20+float64(i)))
+			idx++
+		}
+		// 5 loud non-speech intervals in-region (above split, veto fails). If wrongly
+		// counted they would shift the voiced set.
+		for range 5 {
+			iv = append(iv, vadLoudNonSpeech(idx))
+			idx++
+		}
+		regionEnd := time.Duration(idx) * analysisIntervalHop
+
+		region := &SpeechRegion{Start: regionStart, End: regionEnd, Duration: regionEnd - regionStart}
+		got := deriveGateStatistics(iv, split, axisMomentaryLUFS, region)
+		if math.Abs(got.VoicedLowPercentile-(-19.0)) > 0.001 {
+			t.Errorf("VoicedLowPercentile = %.3f, want -19.000 (veto failures excluded)", got.VoicedLowPercentile)
+		}
+	})
+
+	t.Run("only in-region speech counts toward the voiced set", func(t *testing.T) {
+		// Speech-like intervals outside the elected region must be ignored. Quiet
+		// speech sits before the region; loud speech sits inside it. The voiced p10
+		// must reflect only the in-region levels.
+		var iv []IntervalSample
+		idx := 0
+		// Out-of-region speech at -25 dB (would lower p10 if wrongly counted).
+		for range 10 {
+			iv = append(iv, vadInterval(idx, -25))
+			idx++
+		}
+		regionStart := time.Duration(idx) * analysisIntervalHop
+		// In-region speech, all at -15 dB.
+		for range 11 {
+			iv = append(iv, vadInterval(idx, -15))
+			idx++
+		}
+		regionEnd := time.Duration(idx) * analysisIntervalHop
+
+		region := &SpeechRegion{Start: regionStart, End: regionEnd, Duration: regionEnd - regionStart}
+		got := deriveGateStatistics(iv, split, axisMomentaryLUFS, region)
+		if math.Abs(got.VoicedLowPercentile-(-15.0)) > 0.001 {
+			t.Errorf("VoicedLowPercentile = %.3f, want -15.000 (out-of-region speech ignored)", got.VoicedLowPercentile)
+		}
+	})
+
+	t.Run("nil region leaves voiced set empty", func(t *testing.T) {
+		// No profile elected: voiced p10 is the empty-set zero, separation degrades
+		// to -noise-p95, noise p95 stays populated.
+		var iv []IntervalSample
+		idx := 0
+		for i := range 20 {
+			iv = append(iv, vadInterval(idx, -60+float64(i))) // -60..-41, all below split
+			idx++
+		}
+		got := deriveGateStatistics(iv, split, axisMomentaryLUFS, nil)
+		if got.VoicedLowPercentile != 0 {
+			t.Errorf("VoicedLowPercentile = %.3f, want 0 (no region, empty voiced set)", got.VoicedLowPercentile)
+		}
+		const wantNoise = -42.0 // p95 index = int(0.95*19) = 18 -> -42
+		if math.Abs(got.NoiseHighPercentile-wantNoise) > 0.001 {
+			t.Errorf("NoiseHighPercentile = %.3f, want %.3f", got.NoiseHighPercentile, wantNoise)
+		}
+		if math.Abs(got.SeparationDB-(0-wantNoise)) > 0.001 {
+			t.Errorf("SeparationDB = %.3f, want %.3f", got.SeparationDB, 0-wantNoise)
+		}
+	})
+
+	t.Run("empty noise set yields zero noise percentile", func(t *testing.T) {
+		// Every interval is at or above the split, so the below-split noise set is
+		// empty. percentileOfSorted returns 0 for it; voiced p10 stays real.
+		var iv []IntervalSample
+		idx := 0
+		regionStart := time.Duration(idx) * analysisIntervalHop
+		for i := range 11 {
+			iv = append(iv, vadInterval(idx, -20+float64(i))) // -20..-10, all above split
+			idx++
+		}
+		regionEnd := time.Duration(idx) * analysisIntervalHop
+
+		region := &SpeechRegion{Start: regionStart, End: regionEnd, Duration: regionEnd - regionStart}
+		got := deriveGateStatistics(iv, split, axisMomentaryLUFS, region)
+		if got.NoiseHighPercentile != 0 {
+			t.Errorf("NoiseHighPercentile = %.3f, want 0 (empty noise set)", got.NoiseHighPercentile)
+		}
+		// Voiced p10 index = int(0.10*10) = 1 -> -19 dB.
+		if math.Abs(got.VoicedLowPercentile-(-19.0)) > 0.001 {
+			t.Errorf("VoicedLowPercentile = %.3f, want -19.000", got.VoicedLowPercentile)
+		}
+	})
+
+	t.Run("single-sample voiced and noise sets", func(t *testing.T) {
+		// One in-region speech interval and one below-split noise interval. With a
+		// single sample, every percentile resolves to that lone value.
+		var iv []IntervalSample
+		idx := 0
+		iv = append(iv, vadInterval(idx, -55)) // one noise sample, below split
+		idx++
+		regionStart := time.Duration(idx) * analysisIntervalHop
+		iv = append(iv, vadInterval(idx, -12)) // one in-region speech sample
+		idx++
+		regionEnd := time.Duration(idx) * analysisIntervalHop
+
+		region := &SpeechRegion{Start: regionStart, End: regionEnd, Duration: regionEnd - regionStart}
+		got := deriveGateStatistics(iv, split, axisMomentaryLUFS, region)
+		if math.Abs(got.VoicedLowPercentile-(-12.0)) > 0.001 {
+			t.Errorf("VoicedLowPercentile = %.3f, want -12.000 (lone voiced sample)", got.VoicedLowPercentile)
+		}
+		if math.Abs(got.NoiseHighPercentile-(-55.0)) > 0.001 {
+			t.Errorf("NoiseHighPercentile = %.3f, want -55.000 (lone noise sample)", got.NoiseHighPercentile)
+		}
+		if math.Abs(got.SeparationDB-(-12.0-(-55.0))) > 0.001 {
+			t.Errorf("SeparationDB = %.3f, want %.3f", got.SeparationDB, -12.0-(-55.0))
+		}
+	})
+
+	t.Run("split governs the voiced and noise partition", func(t *testing.T) {
+		// A different split moves the boundary: with split -40, the -45 dB
+		// intervals fall into the noise set, not the voiced set. The same data
+		// under split -30 partitions differently, so the split is load-bearing.
+		var iv []IntervalSample
+		idx := 0
+		regionStart := time.Duration(idx) * analysisIntervalHop
+		// 11 in-region intervals from -50 to -40 dB.
+		for i := range 11 {
+			iv = append(iv, vadInterval(idx, -50+float64(i)))
+			idx++
+		}
+		regionEnd := time.Duration(idx) * analysisIntervalHop
+		region := &SpeechRegion{Start: regionStart, End: regionEnd, Duration: regionEnd - regionStart}
+
+		// Split -45: levels at or above -45 are voiced; below -45 are noise.
+		got := deriveGateStatistics(iv, -45.0, axisMomentaryLUFS, region)
+		// Voiced set sorted {-45,-44,-43,-42,-41,-40}; p10 index int(0.10*5)=0 -> -45.
+		if math.Abs(got.VoicedLowPercentile-(-45.0)) > 0.001 {
+			t.Errorf("VoicedLowPercentile = %.3f, want -45.000 at split -45", got.VoicedLowPercentile)
+		}
+		// Noise set sorted {-50,-49,-48,-47,-46}; p95 index int(0.95*4)=3 -> -47.
+		if math.Abs(got.NoiseHighPercentile-(-47.0)) > 0.001 {
+			t.Errorf("NoiseHighPercentile = %.3f, want -47.000 at split -45", got.NoiseHighPercentile)
+		}
+	})
+
+	t.Run("floored intervals excluded from both sets", func(t *testing.T) {
+		// Floored (digital-silence) intervals must not enter the noise set, so they
+		// cannot pull the noise p95 down. Only measurable below-split levels count.
+		var iv []IntervalSample
+		idx := 0
+		for range 10 {
+			iv = append(iv, vadInterval(idx, -130)) // floored, excluded
+			idx++
+		}
+		for i := range 20 {
+			iv = append(iv, vadInterval(idx, -60+float64(i))) // -60..-41 measurable noise
+			idx++
+		}
+		got := deriveGateStatistics(iv, split, axisMomentaryLUFS, nil)
+		const wantNoise = -42.0 // p95 over the 20 measurable levels, floored excluded
+		if math.Abs(got.NoiseHighPercentile-wantNoise) > 0.001 {
+			t.Errorf("NoiseHighPercentile = %.3f, want %.3f (floored excluded)", got.NoiseHighPercentile, wantNoise)
+		}
+	})
+}
+
 func TestDetectVoiceActivity(t *testing.T) {
 	hop := analysisIntervalHop
 	var iv []IntervalSample
@@ -818,5 +1028,54 @@ func TestDetectVoiceActivity(t *testing.T) {
 	}
 	if m.Noise.Floor >= -16 || m.Noise.Floor <= -120 {
 		t.Errorf("Noise.Floor = %.1f, want a sane low value below speech and above silence", m.Noise.Floor)
+	}
+
+	// Gate statistics land populated. The voiced low percentile sits up in the
+	// speech cluster (~-16), the noise high percentile down in the room-tone
+	// cluster (~-55), so the separation is a healthy positive gap.
+	if m.Regions.VoicedLowPercentile == 0 {
+		t.Error("VoicedLowPercentile = 0, want a populated voiced percentile (a profile was elected)")
+	}
+	if m.Regions.NoiseHighPercentile == 0 {
+		t.Error("NoiseHighPercentile = 0, want a populated noise percentile")
+	}
+	if m.Regions.GateSeparationDB <= 0 {
+		t.Errorf("GateSeparationDB = %.3f, want a positive voiced-over-noise gap", m.Regions.GateSeparationDB)
+	}
+
+	// The written fields match deriveGateStatistics called directly on the same
+	// inputs: the clamped Otsu split, the same axis, and the elected region.
+	histogram := buildLevelHistogram(iv, axisMomentaryLUFS, 1.0)
+	levels := vadLevels(iv, axisMomentaryLUFS)
+	split := clampSplit(otsuSplit(histogram), -70, percentileOfSorted(levels, 75))
+	want := deriveGateStatistics(iv, split, axisMomentaryLUFS, &m.Regions.SpeechProfile.Region)
+	if m.Regions.VoicedLowPercentile != want.VoicedLowPercentile {
+		t.Errorf("VoicedLowPercentile = %.3f, want %.3f (direct helper)", m.Regions.VoicedLowPercentile, want.VoicedLowPercentile)
+	}
+	if m.Regions.NoiseHighPercentile != want.NoiseHighPercentile {
+		t.Errorf("NoiseHighPercentile = %.3f, want %.3f (direct helper)", m.Regions.NoiseHighPercentile, want.NoiseHighPercentile)
+	}
+	if m.Regions.GateSeparationDB != want.SeparationDB {
+		t.Errorf("GateSeparationDB = %.3f, want %.3f (direct helper)", m.Regions.GateSeparationDB, want.SeparationDB)
+	}
+}
+
+func TestDetectVoiceActivity_NoProfileLeavesVoicedPercentileZero(t *testing.T) {
+	hop := analysisIntervalHop
+	var iv []IntervalSample
+	// A flat low-level stream with no speech cluster: no profile is elected, so
+	// the voiced percentile must stay zero while the noise percentile populates.
+	for i := range 60 {
+		iv = append(iv, vadInterval(i, -55))
+	}
+
+	m := &AudioMeasurements{}
+	detectVoiceActivity(m, iv, -70, hop, axisMomentaryLUFS, nil)
+
+	if m.Regions.SpeechProfile != nil {
+		t.Fatal("SpeechProfile elected, want none for a flat low-level stream")
+	}
+	if m.Regions.VoicedLowPercentile != 0 {
+		t.Errorf("VoicedLowPercentile = %.3f, want 0 (no profile, empty voiced set)", m.Regions.VoicedLowPercentile)
 	}
 }
