@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
 	"strings"
 )
 
@@ -52,10 +53,14 @@ type candidateSidecarLine struct {
 }
 
 // MarshalJSON flattens the kind tag and the candidate metrics into one object.
+// The candidate is swept through sanitiseValue first so any non-finite float
+// (NaN, +Inf, -Inf) serialises to JSON null, mirroring the run-record convention
+// (MarshalRunRecord). Without this, encoding/json errors on non-finite floats and
+// aborts the .candidates.jsonl sidecar on digitally-silent (voice-gated) audio.
 func (l candidateSidecarLine) MarshalJSON() ([]byte, error) {
 	var metrics any
 	if l.Speech != nil {
-		metrics = l.Speech
+		metrics = sanitiseValue(reflect.ValueOf(l.Speech))
 	}
 	raw, err := json.Marshal(metrics)
 	if err != nil {
