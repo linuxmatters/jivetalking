@@ -288,6 +288,142 @@ func TestFlooredFraction(t *testing.T) {
 	})
 }
 
+// seedInterval builds a synthetic IntervalSample for the noise-floor seed
+// estimator: RMSLevel and spectral flux drive roomToneScore. Any interval with
+// RMSLevel <= the RMS median AND flux <= the flux median scores exactly 1.0, so
+// such intervals tie at the top of the scored set whatever their exact RMS.
+func seedInterval(rms, flux float64) IntervalSample {
+	return IntervalSample{
+		RMSLevel: rms,
+		Spectral: SpectralMetrics{Flux: flux, Found: true},
+	}
+}
+
+// shuffleIntervals returns a deterministic permutation of the input (reversed),
+// so a test can feed the same multiset in a different order without importing a
+// PRNG. Reversal alone reorders any tied run, which is all these tests need.
+func shuffleIntervals(in []IntervalSample) []IntervalSample {
+	out := make([]IntervalSample, len(in))
+	for i, iv := range in {
+		out[len(in)-1-i] = iv
+	}
+	return out
+}
+
+func TestEstimateNoiseFloorAndThreshold_TiedScoreOrderIndependent(t *testing.T) {
+	// Build a set whose quiet, low-flux intervals all score exactly 1.0 (a tie),
+	// spread across distinct RMS values, plus louder high-flux intervals that
+	// score lower. The tie-break (lower RMS, then index) must make the seeded
+	// noise floor identical regardless of input order; an unstable sort over the
+	// tied run would otherwise let a different RMS land inside the truncation.
+	var intervals []IntervalSample
+	// 25 tied score-1.0 intervals, RMS from -80 to -56 dB, all flux below median.
+	for i := range 25 {
+		intervals = append(intervals, seedInterval(-80+float64(i), 0.01))
+	}
+	// 25 louder, high-flux intervals (score < 1.0) to set the medians and fill
+	// the lower-scored tail.
+	for i := range 25 {
+		intervals = append(intervals, seedInterval(-30+float64(i), 0.50))
+	}
+
+	medians := computeSilenceMedians(intervals)
+	floorA, threshA, okA := estimateNoiseFloorAndThreshold(intervals, medians)
+	if !okA {
+		t.Fatal("estimateNoiseFloorAndThreshold returned ok=false on a valid set")
+	}
+
+	shuffled := shuffleIntervals(intervals)
+	mediansShuf := computeSilenceMedians(shuffled)
+	floorB, threshB, okB := estimateNoiseFloorAndThreshold(shuffled, mediansShuf)
+	if !okB {
+		t.Fatal("estimateNoiseFloorAndThreshold returned ok=false on the shuffled set")
+	}
+
+	if floorA != floorB {
+		t.Errorf("noise floor order-dependent: %.3f vs %.3f (tie-break dropped?)", floorA, floorB)
+	}
+	if threshA != threshB {
+		t.Errorf("threshold order-dependent: %.3f vs %.3f", threshA, threshB)
+	}
+}
+
+func TestEstimateNoiseFloorAndThreshold_TruncationPicksLowestRMS(t *testing.T) {
+	// All quiet intervals tie at score 1.0; the louder ones score lower. The
+	// truncated seed set keeps floorSeedTopPercent of the scored set (len/5).
+	// The deterministic tie-break orders the tied run lowest-RMS first, so the
+	// seeded noise floor (max RMS over the truncation) must equal the highest RMS
+	// among only the kept lowest-RMS intervals, not any louder tied member.
+	const total = 50
+	const tiedCount = 25
+	var intervals []IntervalSample
+	// Tied score-1.0 intervals in DESCENDING RMS order (loudest first). With the
+	// tie-break dropped, a score-only unstable sort can keep these input-leading
+	// loud members and raise the floor; the tie-break must still keep the lowest
+	// RMS values whatever the input order.
+	for i := range tiedCount {
+		intervals = append(intervals, seedInterval(-56-float64(i), 0.01)) // -56..-80, score 1.0
+	}
+	for i := range total - tiedCount {
+		intervals = append(intervals, seedInterval(-30+float64(i), 0.50)) // louder, score < 1.0
+	}
+
+	medians := computeSilenceMedians(intervals)
+	floor, _, ok := estimateNoiseFloorAndThreshold(intervals, medians)
+	if !ok {
+		t.Fatal("estimateNoiseFloorAndThreshold returned ok=false on a valid set")
+	}
+
+	// candidateCount = len/floorSeedTopPercent, floored at floorSeedMinCount.
+	candidateCount := max(total/floorSeedTopPercent, floorSeedMinCount) // 10
+	// The kept tied intervals are the candidateCount lowest RMS values, starting
+	// at -80 dB in 1 dB steps; the highest kept RMS is the seeded floor.
+	wantFloor := -80.0 + float64(candidateCount-1)
+	if math.Abs(floor-wantFloor) > 0.001 {
+		t.Errorf("seeded floor = %.3f, want %.3f (lowest-RMS tied intervals kept)", floor, wantFloor)
+	}
+}
+
+func TestFlooredFraction_BoundaryAtThreshold(t *testing.T) {
+	// Guards the live >= test against vadVoiceActivatedFraction (0.20). A slice at
+	// exactly 0.20 floored must flag voice-activated; one just under must not.
+	build := func(floored, total int) []IntervalSample {
+		var iv []IntervalSample
+		idx := 0
+		for range floored {
+			iv = append(iv, vadInterval(idx, -130)) // floored: level <= vadLevelFloorDB
+			idx++
+		}
+		for range total - floored {
+			iv = append(iv, vadInterval(idx, -15)) // measurable, above floor
+			idx++
+		}
+		return iv
+	}
+
+	t.Run("exactly 0.20 floored passes the >= test", func(t *testing.T) {
+		iv := build(20, 100) // 0.20 exactly
+		got := flooredFraction(iv, axisMomentaryLUFS)
+		if math.Abs(got-0.20) > 0.001 {
+			t.Fatalf("flooredFraction = %.3f, want 0.200", got)
+		}
+		if !(got >= vadVoiceActivatedFraction) {
+			t.Errorf("fraction %.3f at the boundary must satisfy >= %.3f (voice-activated)", got, vadVoiceActivatedFraction)
+		}
+	})
+
+	t.Run("just under 0.20 fails the >= test", func(t *testing.T) {
+		iv := build(19, 100) // 0.19
+		got := flooredFraction(iv, axisMomentaryLUFS)
+		if math.Abs(got-0.19) > 0.001 {
+			t.Fatalf("flooredFraction = %.3f, want 0.190", got)
+		}
+		if got >= vadVoiceActivatedFraction {
+			t.Errorf("fraction %.3f below the boundary must not satisfy >= %.3f", got, vadVoiceActivatedFraction)
+		}
+	})
+}
+
 func TestIsSpeechInterval(t *testing.T) {
 	const split = -30.0
 	inBand := func(level, centroid, entropy float64) IntervalSample {

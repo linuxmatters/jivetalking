@@ -40,11 +40,11 @@ const (
 	// silenceThresholdMinIntervals is the minimum number of intervals required for threshold calculation.
 	silenceThresholdMinIntervals = 10
 
-	// roomToneCandidatePercent is the percentage of top-scored intervals to use as room tone candidates (20%).
-	roomToneCandidatePercent = 5 // divisor: len/5 = 20%
+	// floorSeedTopPercent is the percentage of top-scored intervals taken as the noise-floor seed set (20%).
+	floorSeedTopPercent = 5 // divisor: len/5 = 20%
 
-	// roomToneCandidateMinCount is the minimum number of room tone candidate intervals.
-	roomToneCandidateMinCount = 8
+	// floorSeedMinCount is the minimum number of intervals in the noise-floor seed set.
+	floorSeedMinCount = 8
 
 	// silenceThresholdHeadroomDB is additional dB added to the detected room tone level for headroom.
 	silenceThresholdHeadroomDB = 1.0
@@ -179,10 +179,10 @@ func estimateNoiseFloorAndThreshold(intervals []IntervalSample, medians silenceM
 		return cmp.Compare(a.idx, b.idx)
 	})
 
-	// Take the top 20% of scored intervals as room tone candidates
-	// (or at least roomToneCandidateMinCount intervals for statistical relevance)
-	candidateCount := len(scored) / roomToneCandidatePercent
-	candidateCount = max(candidateCount, roomToneCandidateMinCount)
+	// Take the top 20% of scored intervals as the noise-floor seed set
+	// (or at least floorSeedMinCount intervals for statistical relevance)
+	candidateCount := len(scored) / floorSeedTopPercent
+	candidateCount = max(candidateCount, floorSeedMinCount)
 	candidateCount = min(candidateCount, len(scored))
 
 	// Noise floor is the maximum RMS among high-confidence room tone intervals
