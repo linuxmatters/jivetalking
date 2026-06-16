@@ -211,7 +211,7 @@ func measureOutputRegionFromReader(ctx context.Context, reader *audio.Reader, st
 
 // measureOutputRoomToneRegionFromReader measures a room tone region and maps
 // the result to a bare RegionSample (amplitude/spectral/loudness only). Output
-// re-measure never scores or elects, so no candidate scoring/stability/band
+// re-measure never scores or elects, so no candidate scoring/band
 // fields are produced.
 func measureOutputRoomToneRegionFromReader(ctx context.Context, reader *audio.Reader, region RoomToneRegion, log debugLogger) (*RegionSample, error) {
 	log.Logf("=== measureOutputRoomToneRegion: start=%.3fs, duration=%.3fs ===",
