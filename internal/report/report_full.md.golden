@@ -78,7 +78,7 @@
 | Pre-scan floor | Noise floor estimated from the per-interval data, feeding room-tone detection. (dBFS) | -83.60 |
 | astats floor | FFmpeg astats noise-floor estimate, the minimum local peak over the sliding window. (dBFS) | - |
 | Room-tone detect level | Adaptive threshold below which an interval is treated as a room-tone candidate. (dBFS) | -82.60 |
-| Voice activated | True when the low-cluster (below-split) interval fraction is high, the sparse-speech signature. | no |
+| Voice activated | True when the floored (digital-silence) interval fraction is high, the platform-gated capture signature. | no |
 | Reduction headroom | Gap in dB between the noise floor and quiet speech. (dB) | 40.12 |
 
 ## Regions

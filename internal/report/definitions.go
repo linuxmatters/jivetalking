@@ -286,7 +286,7 @@ var Definitions = map[string]Definition{
 	"voice_activated": {
 		Label: "Voice activated",
 		Unit:  "",
-		Gloss: "True when the low-cluster (below-split) interval fraction is high, the sparse-speech signature.",
+		Gloss: "True when the floored (digital-silence) interval fraction is high, the platform-gated capture signature.",
 	},
 	"reduction_headroom_db": {
 		Label: "Reduction headroom",

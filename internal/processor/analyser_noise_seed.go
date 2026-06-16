@@ -165,9 +165,18 @@ func estimateNoiseFloorAndThreshold(intervals []IntervalSample, medians silenceM
 		}
 	}
 
-	// Sort by score descending to find high-confidence room tone intervals
+	// Sort by score descending to find high-confidence room tone intervals.
+	// Break ties deterministically (slices.SortFunc is not stable): lower RMS
+	// first, then original interval index, so the truncated candidate set and the
+	// seed it yields are reproducible across runs.
 	slices.SortFunc(scored, func(a, b scoredInterval) int {
-		return cmp.Compare(b.score, a.score)
+		if c := cmp.Compare(b.score, a.score); c != 0 {
+			return c
+		}
+		if c := cmp.Compare(a.rms, b.rms); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.idx, b.idx)
 	})
 
 	// Take the top 20% of scored intervals as room tone candidates
