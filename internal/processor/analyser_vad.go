@@ -164,6 +164,82 @@ func percentileOfSorted(sorted []float64, pct float64) float64 {
 	return sorted[idx]
 }
 
+// Gate-statistic percentiles. The voiced low percentile is the quiet edge of
+// voiced speech (the words the gate must never clip); the noise high percentile
+// is the loud edge of the noise the gate must reject. Their separation is the
+// usable gate window.
+const (
+	// gateVoicedLowPercentile is the low percentile of the voiced-speech level
+	// set: the quiet tail of speech, ignoring the single quietest word-end.
+	gateVoicedLowPercentile = 10.0
+	// gateNoiseHighPercentile is the high percentile of the below-split level
+	// set: the loud tail of the noise, ignoring the single loudest noise spike.
+	gateNoiseHighPercentile = 95.0
+)
+
+// gateStatistics carries the three gate-window measurements derived in Pass 1.
+// VoicedLowPercentile and NoiseHighPercentile are on the VAD level axis (dBFS-
+// relative momentary LUFS by default); SeparationDB is their difference in dB.
+type gateStatistics struct {
+	VoicedLowPercentile float64 // p10 of voiced-speech levels (level axis)
+	NoiseHighPercentile float64 // p95 of below-split levels (level axis)
+	SeparationDB        float64 // VoicedLowPercentile - NoiseHighPercentile (dB)
+}
+
+// deriveGateStatistics computes the voiced low percentile, the noise high
+// percentile, and their separation from the interval stream, the clamped Otsu
+// split, the level axis, and the elected speech region. It is a pure function
+// over its inputs: no decode, no filter pass.
+//
+//   - Voiced set: intervals inside speechRegion that are speech under
+//     isSpeechInterval (at or above the split and passing the spectral veto).
+//     Its low percentile (p10) is the quiet edge of speech.
+//   - Noise set: intervals below the split anywhere in the stream. Its high
+//     percentile (p95) is the loud edge of the noise.
+//
+// A nil speechRegion (no profile elected) leaves the voiced set empty, so the
+// voiced percentile is 0 and the separation degrades to -noise-p95; the caller
+// reads the populated noise percentile and treats a zero voiced percentile as
+// "no profile". An empty noise set (every interval at or above the split)
+// yields a zero noise percentile by the same percentileOfSorted convention.
+//
+// The axis parameter matches every sibling VAD helper (vadLevels,
+// isSpeechInterval, intervalLevel) so detectVoiceActivity threads its one axis
+// choice through.
+func deriveGateStatistics(intervals []IntervalSample, split float64, axis levelAxis, speechRegion *SpeechRegion) gateStatistics {
+	var voiced, noise []float64
+	for i := range intervals {
+		level := intervalLevel(intervals[i], axis)
+		if math.IsInf(level, 0) || math.IsNaN(level) || level <= vadLevelFloorDB {
+			continue
+		}
+		if level < split {
+			noise = append(noise, level)
+		}
+	}
+
+	if speechRegion != nil {
+		regionIntervals := getIntervalsInRange(intervals, speechRegion.Start, speechRegion.End)
+		for i := range regionIntervals {
+			if isSpeechInterval(regionIntervals[i], split, axis) {
+				voiced = append(voiced, intervalLevel(regionIntervals[i], axis))
+			}
+		}
+	}
+
+	slices.Sort(voiced)
+	slices.Sort(noise)
+
+	voicedLow := percentileOfSorted(voiced, gateVoicedLowPercentile)
+	noiseHigh := percentileOfSorted(noise, gateNoiseHighPercentile)
+
+	return gateStatistics{
+		VoicedLowPercentile: voicedLow,
+		NoiseHighPercentile: noiseHigh,
+		SeparationDB:        voicedLow - noiseHigh,
+	}
+}
+
 // otsuSplit returns the level that maximises the between-class variance of the
 // two histogram classes (Otsu's method), in one O(bins) pass with no tunable
 // constant. The returned split is the centre of the bin at the optimal
@@ -676,6 +752,19 @@ func detectVoiceActivity(measurements *AudioMeasurements, intervals []IntervalSa
 	if profile != nil {
 		measurements.Regions.SpeechProfile = profile
 	}
+
+	// Derive the gate-window statistics from the same clamped split and axis the
+	// VAD elected with. The voiced set needs the elected region, so pass its
+	// pointer (nil when no profile is elected, which leaves the voiced percentile
+	// zero by the helper's empty-set convention).
+	var speechRegion *SpeechRegion
+	if profile != nil {
+		speechRegion = &profile.Region
+	}
+	gateStats := deriveGateStatistics(intervals, split, axis, speechRegion)
+	measurements.Regions.VoicedLowPercentile = gateStats.VoicedLowPercentile
+	measurements.Regions.NoiseHighPercentile = gateStats.NoiseHighPercentile
+	measurements.Regions.GateSeparationDB = gateStats.SeparationDB
 
 	measurements.Noise.Floor = floor
 	measurements.Noise.FloorSource = "vad_percentile"

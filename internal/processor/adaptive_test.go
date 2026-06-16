@@ -82,9 +82,6 @@ func TestAdaptConfigOrderIndependence(t *testing.T) {
 	if firstDiagnostics == nil {
 		t.Fatal("AdaptConfig returned nil diagnostics for file A")
 	}
-	if !firstDiagnostics.SpeechGateGentleMode {
-		t.Fatal("file A setup failed: expected gentle gate mode")
-	}
 
 	afterA, afterADiagnostics := AdaptConfig(sharedSeed, fileB)
 	alone, aloneDiagnostics := AdaptConfig(newOrderIndependenceSeed(), fileB)
@@ -112,7 +109,7 @@ func TestAdaptConfigFilterSpecBehaviourBaseline(t *testing.T) {
 				"lowpass=f=20500:poles=2:width_type=q:width=0.707:normalize=1," +
 				"anlmdn=s=0.00001:p=0.0060:r=0.0058:m=11," +
 				"afftdn=nr=12:nt=w:tn=1," +
-				"agate=threshold=0.012589:ratio=1.2:attack=10.00:release=575:range=0.1585:knee=2.0:detection=rms:makeup=1.0," +
+				"agate=threshold=0.019953:ratio=2.0:attack=5.00:release=200:range=0.1995:knee=3.0:detection=rms:makeup=1.0," +
 				"acompressor=threshold=0.031623:ratio=3.0:attack=10:release=200:makeup=1.00:knee=4.0:detection=rms:mix=1.00",
 		},
 		{
@@ -122,7 +119,7 @@ func TestAdaptConfigFilterSpecBehaviourBaseline(t *testing.T) {
 				"lowpass=f=20500:poles=2:width_type=q:width=0.707:normalize=1," +
 				"anlmdn=s=0.00001:p=0.0060:r=0.0058:m=11," +
 				"afftdn=nr=12:nt=w:tn=1," +
-				"agate=threshold=0.019953:ratio=2.0:attack=10.00:release=425:range=0.1585:knee=3.0:detection=rms:makeup=1.0," +
+				"agate=threshold=0.010000:ratio=2.0:attack=5.00:release=200:range=0.1995:knee=3.0:detection=rms:makeup=1.0," +
 				"acompressor=threshold=0.177828:ratio=3.0:attack=10:release=200:makeup=1.00:knee=4.0:detection=rms:mix=1.00",
 		},
 	}
@@ -203,6 +200,11 @@ func orderIndependenceBrightSpeechMeasurements() *AudioMeasurements {
 				CrestFactor:        15.0,
 				Entropy:            0.8,
 			},
+			// Wide voiced gap (21 dB): voiced p10 -34, noise p95 -55. The gate
+			// threshold lands at voiced p10 minus the 6 dB speech margin (-40 dB).
+			VoicedLowPercentile: -34.0,
+			NoiseHighPercentile: -55.0,
+			GateSeparationDB:    21.0,
 			SpeechProfile: &SpeechCandidateMetrics{RegionSample: RegionSample{RMSLevel: -24.0, CrestFactor: 12.0, Spectral: SpectralMetrics{
 				Centroid: 5000,
 				Decrease: 0.0,
@@ -254,7 +256,7 @@ func assertOrderIndependentAdaptiveDiagnostics(t *testing.T, got, want *Adaptive
 		want any
 	}{
 		{"BandlimitLPReason", got.BandlimitLPReason, want.BandlimitLPReason},
-		{"SpeechGateGentleMode", got.SpeechGateGentleMode, want.SpeechGateGentleMode},
+		{"SpeechGateDepthDB", got.SpeechGateDepthDB, want.SpeechGateDepthDB},
 		{"SpeechGateAggression", got.SpeechGateAggression, want.SpeechGateAggression},
 		{"SpeechGateDynamicRange", got.SpeechGateDynamicRange, want.SpeechGateDynamicRange},
 		{"SpeechGateQuietSpeechEstimate", got.SpeechGateQuietSpeechEstimate, want.SpeechGateQuietSpeechEstimate},
@@ -508,12 +510,11 @@ func TestTuneSpeechGate(t *testing.T) {
 	// gateCrestFactorThreshold = 20.0 dB (when to use peak vs floor)
 	// gateTargetReductionDB = 12.0 dB (target noise reduction)
 	// gateTargetThresholdDB = -40.0 dB (target for clean recordings)
-	// gateRatioGentle = 1.5, gateRatioMod = 2.0, gateRatioTight = 2.5
+	// gateRatioGentle = 1.5 (wide LRA), gateRatioMod = 2.0 (cap, all else)
 	//
 	// Gap is derived from ratio: gap = targetReduction / (1 - 1/ratio)
 	// - ratio 1.5 → gap = 12 / 0.333 = 36 dB
 	// - ratio 2.0 → gap = 12 / 0.5 = 24 dB
-	// - ratio 2.5 → gap = 12 / 0.6 = 20 dB
 
 	t.Run("threshold calculation", func(t *testing.T) {
 		tests := []struct {
@@ -531,7 +532,7 @@ func TestTuneSpeechGate(t *testing.T) {
 				noiseFloor:      -75.0,
 				roomTonePeak:    -70.0,
 				roomToneCrest:   10.0, // Low crest = stable noise, use floor
-				inputLRA:        8.0,  // Narrow LRA → ratio 2.5 → gap 20dB → -75+20=-55, but target -40 is higher
+				inputLRA:        8.0,  // Narrow LRA → ratio 2.0 (cap) → gap 24dB → -75+24=-51, but target -40 is higher
 				wantThresholdDB: -40.0,
 				tolerance:       1.0,
 				desc:            "very clean, uses target threshold -40dB",
@@ -551,7 +552,7 @@ func TestTuneSpeechGate(t *testing.T) {
 				noiseFloor:      -42.0,
 				roomTonePeak:    -38.0,
 				roomToneCrest:   10.0,
-				inputLRA:        8.0, // Narrow LRA → ratio 2.5 → gap 20dB → -42+20=-22, clamped to -25
+				inputLRA:        8.0, // Narrow LRA → ratio 2.0 (cap) → gap 24dB → -42+24=-18, clamped to -25
 				wantThresholdDB: -25.0,
 				tolerance:       1.0,
 				desc:            "noisy floor, threshold clamped to max",
@@ -609,8 +610,9 @@ func TestTuneSpeechGate(t *testing.T) {
 	})
 
 	t.Run("ratio based on LRA", func(t *testing.T) {
-		// LRA thresholds: gateLRAWide=15 LU, gateLRAModerate=10 LU
-		// Ratios: gateRatioGentle=1.5, gateRatioMod=2.0, gateRatioTight=2.5
+		// LRA threshold: gateLRAWide=15 LU
+		// Ratios: gateRatioGentle=1.5 (wide LRA), gateRatioMod=2.0 (cap, all else)
+		// The gate is a soft expander; ratio never exceeds 2.0:1.
 		tests := []struct {
 			name      string
 			lra       float64
@@ -618,8 +620,9 @@ func TestTuneSpeechGate(t *testing.T) {
 			desc      string
 		}{
 			{"wide dynamics", 18.0, 1.5, "gentle ratio for expressive speech"},
-			{"moderate dynamics", 12.0, 2.0, "moderate ratio"},
-			{"narrow dynamics", 6.0, 2.5, "tighter ratio for compressed audio"},
+			{"moderate dynamics", 12.0, 2.0, "capped ratio"},
+			{"narrow dynamics", 6.0, 2.0, "capped at 2.0:1, never tighter"},
+			{"at wide boundary", 15.0, 2.0, "boundary is exclusive, takes the cap"},
 		}
 
 		for _, tt := range tests {
@@ -640,7 +643,7 @@ func TestTuneSpeechGate(t *testing.T) {
 	})
 
 	t.Run("attack is fixed", func(t *testing.T) {
-		// Attack collapsed to a fixed 10ms floor; transient/flux inputs no longer matter.
+		// Attack collapsed to a fixed 5ms floor; transient/flux inputs no longer matter.
 		tests := []struct {
 			name         string
 			maxDiff      float64
@@ -705,8 +708,8 @@ func TestTuneSpeechGate(t *testing.T) {
 	})
 
 	t.Run("knee is fixed", func(t *testing.T) {
-		// Knee collapsed to a fixed value; spectral crest no longer matters.
-		// Gentle mode overrides it; that case is covered separately.
+		// Knee collapsed to a single fixed value; spectral crest no longer matters
+		// and there is no override (the gentle-mode override is gone, task 4.4).
 		tests := []struct {
 			name  string
 			crest float64
@@ -734,45 +737,56 @@ func TestTuneSpeechGate(t *testing.T) {
 		}
 	})
 
-	t.Run("range based on noise floor", func(t *testing.T) {
-		// Range is driven by the noise floor alone:
-		// floor < -70 dBFS → clean range (-22 dB), else standard range (-16 dB).
+	t.Run("range is fixed depth, reduced on narrow gap", func(t *testing.T) {
+		// Range emits two fixed depths only. A wide gap takes the moderate fixed
+		// depth (14 dB); a narrow gap takes the gentler fixed depth (8 dB). Neither
+		// is ever 0 (full mute). The narrow-gap signal comes from the threshold
+		// step: it fires when separation < speechMargin + noiseMargin (12 dB).
 		tests := []struct {
 			name        string
-			noiseFloor  float64
-			wantRangeDB float64
+			separation  float64
+			wantDepthDB float64
 			desc        string
 		}{
-			{"clean floor - deeper range", -85.0, speechGateRangeCleanDB, "very clean recording, deeper range"},
-			{"clean boundary - deeper range", -70.1, speechGateRangeCleanDB, "just below clean threshold"},
-			{"standard floor - gentle range", -62.0, speechGateRangeStandardDB, "noisier floor, standard range"},
-			{"standard boundary", -70.0, speechGateRangeStandardDB, "at threshold counts as standard"},
+			{"wide gap - fixed moderate depth", 21.0, speechGateDepthFixedDB, "clear separation, full 14 dB depth"},
+			{"narrow gap - reduced depth", 8.0, speechGateDepthNarrowDB, "narrow separation, gentler 8 dB depth"},
+			{"boundary - just narrow", 11.9, speechGateDepthNarrowDB, "below the 12 dB narrow threshold"},
+			{"boundary - just wide", 12.0, speechGateDepthFixedDB, "at the 12 dB threshold counts as wide"},
 		}
 
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				config := newTestConfig()
+				// VoicedLowPercentile placed so the noise high percentile follows the
+				// separation under test; a SpeechProfile must be elected for the
+				// voiced-anchored path that produces the narrow-gap signal.
+				voicedLow := -34.0
 				measurements := &AudioMeasurements{
-					Noise: NoiseMetrics{Floor: tt.noiseFloor},
 					Regions: RegionMetrics{
-						NoiseProfile: &NoiseProfile{
-							PeakLevel:   tt.noiseFloor + 5,
-							CrestFactor: 10.0,
-							Entropy:     0.005,
-						},
+						SpeechProfile:       &SpeechCandidateMetrics{RegionSample: RegionSample{RMSLevel: -20.0}},
+						VoicedLowPercentile: voicedLow,
+						NoiseHighPercentile: voicedLow - tt.separation,
+						GateSeparationDB:    tt.separation,
 					},
 				}
 
 				tuneSpeechGateForTest(config, measurements)
 
 				actualDB := linearToDB(config.SpeechGate.Range)
-				diff := actualDB - tt.wantRangeDB
+				// Range is a negative dB attenuation, so the depth magnitude is its
+				// absolute value.
+				actualDepthDB := -actualDB
+				diff := actualDepthDB - tt.wantDepthDB
 				if diff < 0 {
 					diff = -diff
 				}
 				if diff > 0.5 {
-					t.Errorf("SpeechGate.Range = %.1f dB, want %.1f dB [%s]",
-						actualDB, tt.wantRangeDB, tt.desc)
+					t.Errorf("SpeechGate.Range = %.1f dB depth, want %.1f dB [%s]",
+						actualDepthDB, tt.wantDepthDB, tt.desc)
+				}
+				if config.SpeechGate.Range <= 0 {
+					t.Errorf("SpeechGate.Range = %.4f linear, must never be 0 (full mute) [%s]",
+						config.SpeechGate.Range, tt.desc)
 				}
 			})
 		}
@@ -801,22 +815,20 @@ func TestTuneSpeechGate(t *testing.T) {
 		}
 	})
 
-	t.Run("release based on speech sustain", func(t *testing.T) {
-		// Release no longer keys off room-tone entropy. A fixed +50ms hold
-		// compensation and +75ms tonal allowance are always applied. The only
-		// content split is sustained speech vs standard:
-		// - Sustained (flux < 0.01 AND zcr < 0.08): 300 + 50 + 75 = 425ms
-		// - Standard (otherwise):                   250 + 50 + 75 = 375ms
+	t.Run("release is fixed regardless of flux, ZCR, and LRA", func(t *testing.T) {
+		// Release is fixed at speechGateReleaseFixedMS (200 ms) with the hold folded
+		// in. The former flux/ZCR sustain split and LRA extension are gone, so the
+		// emitted release no longer varies with those inputs.
 		tests := []struct {
-			name        string
-			flux        float64
-			zcr         float64
-			wantRelease float64
-			desc        string
+			name string
+			flux float64
+			zcr  float64
+			lra  float64
 		}{
-			{"sustained speech", 0.005, 0.05, 425, "low flux + low zcr → sustained release"},
-			{"standard speech", 0.02, 0.20, 375, "active speech → standard release"},
-			{"flux high but zcr high", 0.005, 0.20, 375, "zcr disqualifies sustained → standard"},
+			{"sustained speech, wide LRA", 0.005, 0.05, 15.0},
+			{"standard speech, wide LRA", 0.02, 0.20, 15.0},
+			{"sustained speech, very low LRA", 0.005, 0.05, 7.0},
+			{"standard speech, low LRA", 0.02, 0.20, 9.0},
 		}
 
 		for _, tt := range tests {
@@ -825,58 +837,6 @@ func TestTuneSpeechGate(t *testing.T) {
 				measurements := &AudioMeasurements{
 					Spectral: SpectralMetrics{Flux: tt.flux},
 					Dynamics: DynamicsMetrics{ZeroCrossingsRate: tt.zcr},
-					Noise:    NoiseMetrics{Floor: -55.0},
-					Loudness: InputLoudnessMetrics{InputLRA: 15.0}, // Above LRA threshold (10 LU): no extension
-					Regions: RegionMetrics{
-						NoiseProfile: &NoiseProfile{
-							PeakLevel:   -50.0,
-							CrestFactor: 15.0,
-							Entropy:     0.005,
-						},
-					},
-				}
-
-				tuneSpeechGateForTest(config, measurements)
-
-				if config.SpeechGate.Release != tt.wantRelease {
-					t.Errorf("SpeechGate.Release = %.1f ms, want %.1f ms [%s]",
-						config.SpeechGate.Release, tt.wantRelease, tt.desc)
-				}
-			})
-		}
-	})
-
-	t.Run("release extension based on LRA", func(t *testing.T) {
-		// Tests for LRA-based release extension
-		// Low LRA audio has speech at similar levels, causing rapid gate
-		// open/close cycles that pump audibly. Longer release smooths this.
-		//
-		// Constants:
-		// speechGateReleaseLRALow = 10.0 LU (below: extend release)
-		// speechGateReleaseLRAVeryLow = 8.0 LU (below: maximum extension)
-		// speechGateReleaseLRAExtension = 100ms (extension for low LRA)
-		// speechGateReleaseLRAMaxExt = 150ms (max extension for very low LRA)
-
-		// Standard-tier base release (flux 0.02 → 250 + 50 hold + 75 tonal = 375ms),
-		// then LRA extension on top.
-		tests := []struct {
-			name        string
-			lra         float64
-			wantRelease float64
-			desc        string
-		}{
-			{"wide LRA - no extension", 16.0, 375, "wide dynamics don't need release extension"},
-			{"moderate LRA - no extension", 12.0, 375, "moderate dynamics don't need release extension"},
-			{"low LRA - partial extension", 9.0, 425, "375 + 50% of 100ms extension"},
-			{"very low LRA - maximum extension", 7.0, 525, "375 + 150ms max extension"},
-		}
-
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				config := newTestConfig()
-				measurements := &AudioMeasurements{
-					Spectral: SpectralMetrics{Flux: 0.02}, // Standard tier
-
 					Noise:    NoiseMetrics{Floor: -55.0},
 					Loudness: InputLoudnessMetrics{InputLRA: tt.lra},
 					Regions: RegionMetrics{
@@ -890,15 +850,18 @@ func TestTuneSpeechGate(t *testing.T) {
 
 				tuneSpeechGateForTest(config, measurements)
 
-				if config.SpeechGate.Release != tt.wantRelease {
-					t.Errorf("SpeechGate.Release = %.1f ms (LRA=%.1f LU), want %.1f ms [%s]",
-						config.SpeechGate.Release, tt.lra, tt.wantRelease, tt.desc)
+				if config.SpeechGate.Release != speechGateReleaseFixedMS {
+					t.Errorf("SpeechGate.Release = %.1f ms, want %.1f ms (fixed)",
+						config.SpeechGate.Release, speechGateReleaseFixedMS)
 				}
 			})
 		}
 	})
 
-	t.Run("populates diagnostics with speech metrics", func(t *testing.T) {
+	t.Run("populates diagnostics from voiced statistics", func(t *testing.T) {
+		// Voiced p10 -35, noise p95 -62, wide separation 27 dB. The threshold lands
+		// at voiced p10 minus the 6 dB speech margin (-41 dB); the gap is wide so
+		// the narrow-gap signal stays false.
 		config := newTestConfig()
 		diagnostics := tuneSpeechGateForTest(config, &AudioMeasurements{
 			Spectral: SpectralMetrics{Flux: 0.02, Crest: 20.0},
@@ -910,29 +873,40 @@ func TestTuneSpeechGate(t *testing.T) {
 					CrestFactor: 12.0,
 					Entropy:     0.5,
 				},
-				SpeechProfile: &SpeechCandidateMetrics{RegionSample: RegionSample{RMSLevel: -35.0, CrestFactor: 10.0}},
+				VoicedLowPercentile: -35.0,
+				NoiseHighPercentile: -62.0,
+				GateSeparationDB:    27.0,
+				SpeechProfile:       &SpeechCandidateMetrics{RegionSample: RegionSample{RMSLevel: -35.0, CrestFactor: 10.0}},
 			},
 		})
 
-		if !diagnostics.SpeechGateGentleMode {
-			t.Fatal("expected first tuning to enable gentle mode")
+		if diagnostics.SpeechGateDepthDB != speechGateDepthFixedDB {
+			t.Errorf("wide gap: SpeechGateDepthDB = %.1f, want fixed %.1f", diagnostics.SpeechGateDepthDB, speechGateDepthFixedDB)
 		}
-		if diagnostics.SpeechGateAggression == 0 ||
-			diagnostics.SpeechGateDynamicRange == 0 ||
-			diagnostics.SpeechGateQuietSpeechEstimate == 0 ||
-			diagnostics.SpeechGateSpeechSeparation == 0 ||
-			diagnostics.SpeechGateThresholdUnclamped == 0 ||
-			diagnostics.SpeechGateClampReason == "" {
-			t.Fatalf("expected tuning to populate gate diagnostics: %+v", diagnostics)
+		if diagnostics.SpeechGateNarrowGap {
+			t.Error("wide gap: SpeechGateNarrowGap = true, want false")
 		}
-		if config.SpeechGate.Ratio != speechGateGentleRatio || config.SpeechGate.Knee != speechGateGentleKnee {
-			t.Fatalf("expected gentle mode to tune builder values, ratio=%.1f knee=%.1f",
-				config.SpeechGate.Ratio, config.SpeechGate.Knee)
+		if diagnostics.SpeechGateQuietSpeechEstimate != -35.0 {
+			t.Errorf("SpeechGateQuietSpeechEstimate = %.1f, want voiced p10 -35.0", diagnostics.SpeechGateQuietSpeechEstimate)
+		}
+		if diagnostics.SpeechGateSpeechSeparation != 27.0 {
+			t.Errorf("SpeechGateSpeechSeparation = %.1f, want separation 27.0", diagnostics.SpeechGateSpeechSeparation)
+		}
+		if diagnostics.SpeechGateThresholdUnclamped != -35.0-speechGateThresholdSpeechMarginDB {
+			t.Errorf("SpeechGateThresholdUnclamped = %.1f, want %.1f", diagnostics.SpeechGateThresholdUnclamped, -35.0-speechGateThresholdSpeechMarginDB)
+		}
+		if diagnostics.SpeechGateClampReason != "none" {
+			t.Errorf("SpeechGateClampReason = %q, want \"none\" on a wide gap", diagnostics.SpeechGateClampReason)
+		}
+		if config.SpeechGate.Knee != speechGateKneeFixed {
+			t.Errorf("SpeechGate.Knee = %.1f, want fixed %.1f (no gentle override)", config.SpeechGate.Knee, speechGateKneeFixed)
 		}
 		assertNoStaleEffectiveConfigFields(t)
 	})
 
 	t.Run("fresh diagnostics without speech metrics", func(t *testing.T) {
+		// No SpeechProfile: the voiced-anchored diagnostics stay zero and the legacy
+		// threshold path runs.
 		config := newTestConfig()
 		diagnostics := tuneSpeechGateForTest(config, &AudioMeasurements{
 			Spectral: SpectralMetrics{Flux: 0.02},
@@ -940,8 +914,11 @@ func TestTuneSpeechGate(t *testing.T) {
 			Noise:    NoiseMetrics{Floor: -55.0},
 		})
 
-		if diagnostics.SpeechGateGentleMode {
-			t.Error("diagnostics SpeechGateGentleMode = true, want false")
+		if diagnostics.SpeechGateDepthDB != speechGateDepthFixedDB {
+			t.Errorf("no profile: SpeechGateDepthDB = %.1f, want fixed %.1f", diagnostics.SpeechGateDepthDB, speechGateDepthFixedDB)
+		}
+		if diagnostics.SpeechGateNarrowGap {
+			t.Error("diagnostics SpeechGateNarrowGap = true, want false without a profile")
 		}
 		if diagnostics.SpeechGateAggression != 0 ||
 			diagnostics.SpeechGateDynamicRange != 0 ||
@@ -953,6 +930,199 @@ func TestTuneSpeechGate(t *testing.T) {
 			t.Errorf("fresh gate diagnostics populated without speech metrics: %+v", diagnostics)
 		}
 	})
+}
+
+// TestCalculateSpeechGateThreshold covers the voiced-p10-anchored placement
+// (Phase 4 task 4.1): the threshold lands at voiced p10 minus the speech margin,
+// the narrow-gap signal flips at separation = speechMargin + noiseMargin (12 dB),
+// and a crossed (narrow) gap keeps the threshold on the speech side rather than
+// raising it to clear the loud noise.
+func TestCalculateSpeechGateThreshold(t *testing.T) {
+	const narrowGapBoundary = speechGateThresholdSpeechMarginDB + speechGateThresholdNoiseMarginDB // 12 dB
+
+	t.Run("threshold is voiced p10 minus speech margin", func(t *testing.T) {
+		tests := []struct {
+			name       string
+			voicedP10  float64
+			separation float64
+			wantThdDB  float64
+		}{
+			{"wide gap", -34.0, 26.0, -34.0 - speechGateThresholdSpeechMarginDB},
+			{"moderate gap", -40.0, 18.0, -40.0 - speechGateThresholdSpeechMarginDB},
+			{"narrow gap stays on speech side", -42.0, 8.0, -42.0 - speechGateThresholdSpeechMarginDB},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				threshold, _ := calculateSpeechGateThreshold(tt.voicedP10, tt.separation)
+				gotDB := linearToDB(threshold)
+				if math.Abs(gotDB-tt.wantThdDB) > 0.01 {
+					t.Errorf("threshold = %.2f dB, want voiced p10 minus margin %.2f dB", gotDB, tt.wantThdDB)
+				}
+			})
+		}
+	})
+
+	t.Run("narrow-gap signal flips at the margin sum", func(t *testing.T) {
+		tests := []struct {
+			name       string
+			separation float64
+			wantNarrow bool
+		}{
+			{"very narrow", 8.0, true},
+			{"just below boundary", narrowGapBoundary - 0.1, true},
+			{"at boundary is wide", narrowGapBoundary, false},
+			{"wide", 26.0, false},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				_, narrowGap := calculateSpeechGateThreshold(-34.0, tt.separation)
+				if narrowGap != tt.wantNarrow {
+					t.Errorf("narrowGap = %v, want %v at separation %.1f dB", narrowGap, tt.wantNarrow, tt.separation)
+				}
+			})
+		}
+	})
+
+	t.Run("crossed gap does not raise threshold to clear noise", func(t *testing.T) {
+		// Narrow gap: noise p95 (-46) plus the noise margin (-40) sits ABOVE the
+		// speech-side placement (voiced p10 -42 minus speech margin = -48). The
+		// threshold must stay at the speech-side value, not rise toward the noise.
+		voicedP10 := -42.0
+		noiseP95 := -46.0
+		separation := voicedP10 - noiseP95 // 4 dB
+		threshold, narrowGap := calculateSpeechGateThreshold(voicedP10, separation)
+		if !narrowGap {
+			t.Fatalf("expected narrow gap at separation %.1f dB", separation)
+		}
+		gotDB := linearToDB(threshold)
+		wantDB := voicedP10 - speechGateThresholdSpeechMarginDB // -48
+		if math.Abs(gotDB-wantDB) > 0.01 {
+			t.Errorf("threshold = %.2f dB, want speech-side %.2f dB (must not rise to clear noise)", gotDB, wantDB)
+		}
+		noiseClearDB := noiseP95 + speechGateThresholdNoiseMarginDB // -40
+		if gotDB >= noiseClearDB {
+			t.Errorf("threshold %.2f dB rose to clear noise %.2f dB; must resolve to the speech side", gotDB, noiseClearDB)
+		}
+	})
+}
+
+// TestTuneSpeechGateNewBasis is an integration-style check over in-memory
+// AudioMeasurements that drives the whole tuneSpeechGate body (task 4.4). It
+// asserts the new basis end to end: a wide-gap profile case (full fixed depth,
+// voiced-anchored threshold), a narrow-gap profile case (reduced fixed depth,
+// threshold still on the speech side), and a no-profile case (the legacy safety
+// path, which cannot place an in-speech threshold because there is no voiced
+// population). It also pins the fixed parameters (attack, release, knee,
+// detection) and confirms the emitted gate depth surfaces on the diagnostic.
+func TestTuneSpeechGateNewBasis(t *testing.T) {
+	t.Run("wide gap with profile: full depth, voiced-anchored threshold", func(t *testing.T) {
+		config := newTestConfig()
+		voicedP10 := -34.0
+		diag := tuneSpeechGateForTest(config, &AudioMeasurements{
+			Loudness: InputLoudnessMetrics{InputI: -20.0, InputLRA: 12.0},
+			Noise:    NoiseMetrics{Floor: -60.0},
+			Regions: RegionMetrics{
+				SpeechProfile:       &SpeechCandidateMetrics{RegionSample: RegionSample{RMSLevel: -24.0}},
+				VoicedLowPercentile: voicedP10,
+				NoiseHighPercentile: -60.0,
+				GateSeparationDB:    26.0,
+			},
+		})
+
+		wantThdDB := voicedP10 - speechGateThresholdSpeechMarginDB
+		if gotDB := linearToDB(config.SpeechGate.Threshold); math.Abs(gotDB-wantThdDB) > 0.01 {
+			t.Errorf("threshold = %.2f dB, want voiced p10 minus margin %.2f dB", gotDB, wantThdDB)
+		}
+		if depthDB := -linearToDB(config.SpeechGate.Range); math.Abs(depthDB-speechGateDepthFixedDB) > 0.5 {
+			t.Errorf("range depth = %.2f dB, want full %.2f dB on a wide gap", depthDB, speechGateDepthFixedDB)
+		}
+		if diag.SpeechGateNarrowGap {
+			t.Error("SpeechGateNarrowGap = true, want false on a wide gap")
+		}
+		assertFixedGateParams(t, config)
+		if diag.SpeechGateDepthDB != speechGateDepthFixedDB {
+			t.Errorf("SpeechGateDepthDB = %.1f, want full %.1f on a wide gap", diag.SpeechGateDepthDB, speechGateDepthFixedDB)
+		}
+	})
+
+	t.Run("narrow gap with profile: reduced depth, threshold on speech side", func(t *testing.T) {
+		config := newTestConfig()
+		voicedP10 := -42.0
+		separation := 6.0 // below the 12 dB narrow-gap boundary
+		diag := tuneSpeechGateForTest(config, &AudioMeasurements{
+			Loudness: InputLoudnessMetrics{InputI: -30.0, InputLRA: 9.0},
+			Noise:    NoiseMetrics{Floor: -48.0},
+			Regions: RegionMetrics{
+				SpeechProfile:       &SpeechCandidateMetrics{RegionSample: RegionSample{RMSLevel: -28.0}},
+				VoicedLowPercentile: voicedP10,
+				NoiseHighPercentile: voicedP10 - separation,
+				GateSeparationDB:    separation,
+			},
+		})
+
+		if !diag.SpeechGateNarrowGap {
+			t.Fatalf("expected narrow gap at separation %.1f dB", separation)
+		}
+		// Threshold stays on the speech side (voiced p10 minus margin), never raised
+		// toward the noise (research W4 / proposal CAVEAT).
+		wantThdDB := voicedP10 - speechGateThresholdSpeechMarginDB
+		if gotDB := linearToDB(config.SpeechGate.Threshold); math.Abs(gotDB-wantThdDB) > 0.01 {
+			t.Errorf("threshold = %.2f dB, want speech-side %.2f dB on a narrow gap", gotDB, wantThdDB)
+		}
+		if depthDB := -linearToDB(config.SpeechGate.Range); math.Abs(depthDB-speechGateDepthNarrowDB) > 0.5 {
+			t.Errorf("range depth = %.2f dB, want reduced %.2f dB on a narrow gap", depthDB, speechGateDepthNarrowDB)
+		}
+		if config.SpeechGate.Range <= 0 {
+			t.Error("SpeechGate.Range = 0, must never be a full mute")
+		}
+		assertFixedGateParams(t, config)
+		if diag.SpeechGateDepthDB != speechGateDepthNarrowDB {
+			t.Errorf("SpeechGateDepthDB = %.1f, want reduced %.1f on a narrow gap", diag.SpeechGateDepthDB, speechGateDepthNarrowDB)
+		}
+	})
+
+	t.Run("no profile: legacy safety path cannot place an in-speech threshold", func(t *testing.T) {
+		config := newTestConfig()
+		// No SpeechProfile, so the legacy noise-floor path runs. With no voiced
+		// population there is nothing to clip; the threshold is anchored to the noise
+		// floor and clamped to the global limits, so it cannot land inside speech.
+		diag := tuneSpeechGateForTest(config, &AudioMeasurements{
+			Loudness: InputLoudnessMetrics{InputI: -22.0, InputLRA: 14.0},
+			Noise:    NoiseMetrics{Floor: -55.0},
+		})
+
+		gotDB := linearToDB(config.SpeechGate.Threshold)
+		if gotDB < speechGateThresholdMinDB || gotDB > speechGateThresholdMaxDB {
+			t.Errorf("legacy threshold = %.2f dB, want within global limits [%.1f, %.1f]",
+				gotDB, speechGateThresholdMinDB, speechGateThresholdMaxDB)
+		}
+		// The voiced-anchored diagnostics stay zero on the no-profile path.
+		if diag.SpeechGateNarrowGap || diag.SpeechGateQuietSpeechEstimate != 0 || diag.SpeechGateSpeechSeparation != 0 {
+			t.Errorf("no-profile path populated voiced diagnostics: %+v", diag)
+		}
+		if diag.SpeechGateDepthDB != speechGateDepthFixedDB {
+			t.Errorf("SpeechGateDepthDB = %.1f, want full %.1f on the no-profile path", diag.SpeechGateDepthDB, speechGateDepthFixedDB)
+		}
+		assertFixedGateParams(t, config)
+	})
+}
+
+// assertFixedGateParams checks the gate parameters that are fixed under the new
+// basis: attack 5 ms, release 200 ms, knee 3.0, detection rms.
+func assertFixedGateParams(t *testing.T, config *EffectiveFilterConfig) {
+	t.Helper()
+	if config.SpeechGate.Attack != speechGateAttackMS {
+		t.Errorf("Attack = %.2f ms, want fixed %.2f ms", config.SpeechGate.Attack, speechGateAttackMS)
+	}
+	if config.SpeechGate.Release != speechGateReleaseFixedMS {
+		t.Errorf("Release = %.1f ms, want fixed %.1f ms", config.SpeechGate.Release, speechGateReleaseFixedMS)
+	}
+	if config.SpeechGate.Knee != speechGateKneeFixed {
+		t.Errorf("Knee = %.1f, want fixed %.1f", config.SpeechGate.Knee, speechGateKneeFixed)
+	}
+	if config.SpeechGate.Detection != "rms" {
+		t.Errorf("Detection = %q, want fixed \"rms\"", config.SpeechGate.Detection)
+	}
 }
 
 func tuneSpeechGateForTest(config *EffectiveFilterConfig, measurements *AudioMeasurements) *AdaptiveDiagnostics {

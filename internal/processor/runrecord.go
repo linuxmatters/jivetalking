@@ -144,8 +144,20 @@ type RMSDistribution struct {
 // values. The full candidate arrays and interval series are NOT inline; they live
 // in the .candidates.jsonl / .intervals.jsonl sidecars (§8.5 call 2, §9.3).
 type RegionsBlock struct {
-	RoomTone RoomToneRegionRecord `json:"room_tone"`
-	Speech   SpeechRegionRecord   `json:"speech"`
+	RoomTone       RoomToneRegionRecord `json:"room_tone"`
+	Speech         SpeechRegionRecord   `json:"speech"`
+	GateStatistics *GateStatistics      `json:"gate_statistics,omitempty"`
+}
+
+// GateStatistics is the §8.1 `regions.gate_statistics` block: the voiced-speech
+// low percentile, the noise high percentile, and their separation, all derived
+// from the one VAD split in Pass 1. The two percentiles are on the VAD level
+// axis (dBFS-relative momentary LUFS); the separation is their difference in dB.
+// It carries the flat RegionMetrics gate fields by value (small, three floats).
+type GateStatistics struct {
+	VoicedLowPercentile float64 `json:"voiced_low_percentile_dbfs"`
+	NoiseHighPercentile float64 `json:"noise_high_percentile_dbfs"`
+	SeparationDB        float64 `json:"gate_separation_db"`
 }
 
 // RoomToneRegionRecord is the §8.1 `regions.room_tone` nested block: the elected
@@ -308,6 +320,11 @@ func newRegionsBlock(r *RegionMetrics) *RegionsBlock {
 		RoomTone: RoomToneRegionRecord{},
 		Speech: SpeechRegionRecord{
 			CandidatesSummary: newSpeechCandidatesSummary(r),
+		},
+		GateStatistics: &GateStatistics{
+			VoicedLowPercentile: r.VoicedLowPercentile,
+			NoiseHighPercentile: r.NoiseHighPercentile,
+			SeparationDB:        r.GateSeparationDB,
 		},
 	}
 

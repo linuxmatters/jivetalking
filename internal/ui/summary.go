@@ -44,7 +44,7 @@ type AdaptedSummary struct {
 	TruePeakDBTP float64 // input true peak (dBTP)
 	HasSibilance bool    // speech bands measured (sibilance available)
 	SibilanceDB  float64 // SibBandRMS - BodyBandRMS (dB)
-	GentleMode   bool    // Speech gate gentle mode engaged
+	GateDepthDB  float64 // Speech gate attenuation depth (positive dB)
 	InputLUFS    float64 // input integrated loudness (LUFS)
 }
 
@@ -93,7 +93,7 @@ func NewAdaptedSummary(cfg *processor.EffectiveFilterConfig, diag *processor.Ada
 	}
 
 	if diag != nil {
-		s.GentleMode = diag.SpeechGateGentleMode
+		s.GateDepthDB = diag.SpeechGateDepthDB
 	}
 
 	return s

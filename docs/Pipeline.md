@@ -17,9 +17,9 @@ the result, and sets the loudness last.
    voice-activity detector that samples the file in 250 ms intervals. Nothing is
    changed; this pass only listens.
    - **Adapt.** Between Pass 1 and Pass 2, those measurements become per-file
-     filter settings. A cleaner recording gets a deeper gate; a quiet recording
-     gets the same levelling as a loud one; sibilant material gets more
-     de-essing. It is a pure calculation, no audio is touched (shown as Pass 1.5
+     filter settings. The gate threshold sits just below the softest words; a
+     quiet recording gets the same levelling as a loud one; sibilant material
+     gets more de-essing. It is a pure calculation, no audio is touched (shown as Pass 1.5
      in the diagram). Only the settings that genuinely benefit from the
      measurements are adapted; the rest are fixed at values that are correct for
      spoken word.
@@ -173,9 +173,10 @@ rather than a hard gate keeps the transitions natural.
 the compressor and de-esser, so it removes the inter-speech noise before those
 stages can lift it.
 
-**What adapts** (see *Adaptive tuning* below): the threshold, the range (how
-deep it pulls the gaps down), the ratio, and the release time all track the
-Pass 1 measurements. The attack (10 ms), the knee, and RMS detection are fixed.
+**What adapts** (see *Adaptive tuning* below): the threshold is placed from the
+measured soft-speech level, and the range (how deep it pulls the gaps down) and
+the ratio track the Pass 1 measurements. The attack (5 ms), the release
+(200 ms), the knee, and RMS detection are fixed.
 
 ### levelling_compressor
 
@@ -271,6 +272,12 @@ trimmed inward to its cleanest window. That sample sets the noise floor (taken a
 a low percentile of the interval levels) and the noise profile the gate adapts
 against.
 
+**The gate window is measured too.** From the same split, Pass 1 measures the
+soft-speech level (the quiet edge of the spoken passages), the loud-noise level
+(the loud edge of the background), and the gap between them. The soft-speech
+level is what places the gate threshold, and the gap tells the gate whether it
+has room to pull the gaps down fully or should back off.
+
 **Voice-activated capture is detected from the silence.** Some platforms
 (Riverside, Zencastr, and similar) gate the microphone, muting the channel to
 true digital silence between utterances. The detector spots this by the fraction
@@ -284,32 +291,40 @@ Jivetalking adapts only where a per-file measurement makes a real difference.
 Everything else is fixed at a value that is correct for spoken word. There is no
 adaptation for its own sake.
 
-### The speech gate tracks the gap between speech and noise
+### The speech gate sits just below the softest words
 
 The gate's job is to sit above the noise but below the quiet end of speech, so it
 catches the gaps without clipping soft words. To place it, Pass 1 measures the
-**separation**: how far the quietest speech sits above the noise floor.
+**soft-speech level**: the quiet edge of the spoken passages (the 10th percentile
+of the speech, so a single quiet word-end does not drag it). The gate threshold
+is set 6 dB below that level. Sitting just under the softest words, the gate never
+clips a word, even its quietest tail.
 
-- **A cleaner recording gates deeper and more confidently.** When speech sits
-  well clear of the noise, the gate positions its threshold higher within that
-  gap (more "aggression") and pulls the gaps down further. A recording with a
-  noise floor below -70 dBFS takes a deeper range (-22 dB) than a noisier one
-  (-16 dB).
-- **A noisier recording gates more gently.** When speech and noise are close
-  together, the maths that places the threshold becomes unreliable, so a
-  conservative noise-floor-based fallback takes over to avoid gating speech.
+- **The threshold follows the soft-speech level.** It is pinned a fixed 6 dB
+  below the quiet edge of speech. This replaces the older "aggression" maths that
+  built the threshold up from an estimate of where quiet speech ought to be; now
+  it is anchored to the level that was actually measured.
+- **The depth is fixed and moderate.** The gate pulls the gaps down by a fixed
+  14 dB, never a full mute, so the floor under speech stays natural rather than
+  pumping to silence. Depth no longer scales with the noise floor or with how
+  clear the speech is. Gating deeper on a clean recording was dropped because it
+  made the floor pump.
+- **A narrow gap gates more gently.** When the gap between the softest speech and
+  the loudest noise is narrow, the threshold stays on the speech side (it is not
+  raised into the voice) and the depth backs off to a gentler 8 dB instead. A
+  small amount of residual noise is accepted rather than risk gating words.
 - **Wide dynamics get a gentler ratio.** A recording with a wide loudness range
-  (expressive delivery) gets a softer expansion ratio so quiet expressive moments
-  survive; a narrow range gets tighter control.
-- **The release stretches to avoid pumping.** Sustained speech and
-  narrow-loudness-range material get a longer release so the gate does not
-  open and close audibly between similar-level words.
-- **A "gentle mode" guards uniform quiet recordings.** When a very quiet
-  recording also has a narrow loudness range, the gate's soft expansion can start
-  modulating the level ("hunting"). A gentler ratio and sharper knee prevent it.
+  (expressive delivery, LRA over 15 LU) gets a 1.5:1 expansion ratio so quiet
+  expressive moments survive; everything else takes the 2:1 cap. The gate is a
+  soft expander, never tighter than 2:1.
 
-Fixed by design: the attack (10 ms, fast enough for any speech), the knee, and
-RMS level detection. These do not vary usefully across real voices.
+Fixed by design: the attack (5 ms, fast enough to preserve consonant onsets), the
+release (about 200 ms, erring long), the knee, and RMS level detection. The
+release runs long on purpose: the gate engine has no separate hold control, so
+the release alone holds the gate open through the short dips inside speech. The
+soft knee does double duty: it also smooths the open/close boundary so the gate
+does not chatter on level wobble near the threshold. These do not vary usefully
+across real voices.
 
 ### The levelling compressor tracks the speech RMS
 

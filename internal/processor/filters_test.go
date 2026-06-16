@@ -303,7 +303,7 @@ func TestBuildFilterSpecBehaviourBaseline(t *testing.T) {
 				"lowpass=f=20500:poles=2:width_type=q:width=0.707:normalize=1:a=tdii," +
 				"anlmdn=s=0.00001:p=0.0060:r=0.0020:m=3," +
 				"afftdn=nr=12:nt=w:tn=1," +
-				"agate=threshold=0.010000:ratio=2.0:attack=12.00:release=350:range=0.0625:knee=3.0:detection=rms:makeup=1.0," +
+				"agate=threshold=0.010000:ratio=2.0:attack=5.00:release=200:range=0.1995:knee=3.0:detection=rms:makeup=1.0," +
 				"acompressor=threshold=0.125893:ratio=3.0:attack=10:release=200:makeup=1.00:knee=4.0:detection=rms:mix=1.00," +
 				"astats=metadata=1:measure_perchannel=all," +
 				"aspectralstats=win_size=2048:win_func=hann:measure=all," +
@@ -456,7 +456,7 @@ func perFileStateFieldNames() []string {
 		"Measurements",
 		"OutputAnalysisEnabled",
 		"BandlimitLPReason",
-		"SpeechGateGentleMode",
+		"SpeechGateDepthDB",
 		"SpeechGateAggression",
 		"SpeechGateDynamicRange",
 		"SpeechGateQuietSpeechEstimate",

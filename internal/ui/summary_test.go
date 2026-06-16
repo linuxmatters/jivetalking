@@ -34,7 +34,7 @@ func TestNewAdaptedSummaryFromConfig(t *testing.T) {
 	}
 	m.Regions.SpeechProfile.RMSLevel = -20.9
 
-	diag := &processor.AdaptiveDiagnostics{SpeechGateGentleMode: true}
+	diag := &processor.AdaptiveDiagnostics{SpeechGateDepthDB: 14}
 
 	s := NewAdaptedSummary(cfg, diag, m)
 
@@ -68,8 +68,8 @@ func TestNewAdaptedSummaryFromConfig(t *testing.T) {
 	if !s.HasSibilance || s.SibilanceDB != -34-(-30) {
 		t.Errorf("sibilance mapping wrong: has=%v db=%v (want %v)", s.HasSibilance, s.SibilanceDB, -34.0-(-30.0))
 	}
-	if !s.GentleMode {
-		t.Errorf("gentle mode should follow the diagnostic")
+	if s.GateDepthDB != 14 {
+		t.Errorf("gate depth should follow the diagnostic: got %v, want 14", s.GateDepthDB)
 	}
 	if s.InputLUFS != -24.3 {
 		t.Errorf("loudness mapping wrong: in=%v", s.InputLUFS)

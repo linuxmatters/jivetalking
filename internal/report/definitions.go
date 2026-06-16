@@ -297,6 +297,21 @@ var Definitions = map[string]Definition{
 	// -------------------------------------------------------------------------
 	// Regions: elected profile bounds and election-only fields
 	// -------------------------------------------------------------------------
+	"voiced_low_percentile_dbfs": {
+		Label: "Voiced low percentile",
+		Unit:  "dBFS",
+		Gloss: "10th percentile of voiced-speech momentary loudness over the elected region: the quiet edge of speech.",
+	},
+	"noise_high_percentile_dbfs": {
+		Label: "Noise high percentile",
+		Unit:  "dBFS",
+		Gloss: "95th percentile of below-split momentary loudness: the loud edge of the noise.",
+	},
+	"gate_separation_db": {
+		Label: "Gate separation",
+		Unit:  "dB",
+		Gloss: "Difference between the voiced low percentile and the noise high percentile.",
+	},
 	"measured_floor_dbfs": {
 		Label: "Measured floor",
 		Unit:  "dBFS",

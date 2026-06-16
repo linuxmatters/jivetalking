@@ -33,7 +33,7 @@ func litSummary() AdaptedSummary {
 		TruePeakDBTP: -3.2,
 		HasSibilance: true,
 		SibilanceDB:  -4,
-		GentleMode:   true,
+		GateDepthDB:  14,
 		InputLUFS:    -24.3,
 	}
 }
@@ -184,7 +184,7 @@ func TestChainBoxLimiterLit(t *testing.T) {
 }
 
 // TestAnalysisBoxLitRows confirms each Analysis row lights to its measurement,
-// including the inline separation bar and the gentle-mode state.
+// including the inline separation bar and the gate-depth value.
 func TestAnalysisBoxLitRows(t *testing.T) {
 	plain := ansi.Strip(renderAnalysisBox(litSummary(), 0))
 
@@ -202,9 +202,9 @@ func TestAnalysisBoxLitRows(t *testing.T) {
 	if !strings.Contains(plain, "Noise floor  -68 "+unitDB) {
 		t.Errorf("Noise floor should have a 2-space gap before its value:\n%s", plain)
 	}
-	// Soft Gate on → ● ON (caps).
-	if !strings.Contains(plain, "Soft gate") || !strings.Contains(plain, "ON") {
-		t.Errorf("Soft Gate should show its state in caps:\n%s", plain)
+	// Gate depth lit → ● <depth> dB.
+	if !strings.Contains(plain, "Gate depth") || !strings.Contains(plain, "14 "+unitDB) {
+		t.Errorf("Gate depth should show its dB value:\n%s", plain)
 	}
 }
 
@@ -362,22 +362,22 @@ func TestPassBoxTitleInBorder(t *testing.T) {
 	}
 }
 
-// TestAnalysisRowOrder confirms Soft Gate sits on row 6 and Sibilance on row 7
+// TestAnalysisRowOrder confirms Gate depth sits on row 6 and Sibilance on row 7
 // (level with the De-esser at Filter Chain row 7), with Loudness on the bottom
 // data row.
 func TestAnalysisRowOrder(t *testing.T) {
 	plain := ansi.Strip(renderAnalysisBox(litSummary(), 0))
-	gentle := strings.Index(plain, "Soft gate")
+	gateDepth := strings.Index(plain, "Gate depth")
 	sibilance := strings.Index(plain, "Sibilance")
 	loudness := strings.Index(plain, "Loudness")
 	truePeak := strings.Index(plain, "True peak")
-	if gentle < 0 || sibilance < 0 || loudness < 0 || truePeak < 0 {
+	if gateDepth < 0 || sibilance < 0 || loudness < 0 || truePeak < 0 {
 		t.Fatalf("missing a row:\n%s", plain)
 	}
-	// True peak (row 5) → Soft Gate (row 6) → Sibilance (row 7) → Loudness (row 8).
-	if truePeak >= gentle || gentle >= sibilance || sibilance >= loudness {
-		t.Errorf("row order wrong: truePeak=%d gentle=%d sibilance=%d loudness=%d\n%s",
-			truePeak, gentle, sibilance, loudness, plain)
+	// True peak (row 5) → Gate depth (row 6) → Sibilance (row 7) → Loudness (row 8).
+	if truePeak >= gateDepth || gateDepth >= sibilance || sibilance >= loudness {
+		t.Errorf("row order wrong: truePeak=%d gateDepth=%d sibilance=%d loudness=%d\n%s",
+			truePeak, gateDepth, sibilance, loudness, plain)
 	}
 }
 
