@@ -3,6 +3,7 @@ package processor
 import (
 	"bytes"
 	"encoding/json"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -182,6 +183,111 @@ func TestWriteCandidatesSidecar_TaggedLines(t *testing.T) {
 		if _, ok := obj["score"]; !ok {
 			t.Errorf("line %d missing candidate score field", i)
 		}
+	}
+}
+
+// TestIntervalSample_MarshalNonFiniteNulled asserts the NaN/±Inf guard: an
+// IntervalSample carrying NaN, +Inf and -Inf in float fields marshals without
+// error to valid JSON, with each non-finite field nulled (the run-record
+// convention) and finite fields unchanged. This is the digitally-silent
+// (voice-gated) audio case that aborts the .intervals.jsonl sidecar without the
+// guard.
+func TestIntervalSample_MarshalNonFiniteNulled(t *testing.T) {
+	s := IntervalSample{
+		Timestamp:     250 * time.Millisecond,
+		RMSLevel:      math.NaN(),
+		PeakLevel:     math.Inf(1),
+		MomentaryLUFS: math.Inf(-1),
+		ShortTermLUFS: -23.5, // finite, must survive
+		TruePeak:      math.NaN(),
+		SamplePeak:    -1.0, // finite, must survive
+		Spectral:      SpectralMetrics{Mean: math.NaN(), Centroid: 2000, Found: true},
+	}
+
+	raw, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("MarshalJSON returned error on non-finite fields: %v", err)
+	}
+	if !json.Valid(raw) {
+		t.Fatalf("MarshalJSON produced invalid JSON: %s", raw)
+	}
+
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// Non-finite fields render as JSON null.
+	for _, key := range []string{"rms_level", "peak_level", "momentary_lufs", "true_peak", "spectral_mean"} {
+		v, present := obj[key]
+		if !present {
+			t.Errorf("missing key %q", key)
+			continue
+		}
+		if v != nil {
+			t.Errorf("%q = %v, want null (non-finite)", key, v)
+		}
+	}
+
+	// Finite fields are unchanged.
+	if v := obj["short_term_lufs"]; v != -23.5 {
+		t.Errorf("short_term_lufs = %v, want -23.5", v)
+	}
+	if v := obj["sample_peak"]; v != -1.0 {
+		t.Errorf("sample_peak = %v, want -1.0", v)
+	}
+	if v := obj["spectral_centroid"]; v != 2000.0 {
+		t.Errorf("spectral_centroid = %v, want 2000", v)
+	}
+}
+
+// TestCandidateSidecarLine_MarshalNonFiniteNulled asserts the same guard on the
+// candidates sidecar: a SpeechCandidateMetrics carrying NaN, +Inf and -Inf
+// marshals without error to valid JSON, non-finite fields nulled, finite fields
+// and the kind tag intact.
+func TestCandidateSidecarLine_MarshalNonFiniteNulled(t *testing.T) {
+	sp := SpeechCandidateMetrics{
+		Score: math.NaN(),
+		RegionSample: RegionSample{
+			RMSLevel:    math.Inf(1),
+			PeakLevel:   math.Inf(-1),
+			CrestFactor: 12.0, // finite, must survive
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := streamCandidates(&buf, []SpeechCandidateMetrics{sp}); err != nil {
+		t.Fatalf("streamCandidates returned error on non-finite fields: %v", err)
+	}
+
+	lines := nonEmptyLines(buf.String())
+	if len(lines) != 1 {
+		t.Fatalf("line count = %d, want 1", len(lines))
+	}
+	if !json.Valid([]byte(lines[0])) {
+		t.Fatalf("produced invalid JSON: %s", lines[0])
+	}
+
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &obj); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if obj["kind"] != "speech" {
+		t.Errorf("kind = %v, want speech", obj["kind"])
+	}
+	for _, key := range []string{"score", "rms_level_dbfs", "peak_level_dbfs"} {
+		v, present := obj[key]
+		if !present {
+			t.Errorf("missing key %q", key)
+			continue
+		}
+		if v != nil {
+			t.Errorf("%q = %v, want null (non-finite)", key, v)
+		}
+	}
+	if v := obj["crest_factor_db"]; v != 12.0 {
+		t.Errorf("crest_factor_db = %v, want 12.0", v)
 	}
 }
 

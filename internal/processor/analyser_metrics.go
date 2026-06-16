@@ -3,6 +3,7 @@ package processor
 import (
 	"encoding/json"
 	"math"
+	"reflect"
 	"strconv"
 	"time"
 	"unsafe"
@@ -57,9 +58,14 @@ type intervalSampleJSON struct {
 }
 
 // MarshalJSON preserves the flat spectral_* JSON contract while the Go model
-// carries interval spectral data as a SpectralMetrics value.
+// carries interval spectral data as a SpectralMetrics value. Non-finite float
+// fields (NaN, +Inf, -Inf) serialise to JSON null via the shared sanitiseValue
+// sweep, mirroring the run-record convention (MarshalRunRecord). Without this,
+// encoding/json errors on non-finite floats and aborts the .intervals.jsonl
+// sidecar mid-stream on digitally-silent (voice-gated) audio. Finite values are
+// byte-identical to a raw marshal.
 func (s IntervalSample) MarshalJSON() ([]byte, error) {
-	return json.Marshal(intervalSampleJSON{
+	flat := intervalSampleJSON{
 		Timestamp: s.Timestamp,
 
 		RMSLevel:  s.RMSLevel,
@@ -83,7 +89,8 @@ func (s IntervalSample) MarshalJSON() ([]byte, error) {
 		ShortTermLUFS: s.ShortTermLUFS,
 		TruePeak:      s.TruePeak,
 		SamplePeak:    s.SamplePeak,
-	})
+	}
+	return json.Marshal(sanitiseValue(reflect.ValueOf(flat)))
 }
 
 // UnmarshalJSON accepts the legacy flat spectral_* JSON contract.
