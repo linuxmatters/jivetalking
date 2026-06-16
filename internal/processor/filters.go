@@ -270,7 +270,6 @@ type BaseFilterConfig struct {
 type AdaptiveDiagnostics struct {
 	BandlimitLPReason string `json:"bandlimit_lowpass_reason"`
 
-	SpeechGateAggression          float64 `json:"aggression"`
 	SpeechGateDynamicRange        float64 `json:"dynamic_range_db"`
 	SpeechGateQuietSpeechEstimate float64 `json:"quiet_speech_estimate_dbfs"`
 	SpeechGateSpeechSeparation    float64 `json:"separation_db"`
@@ -813,10 +812,11 @@ func (cfg *NoiseReductionConfig) buildAfftdnFilter() string {
 }
 
 // buildSpeechGateFilter builds the speech gate filter specification.
-// Uses soft expander approach (1.5:1-2.5:1 ratio) rather than hard gate for natural speech.
-// Detection is fixed RMS (safe for speech and tonal bleed); the threshold, range,
-// ratio, and release adapt to Pass 1 measurements in adaptive.go. An empty
-// Detection field defaults to RMS here.
+// Uses a soft expander approach (1.5:1-2.0:1 ratio) rather than a hard gate for natural speech.
+// tuneSpeechGate in adaptive_speech_gate.go adapts threshold and range to Pass 1
+// measurements; ratio is LRA-based; attack, release, knee, and detection are fixed.
+// Detection is RMS (safe for speech and tonal bleed); an empty Detection field
+// defaults to RMS here.
 func (cfg *EffectiveFilterConfig) buildSpeechGateFilter() string {
 	gate := cfg.SpeechGate
 	if !gate.Enabled {

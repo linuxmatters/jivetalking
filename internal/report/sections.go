@@ -805,9 +805,9 @@ func renderFilters(rec *processor.RunRecord) string {
 }
 
 // renderFilterDiagnostics renders the adaptive-adaptation rationale from
-// filters.diagnostics.* as objective values (aggression, separation, clamp
-// reason, gate depth, etc.) - no verdicts. Returns the empty string when no
-// diagnostics block is present.
+// filters.diagnostics.* as objective values (separation, clamp reason, gate
+// depth, etc.) - no verdicts. Returns the empty string when no diagnostics
+// block is present.
 func renderFilterDiagnostics(d *processor.AdaptiveDiagnostics) string {
 	if d == nil {
 		return ""
@@ -817,7 +817,6 @@ func renderFilterDiagnostics(d *processor.AdaptiveDiagnostics) string {
 	b.WriteString("### Adaptation diagnostics\n\n")
 	b.WriteString(renderParamTable([]paramRow{
 		{"Low-pass reason", stringCell(d.BandlimitLPReason)},
-		{"Gate aggression", formatMetric(d.SpeechGateAggression, 5)},
 		{"Gate dynamic range (dB)", formatMetric(d.SpeechGateDynamicRange, 2)},
 		{"Quiet-speech estimate (dBFS)", formatMetricDB(d.SpeechGateQuietSpeechEstimate, 2)},
 		{"Speech separation (dB)", formatMetric(d.SpeechGateSpeechSeparation, 2)},

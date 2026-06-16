@@ -457,7 +457,6 @@ func perFileStateFieldNames() []string {
 		"OutputAnalysisEnabled",
 		"BandlimitLPReason",
 		"SpeechGateDepthDB",
-		"SpeechGateAggression",
 		"SpeechGateDynamicRange",
 		"SpeechGateQuietSpeechEstimate",
 		"SpeechGateSpeechSeparation",

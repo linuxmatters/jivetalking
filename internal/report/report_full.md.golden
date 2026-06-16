@@ -292,7 +292,6 @@ Sibilance reduction. Intensity is adapted from the speech-region sibilant-band e
 | Parameter | Value |
 | --- | --- |
 | Low-pass reason | 20.5 kHz band-limit (always on) |
-| Gate aggression | 0.25485 |
 | Gate dynamic range (dB) | 29.92 |
 | Quiet-speech estimate (dBFS) | -75.29 |
 | Speech separation (dB) | 9.30 |

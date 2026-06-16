@@ -44,7 +44,7 @@ func populatedProcessingResult() *ProcessingResult {
 		OutputPath:           "/tmp/episode-LUFS-16-processed.flac",
 		Measurements:         populatedAudioMeasurements(),
 		Config:               &cfg,
-		Diagnostics:          &AdaptiveDiagnostics{SpeechGateAggression: 0.4, SpeechGateClampReason: "none"},
+		Diagnostics:          &AdaptiveDiagnostics{SpeechGateDynamicRange: 0.4, SpeechGateClampReason: "none"},
 		FilteredMeasurements: populatedOutputMeasurements(),
 		NormResult: &NormalisationResult{
 			InputLUFS: -18, OutputLUFS: -16, EffectiveTargetI: -16,

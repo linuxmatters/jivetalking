@@ -262,7 +262,6 @@ func TestEffectiveFilterConfigJSON_HasCanonicalKeys(t *testing.T) {
 func TestAdaptiveDiagnosticsJSON_HasCanonicalKeys(t *testing.T) {
 	diag := AdaptiveDiagnostics{
 		BandlimitLPReason:             "20.5 kHz band-limit (always on)",
-		SpeechGateAggression:          0.45,
 		SpeechGateDynamicRange:        14,
 		SpeechGateQuietSpeechEstimate: -52,
 		SpeechGateSpeechSeparation:    8,
@@ -275,7 +274,7 @@ func TestAdaptiveDiagnosticsJSON_HasCanonicalKeys(t *testing.T) {
 	keys := jsonKeySet(t, diag)
 
 	for _, key := range []string{
-		"bandlimit_lowpass_reason", "aggression", "dynamic_range_db",
+		"bandlimit_lowpass_reason", "dynamic_range_db",
 		"quiet_speech_estimate_dbfs", "separation_db", "speech_headroom_db",
 		"threshold_unclamped_db", "clamp_reason", "speech_gate_depth_db",
 	} {
@@ -286,7 +285,7 @@ func TestAdaptiveDiagnosticsJSON_HasCanonicalKeys(t *testing.T) {
 
 	for _, key := range []string{
 		"SpeechGateAggression", "SpeechGateSpeechSeparation", "SpeechGateClampReason",
-		"separation", "aggression_index",
+		"separation", "aggression", "aggression_index",
 	} {
 		if keys[key] {
 			t.Errorf("diagnostics must not emit legacy key %q", key)

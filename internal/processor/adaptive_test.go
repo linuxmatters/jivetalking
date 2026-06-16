@@ -257,7 +257,6 @@ func assertOrderIndependentAdaptiveDiagnostics(t *testing.T, got, want *Adaptive
 	}{
 		{"BandlimitLPReason", got.BandlimitLPReason, want.BandlimitLPReason},
 		{"SpeechGateDepthDB", got.SpeechGateDepthDB, want.SpeechGateDepthDB},
-		{"SpeechGateAggression", got.SpeechGateAggression, want.SpeechGateAggression},
 		{"SpeechGateDynamicRange", got.SpeechGateDynamicRange, want.SpeechGateDynamicRange},
 		{"SpeechGateQuietSpeechEstimate", got.SpeechGateQuietSpeechEstimate, want.SpeechGateQuietSpeechEstimate},
 		{"SpeechGateSpeechSeparation", got.SpeechGateSpeechSeparation, want.SpeechGateSpeechSeparation},
@@ -920,8 +919,7 @@ func TestTuneSpeechGate(t *testing.T) {
 		if diagnostics.SpeechGateNarrowGap {
 			t.Error("diagnostics SpeechGateNarrowGap = true, want false without a profile")
 		}
-		if diagnostics.SpeechGateAggression != 0 ||
-			diagnostics.SpeechGateDynamicRange != 0 ||
+		if diagnostics.SpeechGateDynamicRange != 0 ||
 			diagnostics.SpeechGateQuietSpeechEstimate != 0 ||
 			diagnostics.SpeechGateSpeechSeparation != 0 ||
 			diagnostics.SpeechGateSpeechHeadroom != 0 ||

@@ -91,7 +91,6 @@ const (
 // elected room-tone region and feed only the no-profile legacy threshold path.
 func tuneSpeechGate(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagnostics, measurements *AudioMeasurements) {
 	if diagnostics != nil {
-		diagnostics.SpeechGateAggression = 0
 		diagnostics.SpeechGateDynamicRange = 0
 		diagnostics.SpeechGateQuietSpeechEstimate = 0
 		diagnostics.SpeechGateSpeechSeparation = 0
