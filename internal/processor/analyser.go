@@ -182,7 +182,7 @@ type NoiseMetrics struct {
 	FloorPrescan        float64 `json:"floor_prescan_dbfs"`          // Noise floor estimated from interval data (dBFS)
 	FloorAstats         float64 `json:"floor_astats_dbfs"`           // FFmpeg astats noise floor estimate (dBFS)
 	RoomToneDetectLevel float64 `json:"room_tone_detect_level_dbfs"` // Adaptive room tone detection threshold (dBFS)
-	VoiceActivated      bool    `json:"voice_activated"`             // True when the low-cluster (below-split) interval fraction is high (sparse speech)
+	VoiceActivated      bool    `json:"voice_activated"`             // True when the floored (digital-silence) interval fraction is high (platform-gated capture signature)
 	ReductionHeadroom   float64 `json:"reduction_headroom_db"`       // dB gap between noise and quiet speech
 }
 

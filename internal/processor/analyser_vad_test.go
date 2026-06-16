@@ -187,6 +187,107 @@ func TestPercentileFloor(t *testing.T) {
 	})
 }
 
+func TestFlooredFraction(t *testing.T) {
+	t.Run("gated slice flips true: floored fraction over threshold", func(t *testing.T) {
+		var iv []IntervalSample
+		idx := 0
+		// Sparse speech: 40 above-split intervals.
+		for range 40 {
+			iv = append(iv, vadInterval(idx, -15))
+			idx++
+		}
+		// Dense silence: 40 floored intervals and 20 fully silent (-inf) windows.
+		for range 40 {
+			iv = append(iv, vadInterval(idx, -130))
+			idx++
+		}
+		for range 20 {
+			iv = append(iv, vadInterval(idx, math.Inf(-1)))
+			idx++
+		}
+
+		got := flooredFraction(iv, axisMomentaryLUFS)
+		// 60 of 100 intervals are floored (including -inf windows).
+		want := 60.0 / 100.0
+		if math.Abs(got-want) > 0.001 {
+			t.Errorf("flooredFraction = %.3f, want %.3f (floored and -inf count)", got, want)
+		}
+		if got < vadVoiceActivatedFraction {
+			t.Errorf("fraction %.3f below threshold %.3f, should flag voice-activated", got, vadVoiceActivatedFraction)
+		}
+	})
+
+	t.Run("sparse below-split slice stays false: zero floored", func(t *testing.T) {
+		// The per-speaker podcast track Option A got wrong: a high below-split
+		// fraction but ZERO digital-silence intervals. Floored-only keeps it false.
+		var iv []IntervalSample
+		idx := 0
+		// 70 below-split-but-measurable intervals (well above the floor).
+		for range 70 {
+			iv = append(iv, vadInterval(idx, -55))
+			idx++
+		}
+		// 30 above-split speech intervals.
+		for range 30 {
+			iv = append(iv, vadInterval(idx, -15))
+			idx++
+		}
+
+		got := flooredFraction(iv, axisMomentaryLUFS)
+		if got != 0 {
+			t.Errorf("flooredFraction = %.3f, want 0 (no interval is floored)", got)
+		}
+		if got >= vadVoiceActivatedFraction {
+			t.Errorf("sparse below-split track flagged voice-activated at %.3f; Option A's failure case", got)
+		}
+	})
+
+	t.Run("continuous slice stays false: no floored, mostly above-split", func(t *testing.T) {
+		var iv []IntervalSample
+		idx := 0
+		for range 95 {
+			iv = append(iv, vadInterval(idx, -15))
+			idx++
+		}
+		for range 5 {
+			iv = append(iv, vadInterval(idx, -60))
+			idx++
+		}
+
+		got := flooredFraction(iv, axisMomentaryLUFS)
+		if got != 0 {
+			t.Errorf("flooredFraction = %.3f, want 0 (no interval is floored)", got)
+		}
+		if got >= vadVoiceActivatedFraction {
+			t.Errorf("continuous track flagged voice-activated at %.3f", got)
+		}
+	})
+
+	t.Run("all-floored slice returns 1.0 (true)", func(t *testing.T) {
+		var iv []IntervalSample
+		for i := range 30 {
+			iv = append(iv, vadInterval(i, -130))
+		}
+		got := flooredFraction(iv, axisMomentaryLUFS)
+		if got != 1.0 {
+			t.Errorf("flooredFraction = %.3f, want 1.0 (every interval floored)", got)
+		}
+		if got < vadVoiceActivatedFraction {
+			t.Errorf("all-floored slice not flagged voice-activated at %.3f", got)
+		}
+	})
+
+	t.Run("all-NaN slice returns 0 via the zero-guard", func(t *testing.T) {
+		var iv []IntervalSample
+		for i := range 20 {
+			iv = append(iv, vadInterval(i, math.NaN()))
+		}
+		if got := flooredFraction(iv, axisMomentaryLUFS); got != 0 {
+			t.Errorf("flooredFraction = %.3f, want 0 (every interval unmeasurable)", got)
+		}
+	})
+}
+
 func TestIsSpeechInterval(t *testing.T) {
 	const split = -30.0
 	inBand := func(level, centroid, entropy float64) IntervalSample {

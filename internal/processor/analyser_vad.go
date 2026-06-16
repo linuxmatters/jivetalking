@@ -602,31 +602,40 @@ func pickLowClusterRegion(intervals []IntervalSample, split float64, axis levelA
 	return best
 }
 
-// vadVoiceActivatedFraction is the low-cluster fraction at or above which the
-// recording is flagged voice-activated. A high fraction of below-split
-// intervals means speech is sparse against long silences, the voice-activated
-// signature. Replaces the room-tone digital-silence count, which no longer
-// exists under the unified detector.
-const vadVoiceActivatedFraction = 0.60
+// vadVoiceActivatedFraction is the floored (digital-silence) interval fraction
+// at or above which the recording is flagged voice-activated. A high fraction
+// of intervals pinned at the digital-silence floor is the platform-gated capture
+// signature: the recorder mutes the channel to true silence between utterances.
+//
+// Sourced from the Phase 3 calibration sweep (VOICEACTIVATED-GATE-PLAN): the
+// whole corpus tops out at 0.10% floored, while the lowest gated TT202 track
+// (Marius) sits at 44.08%. 0.20 (20%) lands in that gap: ~190x margin over the
+// corpus ceiling and ~2.2x under Marius. The combined below-split fraction was
+// rejected because corpus per-speaker tracks run 50-75% below-split, so it could
+// not separate gated recordings from sparse podcast tracks.
+const vadVoiceActivatedFraction = 0.20
 
-// lowClusterFraction returns the fraction of non-floored intervals whose level
-// is below the split.
-func lowClusterFraction(intervals []IntervalSample, split float64, axis levelAxis) float64 {
-	var counted, below float64
+// flooredFraction returns the fraction of measurable intervals pinned at the
+// digital-silence floor (level <= vadLevelFloorDB, including a fully silent
+// momentary window that reads as -inf). Only an unmeasurable interval (NaN) is
+// skipped from the denominator. A high floored fraction is the platform-gated
+// capture signature; below-split-but-measurable intervals do not count here.
+func flooredFraction(intervals []IntervalSample, axis levelAxis) float64 {
+	var counted, floored float64
 	for _, iv := range intervals {
 		level := intervalLevel(iv, axis)
-		if math.IsInf(level, 0) || math.IsNaN(level) || level <= vadLevelFloorDB {
+		if math.IsNaN(level) {
 			continue
 		}
 		counted++
-		if level < split {
-			below++
+		if level <= vadLevelFloorDB {
+			floored++
 		}
 	}
 	if counted == 0 {
 		return 0
 	}
-	return below / counted
+	return floored / counted
 }
 
 // detectVoiceActivity is the unified Pass 1 voice-activity detector. One bimodal
@@ -670,7 +679,7 @@ func detectVoiceActivity(measurements *AudioMeasurements, intervals []IntervalSa
 
 	measurements.Noise.Floor = floor
 	measurements.Noise.FloorSource = "vad_percentile"
-	measurements.Noise.VoiceActivated = lowClusterFraction(intervals, split, axis) >= vadVoiceActivatedFraction
+	measurements.Noise.VoiceActivated = flooredFraction(intervals, axis) >= vadVoiceActivatedFraction
 
 	log.Logf("VAD: split=%.1f dB (axis=%d), floor=%.1f dB, margin=%.2f dB, gapTol=%d, runs=%d, speechElected=%v, noiseRegion=%v",
 		split, axis, floor, margin, tol, len(runs), profile != nil, noiseRegion != nil)
