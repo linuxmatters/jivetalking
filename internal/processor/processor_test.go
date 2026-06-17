@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/linuxmatters/jivetalking/internal/audio"
 )
@@ -418,7 +417,6 @@ func TestRenameNoClobberReportsSourceCleanupFailureAfterPublish(t *testing.T) {
 func TestEffectiveConfigFilterOrderIsolation(t *testing.T) {
 	base := newTestBaseConfig()
 	base.FilterOrder = []FilterID{FilterAnalysis, FilterDeesser}
-	base.Analysis.RoomToneScanDuration = 1500 * time.Millisecond
 
 	first, firstDiagnostics := AdaptConfig(base, &AudioMeasurements{
 		Spectral: SpectralMetrics{Centroid: 5000},
@@ -434,7 +432,6 @@ func TestEffectiveConfigFilterOrderIsolation(t *testing.T) {
 	}
 
 	first.FilterOrder[0] = FilterDownmix
-	first.Analysis.RoomToneScanDuration = 250 * time.Millisecond
 
 	if reflect.DeepEqual(first.FilterOrder, base.FilterOrder) {
 		t.Fatal("test setup failed: first effective FilterOrder did not change")
@@ -444,14 +441,6 @@ func TestEffectiveConfigFilterOrderIsolation(t *testing.T) {
 	}
 	if !reflect.DeepEqual(second.FilterOrder, []FilterID{FilterAnalysis, FilterDeesser}) {
 		t.Errorf("second effective FilterOrder = %v, want independent copy", second.FilterOrder)
-	}
-	if base.Analysis.RoomToneScanDuration != 1500*time.Millisecond {
-		t.Errorf("base Analysis.RoomToneScanDuration = %v, want unchanged 1.5s",
-			base.Analysis.RoomToneScanDuration)
-	}
-	if second.Analysis.RoomToneScanDuration != 1500*time.Millisecond {
-		t.Errorf("second effective Analysis.RoomToneScanDuration = %v, want independent copy",
-			second.Analysis.RoomToneScanDuration)
 	}
 }
 

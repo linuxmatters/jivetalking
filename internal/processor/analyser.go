@@ -513,7 +513,6 @@ func collectAnalysisFrames(ctx stdcontext.Context, filename string, config *Base
 	acc := &metadataAccumulators{}
 
 	var intervals []IntervalSample
-	var silenceIntervals []IntervalSample
 	var intervalAcc intervalAccumulator
 	var intervalStartTime time.Duration
 
@@ -540,9 +539,6 @@ func collectAnalysisFrames(ctx stdcontext.Context, filename string, config *Base
 			if inputFrameTime-intervalStartTime >= analysisIntervalHop {
 				finalised := intervalAcc.finalize(intervalStartTime)
 				intervals = append(intervals, finalised)
-				if config.Analysis.RoomToneScanDuration > 0 && intervalStartTime < config.Analysis.RoomToneScanDuration {
-					silenceIntervals = append(silenceIntervals, finalised)
-				}
 				intervalStartTime = inputFrameTime
 				intervalAcc.reset()
 			}
@@ -583,13 +579,6 @@ func collectAnalysisFrames(ctx stdcontext.Context, filename string, config *Base
 	if intervalAcc.rawSampleCount > 0 {
 		finalised := intervalAcc.finalize(intervalStartTime)
 		intervals = append(intervals, finalised)
-		if config.Analysis.RoomToneScanDuration > 0 && intervalStartTime < config.Analysis.RoomToneScanDuration {
-			silenceIntervals = append(silenceIntervals, finalised)
-		}
-	}
-
-	if config.Analysis.RoomToneScanDuration == 0 {
-		silenceIntervals = intervals
 	}
 
 	ffmpeg.AVFilterGraphFree(&filterGraph)
@@ -598,8 +587,8 @@ func collectAnalysisFrames(ctx stdcontext.Context, filename string, config *Base
 	return &analysisFrameCollection{
 		accumulators:     acc,
 		intervals:        intervals,
-		silenceIntervals: silenceIntervals,
-		silenceMedians:   computeSilenceMedians(silenceIntervals),
+		silenceIntervals: intervals,
+		silenceMedians:   computeSilenceMedians(intervals),
 		totalDuration:    totalDuration,
 	}, nil
 }

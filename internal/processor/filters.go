@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"strings"
-	"time"
 
 	ffmpeg "github.com/linuxmatters/ffmpeg-statigo"
 )
@@ -134,10 +133,6 @@ type DownmixConfig struct {
 
 type AnalysisConfig struct {
 	Enabled bool
-	// RoomToneScanDuration caps the room-tone candidate scan to the first
-	// DURATION of input. Loudness, true peak, LRA, spectral, and speech
-	// analysis remain whole-file regardless. Zero means scan the whole file.
-	RoomToneScanDuration time.Duration
 }
 
 type ResampleConfig struct {

@@ -152,7 +152,6 @@ jivetalking [flags] <files...>
 | `-a, --analysis-only` | Run analysis only (Pass 1), display results, skip processing |
 | `-d, --debug` | Enable debug logging to `jivetalking-debug.log` |
 | `--diagnostics` | Write extra diagnostic artefacts: before/after spectrogram PNGs plus `.intervals.jsonl`/`.candidates.jsonl` sidecars. Adds extra FFmpeg passes. Off by default |
-| `--room-tone-scan-duration=DURATION` | Cap room-tone candidate scan to the first `DURATION` of input (e.g. `30s`, `1m30s`). Default `0s` scans the whole file |
 
 
 ### Examples
@@ -218,7 +217,7 @@ The full source layout, architecture, and contribution standards live in [AGENTS
 
 ### Design Documentation
 
-- [Usage Guide](docs/Usage.md): driving Jivetalking in depth: quality ratings, analysis-only mode, diagnostics, and room-tone scan limiting
+- [Usage Guide](docs/Usage.md): driving Jivetalking in depth: quality ratings, analysis-only mode, and diagnostics
 - [Audio Pipeline](docs/Pipeline.md): how and why the processing pipeline is built and tuned, with a diagram
 - [The hardware that taught me](docs/Inspiration.md): the influences and heritage behind jivetalking's processing approach
 - [Spectral Metrics Reference](docs/Spectral-Metrics-Reference.md): how measurements drive adaptation

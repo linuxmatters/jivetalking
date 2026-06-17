@@ -37,22 +37,11 @@ var createDebugLogFile = os.Create
 
 // CLI defines the command-line interface parsed by kong.
 type CLI struct {
-	Version              bool          `short:"v" help:"Show version information"`
-	Debug                bool          `short:"d" help:"Enable debug logging to jivetalking-debug.log"`
-	AnalysisOnly         bool          `short:"a" help:"Run analysis only (Pass 1), display results, skip processing"`
-	Diagnostics          bool          `name:"diagnostics" help:"Write bulk diagnostic artefacts for sweeps and quality comparison: the .intervals.jsonl and .candidates.jsonl sidecars plus before/after spectrogram PNGs (whole-file and elected room-tone/speech regions). Adds extra FFmpeg passes. Off by default." default:"false"`
-	RoomToneScanDuration time.Duration `name:"room-tone-scan-duration" help:"Cap room-tone-candidate scan to the first DURATION of input (e.g. 30s, 1m30s). Faster on long files at the cost of coverage; loudness, true peak, LRA, spectral, and speech analysis remain whole-file. Fewer room-tone candidates also reach voice-activated detection when capped. 0s means scan the whole file." placeholder:"DURATION" default:"0s"`
-	Files                []string      `arg:"" name:"files" help:"Audio files to process" type:"existingfile" optional:""`
-}
-
-// resolveRoomToneScanDuration validates the --room-tone-scan-duration flag and
-// returns the effective duration to use. Negative values are rejected; 0s means
-// scan the whole file.
-func resolveRoomToneScanDuration(roomTone time.Duration) (time.Duration, error) {
-	if roomTone < 0 {
-		return 0, fmt.Errorf("--room-tone-scan-duration must be >= 0, got %s", roomTone)
-	}
-	return roomTone, nil
+	Version      bool     `short:"v" help:"Show version information"`
+	Debug        bool     `short:"d" help:"Enable debug logging to jivetalking-debug.log"`
+	AnalysisOnly bool     `short:"a" help:"Run analysis only (Pass 1), display results, skip processing"`
+	Diagnostics  bool     `name:"diagnostics" help:"Write bulk diagnostic artefacts for sweeps and quality comparison: the .intervals.jsonl and .candidates.jsonl sidecars plus before/after spectrogram PNGs (whole-file and elected room-tone/speech regions). Adds extra FFmpeg passes. Off by default." default:"false"`
+	Files        []string `arg:"" name:"files" help:"Audio files to process" type:"existingfile" optional:""`
 }
 
 // resolveJobs derives the worker count from the number of input files, capped
@@ -96,14 +85,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	scanDuration, err := resolveRoomToneScanDuration(cliArgs.RoomToneScanDuration)
-	if err != nil {
-		cli.PrintError(err.Error())
-		os.Exit(1)
-	}
-
 	config := processor.DefaultFilterConfig()
-	config.Analysis.RoomToneScanDuration = scanDuration
 
 	debugLog, err := openDebugLog(cliArgs.Debug)
 	if err != nil {
