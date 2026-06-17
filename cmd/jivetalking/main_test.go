@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alecthomas/kong"
 	"github.com/linuxmatters/jivetalking/internal/audio"
 	"github.com/linuxmatters/jivetalking/internal/processor"
 	"github.com/linuxmatters/jivetalking/internal/report"
@@ -712,72 +711,6 @@ func (c *reportCapture) content(path string) (string, bool) {
 	defer c.mu.Unlock()
 	body, ok := c.reports[path]
 	return body, ok
-}
-
-func parseCLIArgs(t *testing.T, args ...string) *CLI {
-	t.Helper()
-	cliArgs := &CLI{}
-	parser, err := kong.New(cliArgs,
-		kong.Name("jivetalking"),
-		kong.Exit(func(int) {
-			t.Fatalf("kong.Exit called during parse with args %v", args)
-		}),
-	)
-	if err != nil {
-		t.Fatalf("kong.New: %v", err)
-	}
-	if _, err := parser.Parse(args); err != nil {
-		t.Fatalf("kong.Parse(%v) error = %v", args, err)
-	}
-	return cliArgs
-}
-
-func makeFixtureFile(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	path := dir + "/in.wav"
-	if err := os.WriteFile(path, []byte("dummy"), 0o600); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
-	return path
-}
-
-func TestCLI_RoomToneScanDurationFlag_ParsesIntoStructField(t *testing.T) {
-	fixture := makeFixtureFile(t)
-	cliArgs := parseCLIArgs(t, "--room-tone-scan-duration=30s", fixture)
-	if cliArgs.RoomToneScanDuration != 30*time.Second {
-		t.Fatalf("RoomToneScanDuration = %s, want 30s", cliArgs.RoomToneScanDuration)
-	}
-}
-
-func TestResolveRoomToneScanDuration_FlagSet(t *testing.T) {
-	got, err := resolveRoomToneScanDuration(30 * time.Second)
-	if err != nil {
-		t.Fatalf("resolveRoomToneScanDuration: %v", err)
-	}
-	if got != 30*time.Second {
-		t.Fatalf("got = %s, want 30s", got)
-	}
-}
-
-func TestResolveRoomToneScanDuration_NegativeRejected(t *testing.T) {
-	_, err := resolveRoomToneScanDuration(-1 * time.Second)
-	if err == nil {
-		t.Fatal("resolveRoomToneScanDuration with negative value: want error, got nil")
-	}
-	if !strings.Contains(err.Error(), "--room-tone-scan-duration") {
-		t.Fatalf("negative error = %q, want --room-tone-scan-duration", err.Error())
-	}
-}
-
-func TestResolveRoomToneScanDuration_ZeroReturnsZero(t *testing.T) {
-	got, err := resolveRoomToneScanDuration(0)
-	if err != nil {
-		t.Fatalf("resolveRoomToneScanDuration: %v", err)
-	}
-	if got != 0 {
-		t.Fatalf("got = %s, want 0s", got)
-	}
 }
 
 func TestResolveJobs(t *testing.T) {

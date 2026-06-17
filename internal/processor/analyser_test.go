@@ -3,7 +3,6 @@ package processor
 import (
 	"context"
 	"encoding/json"
-	"reflect"
 	"testing"
 	"time"
 
@@ -228,10 +227,8 @@ func TestAnalyseAudioDoesNotMutateCallerConfig(t *testing.T) {
 
 	config := DefaultFilterConfig()
 	config.FilterOrder = []FilterID{FilterNoiseReduction, FilterAnalysis}
-	config.Analysis.RoomToneScanDuration = 250 * time.Millisecond
 
 	originalOrder := append([]FilterID(nil), config.FilterOrder...)
-	originalRoomToneScanDuration := config.Analysis.RoomToneScanDuration
 
 	if _, err := AnalyseAudio(context.Background(), testFile, config, nil); err != nil {
 		t.Fatalf("AnalyseAudio failed: %v", err)
@@ -244,9 +241,6 @@ func TestAnalyseAudioDoesNotMutateCallerConfig(t *testing.T) {
 		if config.FilterOrder[i] != originalOrder[i] {
 			t.Errorf("FilterOrder[%d] = %q, want %q", i, config.FilterOrder[i], originalOrder[i])
 		}
-	}
-	if config.Analysis.RoomToneScanDuration != originalRoomToneScanDuration {
-		t.Errorf("Analysis.RoomToneScanDuration = %v, want %v", config.Analysis.RoomToneScanDuration, originalRoomToneScanDuration)
 	}
 }
 
@@ -1345,208 +1339,4 @@ func TestRunFilterGraphLenientErrors(t *testing.T) {
 		t.Fatal("no frames processed with lenient config")
 	}
 	t.Logf("lenient config processed %d filtered frames", frameCount)
-}
-
-func TestAnalyseAudio_RoomToneScanDuration(t *testing.T) {
-	// Deterministic synthetic input for the room-tone-scan-duration cap.
-	//
-	// Layout (85 seconds total):
-	//   [0,  8 s)   tone + noise floor (32 intervals at ~-23 dBFS RMS)
-	//   [8, 55 s)   silence with -60 dBFS noise floor (188 intervals; >= the
-	//               32-interval / 8 s minimum used by the silence pipeline)
-	//   [55, 85 s)  tone + noise floor (120 intervals at ~-23 dBFS RMS)
-	//
-	// The silence gap inherits the configured noise floor (see generateTestAudio)
-	// so the silence pipeline scores it as real room tone rather than rejecting
-	// it as digital silence (RMSLevel <= -115 dBFS).
-	//
-	// The 188 / 152 split (silence > tone) is required so the median RMS used
-	// by roomToneScore falls in the silence range, which in turn lets
-	// estimateNoiseFloorAndThreshold pin the silence threshold near the noise
-	// floor. With a tone-dominated split the median sits at the tone level,
-	// every interval scores 1.0, and the top-20% selection becomes order-
-	// dependent on Go's unstable sort.
-	opts := TestAudioOptions{
-		DurationSecs: 85.0,
-		SampleRate:   44100,
-		ToneFreq:     440.0,
-		ToneLevel:    -23.0,
-		NoiseLevel:   -60.0,
-	}
-	opts.SilenceGap.Start = 8.0
-	opts.SilenceGap.Duration = 47.0
-
-	testFile := generateTestAudio(t, opts)
-	defer cleanupTestAudio(t, testFile)
-
-	// Loudness fields are derived from ebur128 metadata, which is bit-stable
-	// frame-by-frame for identical input. Allow a small tolerance to absorb
-	// any non-determinism in floating-point reductions across runs.
-	const loudnessTolerance = 0.01
-
-	baselineConfig := newTestBaseConfig()
-	baselineConfig.Analysis.Enabled = true
-
-	baseline, err := AnalyseAudio(context.Background(), testFile, baselineConfig, nil)
-	if err != nil {
-		t.Fatalf("baseline AnalyseAudio failed: %v", err)
-	}
-	if baseline.Regions.NoiseProfile == nil {
-		t.Fatalf("baseline NoiseProfile is nil; the silence pipeline did not elect a region " +
-			"for the synthetic input")
-	}
-
-	abs := func(x float64) float64 {
-		if x < 0 {
-			return -x
-		}
-		return x
-	}
-
-	assertLoudnessMatches := func(t *testing.T, got *AudioMeasurements) {
-		t.Helper()
-		if d := abs(got.Loudness.InputI - baseline.Loudness.InputI); d > loudnessTolerance {
-			t.Errorf("InputI = %.4f, baseline = %.4f, diff = %.4f (tolerance %.4f)",
-				got.Loudness.InputI, baseline.Loudness.InputI, d, loudnessTolerance)
-		}
-		if d := abs(got.Loudness.InputTP - baseline.Loudness.InputTP); d > loudnessTolerance {
-			t.Errorf("InputTP = %.4f, baseline = %.4f, diff = %.4f (tolerance %.4f)",
-				got.Loudness.InputTP, baseline.Loudness.InputTP, d, loudnessTolerance)
-		}
-		if d := abs(got.Loudness.InputLRA - baseline.Loudness.InputLRA); d > loudnessTolerance {
-			t.Errorf("InputLRA = %.4f, baseline = %.4f, diff = %.4f (tolerance %.4f)",
-				got.Loudness.InputLRA, baseline.Loudness.InputLRA, d, loudnessTolerance)
-		}
-		if d := abs(got.Noise.Floor - baseline.Noise.Floor); d > loudnessTolerance {
-			t.Errorf("NoiseFloor = %.4f, baseline = %.4f, diff = %.4f (tolerance %.4f)",
-				got.Noise.Floor, baseline.Noise.Floor, d, loudnessTolerance)
-		}
-	}
-
-	t.Run("zero_matches_baseline", func(t *testing.T) {
-		// AC1 / AC5: explicit zero is identical to flag absent (no cap).
-		config := newTestBaseConfig()
-		config.Analysis.Enabled = true
-		config.Analysis.RoomToneScanDuration = 0
-
-		got, err := AnalyseAudio(context.Background(), testFile, config, nil)
-		if err != nil {
-			t.Fatalf("AnalyseAudio failed: %v", err)
-		}
-
-		assertLoudnessMatches(t, got)
-
-		if !speechRegionsEqual(got.Regions.SpeechRegions, baseline.Regions.SpeechRegions) {
-			t.Errorf("SpeechRegions = %+v, baseline = %+v",
-				got.Regions.SpeechRegions, baseline.Regions.SpeechRegions)
-		}
-		if !noiseProfilesEqual(got.Regions.NoiseProfile, baseline.Regions.NoiseProfile) {
-			t.Errorf("NoiseProfile = %+v, baseline = %+v",
-				got.Regions.NoiseProfile, baseline.Regions.NoiseProfile)
-		}
-	})
-
-	t.Run("cap_does_not_change_elected_region", func(t *testing.T) {
-		// The unified voice-activity detector reads the whole-file interval stream,
-		// not the RoomToneScanDuration-capped silence slice, so the elected
-		// low-cluster region is the same with a 2 s cap as uncapped (the cap no
-		// longer suppresses the silence at 8-55 s). The scalar noise floor may
-		// still shift, because the floor clamp anchor is seeded by FloorPrescan,
-		// which estimateNoiseFloorAndThreshold derives from the capped slice.
-		config := newTestBaseConfig()
-		config.Analysis.Enabled = true
-		config.Analysis.RoomToneScanDuration = 2 * time.Second
-
-		got, err := AnalyseAudio(context.Background(), testFile, config, nil)
-		if err != nil {
-			t.Fatalf("AnalyseAudio failed: %v", err)
-		}
-
-		if got.Regions.NoiseProfile == nil {
-			t.Fatal("NoiseProfile is nil; the detector ignores the cap and should still elect a region")
-		}
-		if got.Regions.NoiseProfile.Start != baseline.Regions.NoiseProfile.Start ||
-			got.Regions.NoiseProfile.Duration != baseline.Regions.NoiseProfile.Duration {
-			t.Errorf("elected region = (%v, %v), baseline = (%v, %v) (cap should not change the region)",
-				got.Regions.NoiseProfile.Start, got.Regions.NoiseProfile.Duration,
-				baseline.Regions.NoiseProfile.Start, baseline.Regions.NoiseProfile.Duration)
-		}
-	})
-
-	t.Run("cap_longer_than_silence_matches_uncapped", func(t *testing.T) {
-		// AC7: cap at 60 s comfortably covers the silence at 8-55 s, so the
-		// silence pipeline elects the same region as the uncapped run and
-		// produces the same NoiseProfile placement.
-		config := newTestBaseConfig()
-		config.Analysis.Enabled = true
-		config.Analysis.RoomToneScanDuration = 60 * time.Second
-
-		got, err := AnalyseAudio(context.Background(), testFile, config, nil)
-		if err != nil {
-			t.Fatalf("AnalyseAudio failed: %v", err)
-		}
-
-		if got.Regions.NoiseProfile == nil {
-			t.Fatalf("NoiseProfile is nil; expected the same region as the uncapped run "+
-				"(baseline.NoiseProfile.Start = %v)", baseline.Regions.NoiseProfile.Start)
-		}
-		if got.Regions.NoiseProfile.Start != baseline.Regions.NoiseProfile.Start {
-			t.Errorf("NoiseProfile.Start = %v, baseline = %v",
-				got.Regions.NoiseProfile.Start, baseline.Regions.NoiseProfile.Start)
-		}
-		if got.Regions.NoiseProfile.Duration != baseline.Regions.NoiseProfile.Duration {
-			t.Errorf("NoiseProfile.Duration = %v, baseline = %v",
-				got.Regions.NoiseProfile.Duration, baseline.Regions.NoiseProfile.Duration)
-		}
-	})
-
-	t.Run("other_measurements_unaffected_by_cap", func(t *testing.T) {
-		// AC8: with the cap engaged (cap > silence end so the silence pipeline
-		// elects the same region), whole-file measurements (loudness, true peak,
-		// LRA, speech regions, interval samples) match the uncapped run because
-		// only the silence pipeline reads the capped slice.
-		config := newTestBaseConfig()
-		config.Analysis.Enabled = true
-		config.Analysis.RoomToneScanDuration = 60 * time.Second
-
-		got, err := AnalyseAudio(context.Background(), testFile, config, nil)
-		if err != nil {
-			t.Fatalf("AnalyseAudio failed: %v", err)
-		}
-
-		assertLoudnessMatches(t, got)
-
-		if !speechRegionsEqual(got.Regions.SpeechRegions, baseline.Regions.SpeechRegions) {
-			t.Errorf("SpeechRegions = %+v, baseline = %+v",
-				got.Regions.SpeechRegions, baseline.Regions.SpeechRegions)
-		}
-		if len(got.Regions.IntervalSamples) != len(baseline.Regions.IntervalSamples) {
-			t.Errorf("len(IntervalSamples) = %d, baseline = %d",
-				len(got.Regions.IntervalSamples), len(baseline.Regions.IntervalSamples))
-		}
-	})
-}
-
-// speechRegionsEqual returns true when two SpeechRegion slices match element-wise.
-func speechRegionsEqual(a, b []SpeechRegion) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// noiseProfilesEqual returns true when two NoiseProfile pointers refer to
-// equivalent values (or are both nil). NoiseProfile carries a BandNoise slice, so
-// it is no longer comparable with ==; compare the scalar fields, then the slice
-// element-wise.
-func noiseProfilesEqual(a, b *NoiseProfile) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return reflect.DeepEqual(*a, *b)
 }

@@ -6,7 +6,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 )
 
 // newTestBaseConfig creates a minimal BaseFilterConfig for testing.
@@ -1022,7 +1021,6 @@ func TestFilterOrderRespected(t *testing.T) {
 func TestDeriveAdaptiveFilterResultDeepCopiesFilterOrder(t *testing.T) {
 	base := DefaultFilterConfig()
 	base.FilterOrder = []FilterID{FilterDeesser, FilterAnalysis}
-	base.Analysis.RoomToneScanDuration = 2 * time.Second
 	base.Resample.SampleRate = 48000
 
 	adaptive := deriveAdaptiveFilterResult(base)
@@ -1037,10 +1035,6 @@ func TestDeriveAdaptiveFilterResultDeepCopiesFilterOrder(t *testing.T) {
 	if base.FilterOrder[0] == FilterDownmix {
 		t.Fatal("adaptive FilterOrder mutation changed base FilterOrder")
 	}
-	if adaptive.Analysis.RoomToneScanDuration != base.Analysis.RoomToneScanDuration {
-		t.Errorf("Analysis.RoomToneScanDuration = %s, want %s",
-			adaptive.Analysis.RoomToneScanDuration, base.Analysis.RoomToneScanDuration)
-	}
 	if adaptive.Resample.SampleRate != base.Resample.SampleRate {
 		t.Errorf("Resample.SampleRate = %d, want %d",
 			adaptive.Resample.SampleRate, base.Resample.SampleRate)
@@ -1053,15 +1047,10 @@ func TestDeriveAdaptiveFilterResultDeepCopiesFilterOrder(t *testing.T) {
 
 func TestCloneFilterDefaultsCopiesTypedFamilies(t *testing.T) {
 	base := DefaultFilterConfig()
-	base.Analysis.RoomToneScanDuration = 3 * time.Second
 	base.NoiseReduction.AfftdnEnabled = false
 	base.FilterOrder = []FilterID{FilterAnalysis, FilterDeesser}
 
 	clone := cloneFilterDefaults(&base.filterConfigDefaults)
-	if clone.Analysis.RoomToneScanDuration != base.Analysis.RoomToneScanDuration {
-		t.Errorf("Analysis.RoomToneScanDuration = %s, want %s",
-			clone.Analysis.RoomToneScanDuration, base.Analysis.RoomToneScanDuration)
-	}
 	if clone.NoiseReduction.AfftdnEnabled != base.NoiseReduction.AfftdnEnabled {
 		t.Errorf("NoiseReduction.AfftdnEnabled = %v, want %v",
 			clone.NoiseReduction.AfftdnEnabled, base.NoiseReduction.AfftdnEnabled)
@@ -1080,7 +1069,6 @@ func TestAssembleEffectiveFilterConfig(t *testing.T) {
 	base := DefaultFilterConfig()
 	base.FilterOrder = []FilterID{FilterDeesser, FilterAnalysis}
 	base.Loudnorm.TargetI = -18.0
-	base.Analysis.RoomToneScanDuration = 2 * time.Second
 
 	adaptive := deriveAdaptiveFilterResult(base)
 	adaptive.RumbleHighPass.Frequency = 65.0
@@ -1101,10 +1089,6 @@ func TestAssembleEffectiveFilterConfig(t *testing.T) {
 	if effective.Loudnorm.TargetI != base.Loudnorm.TargetI {
 		t.Errorf("Loudnorm.TargetI = %.1f, want base %.1f", effective.Loudnorm.TargetI, base.Loudnorm.TargetI)
 	}
-	if effective.Analysis.RoomToneScanDuration != base.Analysis.RoomToneScanDuration {
-		t.Errorf("Analysis.RoomToneScanDuration = %s, want base %s",
-			effective.Analysis.RoomToneScanDuration, base.Analysis.RoomToneScanDuration)
-	}
 	if !reflect.DeepEqual(effective.FilterOrder, base.FilterOrder) {
 		t.Errorf("FilterOrder = %v, want base order %v", effective.FilterOrder, base.FilterOrder)
 	}
@@ -1124,7 +1108,6 @@ func TestDeriveEffectiveFilterConfig(t *testing.T) {
 	base := DefaultFilterConfig()
 	base.FilterOrder = []FilterID{FilterDeesser, FilterAnalysis}
 	base.Loudnorm.TargetI = -18.0
-	base.Analysis.RoomToneScanDuration = 2 * time.Second
 	base.NoiseReduction.AfftdnNoiseReduction = 9.0
 
 	derived := deriveEffectiveFilterConfig(base)
@@ -1143,10 +1126,6 @@ func TestDeriveEffectiveFilterConfig(t *testing.T) {
 	if derived.Loudnorm.TargetI != base.Loudnorm.TargetI {
 		t.Errorf("Loudnorm.TargetI = %.1f, want %.1f", derived.Loudnorm.TargetI, base.Loudnorm.TargetI)
 	}
-	if derived.Analysis.RoomToneScanDuration != base.Analysis.RoomToneScanDuration {
-		t.Errorf("Analysis.RoomToneScanDuration = %s, want %s",
-			derived.Analysis.RoomToneScanDuration, base.Analysis.RoomToneScanDuration)
-	}
 	if derived.NoiseReduction.AfftdnNoiseReduction != base.NoiseReduction.AfftdnNoiseReduction {
 		t.Errorf("NoiseReduction.AfftdnNoiseReduction = %.1f, want %.1f",
 			derived.NoiseReduction.AfftdnNoiseReduction, base.NoiseReduction.AfftdnNoiseReduction)
@@ -1154,7 +1133,6 @@ func TestDeriveEffectiveFilterConfig(t *testing.T) {
 
 	if !reflect.DeepEqual(base.FilterOrder, []FilterID{FilterDeesser, FilterAnalysis}) ||
 		base.Loudnorm.TargetI != -18.0 ||
-		base.Analysis.RoomToneScanDuration != 2*time.Second ||
 		base.NoiseReduction.AfftdnNoiseReduction != 9.0 {
 		t.Error("deriveEffectiveFilterConfig mutated caller-owned defaults")
 	}
