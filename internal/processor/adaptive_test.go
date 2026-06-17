@@ -1521,6 +1521,21 @@ func TestTuneLevellingCompressorThresholdFullFileRMSFloor(t *testing.T) {
 			fullFileRMS: -8.0, // -8 + 9 = 1, above -6 -> clamps to -6
 			want:        levellingCompressorThresholdMax,
 		},
+		{
+			// Unmeasured astats leaves RMSLevel at the 0.0 zero value; the guard must
+			// treat it as absent and not floor the speech RMS up to 0 dBFS.
+			name:        "zero full-file RMS (unmeasured astats) falls back to speech",
+			speechRMS:   -24.0,
+			fullFileRMS: 0.0,
+			want:        -24.0 + levellingCompressorThresholdSpeechOffsetDB, // -15.0
+		},
+		{
+			// -Inf full-file RMS: guard falls back to the raw speech RMS.
+			name:        "negative Inf full-file RMS falls back to speech",
+			speechRMS:   -24.0,
+			fullFileRMS: math.Inf(-1),
+			want:        -24.0 + levellingCompressorThresholdSpeechOffsetDB, // -15.0
+		},
 	}
 
 	for _, tt := range tests {

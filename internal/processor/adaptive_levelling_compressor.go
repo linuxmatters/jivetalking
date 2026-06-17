@@ -79,8 +79,14 @@ func tuneLevellingCompressorThreshold(config *EffectiveFilterConfig, measurement
 		// full-file RMS; if the election is anomalously quiet (a clean but quiet
 		// window), floor it at the whole-file level so the threshold is not dragged
 		// too low. Same dBFS axis as the threshold; raises only, never lowers.
-		if !math.IsNaN(measurements.Dynamics.RMSLevel) && !math.IsInf(measurements.Dynamics.RMSLevel, 0) {
-			effectiveSpeechRMS = max(effectiveSpeechRMS, measurements.Dynamics.RMSLevel)
+		// Guard against unmeasured astats: when astats is absent, Dynamics.RMSLevel
+		// stays at the 0.0 zero value (the codebase's unmeasured-RMS sentinel, cf.
+		// assignInputNoiseFloor), which is not NaN/Inf but would floor the speech RMS
+		// up to 0 dBFS and pin the threshold to its ceiling. Any real dBFS level is
+		// negative, so require a finite, sub-zero level before applying the floor.
+		fullFileRMS := measurements.Dynamics.RMSLevel
+		if fullFileRMS < 0 && !math.IsInf(fullFileRMS, -1) {
+			effectiveSpeechRMS = max(effectiveSpeechRMS, fullFileRMS)
 		}
 		threshold = effectiveSpeechRMS + levellingCompressorThresholdSpeechOffsetDB
 	} else {
