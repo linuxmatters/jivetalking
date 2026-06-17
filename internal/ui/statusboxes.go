@@ -304,10 +304,21 @@ func renderAnalysisBox(s AdaptedSummary, height int) string {
 		voiceAvg = activeRow("Voice avg", w, fmt.Sprintf("%.1f %s", s.VoiceAvgDB, unitDB))
 	}
 
+	// SNR Gap needs both a voice level and a measured floor; without either the
+	// separation is meaningless, so the row stays dim/pending rather than show a
+	// gap against an absent floor.
 	separation := offRow("SNR Gap", w, valuePending)
-	if s.HasSpeech {
+	if s.HasSpeech && s.HasNoiseFloor {
 		separation = statusRow(glyphActive, cli.ColorGreen, "SNR Gap", w,
 			fmt.Sprintf("%.0f %s %s", s.SeparationDB, unitDB, separationBar(s.SeparationDB)), cli.ColorText)
+	}
+
+	// Noise floor: when unmeasured (no elected room-tone sample) the live box
+	// shows the same "n/a" the done-box uses (doneBoxNoiseFloorRow), never a
+	// bogus 0 dB. Both surfaces share processor.InputRoomToneFloorDB.
+	noiseFloor := offRow("Noise floor", w, "n/a")
+	if s.HasNoiseFloor {
+		noiseFloor = activeRow("Noise floor", w, fmt.Sprintf("%.0f %s", s.NoiseFloorDB, unitDB))
 	}
 
 	sibilance := offRow("Sibilance", w, valuePending)
@@ -324,7 +335,7 @@ func renderAnalysisBox(s AdaptedSummary, height int) string {
 	// De-esser at Filter Chain row 7 (its driver). Loudness stays the bottom row.
 	rows := []string{
 		voiceAvg,
-		activeRow("Noise floor", w, fmt.Sprintf("%.0f %s", s.NoiseFloorDB, unitDB)),
+		noiseFloor,
 		separation,
 		activeRow("Dynamics", w, fmt.Sprintf("%.1f LU → %.1f:1", s.InputLRA, s.GateRatio)),
 		activeRow("True peak", w, fmt.Sprintf("%.1f %s", s.TruePeakDBTP, unitDBTP)),

@@ -1,8 +1,11 @@
 package ui
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/linuxmatters/jivetalking/internal/processor"
 )
 
@@ -153,13 +156,63 @@ func TestLiveBoxFloorMatchesDoneBoxFloor(t *testing.T) {
 			if ok != tc.wantFloor {
 				t.Fatalf("done-box InputNoiseFloor: ok = %v, want %v", ok, tc.wantFloor)
 			}
+			// The live box must carry the same measured/unmeasured state the
+			// done-box derives from the one resolver.
+			if live.HasNoiseFloor != ok {
+				t.Fatalf("live-box HasNoiseFloor = %v, want %v (must match done-box)", live.HasNoiseFloor, ok)
+			}
 			if ok && live.NoiseFloorDB != done {
 				t.Errorf("live-box floor %v != done-box floor %v (must be identical)", live.NoiseFloorDB, done)
 			}
 			if live.NoiseFloorDB == tc.m.Noise.Floor {
 				t.Errorf("live-box floor used the internal momentary-LUFS floor %v", tc.m.Noise.Floor)
 			}
+
+			plain := ansi.Strip(renderAnalysisBox(live, 0))
+			if ok {
+				if !strings.Contains(plain, fmt.Sprintf("%.0f %s", done, unitDB)) {
+					t.Errorf("measured floor should render its value:\n%s", plain)
+				}
+			} else {
+				// Unmeasured: live box matches the done-box "n/a" convention and
+				// never shows a plausible-looking 0 dB or a separation row.
+				if !strings.Contains(plain, "Noise floor  n/a") {
+					t.Errorf("unmeasured floor should render n/a (done-box convention):\n%s", plain)
+				}
+				if strings.Contains(plain, "Noise floor  0 "+unitDB) {
+					t.Errorf("unmeasured floor must not render a bogus 0 dB:\n%s", plain)
+				}
+				done := doneBoxNoiseFloorRow(live.NoiseFloorDB, 0, live.HasNoiseFloor, false)
+				if done != "n/a" {
+					t.Errorf("done-box renders %q for the same unmeasured floor; live box must match its n/a state", done)
+				}
+			}
 		})
+	}
+}
+
+// TestUnmeasuredFloorNoSeparation confirms that with a SpeechProfile but no
+// measured floor the separation is neither computed nor rendered: a gap against
+// an absent floor is meaningless, so SeparationDB stays zero and the SNR Gap row
+// shows the dim placeholder, not a bogus number.
+func TestUnmeasuredFloorNoSeparation(t *testing.T) {
+	m := &processor.AudioMeasurements{}
+	m.Noise.Floor = -85 // internal; must not leak into the gap
+	m.Regions.SpeechProfile = &processor.SpeechCandidateMetrics{}
+	m.Regions.SpeechProfile.RMSLevel = -22 // voice present, floor absent
+
+	s := NewAdaptedSummary(&processor.EffectiveFilterConfig{}, nil, m)
+
+	if s.HasNoiseFloor {
+		t.Fatal("HasNoiseFloor should be false with no elected room-tone sample")
+	}
+	if s.SeparationDB != 0 {
+		t.Errorf("SeparationDB = %v, want 0 (no floor, no gap)", s.SeparationDB)
+	}
+
+	plain := ansi.Strip(renderAnalysisBox(s, 0))
+	if !strings.Contains(plain, "SNR Gap") || !strings.Contains(plain, valuePending) {
+		t.Errorf("SNR Gap should show the dim placeholder without a measured floor:\n%s", plain)
 	}
 }
 

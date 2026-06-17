@@ -35,17 +35,18 @@ type AdaptedSummary struct {
 	LimiterCeiling float64 // ceiling (dBTP), valid only when LimiterEnabled
 
 	// Analysis rows.
-	HasSpeech    bool    // a SpeechProfile was elected (Voice avg available)
-	VoiceAvgDB   float64 // SpeechProfile RMS (dBFS)
-	NoiseFloorDB float64 // input room-tone RMS floor (astats dBFS); matches the done-box "before"
-	SeparationDB float64 // voice / noise separation (dB) = VoiceAvgDB - NoiseFloorDB, same axis
-	InputLRA     float64 // input loudness range (LU)
-	GateRatio    float64 // Speech gate ratio (x:1)
-	TruePeakDBTP float64 // input true peak (dBTP)
-	HasSibilance bool    // speech bands measured (sibilance available)
-	SibilanceDB  float64 // SibBandRMS - BodyBandRMS (dB)
-	GateDepthDB  float64 // Speech gate attenuation depth (positive dB)
-	InputLUFS    float64 // input integrated loudness (LUFS)
+	HasSpeech     bool    // a SpeechProfile was elected (Voice avg available)
+	VoiceAvgDB    float64 // SpeechProfile RMS (dBFS)
+	HasNoiseFloor bool    // an input room-tone floor was measured (NoiseFloorDB valid)
+	NoiseFloorDB  float64 // input room-tone RMS floor (astats dBFS); matches the done-box "before"
+	SeparationDB  float64 // voice / noise separation (dB) = VoiceAvgDB - NoiseFloorDB, same axis
+	InputLRA      float64 // input loudness range (LU)
+	GateRatio     float64 // Speech gate ratio (x:1)
+	TruePeakDBTP  float64 // input true peak (dBTP)
+	HasSibilance  bool    // speech bands measured (sibilance available)
+	SibilanceDB   float64 // SibBandRMS - BodyBandRMS (dB)
+	GateDepthDB   float64 // Speech gate attenuation depth (positive dB)
+	InputLUFS     float64 // input integrated loudness (LUFS)
 }
 
 // NewAdaptedSummary builds the chain + analysis portion of the summary from the
@@ -78,7 +79,7 @@ func NewAdaptedSummary(cfg *processor.EffectiveFilterConfig, diag *processor.Ada
 	// NOT the K-weighted momentary-LUFS VAD floor (m.Noise.Floor); the latter stays
 	// internal (VAD split, Recording score, afftdn seed). Sourcing both surfaces
 	// from one resolver guarantees live-box == done-box for a given file.
-	s.NoiseFloorDB, _ = processor.InputRoomToneFloorDB(m)
+	s.NoiseFloorDB, s.HasNoiseFloor = processor.InputRoomToneFloorDB(m)
 	s.InputLRA = m.Loudness.InputLRA
 	s.GateRatio = cfg.SpeechGate.Ratio
 	s.TruePeakDBTP = m.Loudness.InputTP
@@ -88,8 +89,13 @@ func NewAdaptedSummary(cfg *processor.EffectiveFilterConfig, diag *processor.Ada
 		s.HasSpeech = true
 		s.VoiceAvgDB = sp.RMSLevel
 		// SNR Gap on one axis: speech RMS minus the input room-tone RMS floor, so
-		// the number and the separation bar agree and there is no axis mix.
-		s.SeparationDB = s.VoiceAvgDB - s.NoiseFloorDB
+		// the number and the separation bar agree and there is no axis mix. A
+		// separation against an absent floor is meaningless, so it needs BOTH a
+		// SpeechProfile and a measured floor; the renderer gates the row on the
+		// same pair (HasSpeech && HasNoiseFloor).
+		if s.HasNoiseFloor {
+			s.SeparationDB = s.VoiceAvgDB - s.NoiseFloorDB
+		}
 		if sp.BandsMeasured {
 			s.HasSibilance = true
 			// Recompute the same band excess the de-esser uses, so box and report
