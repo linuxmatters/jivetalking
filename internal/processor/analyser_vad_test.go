@@ -135,7 +135,7 @@ func TestOtsuSplit(t *testing.T) {
 		noiseFloor := -60.0
 		split := clampSplit(otsuSplit(h), noiseFloor, p75)
 
-		lower := noiseFloor + speechRMSMinimumNoiseMargin
+		lower := noiseFloor + speechMinimumNoiseMarginDB
 		if split < lower-0.001 || split > p75+0.001 {
 			t.Errorf("clamped split = %.2f, want within [%.2f, %.2f]", split, lower, p75)
 		}
@@ -143,8 +143,8 @@ func TestOtsuSplit(t *testing.T) {
 
 	t.Run("degenerate low split pinned to lower bound", func(t *testing.T) {
 		// Otsu picks a split inside the data. With the noise floor anchor sitting
-		// above the raw split, the clamp must pin to noiseFloor + 6, never letting
-		// a low split admit room tone.
+		// above the raw split, the clamp must pin to noiseFloor +
+		// speechMinimumNoiseMarginDB, never letting a low split admit room tone.
 		var intervals []IntervalSample
 		for i := range 80 {
 			intervals = append(intervals, vadInterval(i, -50+float64(i%2)))
@@ -153,9 +153,9 @@ func TestOtsuSplit(t *testing.T) {
 		levels := vadLevels(intervals, axisMomentaryLUFS)
 		p75 := percentileOfSorted(levels, 75)
 
-		noiseFloor := -52.0 // anchor = -46, above the ~-49 single mode
+		noiseFloor := -48.0 // anchor = -46, above the ~-49 single mode
 		split := clampSplit(otsuSplit(h), noiseFloor, p75)
-		lower := noiseFloor + speechRMSMinimumNoiseMargin
+		lower := noiseFloor + speechMinimumNoiseMarginDB
 		if math.Abs(split-lower) > 0.001 {
 			t.Errorf("clamped split = %.2f, want pinned to lower bound %.2f", split, lower)
 		}
@@ -178,11 +178,11 @@ func TestPercentileFloor(t *testing.T) {
 
 	t.Run("clamped to seed anchor", func(t *testing.T) {
 		levels := []float64{-90, -89, -88, -87, -86} // percentile would be ~-90
-		seed := -50.0                                // anchor = -44, above the percentile
+		seed := -50.0                                // anchor = -48, above the percentile
 		got := percentileFloor(levels, seed)
-		want := seed + speechRMSMinimumNoiseMargin
+		want := seed + speechMinimumNoiseMarginDB
 		if got != want {
-			t.Errorf("percentileFloor = %.2f, want clamp to seed+6 = %.2f", got, want)
+			t.Errorf("percentileFloor = %.2f, want clamp to seed+speechMinimumNoiseMarginDB = %.2f", got, want)
 		}
 	})
 }
@@ -289,13 +289,15 @@ func TestFlooredFraction(t *testing.T) {
 }
 
 // seedInterval builds a synthetic IntervalSample for the noise-floor seed
-// estimator: RMSLevel and spectral flux drive roomToneScore. Any interval with
-// RMSLevel <= the RMS median AND flux <= the flux median scores exactly 1.0, so
-// such intervals tie at the top of the scored set whatever their exact RMS.
-func seedInterval(rms, flux float64) IntervalSample {
+// estimator: the momentary-LUFS level and spectral flux drive roomToneScore. Any
+// interval with MomentaryLUFS <= the level median AND flux <= the flux median
+// scores exactly 1.0, so such intervals tie at the top of the scored set whatever
+// their exact level.
+func seedInterval(level, flux float64) IntervalSample {
 	return IntervalSample{
-		RMSLevel: rms,
-		Spectral: SpectralMetrics{Flux: flux, Found: true},
+		RMSLevel:      level,
+		MomentaryLUFS: level,
+		Spectral:      SpectralMetrics{Flux: flux, Found: true},
 	}
 }
 
@@ -381,6 +383,51 @@ func TestEstimateNoiseFloorAndThreshold_TruncationPicksLowestRMS(t *testing.T) {
 	wantFloor := -80.0 + float64(candidateCount-1)
 	if math.Abs(floor-wantFloor) > 0.001 {
 		t.Errorf("seeded floor = %.3f, want %.3f (lowest-RMS tied intervals kept)", floor, wantFloor)
+	}
+}
+
+func TestEstimateNoiseFloorAndThreshold_ExcludesFlooredFromSeed(t *testing.T) {
+	// Voice-activated capture: the quietest, lowest-flux intervals are true digital
+	// silence (floored at -130, below vadLevelFloorDB) and must NOT seed the floor.
+	// Real room-tone intervals sit above the floor; the seed is their max level, not
+	// the phantom -130.
+	var intervals []IntervalSample
+	// 3 floored silence gaps (score 1.0: quietest and low-flux). They sort first by
+	// lowest level but must be excluded from the seed max.
+	for range 3 {
+		intervals = append(intervals, seedInterval(-130, 0.01))
+	}
+	// 40 real room-tone intervals well above the floor, the only valid seed source.
+	for i := range 40 {
+		intervals = append(intervals, seedInterval(-70+float64(i), 0.01)) // -70..-31
+	}
+	// 10 louder, high-flux intervals to set the medians.
+	for i := range 10 {
+		intervals = append(intervals, seedInterval(-10+float64(i), 0.50))
+	}
+
+	medians := computeSilenceMedians(intervals)
+	floor, _, ok := estimateNoiseFloorAndThreshold(intervals, medians)
+	if !ok {
+		t.Fatal("estimateNoiseFloorAndThreshold returned ok=false despite real room-tone intervals")
+	}
+	if floor <= vadLevelFloorDB {
+		t.Errorf("seeded floor = %.3f, want above the digital-silence floor %.1f (floored intervals leaked into the seed)", floor, vadLevelFloorDB)
+	}
+}
+
+func TestEstimateNoiseFloorAndThreshold_AllFlooredReturnsNotOK(t *testing.T) {
+	// Every candidate is true digital silence: the seed must NOT fabricate a level.
+	// ok=false lets the caller fall back so percentileFloor uses the momentary p10.
+	var intervals []IntervalSample
+	for range silenceThresholdMinIntervals + 5 {
+		intervals = append(intervals, seedInterval(-130, 0.01))
+	}
+
+	medians := computeSilenceMedians(intervals)
+	_, _, ok := estimateNoiseFloorAndThreshold(intervals, medians)
+	if ok {
+		t.Error("estimateNoiseFloorAndThreshold returned ok=true on an all-floored set; it must not fabricate a floor")
 	}
 }
 

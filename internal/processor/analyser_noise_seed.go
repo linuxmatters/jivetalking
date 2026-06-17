@@ -2,6 +2,7 @@ package processor
 
 import (
 	"cmp"
+	"math"
 	"slices"
 	"time"
 )
@@ -68,19 +69,21 @@ const (
 
 // roomToneScore calculates a 0-1 score indicating how likely an interval is room tone.
 // Room tone is quiet and spectrally stable, so the score combines two cues:
-//   - Amplitude (weight roomToneAmplitudeWeight): quieter than the RMS median = more likely room tone.
+//   - Amplitude (weight roomToneAmplitudeWeight): quieter than the level median = more likely room tone.
 //   - Spectral flux (weight roomToneFluxWeight): lower than the flux median = stable, not changing.
 //
-// It feeds the pre-scan noise-floor estimator (estimateNoiseFloorAndThreshold);
-// the richer spectral metrics are no longer used now the scored room-tone
-// election is gone.
-func roomToneScore(interval IntervalSample, rmsP50, fluxP50 float64) float64 {
+// The amplitude cue reads the momentary-LUFS axis (interval.MomentaryLUFS), the
+// same axis the VAD split, floor, and noise margin operate on, so the seed and the
+// detector share one scale. It feeds the pre-scan noise-floor estimator
+// (estimateNoiseFloorAndThreshold); the richer spectral metrics are no longer
+// used now the scored room-tone election is gone.
+func roomToneScore(interval IntervalSample, levelP50, fluxP50 float64) float64 {
 	// Amplitude component: quieter = more likely room tone
 	// Score 1.0 if at or below median, decreasing above
 	amplitudeScore := 1.0
-	if interval.RMSLevel > rmsP50 {
+	if interval.MomentaryLUFS > levelP50 {
 		// Linear decay: 0dB above = 1.0, roomToneAmplitudeDecayDB above = 0.0
-		amplitudeScore = 1.0 - (interval.RMSLevel-rmsP50)/roomToneAmplitudeDecayDB
+		amplitudeScore = 1.0 - (interval.MomentaryLUFS-levelP50)/roomToneAmplitudeDecayDB
 		if amplitudeScore < 0 {
 			amplitudeScore = 0
 		}
@@ -104,30 +107,31 @@ func roomToneScore(interval IntervalSample, rmsP50, fluxP50 float64) float64 {
 
 // silenceMedians holds pre-computed median values for the noise-floor seed
 // estimator. Avoids redundant O(n log n) sorts when the same interval data
-// feeds multiple seed functions.
+// feeds multiple seed functions. levelP50 is the median on the momentary-LUFS
+// axis, matching the axis the VAD split and floor operate on.
 type silenceMedians struct {
-	rmsP50  float64
-	fluxP50 float64
+	levelP50 float64
+	fluxP50  float64
 }
 
-// computeSilenceMedians calculates RMS and spectral flux medians from the
-// interval slice used for the noise-floor seed estimate.
+// computeSilenceMedians calculates the momentary-LUFS level and spectral flux
+// medians from the interval slice used for the noise-floor seed estimate.
 func computeSilenceMedians(searchIntervals []IntervalSample) silenceMedians {
 	if len(searchIntervals) == 0 {
 		return silenceMedians{}
 	}
-	rmsLevels := make([]float64, len(searchIntervals))
+	levels := make([]float64, len(searchIntervals))
 	fluxValues := make([]float64, len(searchIntervals))
 	for i, interval := range searchIntervals {
-		rmsLevels[i] = interval.RMSLevel
+		levels[i] = interval.MomentaryLUFS
 		fluxValues[i] = interval.Spectral.Flux
 	}
-	slices.Sort(rmsLevels)
+	slices.Sort(levels)
 	slices.Sort(fluxValues)
 
 	return silenceMedians{
-		rmsP50:  rmsLevels[len(rmsLevels)/2],
-		fluxP50: fluxValues[len(fluxValues)/2],
+		levelP50: levels[len(levels)/2],
+		fluxP50:  fluxValues[len(fluxValues)/2],
 	}
 }
 
@@ -139,41 +143,49 @@ func computeSilenceMedians(searchIntervals []IntervalSample) silenceMedians {
 // 2. Room tone has low spectral flux (stable, unchanging)
 // 3. Room tone has consistent spectral characteristics
 //
-// The noise floor is the max RMS of high-confidence room tone intervals.
-// The silence threshold adds headroom to the noise floor for detection margin.
+// The level is read on the momentary-LUFS axis (the axis the VAD split, floor,
+// and noise margin share), so the seeded floor and the detector measure one scale.
+// The noise floor is the max level of high-confidence room tone intervals; the
+// silence threshold adds headroom to it for detection margin.
+//
+// Floored intervals (momentary at or below vadLevelFloorDB, or non-finite) are
+// excluded before the max so true digital silence between phrases on
+// voice-activated captures does not seed a phantom -120 dB floor. When no real
+// room-tone interval remains after exclusion, the estimator returns ok=false so
+// the caller falls back rather than fabricating a level.
 func estimateNoiseFloorAndThreshold(intervals []IntervalSample, medians silenceMedians) (noiseFloor, silenceThreshold float64, ok bool) {
 	if len(intervals) < silenceThresholdMinIntervals {
 		return 0, 0, false
 	}
 
 	// Use pre-computed medians for scoring reference
-	rmsP50 := medians.rmsP50
+	levelP50 := medians.levelP50
 	fluxP50 := medians.fluxP50
 
 	// Score each interval for room tone likelihood
 	type scoredInterval struct {
 		idx   int
-		rms   float64
+		level float64
 		score float64
 	}
 	scored := make([]scoredInterval, len(intervals))
 	for i, interval := range intervals {
 		scored[i] = scoredInterval{
 			idx:   i,
-			rms:   interval.RMSLevel,
-			score: roomToneScore(interval, rmsP50, fluxP50),
+			level: interval.MomentaryLUFS,
+			score: roomToneScore(interval, levelP50, fluxP50),
 		}
 	}
 
 	// Sort by score descending to find high-confidence room tone intervals.
-	// Break ties deterministically (slices.SortFunc is not stable): lower RMS
+	// Break ties deterministically (slices.SortFunc is not stable): lower level
 	// first, then original interval index, so the truncated candidate set and the
 	// seed it yields are reproducible across runs.
 	slices.SortFunc(scored, func(a, b scoredInterval) int {
 		if c := cmp.Compare(b.score, a.score); c != 0 {
 			return c
 		}
-		if c := cmp.Compare(a.rms, b.rms); c != 0 {
+		if c := cmp.Compare(a.level, b.level); c != 0 {
 			return c
 		}
 		return cmp.Compare(a.idx, b.idx)
@@ -185,15 +197,30 @@ func estimateNoiseFloorAndThreshold(intervals []IntervalSample, medians silenceM
 	candidateCount = max(candidateCount, floorSeedMinCount)
 	candidateCount = min(candidateCount, len(scored))
 
-	// Noise floor is the maximum RMS among high-confidence room tone intervals
-	maxRoomToneRMS := -120.0
+	// Noise floor is the maximum level among high-confidence room tone intervals,
+	// excluding floored (digital-silence / unmeasurable) intervals so a
+	// voice-activated capture's true-silence gaps cannot seed a phantom floor.
+	maxRoomToneLevel := -120.0
+	seen := false
 	for i := 0; i < candidateCount; i++ {
-		if scored[i].rms > maxRoomToneRMS {
-			maxRoomToneRMS = scored[i].rms
+		level := scored[i].level
+		if math.IsInf(level, 0) || math.IsNaN(level) || level <= vadLevelFloorDB {
+			continue
+		}
+		if !seen || level > maxRoomToneLevel {
+			maxRoomToneLevel = level
+			seen = true
 		}
 	}
 
-	return maxRoomToneRMS, maxRoomToneRMS + silenceThresholdHeadroomDB, true
+	// No real room-tone interval survived the floored-interval exclusion: do not
+	// fabricate a level. Return ok=false so the caller uses its low fallback and
+	// the downstream percentileFloor falls back to the momentary p10.
+	if !seen {
+		return 0, 0, false
+	}
+
+	return maxRoomToneLevel, maxRoomToneLevel + silenceThresholdHeadroomDB, true
 }
 
 // calculateAdaptiveSilenceThreshold computes a bounded room tone threshold from a noise floor estimate.

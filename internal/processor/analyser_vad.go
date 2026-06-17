@@ -301,24 +301,25 @@ const vadNoiseFloorPercentile = 10.0
 
 // percentileFloor returns the vadNoiseFloorPercentile low percentile of the
 // per-interval level set as the noise floor, clamped not below
-// noiseFloorSeed + speechRMSMinimumNoiseMargin. The seed is the measured
-// pre-scan floor. The clamp keeps the floor from dropping into digital silence
+// noiseFloorSeed + speechMinimumNoiseMarginDB. The seed is the measured pre-scan
+// floor, now on the same momentary-LUFS axis as these levels, so the margin
+// spans one scale. The clamp keeps the floor from dropping into digital silence
 // on voice-activated material. levels must already be sorted ascending. The
 // percentile is the named constant, the single tuning seam.
 func percentileFloor(levels []float64, noiseFloorSeed float64) float64 {
 	floor := percentileOfSorted(levels, vadNoiseFloorPercentile)
-	anchor := noiseFloorSeed + speechRMSMinimumNoiseMargin
+	anchor := noiseFloorSeed + speechMinimumNoiseMarginDB
 	return max(floor, anchor)
 }
 
-// clampSplit constrains the split to [noiseFloor + speechRMSMinimumNoiseMargin,
-// p75]. The lower clamp (the existing measured 6 dB margin) stops a degenerate
-// low split from admitting room tone; the upper clamp (the 75th percentile of
-// the per-interval level) stops a degenerate high split from rejecting all
-// speech. When the bounds invert (lower > upper, a near-uniform file), the
-// lower bound wins so the split never drops into the noise.
+// clampSplit constrains the split to [noiseFloor + speechMinimumNoiseMarginDB,
+// p75]. The lower clamp (the speechMinimumNoiseMarginDB margin on the momentary-LUFS axis)
+// stops a degenerate low split from admitting room tone; the upper clamp (the
+// 75th percentile of the per-interval level) stops a degenerate high split from
+// rejecting all speech. When the bounds invert (lower > upper, a near-uniform
+// file), the lower bound wins so the split never drops into the noise.
 func clampSplit(split, noiseFloor, p75 float64) float64 {
-	lower := noiseFloor + speechRMSMinimumNoiseMargin
+	lower := noiseFloor + speechMinimumNoiseMarginDB
 	if p75 < lower {
 		return lower
 	}

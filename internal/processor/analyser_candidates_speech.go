@@ -11,8 +11,14 @@ const (
 	speechCentroidMin = 200.0  // Hz - lower bound for speech
 	speechCentroidMax = 6000.0 // Hz - upper bound for speech
 
-	// speechRMSMinimumNoiseMargin is the dB above noise floor for the adaptive speech threshold.
-	speechRMSMinimumNoiseMargin = 6.0
+	// speechMinimumNoiseMarginDB is the protective gap (dB) above the loudest
+	// measured room tone that the VAD split and floor anchor must keep, applied on
+	// the unified momentary-LUFS axis (the axis the VAD split, floor, and seed
+	// share). The former 6.0 silently encoded the RMS-to-LUFS offset (about +4 dB
+	// on HF beds) and over-clamped once the seed moved onto the LUFS axis; 2.0 is
+	// the honest gap on one scale. Corpus-validated to preserve the elected split:
+	// this is a calibration fix and must not move elections.
+	speechMinimumNoiseMarginDB = 2.0
 
 	// speechEntropyMax is the maximum entropy for speech (structured signal).
 	// Pure noise approaches 1.0; speech is typically 0.3-0.7.

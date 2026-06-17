@@ -177,11 +177,11 @@ type DynamicsMetrics struct {
 // estimates kept separate (prescan, astats), the adaptive room-tone detect level,
 // the voice-activated flag, and the noise-reduction headroom.
 type NoiseMetrics struct {
-	Floor               float64 `json:"floor_dbfs"`                  // Derived noise floor (dBFS), three-tier; overwritten by room-tone profile if elected
+	Floor               float64 `json:"floor_dbfs"`                  // Elected noise floor; under the VAD it is the momentary-LUFS p10 (vad_percentile source), so the value is on the momentary-LUFS axis
 	FloorSource         string  `json:"floor_source"`                // Source of Floor: "astats" / "rms_estimate" / "ebur128_estimate" / "vad_percentile"
-	FloorPrescan        float64 `json:"floor_prescan_dbfs"`          // Noise floor estimated from interval data (dBFS)
+	FloorPrescan        float64 `json:"floor_prescan_dbfs"`          // Pre-scan noise floor seed estimated from interval data, on the momentary-LUFS axis (anchors the VAD split clamp)
 	FloorAstats         float64 `json:"floor_astats_dbfs"`           // FFmpeg astats noise floor estimate (dBFS)
-	RoomToneDetectLevel float64 `json:"room_tone_detect_level_dbfs"` // Adaptive room tone detection threshold (dBFS)
+	RoomToneDetectLevel float64 `json:"room_tone_detect_level_dbfs"` // Adaptive room tone detection threshold, derived from the momentary-LUFS-axis seed
 	VoiceActivated      bool    `json:"voice_activated"`             // True when the floored (digital-silence) interval fraction is high (platform-gated capture signature)
 	ReductionHeadroom   float64 `json:"reduction_headroom_db"`       // dB gap between noise and quiet speech
 }
@@ -304,9 +304,6 @@ type OutputMeasurements struct {
 // The noise floor and silence threshold are computed from interval data after the full pass,
 // avoiding the need for a separate pre-scan phase.
 func AnalyseAudio(ctx stdcontext.Context, filename string, config *BaseFilterConfig, progressCallback ProgressCallback) (*AudioMeasurements, error) {
-	// Default fallback threshold if interval analysis yields insufficient data
-	const defaultNoiseFloor = -50.0
-
 	analysisContext := &ProcessingFilterContext{Pass: PassAnalysis}
 	collection, err := collectAnalysisFrames(ctx, filename, config, analysisContext, progressCallback)
 	if err != nil {
@@ -315,7 +312,7 @@ func AnalyseAudio(ctx stdcontext.Context, filename string, config *BaseFilterCon
 
 	intervals := collection.intervals
 
-	measurements, err := buildInputMeasurements(filename, collection, config, defaultNoiseFloor)
+	measurements, err := buildInputMeasurements(filename, collection, config)
 	if err != nil {
 		return nil, err
 	}
@@ -335,13 +332,21 @@ func AnalyseAudio(ctx stdcontext.Context, filename string, config *BaseFilterCon
 	return measurements, nil
 }
 
-func buildInputMeasurements(filename string, collection *analysisFrameCollection, config *BaseFilterConfig, defaultNoiseFloor float64) (*AudioMeasurements, error) {
+func buildInputMeasurements(filename string, collection *analysisFrameCollection, config *BaseFilterConfig) (*AudioMeasurements, error) {
 	acc := collection.accumulators
 
 	noiseFloorEstimate, silenceThreshold, ok := estimateNoiseFloorAndThreshold(collection.silenceIntervals, collection.silenceMedians)
 	if !ok {
-		noiseFloorEstimate = defaultNoiseFloor
-		silenceThreshold = calculateAdaptiveSilenceThreshold(defaultNoiseFloor)
+		// No measurable room tone (fully gated / voice-activated capture): seed the
+		// detector with the low vadLevelFloorDB sentinel, not defaultNoiseFloor. A
+		// -50 seed would raise the split clamp lower bound (to about -44) and the
+		// percentileFloor anchor, collapsing the speech/noise separation on these
+		// captures. The sentinel keeps clampSplit's lower bound and percentileFloor's
+		// anchor inert, so Otsu places the split alone and the reported Noise.Floor
+		// falls to the honest momentary p10. RoomToneDetectLevel derives from the
+		// same seed (clamped to silenceMinThreshold), so it stays sensible.
+		noiseFloorEstimate = vadLevelFloorDB
+		silenceThreshold = calculateAdaptiveSilenceThreshold(vadLevelFloorDB)
 	}
 
 	measurements := &AudioMeasurements{
