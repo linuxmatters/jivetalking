@@ -184,6 +184,12 @@ type NoiseReductionConfig struct {
 	AfftdnNoiseReduction float64 `json:"afftdn_noise_reduction_db"`
 	AfftdnNoiseType      string  `json:"afftdn_noise_type"`
 	AfftdnTrackNoise     bool    `json:"afftdn_track_noise"`
+	// AfftdnNoiseFloor is the static measured noise floor (dB) fed to afftdn's nf
+	// parameter. The zero value means unset, so nf= is omitted and afftdn uses its
+	// own default; a real floor is always negative. tuneNoiseReduction sets it from
+	// the measured Noise.Floor (clamped to afftdn's [-80, -20] range) and turns
+	// track_noise off so afftdn holds the static measured floor.
+	AfftdnNoiseFloor float64 `json:"afftdn_noise_floor_db"`
 }
 
 type SpeechGateConfig struct {
@@ -287,6 +293,16 @@ type AdaptiveDiagnostics struct {
 	// the noise margin). The threshold stays on the speech side; this signal tells
 	// the depth step (Phase 4 task 4.3) to back off rather than over-gate.
 	SpeechGateNarrowGap bool `json:"narrow_gap"`
+
+	// AfftdnEnabled records whether the afftdn FFT denoise tail stays in the chain.
+	// tuneNoiseReduction disables it on voice-activated captures.
+	AfftdnEnabled bool `json:"afftdn_enabled"`
+	// AfftdnNoiseFloorDB is the static measured floor (dB) fed to afftdn's nf when
+	// the stage stays enabled; zero when unset.
+	AfftdnNoiseFloorDB float64 `json:"afftdn_noise_floor_db"`
+	// AfftdnDisableReason names why afftdn was dropped (e.g. "voice_activated"),
+	// empty when the stage stays enabled.
+	AfftdnDisableReason string `json:"afftdn_disable_reason"`
 }
 
 // ProcessingFilterContext holds pass execution state outside caller-owned defaults.
@@ -804,11 +820,16 @@ func (cfg *NoiseReductionConfig) buildAfftdnFilter() string {
 	if cfg.AfftdnTrackNoise {
 		tn = 1
 	}
-	return fmt.Sprintf("afftdn=nr=%g:nt=%s:tn=%d",
+	spec := fmt.Sprintf("afftdn=nr=%g:nt=%s:tn=%d",
 		cfg.AfftdnNoiseReduction,
 		cfg.AfftdnNoiseType,
 		tn,
 	)
+	// Emit nf only when set (a real floor is negative); zero means unset.
+	if cfg.AfftdnNoiseFloor < 0 {
+		spec += fmt.Sprintf(":nf=%g", cfg.AfftdnNoiseFloor)
+	}
+	return spec
 }
 
 // buildSpeechGateFilter builds the speech gate filter specification.

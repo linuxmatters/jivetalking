@@ -755,6 +755,7 @@ func renderFilters(rec *processor.RunRecord) string {
 		{"Smooth (m)", formatMetric(f.NoiseReduction.Smooth, 0)},
 		{"afftdn enabled", boolCell(f.NoiseReduction.AfftdnEnabled)},
 		{"afftdn noise reduction (dB)", formatMetric(f.NoiseReduction.AfftdnNoiseReduction, 0)},
+		{"afftdn noise floor (dB)", afftdnNoiseFloorCell(f.NoiseReduction.AfftdnNoiseFloor)},
 		{"afftdn noise type", stringCell(f.NoiseReduction.AfftdnNoiseType)},
 		{"afftdn track noise", boolCell(f.NoiseReduction.AfftdnTrackNoise)},
 	}))
@@ -824,8 +825,20 @@ func renderFilterDiagnostics(d *processor.AdaptiveDiagnostics) string {
 		{"Gate threshold unclamped (dB)", formatMetric(d.SpeechGateThresholdUnclamped, 2)},
 		{"Clamp reason", stringCell(d.SpeechGateClampReason)},
 		{"Gate depth (dB)", formatMetric(d.SpeechGateDepthDB, 2)},
+		{"afftdn enabled", boolCell(d.AfftdnEnabled)},
+		{"afftdn noise floor (dB)", afftdnNoiseFloorCell(d.AfftdnNoiseFloorDB)},
+		{"afftdn disable reason", stringCell(d.AfftdnDisableReason)},
 	}))
 	return b.String()
+}
+
+// afftdnNoiseFloorCell renders the afftdn nf value, showing the placeholder when
+// unset (zero or non-negative). A set floor is always negative.
+func afftdnNoiseFloorCell(floor float64) string {
+	if floor >= 0 {
+		return placeholder
+	}
+	return formatMetric(floor, 2)
 }
 
 // =============================================================================

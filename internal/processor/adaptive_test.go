@@ -108,7 +108,7 @@ func TestAdaptConfigFilterSpecBehaviourBaseline(t *testing.T) {
 			want: "highpass=f=80:poles=2:width_type=q:width=0.707:normalize=1:a=tdii," +
 				"lowpass=f=20500:poles=2:width_type=q:width=0.707:normalize=1," +
 				"anlmdn=s=0.00001:p=0.0060:r=0.0058:m=11," +
-				"afftdn=nr=12:nt=w:tn=1," +
+				"afftdn=nr=12:nt=w:tn=0:nf=-58," +
 				"agate=threshold=0.019953:ratio=2.0:attack=5.00:release=200:range=0.1995:knee=3.0:detection=rms:makeup=1.0," +
 				"acompressor=threshold=0.031623:ratio=3.0:attack=10:release=200:makeup=1.00:knee=4.0:detection=rms:mix=1.00",
 		},
@@ -118,7 +118,7 @@ func TestAdaptConfigFilterSpecBehaviourBaseline(t *testing.T) {
 			want: "highpass=f=80:poles=2:width_type=q:width=0.707:normalize=1:a=tdii," +
 				"lowpass=f=20500:poles=2:width_type=q:width=0.707:normalize=1," +
 				"anlmdn=s=0.00001:p=0.0060:r=0.0058:m=11," +
-				"afftdn=nr=12:nt=w:tn=1," +
+				"afftdn=nr=12:nt=w:tn=0:nf=-60," +
 				"agate=threshold=0.010000:ratio=2.0:attack=5.00:release=200:range=0.1995:knee=3.0:detection=rms:makeup=1.0," +
 				"acompressor=threshold=0.177828:ratio=3.0:attack=10:release=200:makeup=1.00:knee=4.0:detection=rms:mix=1.00",
 		},
@@ -1640,4 +1640,85 @@ func TestClamp(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTuneNoiseReduction(t *testing.T) {
+	t.Run("voice-activated disables afftdn", func(t *testing.T) {
+		config := &EffectiveFilterConfig{NoiseReduction: defaultNoiseReductionConfig()}
+		diag := &AdaptiveDiagnostics{}
+		measurements := &AudioMeasurements{Noise: NoiseMetrics{Floor: -58.0, VoiceActivated: true}}
+
+		tuneNoiseReduction(config, diag, measurements)
+
+		if config.NoiseReduction.AfftdnEnabled {
+			t.Error("afftdn should be disabled on voice-activated captures")
+		}
+		if diag.AfftdnEnabled {
+			t.Error("diagnostics AfftdnEnabled should be false on voice-activated captures")
+		}
+		if diag.AfftdnDisableReason != "voice_activated" {
+			t.Errorf("AfftdnDisableReason = %q, want voice_activated", diag.AfftdnDisableReason)
+		}
+		if config.NoiseReduction.AfftdnNoiseFloor != 0 {
+			t.Errorf("disabled afftdn should not set a noise floor, got %.2f", config.NoiseReduction.AfftdnNoiseFloor)
+		}
+	})
+
+	t.Run("measured floor sets nf and turns tracking off", func(t *testing.T) {
+		config := &EffectiveFilterConfig{NoiseReduction: defaultNoiseReductionConfig()}
+		diag := &AdaptiveDiagnostics{}
+		measurements := &AudioMeasurements{Noise: NoiseMetrics{Floor: -58.0}}
+
+		tuneNoiseReduction(config, diag, measurements)
+
+		if !config.NoiseReduction.AfftdnEnabled {
+			t.Error("afftdn should stay enabled on a normal capture")
+		}
+		if config.NoiseReduction.AfftdnNoiseFloor != -58.0 {
+			t.Errorf("AfftdnNoiseFloor = %.2f, want -58.0", config.NoiseReduction.AfftdnNoiseFloor)
+		}
+		if config.NoiseReduction.AfftdnTrackNoise {
+			t.Error("AfftdnTrackNoise should be off when a static floor is set")
+		}
+		if diag.AfftdnNoiseFloorDB != -58.0 {
+			t.Errorf("diagnostics AfftdnNoiseFloorDB = %.2f, want -58.0", diag.AfftdnNoiseFloorDB)
+		}
+		if !diag.AfftdnEnabled {
+			t.Error("diagnostics AfftdnEnabled should be true on a normal capture")
+		}
+	})
+
+	t.Run("out-of-range floor clamps into afftdn nf range", func(t *testing.T) {
+		// A floor below afftdn's -80 dB minimum clamps up to -80.
+		lowConfig := &EffectiveFilterConfig{NoiseReduction: defaultNoiseReductionConfig()}
+		tuneNoiseReduction(lowConfig, &AdaptiveDiagnostics{}, &AudioMeasurements{Noise: NoiseMetrics{Floor: -120.0}})
+		if lowConfig.NoiseReduction.AfftdnNoiseFloor != afftdnNoiseFloorMinDB {
+			t.Errorf("floor below range = %.2f, want %.2f", lowConfig.NoiseReduction.AfftdnNoiseFloor, afftdnNoiseFloorMinDB)
+		}
+
+		// A floor above afftdn's -20 dB maximum clamps down to -20.
+		highConfig := &EffectiveFilterConfig{NoiseReduction: defaultNoiseReductionConfig()}
+		tuneNoiseReduction(highConfig, &AdaptiveDiagnostics{}, &AudioMeasurements{Noise: NoiseMetrics{Floor: -5.0}})
+		if highConfig.NoiseReduction.AfftdnNoiseFloor != afftdnNoiseFloorMaxDB {
+			t.Errorf("floor above range = %.2f, want %.2f", highConfig.NoiseReduction.AfftdnNoiseFloor, afftdnNoiseFloorMaxDB)
+		}
+	})
+
+	t.Run("unmeasured floor leaves safe defaults", func(t *testing.T) {
+		config := &EffectiveFilterConfig{NoiseReduction: defaultNoiseReductionConfig()}
+		diag := &AdaptiveDiagnostics{}
+		measurements := &AudioMeasurements{Noise: NoiseMetrics{Floor: 0}} // unmeasured
+
+		tuneNoiseReduction(config, diag, measurements)
+
+		if !config.NoiseReduction.AfftdnEnabled {
+			t.Error("afftdn should stay enabled when the floor is unmeasured")
+		}
+		if !config.NoiseReduction.AfftdnTrackNoise {
+			t.Error("track_noise should stay on when the floor is unmeasured")
+		}
+		if config.NoiseReduction.AfftdnNoiseFloor != 0 {
+			t.Errorf("AfftdnNoiseFloor should stay unset, got %.2f", config.NoiseReduction.AfftdnNoiseFloor)
+		}
+	})
 }

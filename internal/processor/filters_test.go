@@ -800,6 +800,42 @@ func TestBuildNoiseReductionFilter(t *testing.T) {
 		}
 	})
 
+	t.Run("afftdn nf omitted when unset", func(t *testing.T) {
+		nr := defaultNoiseReductionConfig()
+		nr.AfftdnNoiseFloor = 0 // unset
+
+		spec := nr.buildAfftdnFilter()
+
+		if spec != "afftdn=nr=12:nt=w:tn=1" {
+			t.Errorf("unset nf should omit nf= and keep tn=1, got: %s", spec)
+		}
+		if strings.Contains(spec, "nf=") {
+			t.Errorf("unset nf must not emit nf=, got: %s", spec)
+		}
+	})
+
+	t.Run("afftdn nf present and tn=0 when floor set", func(t *testing.T) {
+		nr := defaultNoiseReductionConfig()
+		nr.AfftdnNoiseFloor = -58.0
+		nr.AfftdnTrackNoise = false
+
+		spec := nr.buildAfftdnFilter()
+
+		if spec != "afftdn=nr=12:nt=w:tn=0:nf=-58" {
+			t.Errorf("set floor should emit tn=0 and nf, got: %s", spec)
+		}
+	})
+
+	t.Run("afftdn disabled drops to empty (anlmdn-only via chain)", func(t *testing.T) {
+		nr := defaultNoiseReductionConfig()
+		nr.AfftdnEnabled = false
+		nr.AfftdnNoiseFloor = -58.0 // set, but stage disabled
+
+		if spec := nr.buildAfftdnFilter(); spec != "" {
+			t.Errorf("disabled afftdn must return empty string, got: %s", spec)
+		}
+	})
+
 	t.Run("afftdn disabled produces anlmdn-only spec", func(t *testing.T) {
 		config := newTestConfig()
 		config.NoiseReduction.Enabled = true

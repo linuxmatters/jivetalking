@@ -242,8 +242,9 @@ anlmdn Non-Local Means denoiser at the source rate, followed by an afftdn FFT sp
 | Smooth (m) | 3 |
 | afftdn enabled | yes |
 | afftdn noise reduction (dB) | 12 |
+| afftdn noise floor (dB) | -47.56 |
 | afftdn noise type | w |
-| afftdn track noise | yes |
+| afftdn track noise | no |
 
 ### Speech gate
 
@@ -299,6 +300,9 @@ Sibilance reduction. Intensity is adapted from the speech-region sibilant-band e
 | Gate threshold unclamped (dB) | -67.67 |
 | Clamp reason | none |
 | Gate depth (dB) | 14.00 |
+| afftdn enabled | yes |
+| afftdn noise floor (dB) | -47.56 |
+| afftdn disable reason | - |
 
 ## Peak Limiter
 

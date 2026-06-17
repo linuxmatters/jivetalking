@@ -155,10 +155,30 @@ pairing keeps the gaps clean with less floor modulation.
 stable noise floor. That lets the gate set its threshold closer to the noise and
 open and close more cleanly.
 
-**What is fixed:** Both denoisers run at fixed, validated strengths. The FFT
-reduction is pinned at 12 dB and is deliberately *not* adaptive: a per-voice
-sweep showed the noisiest voice has to be capped near 12 dB to avoid musical
-"warble" artefacts, so a stronger adaptive setting would do harm.
+**When the FFT stage switches off:** On voice-activated recordings the FFT
+denoiser is turned off automatically and the time-domain denoiser runs alone.
+These are captures from platforms that mute the line between phrases, so the gaps
+are true digital silence rather than a steady background. The FFT stage has no
+constant hiss to learn from there, and its noise tracking can warble on the
+silence, so the pipeline drops it. The on-screen **Denoise** readout shows "NLM"
+on these files instead of the usual "NLM+FFT". In testing the FFT stage helped
+about a fifth of the recordings, did nothing either way on most, and only hurt
+the voice-activated captures, so it is switched off exactly there and left on
+everywhere it helps or does no harm.
+
+**How the FFT stage uses the measured floor:** When it does run, the FFT denoiser
+is told the file's actual noise level (the noise floor the pipeline already
+measured in Pass 1) and its own internal noise tracking is turned off. It then
+subtracts against the real measured floor rather than guessing and drifting frame
+to frame. Testing showed this removes a touch more background on average, with no
+change to the voice and no warble.
+
+**What is fixed:** The FFT reduction strength is pinned at 12 dB and is
+deliberately *not* adaptive: a per-voice sweep showed the noisiest voice has to be
+capped near 12 dB to avoid musical "warble" artefacts, so a stronger setting would
+do harm. The time-domain denoiser runs at a fixed, validated strength too. What
+adapts is the FFT stage's on/off decision and the noise floor it works against,
+both described above.
 
 ### speech_gate
 
@@ -361,7 +381,10 @@ The rumble high-pass (80 Hz), the band-limit low-pass (20.5 kHz), and the
 noise-reduction strengths are the same on every file. Each is a single correct
 value for spoken word, validated by ear and by measurement, with nothing in the
 recording that would justify changing it. Adapting them would add risk, not
-quality.
+quality. Note that while the noise-reduction *strengths* are fixed, the FFT
+denoiser does adapt in two ways covered above: it switches off on
+voice-activated recordings, and when it runs it works against the file's measured
+noise floor.
 
 ## Normalisation (Pass 3/4): reaching -16 LUFS honestly
 

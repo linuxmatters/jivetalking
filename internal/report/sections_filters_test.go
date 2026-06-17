@@ -24,6 +24,10 @@ func processingRecord() *processor.RunRecord {
 	cfg.SpeechGate.Release = 375
 	cfg.LevellingCompressor.Threshold = -36.38
 	cfg.Deesser.Intensity = 0.0
+	// afftdn stays enabled on this non-voice-activated capture: nf is pinned to the
+	// measured floor and track_noise is off (tuneNoiseReduction behaviour).
+	cfg.NoiseReduction.AfftdnNoiseFloor = -47.56
+	cfg.NoiseReduction.AfftdnTrackNoise = false
 
 	diag := &processor.AdaptiveDiagnostics{
 		BandlimitLPReason:             "20.5 kHz band-limit (always on)",
@@ -34,6 +38,8 @@ func processingRecord() *processor.RunRecord {
 		SpeechGateThresholdUnclamped:  -67.667044,
 		SpeechGateClampReason:         "none",
 		SpeechGateDepthDB:             14,
+		AfftdnEnabled:                 true,
+		AfftdnNoiseFloorDB:            -47.56,
 	}
 
 	norm := &processor.NormalisationResult{
