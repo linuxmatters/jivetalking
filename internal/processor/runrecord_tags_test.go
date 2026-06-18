@@ -2,6 +2,7 @@ package processor
 
 import (
 	"encoding/json"
+	"math"
 	"testing"
 	"time"
 )
@@ -66,7 +67,11 @@ func populatedAudioMeasurements() *AudioMeasurements {
 		NoiseProfile: &NoiseProfile{
 			Start: 2 * time.Second, Duration: 10 * time.Second,
 			MeasuredNoiseFloor: -60, PeakLevel: -50, CrestFactor: 10, Entropy: 0.5,
-			SpectralCentroid: 1500, SpectralFlatness: 0.4, SpectralKurtosis: 3,
+			SpectralMean: 1.2, SpectralVariance: 2.4, SpectralCentroid: 1500,
+			SpectralSpread: 350, SpectralSkewness: 0.8, SpectralKurtosis: 3,
+			SpectralEntropy: 0.55, SpectralFlatness: 0.4, SpectralCrest: 7.5,
+			SpectralFlux: 0.03, SpectralSlope: -0.25, SpectralDecrease: 0.11,
+			SpectralRolloff: 6500,
 		},
 	}
 	m.Regions.SpeechProfile = &m.Regions.SpeechCandidates[0]
@@ -112,8 +117,11 @@ func TestAudioMeasurementsJSON_HasCanonicalKeys(t *testing.T) {
 		"voiced_low_percentile_dbfs", "noise_high_percentile_dbfs", "gate_separation_db",
 		// region-sample / candidate fields
 		"crest_factor_db", "speech_band_body_rms_dbfs", "speech_band_sib_rms_dbfs",
-		// noise profile fields
+		// noise profile fields (full 13-metric spectral set)
 		"measured_floor_dbfs", "spectral_centroid_hz",
+		"spectral_mean", "spectral_variance", "spectral_spread_hz",
+		"spectral_skewness", "spectral_entropy", "spectral_crest",
+		"spectral_flux", "spectral_slope", "spectral_decrease", "spectral_rolloff_hz",
 	}
 	for _, key := range wantPresent {
 		if !keys[key] {
@@ -129,17 +137,140 @@ func TestAudioMeasurementsJSON_HasCanonicalKeys(t *testing.T) {
 		"floor", "floor_prescan", "floor_astats", "reduction_headroom",
 		"room_tone_detect_level", "min_level", "max_level", "zero_crossings",
 		// legacy flat spectral keys (the old un-suffixed SpectralMetrics marshal).
-		// Note: NoiseProfile keeps its own distinct contamination fields
-		// spectral_flatness / spectral_kurtosis / spectral_centroid_hz (§1.7), so
-		// those are deliberately NOT asserted absent.
+		// Note: NoiseProfile keeps its own distinct contamination fields covering
+		// the full 13-metric set (spectral_mean / spectral_flatness /
+		// spectral_kurtosis / spectral_centroid_hz / spectral_flux / ...), so those
+		// suffixed keys are deliberately NOT asserted absent. The bare
+		// spectral_spread / spectral_rolloff (no _hz) stay asserted absent because
+		// NoiseProfile emits the _hz-suffixed forms.
 		"spectral_centroid", "spectral_spread", "spectral_rolloff",
-		"spectral_mean", "spectral_flux",
 		// removed silence/suggestion plumbing
 		"suggested_gate_threshold", "measured_noise_floor",
 	}
 	for _, key := range wantAbsent {
 		if keys[key] {
 			t.Errorf("legacy key %q must not appear in the record", key)
+		}
+	}
+}
+
+// TestRunRecordNoiseProfileSpectralFields confirms the RunRecord noise-profile
+// node carries all 13 contamination-detection spectral fields (entropy plus the
+// full spectral set) with the values measured on the NoiseProfile. No consumer
+// reads them yet, but they are the measurement spine the JSON artefact must
+// expose, so they must reach regions.room_tone.elected unchanged rather than
+// being dropped on the way to the record.
+func TestRunRecordNoiseProfileSpectralFields(t *testing.T) {
+	rec := NewAnalysisRunRecord("/tmp/episode.flac", populatedAudioMeasurements())
+	tree, raw := marshalRecordTree(t, rec)
+
+	regions, ok := tree["regions"].(map[string]any)
+	if !ok {
+		t.Fatal("missing regions block")
+	}
+	roomTone, ok := regions["room_tone"].(map[string]any)
+	if !ok {
+		t.Fatal("missing regions.room_tone block")
+	}
+	elected, ok := roomTone["elected"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing regions.room_tone.elected noise profile\n%s", raw)
+	}
+
+	// Values come from populatedAudioMeasurements' NoiseProfile fixture.
+	cases := []struct {
+		key  string
+		want float64
+	}{
+		{"entropy", 0.5},
+		{"spectral_mean", 1.2},
+		{"spectral_variance", 2.4},
+		{"spectral_centroid_hz", 1500},
+		{"spectral_spread_hz", 350},
+		{"spectral_skewness", 0.8},
+		{"spectral_kurtosis", 3},
+		{"spectral_entropy", 0.55},
+		{"spectral_flatness", 0.4},
+		{"spectral_crest", 7.5},
+		{"spectral_flux", 0.03},
+		{"spectral_slope", -0.25},
+		{"spectral_decrease", 0.11},
+		{"spectral_rolloff_hz", 6500},
+	}
+	for _, c := range cases {
+		got, present := elected[c.key]
+		if !present {
+			t.Errorf("regions.room_tone.elected missing %q", c.key)
+			continue
+		}
+		num, isNum := got.(float64)
+		if !isNum {
+			t.Errorf("%q = %v (%T), want number", c.key, got, got)
+			continue
+		}
+		if math.Abs(num-c.want) > 0.001 {
+			t.Errorf("%q = %v, want %v", c.key, num, c.want)
+		}
+	}
+}
+
+// TestRunRecordNoiseProfileSpectralFieldsZeroValued confirms the 13 spectral
+// fields keep a stable key set when a metric averages to exactly 0.0. With
+// `,omitempty` removed from their tags, a zero-valued spectral field must still
+// serialise into regions.room_tone.elected rather than dropping out, so the key
+// set is identical file-to-file regardless of measured values.
+func TestRunRecordNoiseProfileSpectralFieldsZeroValued(t *testing.T) {
+	m := populatedAudioMeasurements()
+	// Zero out a representative spread: variance, skewness, flux, and decrease.
+	// Each would have dropped under the old `,omitempty` tags.
+	m.Regions.NoiseProfile.SpectralVariance = 0
+	m.Regions.NoiseProfile.SpectralSkewness = 0
+	m.Regions.NoiseProfile.SpectralFlux = 0
+	m.Regions.NoiseProfile.SpectralDecrease = 0
+
+	rec := NewAnalysisRunRecord("/tmp/episode.flac", m)
+	tree, raw := marshalRecordTree(t, rec)
+
+	regions, ok := tree["regions"].(map[string]any)
+	if !ok {
+		t.Fatal("missing regions block")
+	}
+	roomTone, ok := regions["room_tone"].(map[string]any)
+	if !ok {
+		t.Fatal("missing regions.room_tone block")
+	}
+	elected, ok := roomTone["elected"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing regions.room_tone.elected noise profile\n%s", raw)
+	}
+
+	// All 13 spectral keys must be present even when the value is 0.0.
+	spectralKeys := []string{
+		"spectral_mean", "spectral_variance", "spectral_centroid_hz",
+		"spectral_spread_hz", "spectral_skewness", "spectral_kurtosis",
+		"spectral_entropy", "spectral_flatness", "spectral_crest",
+		"spectral_flux", "spectral_slope", "spectral_decrease", "spectral_rolloff_hz",
+	}
+	for _, key := range spectralKeys {
+		if _, present := elected[key]; !present {
+			t.Errorf("regions.room_tone.elected missing %q when value is zero\n%s", key, raw)
+		}
+	}
+
+	// The zeroed fields must serialise as a numeric 0, not drop or null.
+	for _, key := range []string{"spectral_variance", "spectral_skewness", "spectral_flux", "spectral_decrease"} {
+		got, present := elected[key]
+		if !present {
+			t.Errorf("zero-valued %q dropped from record", key)
+			continue
+		}
+		num, isNum := got.(float64)
+		if !isNum {
+			t.Errorf("%q = %v (%T), want numeric 0", key, got, got)
+			continue
+		}
+		if num != 0 {
+			t.Errorf("%q = %v, want 0", key, num)
 		}
 	}
 }
