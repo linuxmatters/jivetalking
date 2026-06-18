@@ -54,10 +54,22 @@ type NoiseProfile struct {
 	Entropy            float64       `json:"entropy"`                      // Signal randomness (1.0 = white noise, lower = tonal noise like hum)
 	ExtractionWarning  string        `json:"extraction_warning,omitempty"` // Warning message if extraction had issues
 
-	// Spectral characteristics for contamination detection (added during candidate evaluation)
-	SpectralCentroid float64 `json:"spectral_centroid_hz,omitempty"` // Hz, where energy is concentrated (voice range: 300-4000 Hz)
-	SpectralFlatness float64 `json:"spectral_flatness,omitempty"`    // 0-1, noise-like vs tonal (higher = more noise-like)
-	SpectralKurtosis float64 `json:"spectral_kurtosis,omitempty"`    // Peakiness (high = peaked harmonics like speech)
+	// Spectral characteristics for contamination detection (added during candidate
+	// evaluation). The full 13-metric aspectralstats set averaged over the elected
+	// room-tone region, mirroring SpectralMetrics field order.
+	SpectralMean     float64 `json:"spectral_mean"`        // Average spectral power
+	SpectralVariance float64 `json:"spectral_variance"`    // Spectral variance
+	SpectralCentroid float64 `json:"spectral_centroid_hz"` // Hz, where energy is concentrated (voice range: 300-4000 Hz)
+	SpectralSpread   float64 `json:"spectral_spread_hz"`   // Hz, bandwidth/fullness indicator
+	SpectralSkewness float64 `json:"spectral_skewness"`    // Spectral asymmetry (positive=bright, negative=dark)
+	SpectralKurtosis float64 `json:"spectral_kurtosis"`    // Peakiness (high = peaked harmonics like speech)
+	SpectralEntropy  float64 `json:"spectral_entropy"`     // Spectral randomness (0-1); distinct from the astats Entropy field above
+	SpectralFlatness float64 `json:"spectral_flatness"`    // 0-1, noise-like vs tonal (higher = more noise-like)
+	SpectralCrest    float64 `json:"spectral_crest"`       // Spectral peak-to-RMS (transient indicator)
+	SpectralFlux     float64 `json:"spectral_flux"`        // Frame-to-frame spectral change
+	SpectralSlope    float64 `json:"spectral_slope"`       // Spectral tilt (negative=more bass)
+	SpectralDecrease float64 `json:"spectral_decrease"`    // Average spectral decrease
+	SpectralRolloff  float64 `json:"spectral_rolloff_hz"`  // Hz, HF energy dropoff point
 
 	// Room-tone band noise: per-band RMS (dBFS) over the elected room-tone region,
 	// one value per afftdn fixed band (see afftdnBandCentresHz). Feeds the measured

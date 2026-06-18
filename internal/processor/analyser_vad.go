@@ -558,7 +558,7 @@ func extractNoiseProfileFromIntervals(region *RoomToneRegion, intervals []Interv
 	}
 
 	var rmsSum, peakMax float64
-	var entropySum, centroidSum, flatnessSum, kurtosisSum float64
+	var spectralSum SpectralMetrics
 	peakMax = -120.0
 
 	for _, interval := range regionIntervals {
@@ -566,14 +566,12 @@ func extractNoiseProfileFromIntervals(region *RoomToneRegion, intervals []Interv
 		if interval.PeakLevel > peakMax {
 			peakMax = interval.PeakLevel
 		}
-		entropySum += interval.Spectral.Entropy
-		centroidSum += interval.Spectral.Centroid
-		flatnessSum += interval.Spectral.Flatness
-		kurtosisSum += interval.Spectral.Kurtosis
+		spectralSum.add(interval.Spectral)
 	}
 
 	n := float64(len(regionIntervals))
 	avgRMS := rmsSum / n
+	avgSpectral := spectralSum.average(n)
 
 	profile := &NoiseProfile{
 		Start:    region.Start,
@@ -584,10 +582,22 @@ func extractNoiseProfileFromIntervals(region *RoomToneRegion, intervals []Interv
 		MeasuredNoiseFloor: avgRMS,
 		PeakLevel:          peakMax,
 		CrestFactor:        peakMax - avgRMS,
-		Entropy:            entropySum / n,
-		SpectralCentroid:   centroidSum / n,
-		SpectralFlatness:   flatnessSum / n,
-		SpectralKurtosis:   kurtosisSum / n,
+		// Entropy (astats signal-randomness field) is fed from the spectral
+		// entropy average, unchanged from the prior entropySum/n behaviour.
+		Entropy:          avgSpectral.Entropy,
+		SpectralMean:     avgSpectral.Mean,
+		SpectralVariance: avgSpectral.Variance,
+		SpectralCentroid: avgSpectral.Centroid,
+		SpectralSpread:   avgSpectral.Spread,
+		SpectralSkewness: avgSpectral.Skewness,
+		SpectralKurtosis: avgSpectral.Kurtosis,
+		SpectralEntropy:  avgSpectral.Entropy,
+		SpectralFlatness: avgSpectral.Flatness,
+		SpectralCrest:    avgSpectral.Crest,
+		SpectralFlux:     avgSpectral.Flux,
+		SpectralSlope:    avgSpectral.Slope,
+		SpectralDecrease: avgSpectral.Decrease,
+		SpectralRolloff:  avgSpectral.Rolloff,
 	}
 
 	if region.Duration < idealDurationMin {

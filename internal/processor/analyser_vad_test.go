@@ -833,6 +833,76 @@ func TestPickLowClusterRegion(t *testing.T) {
 	}
 }
 
+// TestExtractNoiseProfileSpectralFields confirms extractNoiseProfileFromIntervals
+// averages and preserves all 13 contamination-detection spectral fields from the
+// region's interval samples. These fields have no adaptive consumer yet but are
+// the measurement spine the report exposes, so they must survive extraction
+// unchanged. The astats Entropy field tracks the spectral-entropy mean (unchanged
+// behaviour).
+func TestExtractNoiseProfileSpectralFields(t *testing.T) {
+	hop := analysisIntervalHop
+	// Two intervals with distinct spectral values; the profile must carry their
+	// arithmetic mean for each field (no rounding, no drop). Values are chosen so
+	// each per-field mean is a clean number.
+	iv := []IntervalSample{
+		{
+			Timestamp: 0, RMSLevel: -60, PeakLevel: -50,
+			Spectral: SpectralMetrics{
+				Mean: 1.0, Variance: 2.0, Centroid: 1400, Spread: 300,
+				Skewness: 0.5, Kurtosis: 2.0, Entropy: 0.4, Flatness: 0.3,
+				Crest: 6.0, Flux: 0.02, Slope: -0.4, Decrease: 0.10,
+				Rolloff: 6000, Found: true,
+			},
+		},
+		{
+			Timestamp: hop, RMSLevel: -58, PeakLevel: -48,
+			Spectral: SpectralMetrics{
+				Mean: 3.0, Variance: 4.0, Centroid: 1600, Spread: 500,
+				Skewness: 1.5, Kurtosis: 4.0, Entropy: 0.6, Flatness: 0.5,
+				Crest: 10.0, Flux: 0.06, Slope: -0.2, Decrease: 0.14,
+				Rolloff: 8000, Found: true,
+			},
+		},
+	}
+	region := &RoomToneRegion{Start: 0, Duration: 2 * hop}
+
+	profile := extractNoiseProfileFromIntervals(region, iv)
+	if profile == nil {
+		t.Fatal("extractNoiseProfileFromIntervals returned nil")
+	}
+
+	const tol = 0.001
+	// astats Entropy field carries the spectral-entropy mean (unchanged behaviour).
+	if math.Abs(profile.Entropy-0.5) > tol {
+		t.Errorf("Entropy = %.4f, want mean 0.5", profile.Entropy)
+	}
+
+	checks := []struct {
+		name string
+		got  float64
+		want float64
+	}{
+		{"SpectralMean", profile.SpectralMean, 2.0},
+		{"SpectralVariance", profile.SpectralVariance, 3.0},
+		{"SpectralCentroid", profile.SpectralCentroid, 1500},
+		{"SpectralSpread", profile.SpectralSpread, 400},
+		{"SpectralSkewness", profile.SpectralSkewness, 1.0},
+		{"SpectralKurtosis", profile.SpectralKurtosis, 3.0},
+		{"SpectralEntropy", profile.SpectralEntropy, 0.5},
+		{"SpectralFlatness", profile.SpectralFlatness, 0.4},
+		{"SpectralCrest", profile.SpectralCrest, 8.0},
+		{"SpectralFlux", profile.SpectralFlux, 0.04},
+		{"SpectralSlope", profile.SpectralSlope, -0.3},
+		{"SpectralDecrease", profile.SpectralDecrease, 0.12},
+		{"SpectralRolloff", profile.SpectralRolloff, 7000},
+	}
+	for _, c := range checks {
+		if math.Abs(c.got-c.want) > tol {
+			t.Errorf("%s = %.4f, want mean %.4f", c.name, c.got, c.want)
+		}
+	}
+}
+
 func TestDeriveGateStatistics(t *testing.T) {
 	const split = -30.0
 
