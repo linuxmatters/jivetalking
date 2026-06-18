@@ -546,8 +546,7 @@ const (
 
 // extractNoiseProfileFromIntervals creates a NoiseProfile using pre-collected interval data.
 // This avoids re-reading the audio file - all measurements come from Pass 1's interval samples.
-// Returns nil if no intervals fall within the region. Moved here from the room-tone file so the
-// detector keeps the exact NoiseProfile field shape and the short/long extraction warnings.
+// Returns nil if no intervals fall within the region.
 func extractNoiseProfileFromIntervals(region *RoomToneRegion, intervals []IntervalSample) *NoiseProfile {
 	if region == nil {
 		return nil
@@ -577,8 +576,11 @@ func extractNoiseProfileFromIntervals(region *RoomToneRegion, intervals []Interv
 	avgRMS := rmsSum / n
 
 	profile := &NoiseProfile{
-		Start:              region.Start,
-		Duration:           region.Duration,
+		Start:    region.Start,
+		Duration: region.Duration,
+		// avgRMS is the local astats-RMS value, not the final one. The caller
+		// detectVoiceActivity overwrites MeasuredNoiseFloor with the percentile
+		// floor on the momentary-LUFS axis.
 		MeasuredNoiseFloor: avgRMS,
 		PeakLevel:          peakMax,
 		CrestFactor:        peakMax - avgRMS,

@@ -131,8 +131,10 @@ func recordingLevel(m *AudioMeasurements) float64 {
 	return recordingDeficitWeight*deficitScore + recordingLRAWeight*lraScore
 }
 
-// floorOrZero returns the elected room-tone noise floor (dBFS), or 0 when no
-// NoiseProfile was elected. A 0 dBFS floor scores as maximally dirty, keeping
+// floorOrZero returns the elected room-tone noise floor on the K-weighted
+// momentary-LUFS axis (overwritten by detectVoiceActivity), or 0 when no
+// NoiseProfile was elected. Compare it only against momentary-LUFS values,
+// never an astats-RMS dBFS level. A 0 floor scores as maximally dirty, keeping
 // the fallback honest.
 func (np *NoiseProfile) floorOrZero() float64 {
 	if np == nil {

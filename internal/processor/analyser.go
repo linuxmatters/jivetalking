@@ -37,7 +37,7 @@ type RoomToneRegion struct {
 //     gate threshold and de-esser/quality references.
 //   - CrestFactor/PeakLevel → peak-reference input to the legacy speech gate
 //     threshold path (calculateSpeechGateThresholdLegacy via adaptive_speech_gate.go),
-//     reached only when noise-to-speech separation is too small for the aggression maths.
+//     reached only when no SpeechProfile is elected.
 //
 // Entropy and the spectral fields are measured here for the report and
 // contamination detection; the current adaptive gate keys its release/range on
@@ -48,7 +48,7 @@ type RoomToneRegion struct {
 type NoiseProfile struct {
 	Start              time.Duration `json:"start"`                        // Start time of room tone region used (time.Duration ns)
 	Duration           time.Duration `json:"duration"`                     // Duration of extracted sample (time.Duration ns)
-	MeasuredNoiseFloor float64       `json:"measured_floor_dbfs"`          // dBFS, RMS level of room tone (average noise)
+	MeasuredNoiseFloor float64       `json:"measured_floor_dbfs"`          // Elected noise floor; seeded as astats RMS, overwritten by detectVoiceActivity with the momentary-LUFS percentile floor
 	PeakLevel          float64       `json:"peak_level_dbfs"`              // dBFS, peak level in room tone (transient noise indicator)
 	CrestFactor        float64       `json:"crest_factor_db"`              // Peak - RMS in dB (high = impulsive noise, low = steady noise)
 	Entropy            float64       `json:"entropy"`                      // Signal randomness (1.0 = white noise, lower = tonal noise like hum)

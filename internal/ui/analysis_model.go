@@ -18,7 +18,7 @@ import (
 type analysisFileState struct {
 	FileName string
 	Progress float64 // 0.0 to 1.0
-	Level    float64 // Current audio level in dB
+	Level    float64 // Current audio level, raw decode dBFS axis (not a VAD output)
 	Done     bool
 	Err      error
 	Result   *processor.AnalysisResult

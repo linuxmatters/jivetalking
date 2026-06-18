@@ -177,7 +177,6 @@ func (f *isolationFake) fn(_ context.Context, inputPath string, _ *processor.Bas
 		OutputPath: outputPath,
 		InputLUFS:  -23.0,
 		OutputLUFS: -16.0,
-		NoiseFloor: -60.0,
 	}, nil
 }
 

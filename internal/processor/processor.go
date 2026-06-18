@@ -188,7 +188,6 @@ func ProcessAudio(ctx context.Context, inputPath string, config *BaseFilterConfi
 		OutputPath:           outputPath,
 		InputLUFS:            measurements.Loudness.InputI,
 		OutputLUFS:           0.0, // Will be set to final value below
-		NoiseFloor:           measurements.Noise.Floor,
 		Measurements:         measurements,
 		Config:               effectiveConfig, // Include per-file config for logging adaptive parameters
 		Diagnostics:          diagnostics,
@@ -238,7 +237,6 @@ type ProcessingResult struct {
 	OutputPath   string
 	InputLUFS    float64
 	OutputLUFS   float64 // Final output loudness (after normalisation if applied)
-	NoiseFloor   float64
 	Measurements *AudioMeasurements
 	Config       *EffectiveFilterConfig // Contains adaptive parameters used
 	Diagnostics  *AdaptiveDiagnostics
