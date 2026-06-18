@@ -137,21 +137,9 @@ func outputTruePeak(result *ProcessingResult) float64 {
 	return qualityTPHot
 }
 
-// FinalNoiseFloor resolves the output room-tone RMS floor (dBFS) for display, the
-// same quantity the quality scorer rewards. Prefers the Pass 4 final room-tone
-// sample; falls back to the input floor when no final sample exists so the done
-// box always shows a real measured floor. The bool is false when neither is
-// available.
-func FinalNoiseFloor(result *ProcessingResult) (float64, bool) {
-	if floor, ok := finalRoomToneRMS(result); ok {
-		return floor, true
-	}
-	return inputRoomToneRMS(result)
-}
-
 // OutputNoiseFloor resolves the genuine Pass 4 output room-tone RMS floor (dBFS),
-// the after half of the done-box before->after pair. Unlike FinalNoiseFloor it
-// does NOT fall back to the input floor: the bool is false when no Pass 4
+// the after half of the done-box before->after pair. It does NOT fall back to
+// the input floor: the bool is false when no Pass 4
 // room-tone sample exists, so the done box can show the input figure alone
 // rather than a misleading input->input arrow.
 func OutputNoiseFloor(result *ProcessingResult) (float64, bool) {
@@ -163,7 +151,7 @@ func OutputNoiseFloor(result *ProcessingResult) (float64, bool) {
 
 // InputNoiseFloor resolves the input room-tone RMS floor (dBFS) for display,
 // the before half of the done-box before->after pair whose after half is
-// FinalNoiseFloor. Both ends are RegionSample.RMSLevel on the same astats RMS
+// OutputNoiseFloor. Both ends are RegionSample.RMSLevel on the same astats RMS
 // dBFS axis, so the pair is honestly comparable. It delegates to
 // InputRoomToneFloorDB, which reads only the elected room-tone RegionSample
 // (ElectedRoomToneSample, measured by the same interval accumulation that

@@ -706,7 +706,6 @@ func TestProcessAudio(t *testing.T) {
 	// Log results
 	t.Logf("Input LUFS: %.2f", result.InputLUFS)
 	t.Logf("Output LUFS: %.2f", result.OutputLUFS)
-	t.Logf("Noise Floor: %.2f", result.NoiseFloor)
 	t.Logf("Output: %s", result.OutputPath)
 }
 

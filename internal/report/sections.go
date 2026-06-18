@@ -836,6 +836,7 @@ func renderFilterDiagnostics(d *processor.AdaptiveDiagnostics) string {
 
 // afftdnNoiseFloorCell renders the afftdn nf value, showing the placeholder when
 // unset (zero or non-negative). A set floor is always negative.
+// The value is the VAD momentary-LUFS percentile floor, re-clamped to afftdn's [-80, -20] dB range.
 func afftdnNoiseFloorCell(floor float64) string {
 	if floor >= 0 {
 		return placeholder

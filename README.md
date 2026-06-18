@@ -28,7 +28,7 @@ Record → Process → Edit → Export
   └─ Each presenter records separately, exports FLAC
 ```
 
-**Include 10-15 seconds of room tone somewhere in your recording.** Just sit quietly and let the room breathe - at the start, between sections, or at the end. Jivetalking scans the entire file to find the cleanest room-tone section for building a noise profile, which calibrates the adaptive gate and highpass in Pass 2. The `anlmdn → afftdn` noise reduction runs regardless, so recordings without a clean room-tone section are still denoised.
+**Include 10-15 seconds of room tone somewhere in your recording.** Just sit quietly and let the room breathe - at the start, between sections, or at the end. Jivetalking scans the entire file to find the cleanest quiet stretch and builds a noise profile from it, used by the noise-reduction and gate stages in Pass 2. The `anlmdn → afftdn` noise reduction runs regardless, so recordings without a clean room-tone section are still denoised.
 
 ---
 
