@@ -1,7 +1,5 @@
 package processor
 
-import "math"
-
 // ComputeRecordingScore grades the INPUT capture quality from Pass-1
 // measurements, the counterpart to ComputeQualityScore (which grades the
 // OUTPUT against spec). The output score saturates near 5 stars because the
@@ -82,7 +80,7 @@ func linearScore(v, full, zero float64) float64 {
 		return 0.0
 	}
 	t := (v - zero) / (full - zero)
-	return math.Max(0.0, math.Min(1.0, t))
+	return min(1.0, max(0.0, t))
 }
 
 // ComputeRecordingScore derives the source-capture quality rating from Pass-1
@@ -125,7 +123,7 @@ func recordingCleanliness(m *AudioMeasurements) float64 {
 // recordingLevel blends the loudness deficit (quiet captures penalised, loud
 // ones not) and the loudness range (sprawl penalised).
 func recordingLevel(m *AudioMeasurements) float64 {
-	deficit := math.Max(0, recordingLevelTarget-m.Loudness.InputI)
+	deficit := max(0, recordingLevelTarget-m.Loudness.InputI)
 	deficitScore := linearScore(deficit, recordingDeficitFull, recordingDeficitZero)
 	lraScore := linearScore(m.Loudness.InputLRA, recordingLRAFull, recordingLRAZero)
 	return recordingDeficitWeight*deficitScore + recordingLRAWeight*lraScore
