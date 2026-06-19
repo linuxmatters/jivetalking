@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	ffmpeg "github.com/linuxmatters/ffmpeg-statigo"
 	"github.com/linuxmatters/ffmpeg-statigo/av"
@@ -99,6 +100,17 @@ func generateSpectrogram(ctx context.Context, inputPath string, bounds *regionBo
 		return fmt.Errorf("open audio file: %w", err)
 	}
 	defer reader.Close()
+
+	// For a region render, skip the pre-region span: seek the demuxer near the
+	// region before decoding rather than decoding from frame 0 and letting atrim
+	// discard everything ahead of start. The atrim window stays region-absolute,
+	// so the rendered PNG is unchanged (see regionSeekPreRoll). The whole-file
+	// path (bounds == nil) has no atrim and must decode from frame 0, so it stays
+	// seek-free. A nil debugLogger is a no-op sink for the non-fatal seek warning.
+	if bounds != nil {
+		var log debugLogger
+		seekReaderBeforeRegion(reader, time.Duration(bounds.Start*float64(time.Second)), log)
+	}
 
 	graph, srcCtx, sinkCtx, err := setupSpectrumGraph(reader.GetDecoderContext(), spectrogramFilterSpec(bounds))
 	if err != nil {

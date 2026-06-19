@@ -576,7 +576,7 @@ func TestProcessingRowFitsTerminal(t *testing.T) {
 		updated, _ = m.Update(ProgressMsg{FileIndex: 0, Pass: 2, PassName: "Processing", Progress: 0.5})
 		m = updated.(Model)
 
-		row := renderFileDetails(m.Files[0], m.progress, -20.0, 0.5, -12.0)
+		row := renderFileDetails(&m.Files[0], m.progress, -20.0, 0.5, -12.0)
 		for line := range strings.SplitSeq(row, "\n") {
 			if w := ansi.StringWidth(line); w > term {
 				t.Errorf("term=%d line width %d overflows:\n%q", term, w, line)

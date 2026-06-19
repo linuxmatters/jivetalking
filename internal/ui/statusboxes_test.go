@@ -6,6 +6,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/linuxmatters/jivetalking/internal/cli"
 	"github.com/linuxmatters/jivetalking/internal/processor"
 )
 
@@ -342,11 +343,59 @@ func TestBorderTitleInTopBorder(t *testing.T) {
 	}
 }
 
+// TestCachedOverlayTitle confirms cachedOverlayTitle memoises the spliced top-border
+// line on (title, top-border width): a repeat call with the same key serves the
+// stored line, and a changed title recomputes. The body after the first line always
+// comes from the live box, so per-frame inner content is never cached.
+func TestCachedOverlayTitle(t *testing.T) {
+	box := fileDetailsBox.Render("first row\nsecond row")
+
+	var c overlayTitleCache
+
+	// First call: cache miss, computes and stores the spliced line.
+	out := cachedOverlayTitle(&c, box, "Pass 2/4")
+	if !c.valid {
+		t.Fatal("cache should be valid after the first call")
+	}
+	if c.title != "Pass 2/4" {
+		t.Errorf("cache title = %q, want %q", c.title, "Pass 2/4")
+	}
+	want := overlayBorderTitle(box, "Pass 2/4", cli.ColorSkyBlue)
+	if out != want {
+		t.Errorf("first call differs from overlayBorderTitle:\ngot= %q\nwant=%q",
+			ansi.Strip(out), ansi.Strip(want))
+	}
+
+	// Same (title, width): the stored line must be served. Poison the cached line
+	// with a sentinel; the helper must return it verbatim (proving no recompute).
+	c.line = "SENTINEL"
+	nl := strings.IndexByte(box, '\n')
+	hit := cachedOverlayTitle(&c, box, "Pass 2/4")
+	if hit != "SENTINEL"+box[nl:] {
+		t.Errorf("cache hit should serve the stored line, got %q", ansi.Strip(hit))
+	}
+
+	// Changed title (pass boundary): key mismatch must recompute, replacing the
+	// sentinel with a fresh splice for the new title.
+	recomputed := cachedOverlayTitle(&c, box, "Pass 3/4")
+	if strings.Contains(recomputed, "SENTINEL") {
+		t.Error("title change should recompute, not serve the stale sentinel line")
+	}
+	if c.title != "Pass 3/4" {
+		t.Errorf("cache title after recompute = %q, want %q", c.title, "Pass 3/4")
+	}
+	want3 := overlayBorderTitle(box, "Pass 3/4", cli.ColorSkyBlue)
+	if recomputed != want3 {
+		t.Errorf("recomputed line differs from overlayBorderTitle:\ngot= %q\nwant=%q",
+			ansi.Strip(recomputed), ansi.Strip(want3))
+	}
+}
+
 // TestPassBoxTitleInBorder confirms the Pass box splits "Pass N/4: <Name>" into a
 // border title ("Pass N/4") and a first content row carrying only the pass name.
 func TestPassBoxTitleInBorder(t *testing.T) {
 	file := FileProgress{CurrentPass: processor.PassNormalising, Status: StatusNormalising}
-	plain := ansi.Strip(renderFileDetails(file, newProgressModel(), 0, 0, 0))
+	plain := ansi.Strip(renderFileDetails(&file, newProgressModel(), 0, 0, 0))
 	lines := strings.Split(plain, "\n")
 	if len(lines) < 2 {
 		t.Fatalf("pass box too short:\n%s", plain)

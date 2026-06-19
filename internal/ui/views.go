@@ -69,7 +69,7 @@ func renderFileEntry(file *FileProgress, prog progress.Model, easedLevel, easedP
 		// active file with detailed progress, with the filter-chain status boxes
 		// joined to the right of the Pass box.
 		icon := lipgloss.NewStyle().Foreground(cli.ColorOrange).Render("∿")
-		passBox := renderFileDetails(*file, prog, easedLevel, easedProgress, easedPeak)
+		passBox := renderFileDetails(file, prog, easedLevel, easedProgress, easedPeak)
 		body := joinStatusBoxes(passBox, file, termWidth)
 		return fmt.Sprintf(" %s %s\n%s", icon, fileName, body)
 
@@ -85,14 +85,18 @@ func renderFileEntry(file *FileProgress, prog progress.Model, easedLevel, easedP
 	}
 }
 
+// fileDetailsBox is the active-file Pass box frame: a sky-blue rounded border with
+// horizontal padding. Its inputs are all compile-time constants, so it is identical
+// every frame; hoisting it off renderFileDetails keeps the style allocation off the
+// 60fps redraw (one active file rebuilds it per frame otherwise).
+var fileDetailsBox = lipgloss.NewStyle().
+	Border(lipgloss.RoundedBorder()).
+	BorderForeground(cli.ColorSkyBlue).
+	Padding(0, 1)
+
 // renderFileDetails renders detailed progress for the active file. easedLevel is
 // the spring-smoothed audio level used for the meter display.
-func renderFileDetails(file FileProgress, prog progress.Model, easedLevel, easedProgress, easedPeak float64) string {
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(cli.ColorSkyBlue).
-		Padding(0, 1)
-
+func renderFileDetails(file *FileProgress, prog progress.Model, easedLevel, easedProgress, easedPeak float64) string {
 	var content strings.Builder
 
 	// Pass indicator. "Pass N/4" sits in the top border (spliced below, matching
@@ -118,7 +122,7 @@ func renderFileDetails(file FileProgress, prog progress.Model, easedLevel, eased
 
 	// Time block: elapsed clock, mini dot timeline, projected total clock, and a
 	// realtime-speed badge.
-	content.WriteString(renderTimeline(file))
+	content.WriteString(renderTimeline(*file))
 	content.WriteByte('\n')
 
 	// Audio level visualization. Both the displayed level and the peak marker ease
@@ -130,7 +134,7 @@ func renderFileDetails(file FileProgress, prog progress.Model, easedLevel, eased
 	}
 
 	title := fmt.Sprintf("Pass %d/4", file.CurrentPass)
-	return overlayBorderTitle(box.Render(content.String()), title, cli.ColorSkyBlue)
+	return cachedOverlayTitle(&file.fileDetailsTitleCache, fileDetailsBox.Render(content.String()), title)
 }
 
 // timelineWidth is the cell count of the mini dot timeline in the Time block.
@@ -243,6 +247,25 @@ var meterRamp = sync.OnceValue(func() []color.Color {
 	return ramp
 })
 
+// meterRampStyles caches one lipgloss.Style per meterRamp colour so the meter
+// flush indexes a pre-built style instead of allocating lipgloss.NewStyle() per
+// colour run on the 60fps redraw. It derives its colours from meterRamp() inside
+// the same closure, so the ramp is the single source of truth (the styles and the
+// ramp can never drift). Lazy and thread-safe for the same reasons as meterRamp.
+var meterRampStyles = sync.OnceValue(func() []lipgloss.Style {
+	ramp := meterRamp()
+	styles := make([]lipgloss.Style, len(ramp))
+	for i, c := range ramp {
+		styles[i] = lipgloss.NewStyle().Foreground(c)
+	}
+	return styles
+})
+
+// meterOffRampStyle is the off-ramp fallback style: cells whose index falls
+// outside the cached ramp resolve to cli.ColorRed, matching cellColor in
+// renderAudioLevelMeter. Built once at package init so the flush never allocates.
+var meterOffRampStyle = lipgloss.NewStyle().Foreground(cli.ColorRed)
+
 // renderAudioLevelMeter renders a live audio level meter with dB visualization.
 // elapsed drives the gentle pulse of the peak-hold marker; it is the file's
 // running elapsed time, advanced once per meter tick, so no second tick loop is
@@ -273,7 +296,10 @@ func renderAudioLevelMeter(currentLevel, peakLevel float64, elapsed time.Duratio
 	// meterRamp): its inputs (meterWidth, meterFloorDB, the -16 dB threshold, and
 	// the package-level colours) are all compile-time constants, so the ramp never
 	// varies per frame. Indexing the cached slice keeps this off the 60fps path.
+	// The matching per-colour styles are cached too (meterRampStyles), so the flush
+	// indexes a pre-built style rather than allocating one per run.
 	ramp := meterRamp()
+	rampStyles := meterRampStyles()
 
 	cellColor := func(i int) color.Color {
 		if i < 0 || i >= len(ramp) {
@@ -290,14 +316,23 @@ func renderAudioLevelMeter(currentLevel, peakLevel float64, elapsed time.Duratio
 	}
 
 	// Build contiguous same-colour runs and style each as one segment so
-	// lipgloss emits a single colour sequence per run rather than per rune.
+	// lipgloss emits a single colour sequence per run rather than per rune. The
+	// run is coalesced by colour equality over the cell index, and cellColor maps
+	// cell i to ramp position i, so the run's START cell index is its ramp
+	// position. Index the cached style by that position; an off-ramp run (position
+	// outside the ramp, the cli.ColorRed fallback) uses the package red style.
 	var run strings.Builder
 	var runColor color.Color
+	runStart := 0
 	flush := func() {
 		if run.Len() == 0 {
 			return
 		}
-		b.WriteString(lipgloss.NewStyle().Foreground(runColor).Render(run.String()))
+		style := meterOffRampStyle
+		if runStart >= 0 && runStart < len(rampStyles) {
+			style = rampStyles[runStart]
+		}
+		b.WriteString(style.Render(run.String()))
 		run.Reset()
 	}
 
@@ -305,6 +340,7 @@ func renderAudioLevelMeter(currentLevel, peakLevel float64, elapsed time.Duratio
 		color := cellColor(i)
 		if run.Len() > 0 && color != runColor {
 			flush()
+			runStart = i
 		}
 		runColor = color
 		run.WriteRune(meterChar(i))

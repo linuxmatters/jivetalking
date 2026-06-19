@@ -182,6 +182,38 @@ func overlayBorderTitle(box, title string, borderColor color.Color) string {
 	return b.String() + rest
 }
 
+// cachedOverlayTitle is a memoised overlayBorderTitle for the single-colour
+// active-file Pass box (cli.ColorSkyBlue). It splices the title into box's top
+// border, but reuses the cached top-border line when (title, top-border width) is
+// unchanged: the title is stable within a pass, so the strip + rune-slice +
+// 3-render overlay work runs only when the pass number changes or the box width
+// changes, not on every 60 fps frame. The box body (after the first line) always
+// comes from box, so per-frame inner content still renders; only the top-border
+// overlay is cached. A box with no newline has no overlayable top border, so it is
+// returned unchanged (matching overlayBorderTitle).
+func cachedOverlayTitle(c *overlayTitleCache, box, title string) string {
+	nl := strings.IndexByte(box, '\n')
+	if nl < 0 {
+		return box
+	}
+	top, rest := box[:nl], box[nl:]
+
+	width := lipgloss.Width(top)
+	if !c.valid || c.title != title || c.width != width {
+		// Miss: run the full overlay on this box and cache only its first line.
+		full := overlayBorderTitle(box, title, cli.ColorSkyBlue)
+		// overlayBorderTitle preserves the box structure, so full has the same first
+		// newline; cache only its first line. A box with no newline returned earlier.
+		firstLine, _, _ := strings.Cut(full, "\n")
+		c.line = firstLine
+		c.title = title
+		c.width = width
+		c.valid = true
+	}
+
+	return c.line + rest
+}
+
 // fitWidth pads s with trailing spaces to exactly width display columns, or
 // hard-truncates (dropping trailing ANSI styling) if it overflows. Used so each
 // status-box row occupies exactly one line.

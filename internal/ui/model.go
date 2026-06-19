@@ -143,6 +143,15 @@ type FileProgress struct {
 	// (meter rows appear or disappear). Render-only state; the pool never touches it.
 	statusBoxCache statusBoxCache
 
+	// fileDetailsTitleCache memoises the spliced "Pass N/4" top-border line for the
+	// active-file Pass box (the renderFileDetails overlayBorderTitle call). The line
+	// depends only on (title, top-border width): the colour is fixed at
+	// cli.ColorSkyBlue for this site. The title is stable within a pass, so the strip
+	// + rune-slice + 3-render overlay work runs only when the pass number changes
+	// (new title) or the box width changes, not on every 60 fps frame. Render-only
+	// state; the pool never touches it.
+	fileDetailsTitleCache overlayTitleCache
+
 	// Processing statistics
 	CurrentLevel float64 // Current audio level in dB
 	PeakLevel    float64 // Peak level seen so far
@@ -184,6 +193,18 @@ type statusBoxCache struct {
 	joinHeight int
 	chain      string
 	analysis   string
+}
+
+// overlayTitleCache holds a memoised overlayBorderTitle result keyed on the inputs
+// that vary it: the title text and the rendered box's top-border width. valid guards
+// the zero-value (a genuine key of {"", 0}). line is the spliced first border line.
+// The colour is not part of the key: this cache serves a single-colour call site
+// (cli.ColorSkyBlue), so colour never varies.
+type overlayTitleCache struct {
+	valid bool
+	title string
+	width int
+	line  string
 }
 
 // Model is the Bubbletea model for the processing UI

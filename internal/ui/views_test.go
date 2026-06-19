@@ -92,6 +92,37 @@ func TestMeterRampStableAcrossCalls(t *testing.T) {
 	}
 }
 
+// TestMeterRampStylesMatchRamp asserts the cached style slice has one style per
+// ramp colour (same length) and that each style's foreground resolves to the
+// matching ramp colour, so the flush's position-indexed style matches the
+// per-cell colour the oracle paints. It also checks the off-ramp fallback style
+// resolves to cli.ColorRed, matching cellColor's out-of-range branch.
+func TestMeterRampStylesMatchRamp(t *testing.T) {
+	ramp := meterRamp()
+	styles := meterRampStyles()
+
+	if len(styles) != len(ramp) {
+		t.Fatalf("meterRampStyles length = %d, want ramp length %d", len(styles), len(ramp))
+	}
+	for i := range ramp {
+		if !colorsEqual(styles[i].GetForeground(), ramp[i]) {
+			sr, sg, sb, _ := styles[i].GetForeground().RGBA()
+			rr, rg, rb, _ := ramp[i].RGBA()
+			t.Errorf("style[%d] foreground = (%d,%d,%d), want ramp (%d,%d,%d)",
+				i, sr>>8, sg>>8, sb>>8, rr>>8, rg>>8, rb>>8)
+		}
+	}
+
+	// Off-ramp fallback: cellColor returns cli.ColorRed for an out-of-range index;
+	// the flush uses meterOffRampStyle for the same case.
+	if !colorsEqual(meterOffRampStyle.GetForeground(), cli.ColorRed) {
+		or, og, ob, _ := meterOffRampStyle.GetForeground().RGBA()
+		rr, rg, rb, _ := cli.ColorRed.RGBA()
+		t.Errorf("meterOffRampStyle foreground = (%d,%d,%d), want cli.ColorRed (%d,%d,%d)",
+			or>>8, og>>8, ob>>8, rr>>8, rg>>8, rb>>8)
+	}
+}
+
 // TestRenderAudioLevelMeterMatchesOracle renders the meter across a range of dB
 // fill levels and asserts the output equals a reference renderer that uses the
 // per-frame ramp oracle. A mismatch means the cache changed the visible meter.
