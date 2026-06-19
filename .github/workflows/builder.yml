@@ -72,6 +72,8 @@ jobs:
           cd third_party/ffmpeg-statigo
           go run ./cmd/download-lib
       - uses: robherley/go-test-action@v1
+        env:
+          CGO_ENABLED: 1
         with:
           testArguments: -coverprofile=coverage.out -covermode=atomic ./...
           omit: untested
@@ -111,6 +113,8 @@ jobs:
           cd third_party/ffmpeg-statigo
           go run ./cmd/download-lib
       - name: Test
+        env:
+          CGO_ENABLED: 1
         run: go test ./...
 
   security:
@@ -214,6 +218,8 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Building jivetalking $VERSION for ${{ matrix.os }}/${{ matrix.arch }}"
       - name: Build binary
+        env:
+          CGO_ENABLED: 1
         run: |
           go build -ldflags="-X main.version=${{ steps.version.outputs.version }}" -o jivetalking-${{ matrix.os }}-${{ matrix.arch }} ./cmd/jivetalking
       - name: Upload artifact
