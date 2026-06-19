@@ -38,12 +38,7 @@ func OpenAudioFile(filename string) (*Reader, *Metadata, error) {
 	// ownership to the Reader and frees nothing.
 	decCtx := (*ffmpeg.AVCodecContext)(nil)
 	cleanup := func() {
-		if decCtx != nil {
-			ffmpeg.AVCodecFreeContext(&decCtx)
-		}
-		if fmtCtx != nil {
-			ffmpeg.AVFormatCloseInput(&fmtCtx)
-		}
+		freeContexts(&decCtx, &fmtCtx)
 	}
 
 	if _, err := ffmpeg.AVFormatOpenInput(&fmtCtx, filenameC, nil, nil); err != nil {
@@ -177,6 +172,18 @@ func (r *Reader) SeekTo(timestamp int64) error {
 	return nil
 }
 
+// freeContexts releases the decoder and format contexts in reverse order of
+// acquisition (decCtx before fmtCtx), nil-guarding each. Shared by the
+// OpenAudioFile error path and Close so both free the same set in one place.
+func freeContexts(decCtx **ffmpeg.AVCodecContext, fmtCtx **ffmpeg.AVFormatContext) {
+	if *decCtx != nil {
+		ffmpeg.AVCodecFreeContext(decCtx)
+	}
+	if *fmtCtx != nil {
+		ffmpeg.AVFormatCloseInput(fmtCtx)
+	}
+}
+
 // Close releases all resources
 func (r *Reader) Close() {
 	if r.frame != nil {
@@ -185,10 +192,5 @@ func (r *Reader) Close() {
 	if r.packet != nil {
 		ffmpeg.AVPacketFree(&r.packet)
 	}
-	if r.decCtx != nil {
-		ffmpeg.AVCodecFreeContext(&r.decCtx)
-	}
-	if r.fmtCtx != nil {
-		ffmpeg.AVFormatCloseInput(&r.fmtCtx)
-	}
+	freeContexts(&r.decCtx, &r.fmtCtx)
 }

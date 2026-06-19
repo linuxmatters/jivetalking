@@ -23,8 +23,7 @@ func tuneBandlimitLowPass(config *EffectiveFilterConfig, diagnostics *AdaptiveDi
 	config.BandlimitLowPass.Frequency = bandlimitLPFreq
 	config.BandlimitLowPass.Poles = 2 // 12dB/oct - a real ceiling that attenuates before Nyquist
 	config.BandlimitLowPass.Mix = 1.0
-	if diagnostics == nil {
-		diagnostics = &AdaptiveDiagnostics{}
+	if diagnostics != nil {
+		diagnostics.BandlimitLPReason = "20.5 kHz band-limit (always on)"
 	}
-	diagnostics.BandlimitLPReason = "20.5 kHz band-limit (always on)"
 }

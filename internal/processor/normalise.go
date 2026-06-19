@@ -106,6 +106,68 @@ type LoudnormStats struct {
 	TargetOffset      string `json:"target_offset"`
 }
 
+// LoudnormValue is one loudnorm measurement parsed to a typed float, with OK
+// false when the source string failed to parse. The report formats Value when OK
+// and emits the placeholder otherwise, so a missing or unparseable measurement
+// never fabricates a number.
+type LoudnormValue struct {
+	Value float64
+	OK    bool
+}
+
+// LoudnormMeasured holds the loudnorm stats parsed once to typed floats, plus the
+// precomputed target deviation (OutputI - EffectiveTargetI). The report consumes
+// these typed values and formats them like every other section; it no longer
+// re-parses LoudnormStats strings. This is a report-facing convenience built at
+// record assembly; it is NOT serialised (the JSON record keeps the FFmpeg
+// string-keyed LoudnormStats as its parse target, see normalisationRecord).
+type LoudnormMeasured struct {
+	InputI          LoudnormValue
+	InputTP         LoudnormValue
+	InputLRA        LoudnormValue
+	InputThresh     LoudnormValue
+	OutputI         LoudnormValue
+	OutputTP        LoudnormValue
+	OutputLRA       LoudnormValue
+	OutputThresh    LoudnormValue
+	TargetDeviation LoudnormValue
+}
+
+// parseLoudnormValue parses one loudnorm stats string to a typed float, trimming
+// surrounding whitespace first. OK is false on a parse failure, matching the
+// renderer's former graceful behaviour (placeholder, never a fabricated value).
+func parseLoudnormValue(value string) LoudnormValue {
+	f, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	if err != nil {
+		return LoudnormValue{}
+	}
+	return LoudnormValue{Value: f, OK: true}
+}
+
+// parseLoudnormMeasured parses the loudnorm stats to typed floats once and
+// precomputes the target deviation (OutputI - effectiveTargetI). Returns nil for
+// nil stats so the report omits the loudnorm rows. The deviation OK follows the
+// OutputI parse, mirroring the renderer's former targetDeviationCell guard.
+func parseLoudnormMeasured(stats *LoudnormStats, effectiveTargetI float64) *LoudnormMeasured {
+	if stats == nil {
+		return nil
+	}
+	m := &LoudnormMeasured{
+		InputI:       parseLoudnormValue(stats.InputI),
+		InputTP:      parseLoudnormValue(stats.InputTP),
+		InputLRA:     parseLoudnormValue(stats.InputLRA),
+		InputThresh:  parseLoudnormValue(stats.InputThresh),
+		OutputI:      parseLoudnormValue(stats.OutputI),
+		OutputTP:     parseLoudnormValue(stats.OutputTP),
+		OutputLRA:    parseLoudnormValue(stats.OutputLRA),
+		OutputThresh: parseLoudnormValue(stats.OutputThresh),
+	}
+	if m.OutputI.OK {
+		m.TargetDeviation = LoudnormValue{Value: m.OutputI.Value - effectiveTargetI, OK: true}
+	}
+	return m
+}
+
 // parseLoudnormStatsFile reads loudnorm's JSON stats from a file and parses it
 // into LoudnormStats. A missing or empty file, or one without a JSON object,
 // returns an error in the same failure class as the av_log "no JSON found" path.
@@ -617,18 +679,23 @@ type LimiterDiagnostics struct {
 
 // NormalisationResult contains the outcome of the normalisation pass.
 type NormalisationResult struct {
-	InputLUFS         float64        `json:"input_lufs"`            // Pre-normalisation loudness (from Pass 2 loudnorm measurement)
-	InputTP           float64        `json:"input_dbtp"`            // Pre-normalisation true peak (from Pass 2 loudnorm measurement)
-	OutputLUFS        float64        `json:"output_lufs"`           // Post-normalisation loudness (measured)
-	OutputTP          float64        `json:"output_dbtp"`           // Post-normalisation true peak (measured)
-	GainApplied       float64        `json:"gain_applied_db"`       // Gain adjustment applied (dB): the capped linear makeup (effectiveTargetI - measured_I)
-	WithinTarget      bool           `json:"within_target"`         // True if final output is within tolerance of target
-	Skipped           bool           `json:"skipped"`               // True if normalisation was skipped (already within tolerance)
-	LoudnormStats     *LoudnormStats `json:"loudnorm_measured"`     // Diagnostic output from loudnorm second pass (nil if capture failed)
-	RequestedTargetI  float64        `json:"requested_target_lufs"` // The target I that was requested (from config)
-	EffectiveTargetI  float64        `json:"effective_target_lufs"` // The target I actually used (may be lower to ensure linear mode)
-	LinearModeForced  bool           `json:"linear_mode_forced"`    // True if target was adjusted to force linear mode
-	ActualNormDynamic bool           `json:"actual_norm_dynamic"`   // True if loudnorm's reported normalization_type was "dynamic" (detective)
+	InputLUFS     float64        `json:"input_lufs"`        // Pre-normalisation loudness (from Pass 2 loudnorm measurement)
+	InputTP       float64        `json:"input_dbtp"`        // Pre-normalisation true peak (from Pass 2 loudnorm measurement)
+	OutputLUFS    float64        `json:"output_lufs"`       // Post-normalisation loudness (measured)
+	OutputTP      float64        `json:"output_dbtp"`       // Post-normalisation true peak (measured)
+	GainApplied   float64        `json:"gain_applied_db"`   // Gain adjustment applied (dB): the capped linear makeup (effectiveTargetI - measured_I)
+	WithinTarget  bool           `json:"within_target"`     // True if final output is within tolerance of target
+	Skipped       bool           `json:"skipped"`           // True if normalisation was skipped (already within tolerance)
+	LoudnormStats *LoudnormStats `json:"loudnorm_measured"` // Diagnostic output from loudnorm second pass (nil if capture failed)
+	// LoudnormParsed holds the loudnorm stats parsed once to typed floats plus the
+	// precomputed target deviation, built at result assembly for the report. It is
+	// NOT serialised (json:"-"): the JSON record keeps the string-keyed
+	// LoudnormStats above as its parse target, so the schema is unchanged.
+	LoudnormParsed    *LoudnormMeasured `json:"-"`
+	RequestedTargetI  float64           `json:"requested_target_lufs"` // The target I that was requested (from config)
+	EffectiveTargetI  float64           `json:"effective_target_lufs"` // The target I actually used (may be lower to ensure linear mode)
+	LinearModeForced  bool              `json:"linear_mode_forced"`    // True if target was adjusted to force linear mode
+	ActualNormDynamic bool              `json:"actual_norm_dynamic"`   // True if loudnorm's reported normalization_type was "dynamic" (detective)
 
 	// Limiter diagnostics (Pass 4 pre-limiting). The six limiter values live in
 	// the embedded LimiterDiagnostics (flattened into this JSON object); the Pass 3
@@ -754,6 +821,7 @@ func buildNormalisationResult(
 		WithinTarget:          withinTarget,
 		Skipped:               false,
 		LoudnormStats:         application.loudnormStats,
+		LoudnormParsed:        parseLoudnormMeasured(application.loudnormStats, effectiveTargetI),
 		RequestedTargetI:      requestedTargetI,
 		EffectiveTargetI:      effectiveTargetI,
 		LinearModeForced:      !linearPossible,
@@ -953,9 +1021,7 @@ func prepareLoudnormApplication(ctx context.Context, request loudnormApplication
 		request.config,
 		request.measurement,
 		request.offset,
-		request.limiter.preGainDB,
-		request.limiter.ceilingDB,
-		request.limiter.needed,
+		request.limiter,
 		metadata.SampleRate,
 		statsPath,
 	)
@@ -991,14 +1057,26 @@ func executeAndPublishLoudnormApplication(
 ) (*loudnormApplicationExecutionResult, error) {
 	result := &loudnormApplicationExecutionResult{}
 
+	// failPublish captures the in-graph loudnorm stats and removes the temp file on
+	// any publish-failure path, returning result + the wrapped error. encoderClosed
+	// is set by the caller first when the encoder is already closed, so failPublish
+	// closes it only when still open.
+	encoderClosed := false
+	failPublish := func(encoder loudnormOutputEncoder, err error) (*loudnormApplicationExecutionResult, error) {
+		result.loudnormStats = captureGraphStats()
+		if encoder != nil && !encoderClosed {
+			encoderClosed = true
+			_ = encoder.Close()
+		}
+		removeTemp()
+		return result, err
+	}
+
 	// Create output encoder (same format as input)
 	encoder, err := deps.createEncoder(prep.tempPath, prep.bufferSinkCtx)
 	if err != nil {
-		result.loudnormStats = captureGraphStats()
-		removeTemp()
-		return result, fmt.Errorf("failed to create encoder: %w", err)
+		return failPublish(nil, fmt.Errorf("failed to create encoder: %w", err))
 	}
-	encoderClosed := false
 	defer func() {
 		if !encoderClosed {
 			_ = encoder.Close()
@@ -1008,35 +1086,23 @@ func executeAndPublishLoudnormApplication(
 	loopErr := deps.runFilterGraph(ctx, prep.reader, prep.bufferSrcCtx, prep.bufferSinkCtx,
 		newLoudnormApplicationFrameLoop(prep, request.progress, encoder, &result.acc))
 	if loopErr != nil {
-		result.loudnormStats = captureGraphStats()
-		encoderClosed = true
-		_ = encoder.Close()
-		removeTemp()
-		return result, loopErr
+		return failPublish(encoder, loopErr)
 	}
 
 	// Flush encoder
 	if err := encoder.Flush(); err != nil {
-		result.loudnormStats = captureGraphStats()
-		encoderClosed = true
-		_ = encoder.Close()
-		removeTemp()
-		return result, fmt.Errorf("failed to flush encoder: %w", err)
+		return failPublish(encoder, fmt.Errorf("failed to flush encoder: %w", err))
 	}
 
 	// Close encoder before rename
 	encoderClosed = true
 	if err := encoder.Close(); err != nil {
-		result.loudnormStats = captureGraphStats()
-		removeTemp()
-		return result, fmt.Errorf("failed to close encoder: %w", err)
+		return failPublish(nil, fmt.Errorf("failed to close encoder: %w", err))
 	}
 
 	// Atomic rename: temp file → original file (in-place update)
 	if err := deps.rename(prep.tempPath, request.inputPath); err != nil {
-		result.loudnormStats = captureGraphStats()
-		removeTemp()
-		return result, fmt.Errorf("failed to rename output: %w", err)
+		return failPublish(nil, fmt.Errorf("failed to rename output: %w", err))
 	}
 
 	return result, nil
@@ -1172,10 +1238,11 @@ func loudnormTPTargets(loudnorm LoudnormConfig, measurement *LoudnormMeasurement
 //
 // Chain order: [volume+alimiter] → loudnorm → aresample → [adeclick] → brickwall → astats → aspectralstats → ebur128 → resample
 //
-// The caller pre-computes preGainDB, ceiling, and needsLimiting from Pass 2 measurements.
-// This function builds the prefix via buildPreLimiterPrefix() and passes measurement.InputI
-// and measurement.InputTP directly to loudnorm as measured_I and measured_TP - no manual
-// adjustment is needed because Pass 3 already measured through the same prefix chain.
+// The caller pre-computes the limiterPlan (preGainDB, ceiling, needed) from Pass 2
+// measurements. This function builds the prefix via buildPreLimiterPrefix() and passes
+// measurement.InputI and measurement.InputTP directly to loudnorm as measured_I and
+// measured_TP - no manual adjustment is needed because Pass 3 already measured through
+// the same prefix chain.
 //
 // The loudnorm filter in second pass mode:
 // - Uses measurements from measureWithLoudnorm() (LoudnormMeasurement)
@@ -1193,13 +1260,13 @@ func loudnormTPTargets(loudnorm LoudnormConfig, measurement *LoudnormMeasurement
 // makes the gain cap binding: when the cap lowers effectiveTargetI on a high-crest
 // stem, the matching offset pins the realised scalar gain to the capped I=, holding
 // the final true peak at targetTP. On a safe stem it equals the planned makeup.
-func buildLoudnormFilterSpec(config *EffectiveFilterConfig, measurement *LoudnormMeasurement, offset float64, preGainDB float64, ceiling float64, needsLimiting bool, sourceSampleRate int, statsPath string) string {
+func buildLoudnormFilterSpec(config *EffectiveFilterConfig, measurement *LoudnormMeasurement, offset float64, limiter limiterPlan, sourceSampleRate int, statsPath string) string {
 	var filters []string
 	loudnorm := config.Loudnorm
 	emittedTP, brickwallCeilingDBTP := loudnormTPTargets(loudnorm, measurement)
 
 	// 1. Build pre-limiter prefix (volume + alimiter) from pre-computed values
-	prefix := buildPreLimiterPrefix(preGainDB, ceiling, needsLimiting)
+	prefix := buildPreLimiterPrefix(limiter.preGainDB, limiter.ceilingDB, limiter.needed)
 	if prefix != "" {
 		filters = append(filters, prefix)
 	}
@@ -1280,21 +1347,15 @@ func buildLoudnormFilterSpec(config *EffectiveFilterConfig, measurement *Loudnor
 	// oversampled true peak lands ≤ loudnorm.TargetTP.
 	filters = append(filters, buildBrickwallLimiter(brickwallCeilingDBTP))
 
-	// 5. astats for amplitude measurements (same as Pass 2)
-	// Provides noise floor, dynamic range, RMS level, peak level, etc.
-	// measure_perchannel=all requests all available per-channel statistics
-	filters = append(filters, "astats=metadata=1:measure_perchannel=all")
-
-	// 6. aspectralstats for spectral analysis (same as Pass 2)
-	// Provides centroid, spread, skewness, kurtosis, entropy, flatness, crest, rolloff, etc.
-	// win_size=2048 and win_func=hann match Pass 2 settings for comparable measurements
-	filters = append(filters, "aspectralstats=win_size=2048:win_func=hann:measure=all")
-
-	// 7. ebur128 for loudness validation (metadata only, no audio modification)
-	// dualmono=true ensures accurate mono loudness measurement
-	// Note: ebur128 forces its output format to f64/double (always); its 192kHz
-	// true-peak oversampling is internal-only and the output rate equals the input rate
-	filters = append(filters, "ebur128=metadata=1:peak=sample+true:dualmono=true")
+	// 5-7. astats, aspectralstats, ebur128 for amplitude, spectral, and loudness
+	// measurement. The astats and aspectralstats specs are shared with Pass 2
+	// (filters.go constants) so the two passes cannot drift; the metric catalogue
+	// is documented on buildAnalysisFilter. Pass 4 omits ebur128's target= option
+	// (the brickwall already owns delivered loudness), so it uses the shared prefix
+	// without the target suffix Pass 2 appends.
+	filters = append(filters, astatsAnalysisSpec)
+	filters = append(filters, aspectralstatsAnalysisSpec)
+	filters = append(filters, ebur128AnalysisSpecPrefix)
 
 	// 8. Resample back to output format (44.1kHz/s16/mono)
 	// Required for the f64->s16 conversion ebur128 forces (output format f64, not a

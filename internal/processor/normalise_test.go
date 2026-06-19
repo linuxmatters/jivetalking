@@ -1559,7 +1559,7 @@ func TestBuildLoudnormFilterSpec_PreGain(t *testing.T) {
 				ceiling = reDerivedCeiling
 			}
 
-			filterSpec := buildLoudnormFilterSpec(config, measurement, measurement.TargetOffset, preGainDB, ceiling, needsLimiting, 48000, "")
+			filterSpec := buildLoudnormFilterSpec(config, measurement, measurement.TargetOffset, limiterPlan{preGainDB: preGainDB, ceilingDB: ceiling, needed: needsLimiting}, 48000, "")
 
 			// (a)/(b): Check volume filter presence
 			hasVolume := strings.Contains(filterSpec, "volume=")
@@ -1639,7 +1639,7 @@ func TestBuildLoudnormFilterSpec_DoesNotMutateConfig(t *testing.T) {
 		TargetOffset: -0.5,
 	}
 
-	filterSpec := buildLoudnormFilterSpec(config, measurement, measurement.TargetOffset, 0, -1.0, false, 48000, "")
+	filterSpec := buildLoudnormFilterSpec(config, measurement, measurement.TargetOffset, limiterPlan{ceilingDB: -1.0}, 48000, "")
 
 	if config.Resample.Enabled {
 		t.Error("buildLoudnormFilterSpec mutated config.Resample.Enabled")
@@ -1663,7 +1663,7 @@ func TestBuildLoudnormFilterSpec_Adeclick(t *testing.T) {
 	t.Run("uses Pass 4 adeclick helper", func(t *testing.T) {
 		config := defaultNormalisationTestConfig()
 
-		filterSpec := buildLoudnormFilterSpec(config, measurement, measurement.TargetOffset, 0, -1.0, false, 48000, "")
+		filterSpec := buildLoudnormFilterSpec(config, measurement, measurement.TargetOffset, limiterPlan{ceilingDB: -1.0}, 48000, "")
 
 		const want = "adeclick=t=1.7:w=55:o=50:m=s"
 		if !strings.Contains(filterSpec, want) {
@@ -1675,7 +1675,7 @@ func TestBuildLoudnormFilterSpec_Adeclick(t *testing.T) {
 		config := defaultNormalisationTestConfig()
 		config.Adeclick.Enabled = false
 
-		filterSpec := buildLoudnormFilterSpec(config, measurement, measurement.TargetOffset, 0, -1.0, false, 48000, "")
+		filterSpec := buildLoudnormFilterSpec(config, measurement, measurement.TargetOffset, limiterPlan{ceilingDB: -1.0}, 48000, "")
 
 		if strings.Contains(filterSpec, "adeclick=") {
 			t.Errorf("buildLoudnormFilterSpec() emitted disabled adeclick\nfilterSpec: %s", filterSpec)
@@ -1699,7 +1699,7 @@ func TestBuildLoudnormFilterSpecSourceRateResample(t *testing.T) {
 	t.Run("derives resample rate and orders it between loudnorm and adeclick", func(t *testing.T) {
 		config := defaultNormalisationTestConfig()
 
-		filterSpec := buildLoudnormFilterSpec(config, measurement, measurement.TargetOffset, 0, -1.0, false, 96000, "")
+		filterSpec := buildLoudnormFilterSpec(config, measurement, measurement.TargetOffset, limiterPlan{ceilingDB: -1.0}, 96000, "")
 
 		const wantResample = "aresample=96000"
 		if !strings.Contains(filterSpec, wantResample) {
@@ -1725,7 +1725,7 @@ func TestBuildLoudnormFilterSpecSourceRateResample(t *testing.T) {
 	t.Run("omits resample when source rate is zero", func(t *testing.T) {
 		config := defaultNormalisationTestConfig()
 
-		filterSpec := buildLoudnormFilterSpec(config, measurement, measurement.TargetOffset, 0, -1.0, false, 0, "")
+		filterSpec := buildLoudnormFilterSpec(config, measurement, measurement.TargetOffset, limiterPlan{ceilingDB: -1.0}, 0, "")
 
 		if strings.Contains(filterSpec, "aresample=") {
 			t.Fatalf("buildLoudnormFilterSpec() emitted aresample for zero source rate\nfilterSpec: %s", filterSpec)
@@ -1747,7 +1747,7 @@ func TestBuildLoudnormFilterSpecIgnoresNonNormalisationFields(t *testing.T) {
 
 	base := defaultNormalisationTestConfig()
 	assertNoStaleEffectiveConfigFields(t)
-	controlSpec := buildLoudnormFilterSpec(base, measurement, measurement.TargetOffset, 0, -1.0, false, 48000, "")
+	controlSpec := buildLoudnormFilterSpec(base, measurement, measurement.TargetOffset, limiterPlan{ceilingDB: -1.0}, 48000, "")
 
 	withUnrelatedFilterFields := *base
 	withUnrelatedFilterFields.FilterOrder = []FilterID{FilterAnalysis}
@@ -1755,7 +1755,7 @@ func TestBuildLoudnormFilterSpecIgnoresNonNormalisationFields(t *testing.T) {
 	withUnrelatedFilterFields.SpeechGate.Ratio = 4.0
 	withUnrelatedFilterFields.LevellingCompressor.Threshold = -30.0
 
-	gotSpec := buildLoudnormFilterSpec(&withUnrelatedFilterFields, measurement, measurement.TargetOffset, 0, -1.0, false, 48000, "")
+	gotSpec := buildLoudnormFilterSpec(&withUnrelatedFilterFields, measurement, measurement.TargetOffset, limiterPlan{ceilingDB: -1.0}, 48000, "")
 	if gotSpec != controlSpec {
 		t.Fatalf("buildLoudnormFilterSpec() changed when unrelated filter fields changed\ncontrol: %s\ngot:     %s", controlSpec, gotSpec)
 	}
@@ -1968,7 +1968,7 @@ func TestClampedTargetPropagation_Arithmetic(t *testing.T) {
 				bCeiling = bReDerived
 			}
 
-			filterSpec := buildLoudnormFilterSpec(config, measurement, measurement.TargetOffset, preGainDB, bCeiling, bNeeded, 48000, "")
+			filterSpec := buildLoudnormFilterSpec(config, measurement, measurement.TargetOffset, limiterPlan{preGainDB: preGainDB, ceilingDB: bCeiling, needed: bNeeded}, 48000, "")
 			if !bClamped {
 				t.Error("expected pre-computation to report clamped")
 			}
@@ -2208,9 +2208,7 @@ func TestLoudnormPrefixAndFilterSpecParityRepresentativeCases(t *testing.T) {
 				config,
 				&tt.measurement,
 				tt.measurement.TargetOffset,
-				limiter.preGainDB,
-				limiter.ceilingDB,
-				limiter.needed,
+				limiter,
 				48000,
 				"",
 			)

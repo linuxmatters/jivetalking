@@ -71,6 +71,23 @@ type regionMeasurements struct {
 	FramesProcessed int64
 }
 
+// toRegionSample maps the measured region metrics to a bare RegionSample
+// (amplitude/spectral/loudness only). FramesProcessed is a measurement-internal
+// counter and is not carried onto the sample. Both output region wrappers share
+// this so the eight-field copy lives in one place.
+func (r *regionMeasurements) toRegionSample() *RegionSample {
+	return &RegionSample{
+		RMSLevel:      r.RMSLevel,
+		PeakLevel:     r.PeakLevel,
+		CrestFactor:   r.CrestFactor,
+		Spectral:      r.Spectral,
+		MomentaryLUFS: r.MomentaryLUFS,
+		ShortTermLUFS: r.ShortTermLUFS,
+		TruePeak:      r.TruePeak,
+		SamplePeak:    r.SamplePeak,
+	}
+}
+
 // measureOutputRegionFromReader measures amplitude, spectral, and loudness
 // metrics for a time region in an already-opened audio file. This is the
 // shared implementation behind measureOutputRoomToneRegionFromReader and
@@ -224,16 +241,7 @@ func measureOutputRoomToneRegionFromReader(ctx context.Context, reader *audio.Re
 
 	log.Logf("=== measureOutputRoomToneRegion SUMMARY ===")
 
-	return &RegionSample{
-		RMSLevel:      result.RMSLevel,
-		PeakLevel:     result.PeakLevel,
-		CrestFactor:   result.CrestFactor,
-		Spectral:      result.Spectral,
-		MomentaryLUFS: result.MomentaryLUFS,
-		ShortTermLUFS: result.ShortTermLUFS,
-		TruePeak:      result.TruePeak,
-		SamplePeak:    result.SamplePeak,
-	}, nil
+	return result.toRegionSample(), nil
 }
 
 // extractRegionPair builds optional RoomToneRegion and SpeechRegion pointers
@@ -319,14 +327,5 @@ func measureOutputSpeechRegionFromReader(ctx context.Context, reader *audio.Read
 
 	log.Logf("=== measureOutputSpeechRegion SUMMARY ===")
 
-	return &RegionSample{
-		RMSLevel:      result.RMSLevel,
-		PeakLevel:     result.PeakLevel,
-		CrestFactor:   result.CrestFactor,
-		Spectral:      result.Spectral,
-		MomentaryLUFS: result.MomentaryLUFS,
-		ShortTermLUFS: result.ShortTermLUFS,
-		TruePeak:      result.TruePeak,
-		SamplePeak:    result.SamplePeak,
-	}, nil
+	return result.toRegionSample(), nil
 }

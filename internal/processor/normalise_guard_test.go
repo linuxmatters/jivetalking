@@ -45,7 +45,7 @@ func TestMetadataModeGuard(t *testing.T) {
 			TargetOffset: -0.5,
 		}
 
-		spec := buildLoudnormFilterSpec(config, measurement, measurement.TargetOffset, 0, -1.0, false, 48000, "")
+		spec := buildLoudnormFilterSpec(config, measurement, measurement.TargetOffset, limiterPlan{ceilingDB: -1.0}, 48000, "")
 		assertBothFlags(t, "buildLoudnormFilterSpec()", spec)
 	})
 

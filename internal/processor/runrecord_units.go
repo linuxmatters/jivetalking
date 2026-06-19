@@ -24,6 +24,18 @@ func sanitisedSourceMap(source any) map[string]any {
 		return nil
 	}
 	v := reflect.ValueOf(source)
+	// Honour a custom json.Marshaler on the source (e.g. NoiseProfile flattens its
+	// embedded Spectral to spectral_* keys) by routing through sanitiseValue, which
+	// marshals via the type then re-sanitises the decoded tree. Falls through to the
+	// reflection walk for plain structs (no marshaler). Either way a struct source
+	// yields a map; non-struct or non-object sources yield nil so the caller drops
+	// the field.
+	if _, ok := marshalerOf(v); ok {
+		if m, isMap := sanitiseValue(v).(map[string]any); isMap {
+			return m
+		}
+		return nil
+	}
 	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
 		if v.IsNil() {
 			return nil
@@ -128,6 +140,82 @@ func (p *noiseProfileRecord) Profile() *NoiseProfile {
 		return nil
 	}
 	return p.source()
+}
+
+// noiseProfileJSON is the flat JSON contract for NoiseProfile: the embedded
+// SpectralMetrics is unpacked into the historical spectral_* tags (distinct from
+// SpectralMetrics's own mean/centroid_hz/entropy tags) so the schema is unchanged
+// after the embed. Field order and tags mirror the former flat struct exactly.
+type noiseProfileJSON struct {
+	Start              time.Duration `json:"start"`
+	Duration           time.Duration `json:"duration"`
+	MeasuredNoiseFloor float64       `json:"measured_floor_dbfs"`
+	PeakLevel          float64       `json:"peak_level_dbfs"`
+	CrestFactor        float64       `json:"crest_factor_db"`
+	Entropy            float64       `json:"entropy"`
+	ExtractionWarning  string        `json:"extraction_warning,omitempty"`
+
+	SpectralMean     float64 `json:"spectral_mean"`
+	SpectralVariance float64 `json:"spectral_variance"`
+	SpectralCentroid float64 `json:"spectral_centroid_hz"`
+	SpectralSpread   float64 `json:"spectral_spread_hz"`
+	SpectralSkewness float64 `json:"spectral_skewness"`
+	SpectralKurtosis float64 `json:"spectral_kurtosis"`
+	SpectralEntropy  float64 `json:"spectral_entropy"`
+	SpectralFlatness float64 `json:"spectral_flatness"`
+	SpectralCrest    float64 `json:"spectral_crest"`
+	SpectralFlux     float64 `json:"spectral_flux"`
+	SpectralSlope    float64 `json:"spectral_slope"`
+	SpectralDecrease float64 `json:"spectral_decrease"`
+	SpectralRolloff  float64 `json:"spectral_rolloff_hz"`
+
+	BandNoise     []float64 `json:"band_noise_dbfs,omitempty"`
+	BandsMeasured bool      `json:"band_noise_measured,omitempty"`
+
+	OriginalStart    time.Duration `json:"original_start,omitempty"`
+	OriginalDuration time.Duration `json:"original_duration,omitempty"`
+	WasRefined       bool          `json:"was_refined,omitempty"`
+}
+
+// MarshalJSON preserves the flat spectral_* JSON contract while the Go model
+// carries the room-tone spectral data as an embedded SpectralMetrics value. The
+// embedded value flattens into the historical spectral_* tags rather than
+// SpectralMetrics's own mean/centroid_hz/entropy tags, so the run-record JSON and
+// the default-marshalled noise_profile key stay byte-identical. Non-finite float
+// fields serialise to null via the shared sanitiseValue sweep, mirroring
+// IntervalSample.MarshalJSON.
+func (p NoiseProfile) MarshalJSON() ([]byte, error) {
+	flat := noiseProfileJSON{
+		Start:              p.Start,
+		Duration:           p.Duration,
+		MeasuredNoiseFloor: p.MeasuredNoiseFloor,
+		PeakLevel:          p.PeakLevel,
+		CrestFactor:        p.CrestFactor,
+		Entropy:            p.Entropy,
+		ExtractionWarning:  p.ExtractionWarning,
+
+		SpectralMean:     p.Spectral.Mean,
+		SpectralVariance: p.Spectral.Variance,
+		SpectralCentroid: p.Spectral.Centroid,
+		SpectralSpread:   p.Spectral.Spread,
+		SpectralSkewness: p.Spectral.Skewness,
+		SpectralKurtosis: p.Spectral.Kurtosis,
+		SpectralEntropy:  p.Spectral.Entropy,
+		SpectralFlatness: p.Spectral.Flatness,
+		SpectralCrest:    p.Spectral.Crest,
+		SpectralFlux:     p.Spectral.Flux,
+		SpectralSlope:    p.Spectral.Slope,
+		SpectralDecrease: p.Spectral.Decrease,
+		SpectralRolloff:  p.Spectral.Rolloff,
+
+		BandNoise:     p.BandNoise,
+		BandsMeasured: p.BandsMeasured,
+
+		OriginalStart:    p.OriginalStart,
+		OriginalDuration: p.OriginalDuration,
+		WasRefined:       p.WasRefined,
+	}
+	return json.Marshal(sanitiseValue(reflect.ValueOf(flat)))
 }
 
 // speechProfileRecord wraps the elected speech candidate for the record. Its

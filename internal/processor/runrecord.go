@@ -249,6 +249,14 @@ func NewRunRecord(result *ProcessingResult) *RunRecord {
 				rec.Regions.Speech.Samples.Final = fm.SpeechSample
 			}
 		}
+		// Parse loudnorm stats to typed floats once for the report, precomputing the
+		// target deviation. buildNormalisationResult sets this on the production path;
+		// fill it here when absent (e.g. a result assembled directly) so the report
+		// formats typed numbers and never re-parses the strings. The typed values are
+		// json:"-", so this does not touch the run-record JSON schema.
+		if result.NormResult.LoudnormParsed == nil {
+			result.NormResult.LoudnormParsed = parseLoudnormMeasured(result.NormResult.LoudnormStats, result.NormResult.EffectiveTargetI)
+		}
 		rec.Normalisation = &normalisationRecord{recordWrapper[NormalisationResult]{src: result.NormResult}}
 	}
 

@@ -56,20 +56,11 @@ type NoiseProfile struct {
 
 	// Spectral characteristics for contamination detection (added during candidate
 	// evaluation). The full 13-metric aspectralstats set averaged over the elected
-	// room-tone region, mirroring SpectralMetrics field order.
-	SpectralMean     float64 `json:"spectral_mean"`        // Average spectral power
-	SpectralVariance float64 `json:"spectral_variance"`    // Spectral variance
-	SpectralCentroid float64 `json:"spectral_centroid_hz"` // Hz, where energy is concentrated (voice range: 300-4000 Hz)
-	SpectralSpread   float64 `json:"spectral_spread_hz"`   // Hz, bandwidth/fullness indicator
-	SpectralSkewness float64 `json:"spectral_skewness"`    // Spectral asymmetry (positive=bright, negative=dark)
-	SpectralKurtosis float64 `json:"spectral_kurtosis"`    // Peakiness (high = peaked harmonics like speech)
-	SpectralEntropy  float64 `json:"spectral_entropy"`     // Spectral randomness (0-1); distinct from the astats Entropy field above
-	SpectralFlatness float64 `json:"spectral_flatness"`    // 0-1, noise-like vs tonal (higher = more noise-like)
-	SpectralCrest    float64 `json:"spectral_crest"`       // Spectral peak-to-RMS (transient indicator)
-	SpectralFlux     float64 `json:"spectral_flux"`        // Frame-to-frame spectral change
-	SpectralSlope    float64 `json:"spectral_slope"`       // Spectral tilt (negative=more bass)
-	SpectralDecrease float64 `json:"spectral_decrease"`    // Average spectral decrease
-	SpectralRolloff  float64 `json:"spectral_rolloff_hz"`  // Hz, HF energy dropoff point
+	// room-tone region, mirroring RegionSample's Spectral embed. The custom
+	// NoiseProfile.MarshalJSON flattens this to the spectral_* tags (json:"-" keeps
+	// the default marshal from emitting the SpectralMetrics own tags). The astats
+	// Entropy field above stays DISTINCT from Spectral.Entropy (different axis).
+	Spectral SpectralMetrics `json:"-"`
 
 	// Room-tone band noise: per-band RMS (dBFS) over the elected room-tone region,
 	// one value per afftdn fixed band (see afftdnBandCentresHz). Feeds the measured
@@ -324,8 +315,7 @@ type OutputMeasurements struct {
 // The noise floor and silence threshold are computed from interval data after the full pass,
 // avoiding the need for a separate pre-scan phase.
 func AnalyseAudio(ctx stdcontext.Context, filename string, config *BaseFilterConfig, progressCallback ProgressCallback) (*AudioMeasurements, error) {
-	analysisContext := &ProcessingFilterContext{Pass: PassAnalysis}
-	collection, err := collectAnalysisFrames(ctx, filename, config, analysisContext, progressCallback)
+	collection, err := collectAnalysisFrames(ctx, filename, config, PassAnalysis, progressCallback)
 	if err != nil {
 		return nil, err
 	}
@@ -441,29 +431,81 @@ func assignAstatsMeasurements(measurements *AudioMeasurements, acc *metadataAccu
 	measurements.Dynamics.NumberOfSamples = acc.astatsNumberOfSamples
 }
 
+// Noise-floor fallback estimator anchors (dB). These tune ONLY the fallback
+// estimators that run when astats provides no usable trough; the normal path
+// overwrites Noise.Floor with the VAD percentile floor.
+const (
+	// noiseFloorRMSEstimateOffsetDB drops below the overall RMS level to guess a
+	// floor when only an RMS level (no trough) is available.
+	noiseFloorRMSEstimateOffsetDB = 15.0
+	// noiseFloorThreshOffsetLoudDB / Mid / QuietDB sit below the ebur128 input
+	// threshold to guess a floor; a louder capture sits further above its floor.
+	noiseFloorThreshOffsetLoudDB  = 18.0
+	noiseFloorThreshOffsetMidDB   = 12.0
+	noiseFloorThreshOffsetQuietDB = 8.0
+	// noiseFloorClampMinDB / MaxDB bound the estimated floor.
+	noiseFloorClampMinDB = -90.0
+	noiseFloorClampMaxDB = -30.0
+)
+
+// Reduction-headroom fallback tiers (dB), used when no measured RMS/floor pair
+// is available.
+const (
+	reductionHeadroomLoudDB  = 40.0
+	reductionHeadroomMidDB   = 25.0
+	reductionHeadroomQuietDB = 15.0
+)
+
+// loudnessTier classifies a capture by its integrated input loudness against the
+// shared -20/-30 LUFS ladder, so the noise-floor and reduction-headroom fallback
+// estimators read one ordering instead of two copies.
+type loudnessTier int
+
+const (
+	loudnessTierLoud  loudnessTier = iota // InputI > -20 LUFS
+	loudnessTierMid                       // -30 < InputI <= -20 LUFS
+	loudnessTierQuiet                     // InputI <= -30 LUFS
+)
+
+const (
+	loudnessTierLoudThresholdLUFS = -20.0
+	loudnessTierMidThresholdLUFS  = -30.0
+)
+
+func classifyLoudnessTier(inputI float64) loudnessTier {
+	switch {
+	case inputI > loudnessTierLoudThresholdLUFS:
+		return loudnessTierLoud
+	case inputI > loudnessTierMidThresholdLUFS:
+		return loudnessTierMid
+	default:
+		return loudnessTierQuiet
+	}
+}
+
 func assignInputNoiseFloor(measurements *AudioMeasurements, acc *metadataAccumulators) {
 	switch {
 	case acc.astatsRMSTrough != 0 && !math.IsInf(acc.astatsRMSTrough, -1):
 		measurements.Noise.Floor = acc.astatsRMSTrough
 		measurements.Noise.FloorSource = "astats"
 	case acc.astatsRMSLevel != 0 && !math.IsInf(acc.astatsRMSLevel, -1):
-		measurements.Noise.Floor = acc.astatsRMSLevel - 15.0
+		measurements.Noise.Floor = acc.astatsRMSLevel - noiseFloorRMSEstimateOffsetDB
 		measurements.Noise.FloorSource = "rms_estimate"
 	default:
 		var noiseFloorOffset float64
-		switch {
-		case measurements.Loudness.InputI > -20:
-			noiseFloorOffset = 18.0
-		case measurements.Loudness.InputI > -30:
-			noiseFloorOffset = 12.0
+		switch classifyLoudnessTier(measurements.Loudness.InputI) {
+		case loudnessTierLoud:
+			noiseFloorOffset = noiseFloorThreshOffsetLoudDB
+		case loudnessTierMid:
+			noiseFloorOffset = noiseFloorThreshOffsetMidDB
 		default:
-			noiseFloorOffset = 8.0
+			noiseFloorOffset = noiseFloorThreshOffsetQuietDB
 		}
 		measurements.Noise.Floor = measurements.Loudness.InputThresh - noiseFloorOffset
 		measurements.Noise.FloorSource = "ebur128_estimate"
 	}
 
-	measurements.Noise.Floor = max(-90.0, min(-30.0, measurements.Noise.Floor))
+	measurements.Noise.Floor = max(noiseFloorClampMinDB, min(noiseFloorClampMaxDB, measurements.Noise.Floor))
 }
 
 func assignInputMeasurementSuggestions(measurements *AudioMeasurements) {
@@ -473,13 +515,13 @@ func assignInputMeasurementSuggestions(measurements *AudioMeasurements) {
 		return
 	}
 
-	switch {
-	case measurements.Loudness.InputI > -20:
-		measurements.Noise.ReductionHeadroom = 40.0
-	case measurements.Loudness.InputI > -30:
-		measurements.Noise.ReductionHeadroom = 25.0
+	switch classifyLoudnessTier(measurements.Loudness.InputI) {
+	case loudnessTierLoud:
+		measurements.Noise.ReductionHeadroom = reductionHeadroomLoudDB
+	case loudnessTierMid:
+		measurements.Noise.ReductionHeadroom = reductionHeadroomMidDB
 	default:
-		measurements.Noise.ReductionHeadroom = 15.0
+		measurements.Noise.ReductionHeadroom = reductionHeadroomQuietDB
 	}
 }
 
@@ -491,7 +533,7 @@ type analysisFrameCollection struct {
 	totalDuration    float64 // total audio length, seconds (from input metadata)
 }
 
-func collectAnalysisFrames(ctx stdcontext.Context, filename string, config *BaseFilterConfig, context *ProcessingFilterContext, progressCallback ProgressCallback) (*analysisFrameCollection, error) {
+func collectAnalysisFrames(ctx stdcontext.Context, filename string, config *BaseFilterConfig, pass PassNumber, progressCallback ProgressCallback) (*analysisFrameCollection, error) {
 	reader, metadata, err := audio.OpenAudioFile(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open audio file: %w", err)
@@ -506,7 +548,7 @@ func collectAnalysisFrames(ctx stdcontext.Context, filename string, config *Base
 	filterGraph, bufferSrcCtx, bufferSinkCtx, err := createAnalysisFilterGraph(
 		reader.GetDecoderContext(),
 		config,
-		context,
+		pass,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create filter graph: %w", err)
@@ -565,7 +607,7 @@ func collectAnalysisFrames(ctx stdcontext.Context, filename string, config *Base
 					progress = BandPhaseProgressStart
 				}
 				progressCallback(ProgressUpdate{
-					Pass:     context.Pass,
+					Pass:     pass,
 					PassName: "Analysing",
 					Progress: progress,
 					Level:    currentLevel,
@@ -611,15 +653,8 @@ func collectAnalysisFrames(ctx stdcontext.Context, filename string, config *Base
 func createAnalysisFilterGraph(
 	decCtx *ffmpeg.AVCodecContext,
 	config *BaseFilterConfig,
-	context *ProcessingFilterContext,
+	_ PassNumber,
 ) (*ffmpeg.AVFilterGraph, *ffmpeg.AVFilterContext, *ffmpeg.AVFilterContext, error) {
-	if context == nil {
-		context = &ProcessingFilterContext{Pass: PassAnalysis}
-	}
-	if context.Pass == 0 {
-		context.Pass = PassAnalysis
-	}
-
 	analysisConfig := deriveEffectiveFilterConfig(config)
 	analysisConfig.FilterOrder = cloneFilterOrder(Pass1FilterOrder)
 

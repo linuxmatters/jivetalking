@@ -62,6 +62,17 @@ const (
 // window near -120 dBFS; this margin sits just above that measurement floor.
 const vadLevelFloorDB = -115.0
 
+// isFlooredLevel reports whether a per-interval level is floored: at or below
+// vadLevelFloorDB (digital silence / unmeasurable) or non-finite (+Inf, -Inf,
+// NaN). The histogram, the level set, the gate statistics, and the noise-floor
+// seed all exclude these so digital silence does not invent a spurious low mode
+// or seed a phantom floor. flooredFraction deliberately uses a NaN-only test
+// (it counts floored intervals against the measurable denominator), so it is
+// kept separate; do not route it through this predicate.
+func isFlooredLevel(level float64) bool {
+	return math.IsInf(level, 0) || math.IsNaN(level) || level <= vadLevelFloorDB
+}
+
 // intervalLevel returns the per-interval level on the selected axis.
 func intervalLevel(s IntervalSample, axis levelAxis) float64 {
 	switch axis {
@@ -104,7 +115,7 @@ func buildLevelHistogram(intervals []IntervalSample, axis levelAxis, binWidthDB 
 	maxLevel := math.Inf(-1)
 	for _, iv := range intervals {
 		level := intervalLevel(iv, axis)
-		if math.IsInf(level, 0) || math.IsNaN(level) || level <= vadLevelFloorDB {
+		if isFlooredLevel(level) {
 			continue
 		}
 		levels = append(levels, level)
@@ -144,7 +155,7 @@ func vadLevels(intervals []IntervalSample, axis levelAxis) []float64 {
 	levels := make([]float64, 0, len(intervals))
 	for _, iv := range intervals {
 		level := intervalLevel(iv, axis)
-		if math.IsInf(level, 0) || math.IsNaN(level) || level <= vadLevelFloorDB {
+		if isFlooredLevel(level) {
 			continue
 		}
 		levels = append(levels, level)
@@ -210,7 +221,7 @@ func deriveGateStatistics(intervals []IntervalSample, split float64, axis levelA
 	var voiced, noise []float64
 	for i := range intervals {
 		level := intervalLevel(intervals[i], axis)
-		if math.IsInf(level, 0) || math.IsNaN(level) || level <= vadLevelFloorDB {
+		if isFlooredLevel(level) {
 			continue
 		}
 		if level < split {
@@ -557,21 +568,12 @@ func extractNoiseProfileFromIntervals(region *RoomToneRegion, intervals []Interv
 		return nil
 	}
 
-	var rmsSum, peakMax float64
-	var spectralSum SpectralMetrics
-	peakMax = -120.0
-
-	for _, interval := range regionIntervals {
-		rmsSum += interval.RMSLevel
-		if interval.PeakLevel > peakMax {
-			peakMax = interval.PeakLevel
-		}
-		spectralSum.add(interval.Spectral)
-	}
+	acc := accumulateIntervalMetrics(regionIntervals)
+	peakMax := acc.peakMax
 
 	n := float64(len(regionIntervals))
-	avgRMS := rmsSum / n
-	avgSpectral := spectralSum.average(n)
+	avgRMS := acc.rmsSum / n
+	avgSpectral := acc.spectralSum.average(n)
 
 	profile := &NoiseProfile{
 		Start:    region.Start,
@@ -583,21 +585,12 @@ func extractNoiseProfileFromIntervals(region *RoomToneRegion, intervals []Interv
 		PeakLevel:          peakMax,
 		CrestFactor:        peakMax - avgRMS,
 		// Entropy (astats signal-randomness field) is fed from the spectral
-		// entropy average, unchanged from the prior entropySum/n behaviour.
-		Entropy:          avgSpectral.Entropy,
-		SpectralMean:     avgSpectral.Mean,
-		SpectralVariance: avgSpectral.Variance,
-		SpectralCentroid: avgSpectral.Centroid,
-		SpectralSpread:   avgSpectral.Spread,
-		SpectralSkewness: avgSpectral.Skewness,
-		SpectralKurtosis: avgSpectral.Kurtosis,
-		SpectralEntropy:  avgSpectral.Entropy,
-		SpectralFlatness: avgSpectral.Flatness,
-		SpectralCrest:    avgSpectral.Crest,
-		SpectralFlux:     avgSpectral.Flux,
-		SpectralSlope:    avgSpectral.Slope,
-		SpectralDecrease: avgSpectral.Decrease,
-		SpectralRolloff:  avgSpectral.Rolloff,
+		// entropy average, unchanged from the prior entropySum/n behaviour. It
+		// stays DISTINCT from the embedded Spectral.Entropy (different axis).
+		Entropy: avgSpectral.Entropy,
+		// The full 13-metric room-tone spectral average, copied as one embedded
+		// value (mirrors RegionSample's Spectral embed).
+		Spectral: avgSpectral,
 	}
 
 	if region.Duration < idealDurationMin {
@@ -678,15 +671,15 @@ func pickLowClusterRegion(intervals []IntervalSample, split float64, axis levelA
 	// Golden refinement: trim a long quiet run to its cleanest (lowest-RMS) inner
 	// window, biasing the noise sample inward. Reuses the shared sliding-window
 	// refinement with the room-tone window bounds.
-	start, end, dur, ok := refineToSubregion(
-		best.Start, best.End, best.Duration,
+	refined, ok := refineToSubregion(
+		refineRegion{Start: best.Start, End: best.End, Duration: best.Duration},
 		intervals,
 		goldenWindowDuration, goldenWindowMinimum,
 		scoreIntervalWindow,
 		func(candidate, current float64) bool { return candidate < current },
 	)
 	if ok {
-		return &RoomToneRegion{Start: start, End: end, Duration: dur}
+		return &RoomToneRegion{Start: refined.Start, End: refined.End, Duration: refined.Duration}
 	}
 	return best
 }

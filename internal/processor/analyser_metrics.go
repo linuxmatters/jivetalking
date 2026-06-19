@@ -132,22 +132,27 @@ func (s *IntervalSample) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// intervalSpectralJSONKeys is the single source of truth for the flat spectral_*
+// JSON keys on an interval sample. The intervalSampleJSON marshal/unmarshal tags
+// must match this list, and hasSpectralKeys probes exactly these keys.
+var intervalSpectralJSONKeys = []string{
+	"spectral_mean",
+	"spectral_variance",
+	"spectral_centroid",
+	"spectral_spread",
+	"spectral_skewness",
+	"spectral_kurtosis",
+	"spectral_entropy",
+	"spectral_flatness",
+	"spectral_crest",
+	"spectral_flux",
+	"spectral_slope",
+	"spectral_decrease",
+	"spectral_rolloff",
+}
+
 func hasSpectralKeys(raw map[string]json.RawMessage) bool {
-	for _, key := range []string{
-		"spectral_mean",
-		"spectral_variance",
-		"spectral_centroid",
-		"spectral_spread",
-		"spectral_skewness",
-		"spectral_kurtosis",
-		"spectral_entropy",
-		"spectral_flatness",
-		"spectral_crest",
-		"spectral_flux",
-		"spectral_slope",
-		"spectral_decrease",
-		"spectral_rolloff",
-	} {
+	for _, key := range intervalSpectralJSONKeys {
 		if _, ok := raw[key]; ok {
 			return true
 		}

@@ -51,39 +51,9 @@ func StyledHelpPrinter() func(kong.HelpOptions, *kong.Context) error {
 		fmt.Fprintf(&sb, "%s [flags] <files> ...", ctx.Model.Name)
 		sb.WriteString("\n")
 
-		// Arguments section
-		args := getArguments(ctx)
-		if len(args) > 0 {
-			sb.WriteString("\n")
-			sb.WriteString(helpSectionStyle.Render("Arguments:"))
-			sb.WriteString("\n")
-			for _, arg := range args {
-				sb.WriteString("  ")
-				sb.WriteString(helpArgStyle.Render(arg.name))
-				if arg.help != "" {
-					sb.WriteString("  ")
-					sb.WriteString(arg.help)
-				}
-				sb.WriteString("\n")
-			}
-		}
-
-		// Flags section
-		flags := getFlags(ctx)
-		if len(flags) > 0 {
-			sb.WriteString("\n")
-			sb.WriteString(helpSectionStyle.Render("Flags:"))
-			sb.WriteString("\n")
-			for _, flag := range flags {
-				sb.WriteString("  ")
-				sb.WriteString(helpFlagStyle.Render(flag.flags))
-				if flag.help != "" {
-					sb.WriteString("  ")
-					sb.WriteString(flag.help)
-				}
-				sb.WriteString("\n")
-			}
-		}
+		// Arguments and Flags sections
+		writeHelpSection(&sb, "Arguments:", helpArgStyle, getArguments(ctx))
+		writeHelpSection(&sb, "Flags:", helpFlagStyle, getFlags(ctx))
 
 		sb.WriteString("\n")
 		fmt.Fprint(colorprofile.NewWriter(ctx.Stdout, os.Environ()), sb.String())
@@ -91,34 +61,50 @@ func StyledHelpPrinter() func(kong.HelpOptions, *kong.Context) error {
 	}
 }
 
-type argument struct {
-	name string
-	help string
-}
-
-type flag struct {
-	flags string
+// helpRow is one label/help pair rendered in the Arguments or Flags section.
+type helpRow struct {
+	label string
 	help  string
 }
 
-func getArguments(ctx *kong.Context) []argument {
-	var args []argument
+// writeHelpSection renders a help section (header plus label-styled rows) to sb,
+// writing nothing when rows is empty. label is drawn with style, help follows
+// after two spaces when present.
+func writeHelpSection(sb *strings.Builder, header string, style lipgloss.Style, rows []helpRow) {
+	if len(rows) == 0 {
+		return
+	}
+
+	sb.WriteString("\n")
+	sb.WriteString(helpSectionStyle.Render(header))
+	sb.WriteString("\n")
+	for _, row := range rows {
+		sb.WriteString("  ")
+		sb.WriteString(style.Render(row.label))
+		if row.help != "" {
+			sb.WriteString("  ")
+			sb.WriteString(row.help)
+		}
+		sb.WriteString("\n")
+	}
+}
+
+func getArguments(ctx *kong.Context) []helpRow {
+	var args []helpRow
 
 	for _, arg := range ctx.Model.Positional {
-		name := arg.Summary()
-		help := arg.Help
-		args = append(args, argument{name: name, help: help})
+		args = append(args, helpRow{label: arg.Summary(), help: arg.Help})
 	}
 
 	return args
 }
 
-func getFlags(ctx *kong.Context) []flag {
-	var flags []flag
+func getFlags(ctx *kong.Context) []helpRow {
+	var flags []helpRow
 
 	// Kong omits --help from Model.Flags, so prepend it by hand.
-	flags = append(flags, flag{
-		flags: "-h, --help",
+	flags = append(flags, helpRow{
+		label: "-h, --help",
 		help:  "Show context-sensitive help.",
 	})
 
@@ -139,8 +125,8 @@ func getFlags(ctx *kong.Context) []flag {
 			flagStr += "=" + strings.ToUpper(f.PlaceHolder)
 		}
 
-		flags = append(flags, flag{
-			flags: flagStr,
+		flags = append(flags, helpRow{
+			label: flagStr,
 			help:  f.Help,
 		})
 	}

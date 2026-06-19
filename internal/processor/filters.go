@@ -316,11 +316,6 @@ type AdaptiveDiagnostics struct {
 	AfftdnNoiseType string `json:"afftdn_noise_type"`
 }
 
-// ProcessingFilterContext holds pass execution state outside caller-owned defaults.
-type ProcessingFilterContext struct {
-	Pass PassNumber
-}
-
 // filterBuilderFunc is a function that builds a filter spec from effective config.
 // Returns the FFmpeg filter specification string, or empty string if disabled.
 type filterBuilderFunc func(*EffectiveFilterConfig) string
@@ -619,6 +614,18 @@ func (cfg *EffectiveFilterConfig) buildDownmixFilter() string {
 	return "aformat=channel_layouts=mono"
 }
 
+// Shared analysis-filter segments. Pass 2 (buildAnalysisFilter) and the Pass-4
+// chain (buildNormalisationFilters) both measure the signal with the same
+// astats and aspectralstats settings; these constants are the single source so
+// the two passes cannot drift. The ebur128 stage differs by one option (Pass 2
+// appends target=<TargetI>, Pass 4 leaves the default), so it shares only the
+// common prefix below. The metric catalogue is documented on buildAnalysisFilter.
+const (
+	astatsAnalysisSpec         = "astats=metadata=1:measure_perchannel=all"
+	aspectralstatsAnalysisSpec = "aspectralstats=win_size=2048:win_func=hann:measure=all"
+	ebur128AnalysisSpecPrefix  = "ebur128=metadata=1:peak=sample+true:dualmono=true"
+)
+
 // buildAnalysisFilter builds the audio analysis filter chain.
 // Combines astats, aspectralstats, and ebur128 for comprehensive measurement.
 // Used in both Pass 1 (input analysis) and Pass 2 (output analysis).
@@ -675,9 +682,10 @@ func (cfg *EffectiveFilterConfig) buildAnalysisFilter() string {
 	// measurement for Pass 3 is done separately via measureWithLoudnorm() which
 	// reads the file without encoding output.
 	return fmt.Sprintf(
-		"astats=metadata=1:measure_perchannel=all,"+
-			"aspectralstats=win_size=2048:win_func=hann:measure=all,"+
-			"ebur128=metadata=1:peak=sample+true:dualmono=true:target=%.0f",
+		"%s,%s,%s:target=%.0f",
+		astatsAnalysisSpec,
+		aspectralstatsAnalysisSpec,
+		ebur128AnalysisSpecPrefix,
 		cfg.Loudnorm.TargetI)
 }
 

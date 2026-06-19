@@ -828,7 +828,7 @@ func TestPickLowClusterRegion(t *testing.T) {
 		t.Errorf("MeasuredNoiseFloor = %.2f, want percentile floor %.2f", profile.MeasuredNoiseFloor, floor)
 	}
 	// Spectral fields come from the picked region (centroid set by vadInterval).
-	if profile.SpectralCentroid == 0 {
+	if profile.Spectral.Centroid == 0 {
 		t.Error("NoiseProfile spectral centroid is zero; want region spectral fields")
 	}
 }
@@ -882,19 +882,19 @@ func TestExtractNoiseProfileSpectralFields(t *testing.T) {
 		got  float64
 		want float64
 	}{
-		{"SpectralMean", profile.SpectralMean, 2.0},
-		{"SpectralVariance", profile.SpectralVariance, 3.0},
-		{"SpectralCentroid", profile.SpectralCentroid, 1500},
-		{"SpectralSpread", profile.SpectralSpread, 400},
-		{"SpectralSkewness", profile.SpectralSkewness, 1.0},
-		{"SpectralKurtosis", profile.SpectralKurtosis, 3.0},
-		{"SpectralEntropy", profile.SpectralEntropy, 0.5},
-		{"SpectralFlatness", profile.SpectralFlatness, 0.4},
-		{"SpectralCrest", profile.SpectralCrest, 8.0},
-		{"SpectralFlux", profile.SpectralFlux, 0.04},
-		{"SpectralSlope", profile.SpectralSlope, -0.3},
-		{"SpectralDecrease", profile.SpectralDecrease, 0.12},
-		{"SpectralRolloff", profile.SpectralRolloff, 7000},
+		{"SpectralMean", profile.Spectral.Mean, 2.0},
+		{"SpectralVariance", profile.Spectral.Variance, 3.0},
+		{"SpectralCentroid", profile.Spectral.Centroid, 1500},
+		{"SpectralSpread", profile.Spectral.Spread, 400},
+		{"SpectralSkewness", profile.Spectral.Skewness, 1.0},
+		{"SpectralKurtosis", profile.Spectral.Kurtosis, 3.0},
+		{"SpectralEntropy", profile.Spectral.Entropy, 0.5},
+		{"SpectralFlatness", profile.Spectral.Flatness, 0.4},
+		{"SpectralCrest", profile.Spectral.Crest, 8.0},
+		{"SpectralFlux", profile.Spectral.Flux, 0.04},
+		{"SpectralSlope", profile.Spectral.Slope, -0.3},
+		{"SpectralDecrease", profile.Spectral.Decrease, 0.12},
+		{"SpectralRolloff", profile.Spectral.Rolloff, 7000},
 	}
 	for _, c := range checks {
 		if math.Abs(c.got-c.want) > tol {
@@ -1194,5 +1194,28 @@ func TestDetectVoiceActivity_NoProfileLeavesVoicedPercentileZero(t *testing.T) {
 	}
 	if m.Regions.VoicedLowPercentile != 0 {
 		t.Errorf("VoicedLowPercentile = %.3f, want 0 (no profile, empty voiced set)", m.Regions.VoicedLowPercentile)
+	}
+}
+
+func TestIsFlooredLevel(t *testing.T) {
+	cases := []struct {
+		name  string
+		level float64
+		want  bool
+	}{
+		{"normal value above floor", -40.0, false},
+		{"value at floor", vadLevelFloorDB, true},
+		{"value below floor", vadLevelFloorDB - 1, true},
+		{"positive infinity", math.Inf(1), true},
+		{"negative infinity", math.Inf(-1), true},
+		{"NaN", math.NaN(), true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isFlooredLevel(tc.level); got != tc.want {
+				t.Errorf("isFlooredLevel(%v) = %v, want %v", tc.level, got, tc.want)
+			}
+		})
 	}
 }

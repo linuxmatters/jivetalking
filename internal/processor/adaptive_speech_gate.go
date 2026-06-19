@@ -86,15 +86,11 @@ const (
 // Room-tone peak/crest are read from the noise profile extracted from the
 // elected room-tone region and feed only the no-profile legacy threshold path.
 func tuneSpeechGate(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagnostics, measurements *AudioMeasurements) {
-	if diagnostics != nil {
-		diagnostics.SpeechGateDynamicRange = 0
-		diagnostics.SpeechGateQuietSpeechEstimate = 0
-		diagnostics.SpeechGateSpeechSeparation = 0
-		diagnostics.SpeechGateSpeechHeadroom = 0
-		diagnostics.SpeechGateThresholdUnclamped = 0
-		diagnostics.SpeechGateClampReason = ""
-		diagnostics.SpeechGateNarrowGap = false
-	}
+	// AdaptiveDiagnostics is freshly allocated per AdaptConfig call, so the
+	// speech-gate fields written only inside the SpeechProfile branch below
+	// (narrow gap, quiet-speech estimate, separation, headroom, unclamped
+	// threshold, clamp reason) start at their zero value on the no-profile path.
+	// No explicit zeroing is needed.
 
 	// Room-tone peak/crest feed only the no-profile legacy threshold path
 	// (NoiseProfile is extracted from the elected room-tone region).

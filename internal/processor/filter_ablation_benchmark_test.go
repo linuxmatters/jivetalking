@@ -403,7 +403,7 @@ func buildFullbenchPass4ResampleFilter(config *EffectiveFilterConfig) string {
 func buildFullbenchProductionPass4SpecWithoutAdeclick(config *EffectiveFilterConfig, measurement *LoudnormMeasurement) string {
 	pass4Config := *config
 	pass4Config.Adeclick.Enabled = false
-	return buildLoudnormFilterSpec(&pass4Config, measurement, measurement.TargetOffset, 0, 0, false, 48000, "")
+	return buildLoudnormFilterSpec(&pass4Config, measurement, measurement.TargetOffset, limiterPlan{}, 48000, "")
 }
 
 func extractFullbenchFilterClause(spec, prefix string) string {
@@ -559,7 +559,7 @@ func TestFullbenchLoudnormClauseMatchesProduction(t *testing.T) {
 	productionConfig := *config
 	productionConfig.Adeclick.Enabled = false
 	productionClause := extractFullbenchFilterClause(
-		buildLoudnormFilterSpec(&productionConfig, measurement, measurement.TargetOffset, 0, 0, false, 48000, ""),
+		buildLoudnormFilterSpec(&productionConfig, measurement, measurement.TargetOffset, limiterPlan{}, 48000, ""),
 		"loudnorm=",
 	)
 	benchmarkClause := buildFullbenchLoudnormClause(config, measurement)

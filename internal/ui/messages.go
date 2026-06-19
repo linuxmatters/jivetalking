@@ -23,9 +23,12 @@ type FileStartMsg struct {
 	FileName  string
 }
 
-// FileCompleteMsg indicates a file has finished processing
-type FileCompleteMsg struct {
-	FileIndex  int
+// CompletionResult carries the per-file completion payload shared by
+// FileCompleteMsg (sent by the pool) and FileProgress (held by the model). Both
+// embed it so the model can copy the whole payload in one assignment; a field
+// added here reaches FileProgress without a matching copy line, and a dropped
+// copy becomes a compile error rather than a silent omission.
+type CompletionResult struct {
 	InputLUFS  float64
 	OutputLUFS float64
 	// FinalNoiseFloor is the output room-tone noise floor in dBFS (lower = cleaner),
@@ -59,6 +62,12 @@ type FileCompleteMsg struct {
 	// resets per pass.
 	ProcessingTime time.Duration
 	Error          error
+}
+
+// FileCompleteMsg indicates a file has finished processing
+type FileCompleteMsg struct {
+	FileIndex int
+	CompletionResult
 }
 
 // AdaptedSummaryMsg carries the filter-chain status view-model for a single file,

@@ -7,29 +7,41 @@ import (
 	"time"
 )
 
+// refineRegion is the neutral {Start, End, Duration} region value passed through
+// refineToSubregion. It is domain-agnostic on purpose: SpeechRegion and
+// RoomToneRegion share this shape but carry domain-specific JSON tags and meaning,
+// so the shared refinement helper takes and returns this plain value and each
+// caller converts to its own region type. (Distinct from spectrogram.go's
+// regionBounds, which holds float seconds for a spectrogram window.)
+type refineRegion struct {
+	Start    time.Duration
+	End      time.Duration
+	Duration time.Duration
+}
+
 // refineToSubregion implements the shared sliding-window refinement logic used by both
 // room tone and speech sub-region selection. It finds the best-scoring contiguous window
 // within the given time range, where "best" is determined by the provided scoring function
 // and comparison: isBetter(candidate, current) returns true when candidate should replace current.
 //
-// Returns the refined start, end, and duration. If refinement is not possible (insufficient
+// Returns the refined region bounds. If refinement is not possible (insufficient
 // intervals, already within target), returns the original bounds unchanged and ok=false.
 func refineToSubregion(
-	start, end, duration time.Duration,
+	region refineRegion,
 	intervals []IntervalSample,
 	windowDuration, windowMinimum time.Duration,
 	score func([]IntervalSample) float64,
 	isBetter func(candidate, current float64) bool,
-) (refinedStart, refinedEnd, refinedDuration time.Duration, ok bool) {
+) (refined refineRegion, ok bool) {
 	// No refinement needed if already at or below target duration
-	if duration <= windowDuration {
-		return start, end, duration, false
+	if region.Duration <= windowDuration {
+		return region, false
 	}
 
 	// Extract intervals within the candidate's time range
-	candidateIntervals := getIntervalsInRange(intervals, start, end)
+	candidateIntervals := getIntervalsInRange(intervals, region.Start, region.End)
 	if candidateIntervals == nil {
-		return start, end, duration, false
+		return region, false
 	}
 
 	// Calculate window size in intervals
@@ -38,7 +50,7 @@ func refineToSubregion(
 
 	// Need at least minimum window worth of intervals
 	if len(candidateIntervals) < minimumIntervals {
-		return start, end, duration, false
+		return region, false
 	}
 
 	// If we have fewer intervals than target window, use what we have
@@ -59,11 +71,14 @@ func refineToSubregion(
 	}
 
 	// Calculate refined region bounds from the best window position
-	refinedStart = candidateIntervals[bestStartIdx].Timestamp
-	refinedDuration = time.Duration(windowIntervals) * goldenIntervalSize
-	refinedEnd = refinedStart + refinedDuration
+	refinedStart := candidateIntervals[bestStartIdx].Timestamp
+	refinedDuration := time.Duration(windowIntervals) * goldenIntervalSize
 
-	return refinedStart, refinedEnd, refinedDuration, true
+	return refineRegion{
+		Start:    refinedStart,
+		End:      refinedStart + refinedDuration,
+		Duration: refinedDuration,
+	}, true
 }
 
 // getIntervalsInRange returns intervals that fall within the given time range.

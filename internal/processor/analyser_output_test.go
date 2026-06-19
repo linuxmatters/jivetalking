@@ -128,6 +128,50 @@ func TestRegionSeekPreRollCoversLoudnessWindows(t *testing.T) {
 	}
 }
 
+// TestToRegionSample asserts the eight-field copy maps each regionMeasurements
+// field to its RegionSample counterpart and drops the measurement-internal
+// FramesProcessed counter. Pure-function test: no audio, no demuxer.
+func TestToRegionSample(t *testing.T) {
+	rm := &regionMeasurements{
+		RMSLevel:        -18.5,
+		PeakLevel:       -2.0,
+		CrestFactor:     16.5,
+		Spectral:        SpectralMetrics{Centroid: 1234.5, Rolloff: 6789.0, Found: true},
+		MomentaryLUFS:   -16.2,
+		ShortTermLUFS:   -15.8,
+		TruePeak:        -1.1,
+		SamplePeak:      -1.3,
+		FramesProcessed: 4242,
+	}
+
+	got := rm.toRegionSample()
+
+	if got.RMSLevel != rm.RMSLevel {
+		t.Errorf("RMSLevel = %v, want %v", got.RMSLevel, rm.RMSLevel)
+	}
+	if got.PeakLevel != rm.PeakLevel {
+		t.Errorf("PeakLevel = %v, want %v", got.PeakLevel, rm.PeakLevel)
+	}
+	if got.CrestFactor != rm.CrestFactor {
+		t.Errorf("CrestFactor = %v, want %v", got.CrestFactor, rm.CrestFactor)
+	}
+	if got.Spectral != rm.Spectral {
+		t.Errorf("Spectral = %+v, want %+v", got.Spectral, rm.Spectral)
+	}
+	if got.MomentaryLUFS != rm.MomentaryLUFS {
+		t.Errorf("MomentaryLUFS = %v, want %v", got.MomentaryLUFS, rm.MomentaryLUFS)
+	}
+	if got.ShortTermLUFS != rm.ShortTermLUFS {
+		t.Errorf("ShortTermLUFS = %v, want %v", got.ShortTermLUFS, rm.ShortTermLUFS)
+	}
+	if got.TruePeak != rm.TruePeak {
+		t.Errorf("TruePeak = %v, want %v", got.TruePeak, rm.TruePeak)
+	}
+	if got.SamplePeak != rm.SamplePeak {
+		t.Errorf("SamplePeak = %v, want %v", got.SamplePeak, rm.SamplePeak)
+	}
+}
+
 func TestExtractRegionPair(t *testing.T) {
 	tests := []struct {
 		name         string

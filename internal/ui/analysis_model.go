@@ -95,20 +95,11 @@ func (m AnalysisModel) Init() tea.Cmd {
 
 // Update handles messages and updates the model
 func (m AnalysisModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if handled, cmd := handleCommonMsg(msg, &m.Width, &m.Height, &m.Done, &m.progress, analysisBarOverhead); handled {
+		return m, cmd
+	}
+
 	switch msg := msg.(type) {
-	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "q", "ctrl+c":
-			return m, tea.Quit
-		}
-
-	case tea.WindowSizeMsg:
-		m.Width = msg.Width
-		m.Height = msg.Height
-		if msg.Width > 0 {
-			m.progress.SetWidth(progressWidthFor(msg.Width, analysisBarOverhead))
-		}
-
 	case AnalysisStartMsg:
 		if msg.FileIndex >= 0 && msg.FileIndex < len(m.Files) {
 			m.Files[msg.FileIndex].FileName = filepath.Base(msg.FilePath)
@@ -135,10 +126,6 @@ func (m AnalysisModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
-
-	case AllCompleteMsg:
-		m.Done = true
-		return m, tea.Quit
 	}
 
 	return m, nil

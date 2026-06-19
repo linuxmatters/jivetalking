@@ -58,18 +58,20 @@ type GainAdviceResult struct {
 //   - inputTP < -12             -> Quiet:    raise by round(target - inputTP)
 //   - -12 <= inputTP <= -1      -> Fine:    leave it
 func GainAdvice(inputTP float64) GainAdviceResult {
+	// Clipping and Hot both lower the gain by the same amount; only Kind differs.
+	lowerDeltaDB := -math.Round(inputTP - gainAdviceTargetTP)
 	switch {
 	case inputTP >= 0:
 		return GainAdviceResult{
 			Kind:    GainClipping,
 			InputTP: inputTP,
-			DeltaDB: -math.Round(inputTP - gainAdviceTargetTP),
+			DeltaDB: lowerDeltaDB,
 		}
 	case inputTP > gainAdviceHotTP:
 		return GainAdviceResult{
 			Kind:    GainHot,
 			InputTP: inputTP,
-			DeltaDB: -math.Round(inputTP - gainAdviceTargetTP),
+			DeltaDB: lowerDeltaDB,
 		}
 	case inputTP < gainAdviceQuietTP:
 		return GainAdviceResult{

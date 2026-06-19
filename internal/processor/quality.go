@@ -192,6 +192,29 @@ func InputRoomToneFloorDB(m *AudioMeasurements) (float64, bool) {
 	return floor, true
 }
 
+// OutputTP resolves the final-output true peak (dBTP) for the done-box
+// before->after row. It reads NormResult.OutputTP, ebur128's measured peak on
+// the final Pass 4 output, the same value the pool read inline. The bool is
+// false when NormResult is nil (normalisation disabled or skipped), so the UI
+// gates the row rather than showing a bogus 0.
+func OutputTP(result *ProcessingResult) (float64, bool) {
+	if result == nil || result.NormResult == nil {
+		return 0, false
+	}
+	return result.NormResult.OutputTP, true
+}
+
+// OutputLRA resolves the final-output loudness range (LU) for the done-box
+// before->after row, read from the final-stage FinalMeasurements measured by
+// ebur128, the same value the pool read inline. The bool is false when
+// NormResult or its FinalMeasurements is nil, so the UI gates the row.
+func OutputLRA(result *ProcessingResult) (float64, bool) {
+	if result == nil || result.NormResult == nil || result.NormResult.FinalMeasurements == nil {
+		return 0, false
+	}
+	return result.NormResult.FinalMeasurements.Loudness.OutputLRA, true
+}
+
 // inputRoomToneRMS resolves the elected input room-tone RMS floor (dBFS) from a
 // ProcessingResult, delegating to InputRoomToneFloorDB so the quality scorer's
 // input-floor fallback shares the one display resolver.

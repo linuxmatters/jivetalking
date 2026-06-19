@@ -104,33 +104,24 @@ func launchWorkerPool(env poolEnv, diagnostics bool, reportWarnings chan<- strin
 	return done
 }
 
-// runWorkerPool processes files concurrently under a bounded worker pool sharing
-// one tea.Program. A buffered semaphore of size jobs caps in-flight workers; a
-// sync.WaitGroup tracks completion. Each worker owns its file index, a per-file
-// prefixed logger, and a per-worker config clone, mirroring the serial loop's
-// per-file body. After all workers finish it sends ui.AllCompleteMsg. With
-// jobs == 1 the observable outcome matches the serial path.
+// runBoundedPool is the shared bounded-worker-pool skeleton both pools run. A
+// buffered semaphore of size env.jobs caps in-flight workers; a sync.WaitGroup
+// tracks completion. For each file it spawns a worker that acquires the
+// semaphore or bails on env.ctx.Done() (a not-yet-started worker skips its work
+// cleanly; the slot is released only on the branch that took one), derives a
+// per-file prefixed logger, and runs the caller's body with the file index,
+// input path, and that logger. wg.Done() always fires - including the
+// cancellation bail - so wg.Wait() returns even when ctx is cancelled.
 //
-// On cancellation a not-yet-started worker skips its work via the ctx.Done()
-// select at acquire, while an in-flight worker aborts mid-frame because ctx is
-// threaded into ProcessAudio. Either way wg.Done() fires so wg.Wait() returns
-// and ui.AllCompleteMsg is sent.
-//
-// diagnostics gates the bulk diagnostic artefacts (the .jsonl sidecars and the
-// spectrogram PNGs). When false the always-on set (.flac/.md/.json) still
-// writes; only the opt-in sidecars are skipped.
-func runWorkerPool(env poolEnv, diagnostics bool, reportWarnings chan<- string, deps workerPoolDeps) {
+// After wg.Wait() it runs the optional afterWait hook (the processing pool
+// drains its spectrogram-render WaitGroup here so the process does not exit
+// until every PNG lands), then sends ui.AllCompleteMsg gated on env.p != nil:
+// the processing pool always has a non-nil program, while the no-TTY analysis
+// path passes nil and must not call p.Send. Each body owns every other p.Send
+// and self-gates on env.p, so a nil program never deadlocks a worker.
+func runBoundedPool(env poolEnv, afterWait func(), body func(i int, inputPath string, wlog func(string, ...any))) {
 	sem := make(chan struct{}, env.jobs)
 	var wg sync.WaitGroup
-
-	// Spectrogram renders run in background goroutines off the file-worker critical
-	// path. specSem bounds them to the jobs budget shared across ALL files - one
-	// pool-level semaphore, never one unbounded goroutine per PNG, so ffmpeg is not
-	// oversubscribed beyond the worker budget. specWG tracks every render so the
-	// pool waits for all PNGs before AllCompleteMsg / program exit.
-	specSem := make(chan struct{}, env.jobs)
-	var specWG sync.WaitGroup
-	render := processingRenderScheduler{sem: specSem, wg: &specWG}
 
 	for i, inputPath := range env.files {
 		wg.Go(func() {
@@ -144,9 +135,60 @@ func runWorkerPool(env poolEnv, diagnostics bool, reportWarnings chan<- string, 
 				return
 			}
 
-			fileStartTime := time.Now()
-
 			wlog := withFilePrefix(inputPath, env.sharedLog)
+			body(i, inputPath, wlog)
+		})
+	}
+
+	wg.Wait()
+
+	if afterWait != nil {
+		afterWait()
+	}
+
+	if env.p != nil {
+		env.sharedLog("[POOL] Sending AllCompleteMsg")
+		env.p.Send(ui.AllCompleteMsg{})
+	}
+}
+
+// runWorkerPool processes files concurrently under a bounded worker pool sharing
+// one tea.Program. It supplies its per-file body to the shared runBoundedPool
+// skeleton (which owns the semaphore, the WaitGroup, the ctx.Done() acquire-or-
+// bail, and the final ui.AllCompleteMsg send). Each worker owns its file index,
+// a per-file prefixed logger, and a per-worker config clone, mirroring the
+// serial loop's per-file body. With jobs == 1 the observable outcome matches the
+// serial path.
+//
+// On cancellation a not-yet-started worker skips its work via the ctx.Done()
+// select at acquire, while an in-flight worker aborts mid-frame because ctx is
+// threaded into ProcessAudio. Either way wg.Done() fires so wg.Wait() returns
+// and ui.AllCompleteMsg is sent.
+//
+// diagnostics gates the bulk diagnostic artefacts (the .jsonl sidecars and the
+// spectrogram PNGs). When false the always-on set (.flac/.md/.json) still
+// writes; only the opt-in sidecars are skipped.
+func runWorkerPool(env poolEnv, diagnostics bool, reportWarnings chan<- string, deps workerPoolDeps) {
+	// Spectrogram renders run in background goroutines off the file-worker critical
+	// path. specSem bounds them to the jobs budget shared across ALL files - one
+	// pool-level semaphore, never one unbounded goroutine per PNG, so ffmpeg is not
+	// oversubscribed beyond the worker budget. specWG tracks every render so the
+	// pool waits for all PNGs before AllCompleteMsg / program exit.
+	specSem := make(chan struct{}, env.jobs)
+	var specWG sync.WaitGroup
+	render := processingRenderScheduler{sem: specSem, wg: &specWG}
+
+	runBoundedPool(env,
+		// Gate program exit on the spectrogram renders: every file's per-file
+		// FileCompleteMsg has already fired (wg drained), so the file-worker TUI
+		// is not held up; only AllCompleteMsg (which quits the program) waits
+		// here, so the process does not exit until every PNG lands. On a user ctx
+		// cancel the in-flight renders abort and clean their partials, then specWG
+		// drains. With --diagnostics off nothing was launched, so this returns at
+		// once.
+		specWG.Wait,
+		func(i int, inputPath string, wlog func(string, ...any)) {
+			fileStartTime := time.Now()
 
 			wlog("[POOL] Sending FileStartMsg for file %d: %s", i, inputPath)
 			env.p.Send(ui.FileStartMsg{
@@ -168,8 +210,8 @@ func runWorkerPool(env poolEnv, diagnostics bool, reportWarnings chan<- string, 
 			if err != nil {
 				wlog("[POOL] ProcessAudio failed: %v", err)
 				env.p.Send(ui.FileCompleteMsg{
-					FileIndex: i,
-					Error:     err,
+					FileIndex:        i,
+					CompletionResult: ui.CompletionResult{Error: err},
 				})
 				return
 			}
@@ -180,20 +222,6 @@ func runWorkerPool(env poolEnv, diagnostics bool, reportWarnings chan<- string, 
 
 			emitProcessingReport(env, inputPath, result, ph, processingTimings{fileStart: fileStartTime, pass2: pass2Time}, diagnostics, reportWarnings, render)
 		})
-	}
-
-	wg.Wait()
-
-	// Gate program exit on the spectrogram renders: every file's per-file
-	// FileCompleteMsg has already fired (wg drained), so the file-worker TUI is not
-	// held up; only AllCompleteMsg (which quits the program) waits here, so the
-	// process does not exit until every PNG lands. On a user ctx cancel the
-	// in-flight renders abort and clean their partials, then specWG drains. With
-	// --diagnostics off nothing was launched, so this returns at once.
-	specWG.Wait()
-
-	env.sharedLog("[POOL] Sending AllCompleteMsg")
-	env.p.Send(ui.AllCompleteMsg{})
 }
 
 // processingRenderScheduler bundles the pool-level background spectrogram-render
@@ -381,16 +409,11 @@ func emitProcessingReport(env poolEnv, inputPath string, result *processor.Proce
 
 	// Surface the final-output true peak and loudness range from NormResult for
 	// the done-box before→after rows. Read-only: both are measured by ebur128 on
-	// the final output during normalisation, never recomputed here. NormResult is
-	// nil when normalisation was disabled/skipped; FinalMeasurements may also be
-	// nil, so guard both and leave the value at 0 (the UI gates the row).
-	var outputTP, outputLRA float64
-	if result.NormResult != nil {
-		outputTP = result.NormResult.OutputTP
-		if fm := result.NormResult.FinalMeasurements; fm != nil {
-			outputLRA = fm.Loudness.OutputLRA
-		}
-	}
+	// the final output during normalisation, never recomputed here. The accessors
+	// guard a nil NormResult/FinalMeasurements and return 0 when absent (the UI
+	// gates the row), mirroring OutputNoiseFloor/InputNoiseFloor above.
+	outputTP, _ := processor.OutputTP(result)
+	outputLRA, _ := processor.OutputLRA(result)
 
 	// Confirm the Limiter row at completion. The row already lit during Pass 4
 	// (progressHandler resends the summary with the ceiling on the Pass-4-start
@@ -405,18 +428,20 @@ func emitProcessingReport(env poolEnv, inputPath string, result *processor.Proce
 
 	wlog("[POOL] Sending FileCompleteMsg for file %d", i)
 	env.p.Send(ui.FileCompleteMsg{
-		FileIndex:           i,
-		InputLUFS:           result.InputLUFS,
-		OutputLUFS:          result.OutputLUFS,
-		FinalNoiseFloor:     finalNoiseFloor,
-		InputNoiseFloor:     inputNoiseFloor,
-		HaveFinalNoiseFloor: haveFinalNoiseFloor,
-		HaveInputNoiseFloor: haveInputNoiseFloor,
-		OutputTP:            outputTP,
-		OutputLRA:           outputLRA,
-		OutputPath:          result.OutputPath,
-		Quality:             processor.ComputeQualityScore(result),
-		RecordingQuality:    processor.ComputeRecordingScore(result.Measurements),
-		ProcessingTime:      time.Since(t.fileStart),
+		FileIndex: i,
+		CompletionResult: ui.CompletionResult{
+			InputLUFS:           result.InputLUFS,
+			OutputLUFS:          result.OutputLUFS,
+			FinalNoiseFloor:     finalNoiseFloor,
+			InputNoiseFloor:     inputNoiseFloor,
+			HaveFinalNoiseFloor: haveFinalNoiseFloor,
+			HaveInputNoiseFloor: haveInputNoiseFloor,
+			OutputTP:            outputTP,
+			OutputLRA:           outputLRA,
+			OutputPath:          result.OutputPath,
+			Quality:             processor.ComputeQualityScore(result),
+			RecordingQuality:    processor.ComputeRecordingScore(result.Measurements),
+			ProcessingTime:      time.Since(t.fileStart),
+		},
 	})
 }

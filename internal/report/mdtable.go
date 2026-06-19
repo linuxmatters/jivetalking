@@ -93,8 +93,8 @@ func isDigitalSilence(value float64) bool {
 // notation for very small non-zero magnitudes (< 0.0001), the placeholder for
 // NaN/Inf, otherwise fixed decimals.
 func formatMetric(value float64, decimals int) string {
-	if math.IsNaN(value) || math.IsInf(value, 0) {
-		return placeholder
+	if token, ok := nonFiniteToken(value, 0); ok {
+		return token
 	}
 	if value != 0 && math.Abs(value) < 0.0001 {
 		return fmt.Sprintf("%.2e", value)
@@ -105,8 +105,8 @@ func formatMetric(value float64, decimals int) string {
 // formatMetricDB formats a dB value, rendering "< -120" for digital silence
 // (-Inf or at/below the floor) and the placeholder for NaN/+Inf.
 func formatMetricDB(value float64, decimals int) string {
-	if math.IsNaN(value) || math.IsInf(value, 1) {
-		return placeholder
+	if token, ok := nonFiniteToken(value, 1); ok {
+		return token
 	}
 	if isDigitalSilence(value) {
 		return "< -120"
@@ -117,8 +117,8 @@ func formatMetricDB(value float64, decimals int) string {
 // formatMetricLUFS formats a LUFS value, rendering "< -70" below the ebur128
 // measurement floor and the placeholder for NaN/+Inf.
 func formatMetricLUFS(value float64, decimals int) string {
-	if math.IsNaN(value) || math.IsInf(value, 1) {
-		return placeholder
+	if token, ok := nonFiniteToken(value, 1); ok {
+		return token
 	}
 	if value < lufsMeasurementFloor {
 		return "< -70"
@@ -129,8 +129,8 @@ func formatMetricLUFS(value float64, decimals int) string {
 // formatMetricSigned formats a value with an explicit sign for positives (e.g.
 // "+2.5"), and the placeholder for NaN/Inf.
 func formatMetricSigned(value float64, decimals int) string {
-	if math.IsNaN(value) || math.IsInf(value, 0) {
-		return placeholder
+	if token, ok := nonFiniteToken(value, 0); ok {
+		return token
 	}
 	return fmt.Sprintf("%+.*f", decimals, value)
 }

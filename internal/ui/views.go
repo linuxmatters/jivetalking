@@ -292,12 +292,31 @@ func renderAudioLevelMeter(currentLevel, peakLevel float64, elapsed time.Duratio
 	// place the marker and elbow one cell beyond the bar.
 	peakPos := max(0, min(int(((peakLevel-minDB)/(maxDB-minDB))*float64(width)), width-1))
 
-	// The green→yellow→orange→red colour ramp is built once and cached (see
-	// meterRamp): its inputs (meterWidth, meterFloorDB, the -16 dB threshold, and
-	// the package-level colours) are all compile-time constants, so the ramp never
-	// varies per frame. Indexing the cached slice keeps this off the 60fps path.
-	// The matching per-colour styles are cached too (meterRampStyles), so the flush
-	// indexes a pre-built style rather than allocating one per run.
+	b.WriteString(renderMeterBar(width, currentPos))
+
+	if marker := renderPeakMarker(peakLevel, peakPos, width, minDB, elapsed); marker != "" {
+		b.WriteByte('\n')
+		b.WriteString(marker)
+	}
+
+	return b.String()
+}
+
+// renderMeterBar draws the width-cell level meter: the first currentPos cells use
+// the filled glyph, the rest the empty glyph. It does NOT reuse renderFilledBar:
+// the ramp colour spans both filled and empty cells (so the bar is coloured along
+// its whole length), and contiguous same-colour cells are coalesced into one
+// styled run so lipgloss emits a single colour sequence per run rather than per
+// rune, keeping it off the 60fps path.
+//
+// The green→yellow→orange→red colour ramp is built once and cached (see
+// meterRamp): its inputs (meterWidth, meterFloorDB, the -16 dB threshold, and the
+// package-level colours) are all compile-time constants, so the ramp never varies
+// per frame. The matching per-colour styles are cached too (meterRampStyles), so
+// the flush indexes a pre-built style rather than allocating one per run.
+func renderMeterBar(width, currentPos int) string {
+	var b strings.Builder
+
 	ramp := meterRamp()
 	rampStyles := meterRampStyles()
 
@@ -315,12 +334,11 @@ func renderAudioLevelMeter(currentLevel, peakLevel float64, elapsed time.Duratio
 		return '░' // Empty
 	}
 
-	// Build contiguous same-colour runs and style each as one segment so
-	// lipgloss emits a single colour sequence per run rather than per rune. The
-	// run is coalesced by colour equality over the cell index, and cellColor maps
-	// cell i to ramp position i, so the run's START cell index is its ramp
-	// position. Index the cached style by that position; an off-ramp run (position
-	// outside the ramp, the cli.ColorRed fallback) uses the package red style.
+	// Build contiguous same-colour runs and style each as one segment. The run is
+	// coalesced by colour equality over the cell index, and cellColor maps cell i
+	// to ramp position i, so the run's START cell index is its ramp position. Index
+	// the cached style by that position; an off-ramp run (position outside the
+	// ramp, the cli.ColorRed fallback) uses the package red style.
 	var run strings.Builder
 	var runColor color.Color
 	runStart := 0
@@ -347,42 +365,49 @@ func renderAudioLevelMeter(currentLevel, peakLevel float64, elapsed time.Duratio
 	}
 	flush()
 
-	// Peak-hold marker: a single pulsing line beneath the bar that tethers the
-	// peak value to its column via an up-tip arrow, with the value in Unicode
-	// superscript so the label and its pointer share one row. The "Level:" header
-	// already names the unit, so the marker carries only the value. Skip it when
-	// there is no meaningful peak yet (peak still at the silence floor), so no
-	// stray marker sits at column 0. Alignment uses lipgloss.Width (display
-	// columns), not byte length: every superscript rune is width 1, including the
-	// '·' decimal separator pinned to width 1 at startup (see main.go), so the
-	// arrow lands exactly under the peak column.
-	if peakLevel > minDB {
-		pulseColor := peakMarkerColor(elapsed)
-		arrowStyle := lipgloss.NewStyle().Foreground(pulseColor)
-		valueStyle := lipgloss.NewStyle().Foreground(cli.ColorOrange)
-		supValue := superscriptValue(fmt.Sprintf("%.1f", peakLevel))
+	return b.String()
+}
 
-		b.WriteByte('\n')
-		// Default: arrow leads, value to its right (⬑ value). When that form would
-		// overflow the bar, flip so the value leads and the arrow trails (value ⬏),
-		// keeping the label within meterWidth. The right form renders as
-		// `<peakPos spaces>⬑ <supValue>` = peakPos + 1 (⬑) + 1 (space) +
-		// lipgloss.Width(supValue) columns; the arrow sits at the peak column.
-		if peakPos+lipgloss.Width(supValue)+2 <= width {
-			b.WriteString(strings.Repeat(" ", peakPos))
-			b.WriteString(arrowStyle.Render("⬑"))
-			b.WriteByte(' ')
-			b.WriteString(valueStyle.Render(supValue))
-		} else {
-			// value then a right-up arrow ⬏ ending under the peak column. The form
-			// is `<lead spaces><supValue> ⬏`, so lead + width(supValue) + 1 ==
-			// peakPos places the arrow at the peak column.
-			lead := max(peakPos-(lipgloss.Width(supValue)+1), 0)
-			b.WriteString(strings.Repeat(" ", lead))
-			b.WriteString(valueStyle.Render(supValue))
-			b.WriteByte(' ')
-			b.WriteString(arrowStyle.Render("⬏"))
-		}
+// renderPeakMarker lays out the peak-hold marker: a single pulsing line beneath
+// the bar that tethers the peak value to its column via an up-tip arrow, with the
+// value in Unicode superscript so the label and its pointer share one row. The
+// "Level:" header already names the unit, so the marker carries only the value. It
+// returns "" when there is no meaningful peak yet (peak still at the silence
+// floor), so no stray marker sits at column 0. Alignment uses lipgloss.Width
+// (display columns), not byte length: every superscript rune is width 1, including
+// the '·' decimal separator pinned to width 1 at startup (see main.go), so the
+// arrow lands exactly under the peak column.
+func renderPeakMarker(peakLevel float64, peakPos, width int, minDB float64, elapsed time.Duration) string {
+	if peakLevel <= minDB {
+		return ""
+	}
+
+	var b strings.Builder
+
+	pulseColor := peakMarkerColor(elapsed)
+	arrowStyle := lipgloss.NewStyle().Foreground(pulseColor)
+	valueStyle := lipgloss.NewStyle().Foreground(cli.ColorOrange)
+	supValue := superscriptValue(fmt.Sprintf("%.1f", peakLevel))
+
+	// Default: arrow leads, value to its right (⬑ value). When that form would
+	// overflow the bar, flip so the value leads and the arrow trails (value ⬏),
+	// keeping the label within meterWidth. The right form renders as
+	// `<peakPos spaces>⬑ <supValue>` = peakPos + 1 (⬑) + 1 (space) +
+	// lipgloss.Width(supValue) columns; the arrow sits at the peak column.
+	if peakPos+lipgloss.Width(supValue)+2 <= width {
+		b.WriteString(strings.Repeat(" ", peakPos))
+		b.WriteString(arrowStyle.Render("⬑"))
+		b.WriteByte(' ')
+		b.WriteString(valueStyle.Render(supValue))
+	} else {
+		// value then a right-up arrow ⬏ ending under the peak column. The form
+		// is `<lead spaces><supValue> ⬏`, so lead + width(supValue) + 1 ==
+		// peakPos places the arrow at the peak column.
+		lead := max(peakPos-(lipgloss.Width(supValue)+1), 0)
+		b.WriteString(strings.Repeat(" ", lead))
+		b.WriteString(valueStyle.Render(supValue))
+		b.WriteByte(' ')
+		b.WriteString(arrowStyle.Render("⬏"))
 	}
 
 	return b.String()

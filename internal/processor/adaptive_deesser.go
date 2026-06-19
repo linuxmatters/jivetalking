@@ -21,6 +21,15 @@ const (
 	deessIntensityMax = 0.85 // Ceiling at/above deessExcessMaxDB
 )
 
+// SibilanceExcessDB is the speech-region sibilance excess in dB: the sibilant-band
+// RMS minus the body-band RMS (both dBFS, same astats axis). It is the single
+// source of the de-esser engagement signal, shared with the UI summary so the box
+// and the de-esser tuner never drift. Both bands must be measured (BandsMeasured)
+// for the value to mean anything; callers gate on that.
+func (m *SpeechCandidateMetrics) SibilanceExcessDB() float64 {
+	return m.SibBandRMS - m.BodyBandRMS
+}
+
 // tuneDeesser sets de-esser intensity from the speech-region sibilance excess
 // (sibilant-band RMS minus body-band RMS). It requires a SpeechProfile with both
 // bands measured; full-file metrics are diluted by silence/noise and produce
@@ -39,7 +48,7 @@ func tuneDeesser(config *EffectiveFilterConfig, measurements *AudioMeasurements)
 		return
 	}
 
-	sibilanceExcess := measurements.Regions.SpeechProfile.SibBandRMS - measurements.Regions.SpeechProfile.BodyBandRMS
+	sibilanceExcess := measurements.Regions.SpeechProfile.SibilanceExcessDB()
 
 	switch {
 	case sibilanceExcess < deessExcessOffDB:

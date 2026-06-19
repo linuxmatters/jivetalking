@@ -49,6 +49,38 @@ func progressWidthFor(termWidth, overhead int) int {
 	return w
 }
 
+// handleCommonMsg processes the messages both Update methods treat identically:
+// the quit keys ("q"/"ctrl+c"), WindowSizeMsg (store dimensions + clamp the
+// progress width via progressWidthFor with the caller's chrome overhead), and
+// AllCompleteMsg (mark done + quit). It mutates the shared fields through
+// pointers and returns handled=true when it owned the message, so each Update
+// can return early; per-model messages fall through with handled=false to the
+// model's own switch. Kept to the genuinely-identical block: the models share no
+// struct shape, only these four fields.
+func handleCommonMsg(msg tea.Msg, width, height *int, done *bool, prog *progress.Model, overhead int) (handled bool, cmd tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyPressMsg:
+		switch msg.String() {
+		case "q", "ctrl+c":
+			return true, tea.Quit
+		}
+
+	case tea.WindowSizeMsg:
+		*width = msg.Width
+		*height = msg.Height
+		if msg.Width > 0 {
+			prog.SetWidth(progressWidthFor(msg.Width, overhead))
+		}
+		return true, nil
+
+	case AllCompleteMsg:
+		*done = true
+		return true, tea.Quit
+	}
+
+	return false, nil
+}
+
 // meterFPS is the spring step rate for the eased audio level meter (~60fps).
 const meterFPS = 60
 
@@ -103,9 +135,8 @@ const (
 
 // FileProgress tracks progress for a single audio file
 type FileProgress struct {
-	InputPath  string
-	OutputPath string
-	Status     FileStatus
+	InputPath string
+	Status    FileStatus
 
 	// Phase tracking
 	CurrentPass processor.PassNumber
@@ -115,11 +146,6 @@ type FileProgress struct {
 	Progress    float64 // 0.0 to 1.0
 	StartTime   time.Time
 	ElapsedTime time.Duration
-
-	// ProcessingTime is the total wall-clock time across all four passes, plumbed
-	// from the pool via FileCompleteMsg. ElapsedTime resets per pass, so the
-	// done-box Time row uses this instead.
-	ProcessingTime time.Duration
 
 	// Duration is the total audio length in seconds (constant per file; the
 	// first non-zero value is kept). Drives the realtime-speed badge.
@@ -156,31 +182,11 @@ type FileProgress struct {
 	CurrentLevel float64 // Current audio level in dB
 	PeakLevel    float64 // Peak level seen so far
 
-	// Completion results
-	InputLUFS  float64
-	OutputLUFS float64
-	// FinalNoiseFloor is the output room-tone noise floor in dBFS (lower = cleaner),
-	// shown in the done box and aligned with the quality score's noise component.
-	// InputNoiseFloor is the input room-tone floor on the same astats RMS dBFS axis;
-	// the done box shows the input->output pair. The Have* flags gate each end.
-	FinalNoiseFloor     float64
-	InputNoiseFloor     float64
-	HaveFinalNoiseFloor bool
-	HaveInputNoiseFloor bool
-	// OutputTP / OutputLRA are the post-normalisation true peak (dBTP) and loudness
-	// range (LU), surfaced from NormResult at the pool send site. Paired with
-	// Summary.TruePeakDBTP / Summary.InputLRA they drive the done-box True peak and
-	// Dynamics before→after rows.
-	OutputTP  float64
-	OutputLRA float64
-	// Quality is the OUTPUT (Processed) score; RecordingQuality is the INPUT
-	// (Recording) source-capture score. The done box shows both, Recording above
-	// Processed.
-	Quality          processor.QualityScore
-	RecordingQuality processor.QualityScore
-
-	// Error tracking
-	Error error
+	// Completion results, copied wholesale from FileCompleteMsg.CompletionResult.
+	// Carries the done-box numbers (InputLUFS/OutputLUFS, noise floors and their
+	// Have* gates, OutputTP/OutputLRA, the two quality scores, ProcessingTime) and
+	// the per-file Error.
+	CompletionResult
 }
 
 // statusBoxCache holds the memoised side-panel render keyed on the inputs the
@@ -302,20 +308,11 @@ func (m Model) Init() tea.Cmd {
 
 // Update handles messages and updates the model
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if handled, cmd := handleCommonMsg(msg, &m.Width, &m.Height, &m.Done, &m.progress, processingBarOverhead); handled {
+		return m, cmd
+	}
+
 	switch msg := msg.(type) {
-	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "q", "ctrl+c":
-			return m, tea.Quit
-		}
-
-	case tea.WindowSizeMsg:
-		m.Width = msg.Width
-		m.Height = msg.Height
-		if msg.Width > 0 {
-			m.progress.SetWidth(progressWidthFor(msg.Width, processingBarOverhead))
-		}
-
 	case ProgressMsg:
 		if msg.FileIndex >= 0 && msg.FileIndex < len(m.Files) {
 			m.Files[msg.FileIndex] = updateFileProgress(m.Files[msg.FileIndex], msg)
@@ -346,19 +343,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case FileCompleteMsg:
 		if msg.FileIndex >= 0 && msg.FileIndex < len(m.Files) {
 			m.Files[msg.FileIndex].Status = StatusComplete
-			m.Files[msg.FileIndex].InputLUFS = msg.InputLUFS
-			m.Files[msg.FileIndex].OutputLUFS = msg.OutputLUFS
-			m.Files[msg.FileIndex].FinalNoiseFloor = msg.FinalNoiseFloor
-			m.Files[msg.FileIndex].InputNoiseFloor = msg.InputNoiseFloor
-			m.Files[msg.FileIndex].HaveFinalNoiseFloor = msg.HaveFinalNoiseFloor
-			m.Files[msg.FileIndex].HaveInputNoiseFloor = msg.HaveInputNoiseFloor
-			m.Files[msg.FileIndex].OutputTP = msg.OutputTP
-			m.Files[msg.FileIndex].OutputLRA = msg.OutputLRA
-			m.Files[msg.FileIndex].OutputPath = msg.OutputPath
-			m.Files[msg.FileIndex].Quality = msg.Quality
-			m.Files[msg.FileIndex].RecordingQuality = msg.RecordingQuality
-			m.Files[msg.FileIndex].ProcessingTime = msg.ProcessingTime
-			m.Files[msg.FileIndex].Error = msg.Error
+			m.Files[msg.FileIndex].CompletionResult = msg.CompletionResult
 
 			if msg.Error != nil {
 				m.Files[msg.FileIndex].Status = StatusError
@@ -395,10 +380,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, meterTick()
-
-	case AllCompleteMsg:
-		m.Done = true
-		return m, tea.Quit
 	}
 
 	return m, nil

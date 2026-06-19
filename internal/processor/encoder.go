@@ -29,35 +29,50 @@ func createOutputEncoder(outputPath string, bufferSinkCtx *ffmpeg.AVFilterContex
 		return nil, fmt.Errorf("failed to allocate output context: %w", err)
 	}
 
+	// Rollback: on any error path success stays false, so the defer frees every
+	// resource acquired so far in the reverse order of acquisition - AVIOClose
+	// (pb), then AVCodecFreeContext (encCtx), then AVFormatFreeContext (fmtCtx).
+	// Each free is nil-guarded so an unallocated resource is skipped. The success
+	// return sets success = true, handing ownership to the returned *Encoder.
+	var encCtx *ffmpeg.AVCodecContext
+	success := false
+	defer func() {
+		if success {
+			return
+		}
+		if fmtCtx != nil && fmtCtx.Pb() != nil {
+			ffmpeg.AVIOClose(fmtCtx.Pb())
+		}
+		if encCtx != nil {
+			ffmpeg.AVCodecFreeContext(&encCtx)
+		}
+		if fmtCtx != nil {
+			ffmpeg.AVFormatFreeContext(fmtCtx)
+		}
+	}()
+
 	codec := ffmpeg.AVCodecFindEncoder(ffmpeg.AVCodecIdFlac)
 	if codec == nil {
-		ffmpeg.AVFormatFreeContext(fmtCtx)
 		return nil, fmt.Errorf("FLAC encoder not found for output: %s", outputPath)
 	}
 
 	stream := ffmpeg.AVFormatNewStream(fmtCtx, nil)
 	if stream == nil {
-		ffmpeg.AVFormatFreeContext(fmtCtx)
 		return nil, fmt.Errorf("failed to create stream for output: %s", outputPath)
 	}
 
-	encCtx := ffmpeg.AVCodecAllocContext3(codec)
+	encCtx = ffmpeg.AVCodecAllocContext3(codec)
 	if encCtx == nil {
-		ffmpeg.AVFormatFreeContext(fmtCtx)
 		return nil, fmt.Errorf("failed to allocate encoder context for output: %s", outputPath)
 	}
 
 	// Get audio parameters from filter output (we only need sample rate, format is set to S16 via aformat filter)
 	if _, err := ffmpeg.AVBuffersinkGetFormat(bufferSinkCtx); err != nil { // Verify filter output is configured
-		ffmpeg.AVCodecFreeContext(&encCtx)
-		ffmpeg.AVFormatFreeContext(fmtCtx)
 		return nil, fmt.Errorf("failed to get sample format: %w", err)
 	}
 
 	sampleRate, err := ffmpeg.AVBuffersinkGetSampleRate(bufferSinkCtx)
 	if err != nil {
-		ffmpeg.AVCodecFreeContext(&encCtx)
-		ffmpeg.AVFormatFreeContext(fmtCtx)
 		return nil, fmt.Errorf("failed to get sample rate: %w", err)
 	}
 
@@ -69,8 +84,6 @@ func createOutputEncoder(outputPath string, bufferSinkCtx *ffmpeg.AVFilterContex
 
 	channels, err := ffmpeg.AVBuffersinkGetChannels(bufferSinkCtx)
 	if err != nil {
-		ffmpeg.AVCodecFreeContext(&encCtx)
-		ffmpeg.AVFormatFreeContext(fmtCtx)
 		return nil, fmt.Errorf("failed to get channels: %w", err)
 	}
 
@@ -79,8 +92,6 @@ func createOutputEncoder(outputPath string, bufferSinkCtx *ffmpeg.AVFilterContex
 	// Set compression level for FLAC
 	if codec.Id() == ffmpeg.AVCodecIdFlac {
 		if _, err := ffmpeg.AVOptSetInt(encCtx.RawPtr(), ffmpeg.GlobalCStr("compression_level"), 5, 0); err != nil {
-			ffmpeg.AVCodecFreeContext(&encCtx)
-			ffmpeg.AVFormatFreeContext(fmtCtx)
 			return nil, fmt.Errorf("failed to set FLAC compression level: %w", err)
 		}
 		// FLAC encoder requires fixed frame size - must match asetnsamples filter (4096)
@@ -95,14 +106,10 @@ func createOutputEncoder(outputPath string, bufferSinkCtx *ffmpeg.AVFilterContex
 	encCtx.SetTimeBase(timeBase)
 
 	if _, err := ffmpeg.AVCodecOpen2(encCtx, codec, nil); err != nil {
-		ffmpeg.AVCodecFreeContext(&encCtx)
-		ffmpeg.AVFormatFreeContext(fmtCtx)
 		return nil, fmt.Errorf("failed to open encoder: %w", err)
 	}
 
 	if _, err := ffmpeg.AVCodecParametersFromContext(stream.Codecpar(), encCtx); err != nil {
-		ffmpeg.AVCodecFreeContext(&encCtx)
-		ffmpeg.AVFormatFreeContext(fmtCtx)
 		return nil, fmt.Errorf("failed to copy encoder parameters: %w", err)
 	}
 
@@ -111,32 +118,21 @@ func createOutputEncoder(outputPath string, bufferSinkCtx *ffmpeg.AVFilterContex
 	if fmtCtx.Oformat().Flags()&ffmpeg.AVFmtNofile == 0 {
 		var pb *ffmpeg.AVIOContext
 		if _, err := ffmpeg.AVIOOpen(&pb, outputPathC, ffmpeg.AVIOFlagWrite); err != nil {
-			ffmpeg.AVCodecFreeContext(&encCtx)
-			ffmpeg.AVFormatFreeContext(fmtCtx)
 			return nil, fmt.Errorf("failed to open output file: %w", err)
 		}
 		fmtCtx.SetPb(pb)
 	}
 
 	if _, err := ffmpeg.AVFormatWriteHeader(fmtCtx, nil); err != nil {
-		if fmtCtx.Pb() != nil {
-			ffmpeg.AVIOClose(fmtCtx.Pb())
-		}
-		ffmpeg.AVCodecFreeContext(&encCtx)
-		ffmpeg.AVFormatFreeContext(fmtCtx)
 		return nil, fmt.Errorf("failed to write header: %w", err)
 	}
 
 	packet := ffmpeg.AVPacketAlloc()
 	if packet == nil {
-		if fmtCtx.Pb() != nil {
-			ffmpeg.AVIOClose(fmtCtx.Pb())
-		}
-		ffmpeg.AVCodecFreeContext(&encCtx)
-		ffmpeg.AVFormatFreeContext(fmtCtx)
 		return nil, fmt.Errorf("failed to allocate packet for output: %s", outputPath)
 	}
 
+	success = true
 	return &Encoder{
 		fmtCtx: fmtCtx,
 		encCtx: encCtx,

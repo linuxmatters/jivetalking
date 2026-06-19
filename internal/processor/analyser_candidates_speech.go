@@ -186,8 +186,8 @@ func refineToGoldenSpeechSubregion(candidate *SpeechRegion, intervals []Interval
 		return nil
 	}
 
-	start, end, dur, ok := refineToSubregion(
-		candidate.Start, candidate.End, candidate.Duration,
+	refined, ok := refineToSubregion(
+		refineRegion{Start: candidate.Start, End: candidate.End, Duration: candidate.Duration},
 		intervals,
 		goldenSpeechWindowDuration, goldenSpeechWindowMinimum,
 		scoreSpeechIntervalWindow,
@@ -197,7 +197,7 @@ func refineToGoldenSpeechSubregion(candidate *SpeechRegion, intervals []Interval
 		return candidate
 	}
 
-	return &SpeechRegion{Start: start, End: end, Duration: dur}
+	return &SpeechRegion{Start: refined.Start, End: refined.End, Duration: refined.Duration}
 }
 
 // findBestSpeechRegionResult contains the selected region and all evaluated candidates.

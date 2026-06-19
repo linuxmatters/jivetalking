@@ -96,12 +96,17 @@ func PrintVersion(version string) {
 	lipgloss.Println()
 }
 
+// printLabelled writes a styled label followed by message to stderr.
+func printLabelled(style lipgloss.Style, label, message string) {
+	lipgloss.Fprintf(os.Stderr, "%s %s\n", style.Render(label), message)
+}
+
 // PrintError prints an error message
 func PrintError(message string) {
-	lipgloss.Fprintf(os.Stderr, "%s %s\n", errorStyle.Render("Error:"), message)
+	printLabelled(errorStyle, "Error:", message)
 }
 
 // PrintWarning prints a warning message
 func PrintWarning(message string) {
-	lipgloss.Fprintf(os.Stderr, "%s %s\n", warningStyle.Render("Warning:"), message)
+	printLabelled(warningStyle, "Warning:", message)
 }

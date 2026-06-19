@@ -98,9 +98,9 @@ func NewAdaptedSummary(cfg *processor.EffectiveFilterConfig, diag *processor.Ada
 		}
 		if sp.BandsMeasured {
 			s.HasSibilance = true
-			// Recompute the same band excess the de-esser uses, so box and report
-			// never drift (adaptive_deesser.go).
-			s.SibilanceDB = sp.SibBandRMS - sp.BodyBandRMS
+			// Source the same band excess the de-esser uses, so box and report
+			// never drift (processor.SpeechCandidateMetrics.SibilanceExcessDB).
+			s.SibilanceDB = sp.SibilanceExcessDB()
 		}
 	}
 

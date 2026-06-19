@@ -67,11 +67,13 @@ func populatedAudioMeasurements() *AudioMeasurements {
 		NoiseProfile: &NoiseProfile{
 			Start: 2 * time.Second, Duration: 10 * time.Second,
 			MeasuredNoiseFloor: -60, PeakLevel: -50, CrestFactor: 10, Entropy: 0.5,
-			SpectralMean: 1.2, SpectralVariance: 2.4, SpectralCentroid: 1500,
-			SpectralSpread: 350, SpectralSkewness: 0.8, SpectralKurtosis: 3,
-			SpectralEntropy: 0.55, SpectralFlatness: 0.4, SpectralCrest: 7.5,
-			SpectralFlux: 0.03, SpectralSlope: -0.25, SpectralDecrease: 0.11,
-			SpectralRolloff: 6500,
+			Spectral: SpectralMetrics{
+				Mean: 1.2, Variance: 2.4, Centroid: 1500,
+				Spread: 350, Skewness: 0.8, Kurtosis: 3,
+				Entropy: 0.55, Flatness: 0.4, Crest: 7.5,
+				Flux: 0.03, Slope: -0.25, Decrease: 0.11,
+				Rolloff: 6500,
+			},
 		},
 	}
 	m.Regions.SpeechProfile = &m.Regions.SpeechCandidates[0]
@@ -223,10 +225,10 @@ func TestRunRecordNoiseProfileSpectralFieldsZeroValued(t *testing.T) {
 	m := populatedAudioMeasurements()
 	// Zero out a representative spread: variance, skewness, flux, and decrease.
 	// Each would have dropped under the old `,omitempty` tags.
-	m.Regions.NoiseProfile.SpectralVariance = 0
-	m.Regions.NoiseProfile.SpectralSkewness = 0
-	m.Regions.NoiseProfile.SpectralFlux = 0
-	m.Regions.NoiseProfile.SpectralDecrease = 0
+	m.Regions.NoiseProfile.Spectral.Variance = 0
+	m.Regions.NoiseProfile.Spectral.Skewness = 0
+	m.Regions.NoiseProfile.Spectral.Flux = 0
+	m.Regions.NoiseProfile.Spectral.Decrease = 0
 
 	rec := NewAnalysisRunRecord("/tmp/episode.flac", m)
 	tree, raw := marshalRecordTree(t, rec)

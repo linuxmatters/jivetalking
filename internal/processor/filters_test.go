@@ -1464,6 +1464,69 @@ func TestBuildAnalysisFilter(t *testing.T) {
 	})
 }
 
+// findFilterElement returns the comma-separated element of an FFmpeg filter
+// chain whose name matches prefix (e.g. "astats="), or "" if absent.
+func findFilterElement(spec, prefix string) string {
+	for element := range strings.SplitSeq(spec, ",") {
+		if strings.HasPrefix(element, prefix) {
+			return element
+		}
+	}
+	return ""
+}
+
+// TestAnalysisSegmentSharedAcrossPasses locks the Pass-2 (buildAnalysisFilter)
+// and Pass-4 (buildLoudnormFilterSpec) analysis segments together so they cannot
+// drift. The astats and aspectralstats specs must be byte-identical; the ebur128
+// stages must share a byte-identical prefix (Pass 2 alone appends target=).
+func TestAnalysisSegmentSharedAcrossPasses(t *testing.T) {
+	pass2Config := newTestConfig()
+	pass2Config.Analysis.Enabled = true
+	pass2Config.Loudnorm.TargetI = -16.0
+	pass2Spec := pass2Config.buildAnalysisFilter()
+
+	pass4Config := defaultNormalisationTestConfig()
+	measurement := &LoudnormMeasurement{
+		InputI:       -24.0,
+		InputTP:      -5.0,
+		InputLRA:     6.0,
+		InputThresh:  -34.0,
+		TargetOffset: -0.5,
+	}
+	pass4Spec := buildLoudnormFilterSpec(pass4Config, measurement, measurement.TargetOffset, limiterPlan{ceilingDB: -1.0}, 48000, "")
+
+	pass2Astats := findFilterElement(pass2Spec, "astats=")
+	pass4Astats := findFilterElement(pass4Spec, "astats=")
+	if pass2Astats == "" || pass4Astats == "" {
+		t.Fatalf("astats segment missing\npass2: %q\npass4: %q", pass2Spec, pass4Spec)
+	}
+	if pass2Astats != pass4Astats {
+		t.Errorf("astats segment drift\npass2: %q\npass4: %q", pass2Astats, pass4Astats)
+	}
+
+	pass2Spectral := findFilterElement(pass2Spec, "aspectralstats=")
+	pass4Spectral := findFilterElement(pass4Spec, "aspectralstats=")
+	if pass2Spectral == "" || pass4Spectral == "" {
+		t.Fatalf("aspectralstats segment missing\npass2: %q\npass4: %q", pass2Spec, pass4Spec)
+	}
+	if pass2Spectral != pass4Spectral {
+		t.Errorf("aspectralstats segment drift\npass2: %q\npass4: %q", pass2Spectral, pass4Spectral)
+	}
+
+	pass2Ebur128 := findFilterElement(pass2Spec, "ebur128=")
+	pass4Ebur128 := findFilterElement(pass4Spec, "ebur128=")
+	if pass2Ebur128 == "" || pass4Ebur128 == "" {
+		t.Fatalf("ebur128 segment missing\npass2: %q\npass4: %q", pass2Spec, pass4Spec)
+	}
+	// Pass 4 emits the shared prefix verbatim; Pass 2 appends target=<TargetI>.
+	if pass4Ebur128 != ebur128AnalysisSpecPrefix {
+		t.Errorf("Pass-4 ebur128 = %q, want shared prefix %q", pass4Ebur128, ebur128AnalysisSpecPrefix)
+	}
+	if !strings.HasPrefix(pass2Ebur128, ebur128AnalysisSpecPrefix) {
+		t.Errorf("Pass-2 ebur128 %q does not start with shared prefix %q", pass2Ebur128, ebur128AnalysisSpecPrefix)
+	}
+}
+
 func TestBuildResampleFilter(t *testing.T) {
 	t.Run("enabled returns aformat+asetnsamples with default params", func(t *testing.T) {
 		config := newTestConfig()

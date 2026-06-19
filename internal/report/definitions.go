@@ -138,14 +138,6 @@ var Definitions = map[string]Definition{
 		Unit:  "",
 		Gloss: "Fraction of sample pairs that change sign, zero_crossings/N.",
 	},
-	// Catalogued but not yet rendered: no report section emits this key. The
-	// data key is a live JSON struct tag in analyser.go; the gloss is kept ready
-	// for a future renderer.
-	"zero_crossings_count": {
-		Label: "Zero-crossings count",
-		Unit:  "count",
-		Gloss: "Number of sample pairs that change sign.",
-	},
 	"bit_depth": {
 		Label: "Bit depth",
 		Unit:  "bits",
@@ -156,41 +148,6 @@ var Definitions = map[string]Definition{
 		Unit:  "",
 		Gloss: "Magnitude-weighted spectral entropy, -sum(mag*ln(mag+eps))/ln(N); for astats stages, the sample-value distribution entropy.",
 	},
-	// Catalogued but not yet rendered: no report section emits the keys in this
-	// group. noise_floor_count and number_of_samples are live JSON struct tags
-	// in analyser.go; the astats *_difference keys are authored for forward use.
-	// Glosses are kept ready for a future renderer.
-	"noise_floor_count": {
-		Label: "Noise-floor count",
-		Unit:  "count",
-		Gloss: "Number of samples at or below the measured noise-floor level (astats).",
-	},
-	"number_of_samples": {
-		Label: "Number of samples",
-		Unit:  "count",
-		Gloss: "Count of samples in the measured stream (astats).",
-	},
-	"max_difference": {
-		Label: "Max difference",
-		Unit:  "",
-		Gloss: "Largest absolute difference between two consecutive samples (astats).",
-	},
-	"min_difference": {
-		Label: "Min difference",
-		Unit:  "",
-		Gloss: "Smallest absolute difference between two consecutive samples (astats).",
-	},
-	"mean_difference": {
-		Label: "Mean difference",
-		Unit:  "",
-		Gloss: "Mean absolute difference between consecutive samples (astats).",
-	},
-	"rms_difference": {
-		Label: "RMS difference",
-		Unit:  "",
-		Gloss: "RMS of the absolute differences between consecutive samples (astats).",
-	},
-
 	// -------------------------------------------------------------------------
 	// Spectral (aspectralstats, the 13 fields)
 	// -------------------------------------------------------------------------
@@ -416,9 +373,7 @@ var Definitions = map[string]Definition{
 // requiredKeys is the set of RunRecord field names the loudness, dynamics, and
 // spectral sections emit and that MUST have a definition. The renderers and the
 // completeness test assert every key here resolves in Definitions; a missing
-// entry fails the test. Authored (not in the reference doc) keys are the astats
-// *_difference, noise_floor_count, and number_of_samples fields, defined
-// minimally and factually above.
+// entry fails the test.
 var requiredKeys = []string{
 	// Loudness
 	"integrated_lufs",

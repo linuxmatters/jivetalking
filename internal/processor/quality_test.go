@@ -205,3 +205,67 @@ func TestOutputNoiseFloorAbsentNoFallback(t *testing.T) {
 		t.Error("OutputNoiseFloor with no Pass 4 sample: ok = true, want false (no input fallback)")
 	}
 }
+
+// TestOutputTP covers the three nil-guard layers: nil NormResult yields ok =
+// false; a populated NormResult returns its top-level OutputTP regardless of
+// FinalMeasurements (TP is a NormResult field, the value the pool read inline).
+func TestOutputTP(t *testing.T) {
+	if _, ok := OutputTP(nil); ok {
+		t.Error("OutputTP(nil): ok = true, want false")
+	}
+
+	noNorm := &ProcessingResult{}
+	if _, ok := OutputTP(noNorm); ok {
+		t.Error("OutputTP with nil NormResult: ok = true, want false")
+	}
+
+	// Nil FinalMeasurements still yields the TP: it is a top-level NormResult
+	// field, so the value is available without FinalMeasurements.
+	nilFinal := &ProcessingResult{NormResult: &NormalisationResult{OutputTP: -1.5}}
+	tp, ok := OutputTP(nilFinal)
+	if !ok {
+		t.Fatal("OutputTP with nil FinalMeasurements: ok = false, want true")
+	}
+	if tp != -1.5 {
+		t.Errorf("OutputTP = %.1f, want -1.5", tp)
+	}
+
+	full := resultWith(-16.0, -2.0, -64.0, -82.0)
+	if tp, ok := OutputTP(full); !ok || tp != -2.0 {
+		t.Errorf("OutputTP populated = %.1f, ok = %v; want -2.0, true", tp, ok)
+	}
+}
+
+// TestOutputLRA covers the three nil-guard layers: nil NormResult and nil
+// FinalMeasurements both yield ok = false; a fully populated result returns
+// FinalMeasurements.Loudness.OutputLRA, the value the pool read inline.
+func TestOutputLRA(t *testing.T) {
+	if _, ok := OutputLRA(nil); ok {
+		t.Error("OutputLRA(nil): ok = true, want false")
+	}
+
+	noNorm := &ProcessingResult{}
+	if _, ok := OutputLRA(noNorm); ok {
+		t.Error("OutputLRA with nil NormResult: ok = true, want false")
+	}
+
+	nilFinal := &ProcessingResult{NormResult: &NormalisationResult{}}
+	if _, ok := OutputLRA(nilFinal); ok {
+		t.Error("OutputLRA with nil FinalMeasurements: ok = true, want false")
+	}
+
+	full := &ProcessingResult{
+		NormResult: &NormalisationResult{
+			FinalMeasurements: &OutputMeasurements{
+				Loudness: OutputLoudnessMetrics{OutputLRA: 7.5},
+			},
+		},
+	}
+	lra, ok := OutputLRA(full)
+	if !ok {
+		t.Fatal("OutputLRA populated: ok = false, want true")
+	}
+	if lra != 7.5 {
+		t.Errorf("OutputLRA = %.1f, want 7.5", lra)
+	}
+}

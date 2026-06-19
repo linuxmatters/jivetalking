@@ -111,7 +111,7 @@ func TestProcessingViewOverallProgressContent(t *testing.T) {
 	m := NewModel([]string{"a.wav", "b.wav", "c.wav"})
 	m.Width = 120
 
-	updated, _ := m.Update(FileCompleteMsg{FileIndex: 0, OutputPath: "a-out.wav"})
+	updated, _ := m.Update(FileCompleteMsg{FileIndex: 0, CompletionResult: CompletionResult{OutputPath: "a-out.wav"}})
 	m = updated.(Model)
 
 	view := renderProcessingView(m)
@@ -133,15 +133,19 @@ func TestFinalSummaryReturnsCompletionContent(t *testing.T) {
 	updated, _ := m.Update(ProgressMsg{FileIndex: 0, Pass: processor.PassProcessing, Progress: 0.5, Level: -12})
 	m = updated.(Model)
 	updated, _ = m.Update(FileCompleteMsg{
-		FileIndex: 0, OutputPath: "a-out.wav", InputLUFS: -30.9, OutputLUFS: -15.9,
-		FinalNoiseFloor: -80.0, HaveFinalNoiseFloor: true,
-		Quality: processor.QualityScore{Stars: 4, Label: "Great"},
+		FileIndex: 0, CompletionResult: CompletionResult{
+			OutputPath: "a-out.wav", InputLUFS: -30.9, OutputLUFS: -15.9,
+			FinalNoiseFloor: -80.0, HaveFinalNoiseFloor: true,
+			Quality: processor.QualityScore{Stars: 4, Label: "Great"},
+		},
 	})
 	m = updated.(Model)
 	updated, _ = m.Update(FileCompleteMsg{
-		FileIndex: 1, OutputPath: "b-out.wav", InputLUFS: -20.0, OutputLUFS: -16.0,
-		FinalNoiseFloor: -65.0, HaveFinalNoiseFloor: true,
-		Quality: processor.QualityScore{Stars: 5, Label: "Excellent"},
+		FileIndex: 1, CompletionResult: CompletionResult{
+			OutputPath: "b-out.wav", InputLUFS: -20.0, OutputLUFS: -16.0,
+			FinalNoiseFloor: -65.0, HaveFinalNoiseFloor: true,
+			Quality: processor.QualityScore{Stars: 5, Label: "Excellent"},
+		},
 	})
 	m = updated.(Model)
 	m.Done = true
@@ -175,14 +179,16 @@ func TestFinalSummaryReturnsCompletionContent(t *testing.T) {
 // the processed (output) filename, never the input name nor a "→".
 func TestDoneBoxRendersIndigoLabelledRows(t *testing.T) {
 	file := FileProgress{
-		InputPath:           "LMP-81-mark.flac",
-		OutputPath:          "LMP-81-mark-LUFS-16-processed.flac",
-		Status:              StatusComplete,
-		InputLUFS:           -30.9,
-		OutputLUFS:          -15.9,
-		FinalNoiseFloor:     -80.0,
-		HaveFinalNoiseFloor: true,
-		Quality:             processor.QualityScore{Stars: 4, Label: "Excellent"},
+		InputPath: "LMP-81-mark.flac",
+		Status:    StatusComplete,
+		CompletionResult: CompletionResult{
+			OutputPath:          "LMP-81-mark-LUFS-16-processed.flac",
+			InputLUFS:           -30.9,
+			OutputLUFS:          -15.9,
+			FinalNoiseFloor:     -80.0,
+			HaveFinalNoiseFloor: true,
+			Quality:             processor.QualityScore{Stars: 4, Label: "Excellent"},
+		},
 	}
 
 	raw := renderDoneBox(file)
@@ -255,22 +261,26 @@ func TestDoneBoxRendersIndigoLabelledRows(t *testing.T) {
 // number sat next to fewer stars.
 func TestDoneBoxNoiseAndStarsMoveTogether(t *testing.T) {
 	clean := FileProgress{
-		InputPath:           "clean.flac",
-		OutputPath:          "clean-out.flac",
-		Status:              StatusComplete,
-		OutputLUFS:          -16.0,
-		FinalNoiseFloor:     -80.0,
-		HaveFinalNoiseFloor: true,
-		Quality:             processor.QualityScore{Stars: 5, Label: "Excellent"},
+		InputPath: "clean.flac",
+		Status:    StatusComplete,
+		CompletionResult: CompletionResult{
+			OutputPath:          "clean-out.flac",
+			OutputLUFS:          -16.0,
+			FinalNoiseFloor:     -80.0,
+			HaveFinalNoiseFloor: true,
+			Quality:             processor.QualityScore{Stars: 5, Label: "Excellent"},
+		},
 	}
 	noisy := FileProgress{
-		InputPath:           "noisy.flac",
-		OutputPath:          "noisy-out.flac",
-		Status:              StatusComplete,
-		OutputLUFS:          -16.0,
-		FinalNoiseFloor:     -55.0,
-		HaveFinalNoiseFloor: true,
-		Quality:             processor.QualityScore{Stars: 4, Label: "Great"},
+		InputPath: "noisy.flac",
+		Status:    StatusComplete,
+		CompletionResult: CompletionResult{
+			OutputPath:          "noisy-out.flac",
+			OutputLUFS:          -16.0,
+			FinalNoiseFloor:     -55.0,
+			HaveFinalNoiseFloor: true,
+			Quality:             processor.QualityScore{Stars: 4, Label: "Great"},
+		},
 	}
 
 	cleanPlain := ansi.Strip(renderDoneBox(clean))
@@ -299,11 +309,13 @@ func TestDoneBoxNoiseAndStarsMoveTogether(t *testing.T) {
 // zero the placeholder "⚡ —×" shows alongside a 00:00 clock.
 func TestDoneBoxTimeRow(t *testing.T) {
 	known := FileProgress{
-		OutputPath:     "a-out.flac",
-		Status:         StatusComplete,
-		Duration:       120.0,
-		ProcessingTime: 48 * time.Second,
-		Quality:        processor.QualityScore{Stars: 4, Label: "Great"},
+		Status:   StatusComplete,
+		Duration: 120.0,
+		CompletionResult: CompletionResult{
+			OutputPath:     "a-out.flac",
+			ProcessingTime: 48 * time.Second,
+			Quality:        processor.QualityScore{Stars: 4, Label: "Great"},
+		},
 	}
 	plain := ansi.Strip(renderDoneBox(known))
 
@@ -319,10 +331,12 @@ func TestDoneBoxTimeRow(t *testing.T) {
 	}
 
 	zero := FileProgress{
-		OutputPath: "b-out.flac",
-		Status:     StatusComplete,
-		Duration:   120.0,
-		Quality:    processor.QualityScore{Stars: 4, Label: "Great"},
+		Status:   StatusComplete,
+		Duration: 120.0,
+		CompletionResult: CompletionResult{
+			OutputPath: "b-out.flac",
+			Quality:    processor.QualityScore{Stars: 4, Label: "Great"},
+		},
 	}
 	zeroPlain := ansi.Strip(renderDoneBox(zero))
 
@@ -350,11 +364,13 @@ func TestDoneBoxNoiseFloorClamp(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			file := FileProgress{
-				OutputPath:          "x-out.flac",
-				Status:              StatusComplete,
-				FinalNoiseFloor:     tc.floor,
-				HaveFinalNoiseFloor: true,
-				Quality:             processor.QualityScore{Stars: 4, Label: "Great"},
+				Status: StatusComplete,
+				CompletionResult: CompletionResult{
+					OutputPath:          "x-out.flac",
+					FinalNoiseFloor:     tc.floor,
+					HaveFinalNoiseFloor: true,
+					Quality:             processor.QualityScore{Stars: 4, Label: "Great"},
+				},
 			}
 			plain := ansi.Strip(renderDoneBox(file))
 			if !strings.Contains(plain, tc.want) {
@@ -369,11 +385,13 @@ func TestDoneBoxNoiseFloorClamp(t *testing.T) {
 // Pass-1 Summary (ChainReady), output TP from the completion message.
 func TestDoneBoxTruePeakRow(t *testing.T) {
 	file := FileProgress{
-		OutputPath: "tp-out.flac",
-		Status:     StatusComplete,
-		OutputTP:   -2.0,
-		Summary:    AdaptedSummary{ChainReady: true, TruePeakDBTP: -0.1, InputLRA: 12.3},
-		Quality:    processor.QualityScore{Stars: 4, Label: "Great"},
+		Status:  StatusComplete,
+		Summary: AdaptedSummary{ChainReady: true, TruePeakDBTP: -0.1, InputLRA: 12.3},
+		CompletionResult: CompletionResult{
+			OutputPath: "tp-out.flac",
+			OutputTP:   -2.0,
+			Quality:    processor.QualityScore{Stars: 4, Label: "Great"},
+		},
 	}
 	plain := ansi.Strip(renderDoneBox(file))
 
@@ -394,11 +412,13 @@ func TestDoneBoxTruePeakRow(t *testing.T) {
 // loudness range in LU with a signed Δ carrying no unit.
 func TestDoneBoxDynamicsRow(t *testing.T) {
 	file := FileProgress{
-		OutputPath: "lra-out.flac",
-		Status:     StatusComplete,
-		OutputLRA:  8.0,
-		Summary:    AdaptedSummary{ChainReady: true, TruePeakDBTP: -0.1, InputLRA: 12.3},
-		Quality:    processor.QualityScore{Stars: 4, Label: "Great"},
+		Status:  StatusComplete,
+		Summary: AdaptedSummary{ChainReady: true, TruePeakDBTP: -0.1, InputLRA: 12.3},
+		CompletionResult: CompletionResult{
+			OutputPath: "lra-out.flac",
+			OutputLRA:  8.0,
+			Quality:    processor.QualityScore{Stars: 4, Label: "Great"},
+		},
 	}
 	plain := ansi.Strip(renderDoneBox(file))
 
@@ -421,17 +441,19 @@ func TestDoneBoxDynamicsRow(t *testing.T) {
 // (Recording) and output-quality (Processed) star rows, Recording above Processed.
 func TestDoneBoxRowOrder(t *testing.T) {
 	file := FileProgress{
-		OutputPath:          "order-out.flac",
-		Status:              StatusComplete,
-		InputLUFS:           -30.9,
-		OutputLUFS:          -15.9,
-		OutputTP:            -2.0,
-		OutputLRA:           8.0,
-		FinalNoiseFloor:     -80.0,
-		HaveFinalNoiseFloor: true,
-		Summary:             AdaptedSummary{ChainReady: true, TruePeakDBTP: -0.1, InputLRA: 12.3},
-		Quality:             processor.QualityScore{Stars: 4, Label: "Great"},
-		RecordingQuality:    processor.QualityScore{Stars: 3, Label: "Good"},
+		Status:  StatusComplete,
+		Summary: AdaptedSummary{ChainReady: true, TruePeakDBTP: -0.1, InputLRA: 12.3},
+		CompletionResult: CompletionResult{
+			OutputPath:          "order-out.flac",
+			InputLUFS:           -30.9,
+			OutputLUFS:          -15.9,
+			OutputTP:            -2.0,
+			OutputLRA:           8.0,
+			FinalNoiseFloor:     -80.0,
+			HaveFinalNoiseFloor: true,
+			Quality:             processor.QualityScore{Stars: 4, Label: "Great"},
+			RecordingQuality:    processor.QualityScore{Stars: 3, Label: "Good"},
+		},
 	}
 	plain := ansi.Strip(renderDoneBox(file))
 
@@ -457,14 +479,16 @@ func TestDoneBoxRowOrder(t *testing.T) {
 // wide ㏈/arrow glyphs count as their true column span.
 func TestDoneBoxColumnsAlign(t *testing.T) {
 	file := FileProgress{
-		OutputPath: "align-out.flac",
-		Status:     StatusComplete,
-		InputLUFS:  -29.8,
-		OutputLUFS: -16.0,
-		OutputTP:   -2.2,
-		OutputLRA:  8.8,
-		Summary:    AdaptedSummary{ChainReady: true, TruePeakDBTP: -0.1, InputLRA: 12.3},
-		Quality:    processor.QualityScore{Stars: 4, Label: "Great"},
+		Status:  StatusComplete,
+		Summary: AdaptedSummary{ChainReady: true, TruePeakDBTP: -0.1, InputLRA: 12.3},
+		CompletionResult: CompletionResult{
+			OutputPath: "align-out.flac",
+			InputLUFS:  -29.8,
+			OutputLUFS: -16.0,
+			OutputTP:   -2.2,
+			OutputLRA:  8.8,
+			Quality:    processor.QualityScore{Stars: 4, Label: "Great"},
+		},
 	}
 	plain := ansi.Strip(renderDoneBox(file))
 
@@ -531,14 +555,16 @@ func noiseFloorRowOf(t *testing.T, file FileProgress) string {
 // sentinel would mislead).
 func TestDoneBoxNoiseFloorBeforeAfter(t *testing.T) {
 	file := FileProgress{
-		OutputPath:          "nf-out.flac",
-		Status:              StatusComplete,
-		InputNoiseFloor:     -64.0,
-		FinalNoiseFloor:     -82.0,
-		HaveInputNoiseFloor: true,
-		HaveFinalNoiseFloor: true,
-		Summary:             AdaptedSummary{ChainReady: true, TruePeakDBTP: -0.1, InputLRA: 12.3},
-		Quality:             processor.QualityScore{Stars: 4, Label: "Great"},
+		Status:  StatusComplete,
+		Summary: AdaptedSummary{ChainReady: true, TruePeakDBTP: -0.1, InputLRA: 12.3},
+		CompletionResult: CompletionResult{
+			OutputPath:          "nf-out.flac",
+			InputNoiseFloor:     -64.0,
+			FinalNoiseFloor:     -82.0,
+			HaveInputNoiseFloor: true,
+			HaveFinalNoiseFloor: true,
+			Quality:             processor.QualityScore{Stars: 4, Label: "Great"},
+		},
 	}
 	noiseLine := noiseFloorRowOf(t, file)
 
@@ -557,11 +583,13 @@ func TestDoneBoxNoiseFloorBeforeAfter(t *testing.T) {
 // single value (no broken arrow) when only one end is available.
 func TestDoneBoxNoiseFloorSingleEnd(t *testing.T) {
 	outputOnly := FileProgress{
-		OutputPath:          "nf-out.flac",
-		Status:              StatusComplete,
-		FinalNoiseFloor:     -80.0,
-		HaveFinalNoiseFloor: true,
-		Quality:             processor.QualityScore{Stars: 4, Label: "Great"},
+		Status: StatusComplete,
+		CompletionResult: CompletionResult{
+			OutputPath:          "nf-out.flac",
+			FinalNoiseFloor:     -80.0,
+			HaveFinalNoiseFloor: true,
+			Quality:             processor.QualityScore{Stars: 4, Label: "Great"},
+		},
 	}
 	line := noiseFloorRowOf(t, outputOnly)
 	if strings.Contains(line, "→") {
@@ -572,11 +600,13 @@ func TestDoneBoxNoiseFloorSingleEnd(t *testing.T) {
 	}
 
 	inputOnly := FileProgress{
-		OutputPath:          "nf-out.flac",
-		Status:              StatusComplete,
-		InputNoiseFloor:     -64.0,
-		HaveInputNoiseFloor: true,
-		Quality:             processor.QualityScore{Stars: 4, Label: "Great"},
+		Status: StatusComplete,
+		CompletionResult: CompletionResult{
+			OutputPath:          "nf-out.flac",
+			InputNoiseFloor:     -64.0,
+			HaveInputNoiseFloor: true,
+			Quality:             processor.QualityScore{Stars: 4, Label: "Great"},
+		},
 	}
 	line = noiseFloorRowOf(t, inputOnly)
 	if strings.Contains(line, "→") {
@@ -592,12 +622,14 @@ func TestDoneBoxNoiseFloorSingleEnd(t *testing.T) {
 // unset input never produces a misleading comparison.
 func TestDoneBoxGuardsEmptySummary(t *testing.T) {
 	file := FileProgress{
-		OutputPath: "guard-out.flac",
-		Status:     StatusComplete,
-		OutputTP:   -2.0,
-		OutputLRA:  8.0,
-		Summary:    AdaptedSummary{ChainReady: false},
-		Quality:    processor.QualityScore{Stars: 4, Label: "Great"},
+		Status:  StatusComplete,
+		Summary: AdaptedSummary{ChainReady: false},
+		CompletionResult: CompletionResult{
+			OutputPath: "guard-out.flac",
+			OutputTP:   -2.0,
+			OutputLRA:  8.0,
+			Quality:    processor.QualityScore{Stars: 4, Label: "Great"},
+		},
 	}
 	plain := ansi.Strip(renderDoneBox(file))
 
@@ -632,12 +664,14 @@ func TestDoneBoxGuardsEmptySummary(t *testing.T) {
 func TestFileCompleteMsgCopiesOutputTPAndLRA(t *testing.T) {
 	m := NewModel([]string{"a.flac"})
 	updated, _ := m.Update(FileCompleteMsg{
-		FileIndex:  0,
-		InputLUFS:  -30.9,
-		OutputLUFS: -15.9,
-		OutputTP:   -2.0,
-		OutputLRA:  8.0,
-		OutputPath: "a-out.flac",
+		FileIndex: 0,
+		CompletionResult: CompletionResult{
+			InputLUFS:  -30.9,
+			OutputLUFS: -15.9,
+			OutputTP:   -2.0,
+			OutputLRA:  8.0,
+			OutputPath: "a-out.flac",
+		},
 	})
 	mm := updated.(Model)
 	if got := mm.Files[0].OutputTP; got != -2.0 {
@@ -653,10 +687,12 @@ func TestFileCompleteMsgCopiesOutputTPAndLRA(t *testing.T) {
 // star count and word label, Recording directly above Processed.
 func TestDoneBoxRecordingAndProcessedRows(t *testing.T) {
 	file := FileProgress{
-		OutputPath:       "rp-out.flac",
-		Status:           StatusComplete,
-		RecordingQuality: processor.QualityScore{Stars: 2, Label: "Fair"},
-		Quality:          processor.QualityScore{Stars: 5, Label: "Excellent"},
+		Status: StatusComplete,
+		CompletionResult: CompletionResult{
+			OutputPath:       "rp-out.flac",
+			RecordingQuality: processor.QualityScore{Stars: 2, Label: "Fair"},
+			Quality:          processor.QualityScore{Stars: 5, Label: "Excellent"},
+		},
 	}
 	plain := ansi.Strip(renderDoneBox(file))
 
@@ -709,10 +745,12 @@ func TestDoneBoxRecordingAndProcessedRows(t *testing.T) {
 func TestFileCompleteMsgCopiesRecordingQuality(t *testing.T) {
 	m := NewModel([]string{"a.flac"})
 	updated, _ := m.Update(FileCompleteMsg{
-		FileIndex:        0,
-		OutputPath:       "a-out.flac",
-		Quality:          processor.QualityScore{Stars: 5, Label: "Excellent"},
-		RecordingQuality: processor.QualityScore{Stars: 2, Label: "Fair"},
+		FileIndex: 0,
+		CompletionResult: CompletionResult{
+			OutputPath:       "a-out.flac",
+			Quality:          processor.QualityScore{Stars: 5, Label: "Excellent"},
+			RecordingQuality: processor.QualityScore{Stars: 2, Label: "Fair"},
+		},
 	})
 	mm := updated.(Model)
 	if got := mm.Files[0].RecordingQuality.Stars; got != 2 {

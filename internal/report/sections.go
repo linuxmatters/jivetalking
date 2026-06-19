@@ -8,181 +8,13 @@ import (
 	"github.com/linuxmatters/jivetalking/internal/processor"
 )
 
-// paramRow is one Parameter | Value row for the filter and normalisation tables.
-// Those blocks render configuration values keyed by static descriptive labels
-// (fixed-design statements, not metric-definition glosses), so they use this
-// flat shape rather than the metricRow/Definitions machinery the loudness,
-// dynamics, and spectral tables use.
-type paramRow struct {
-	label string
-	value string
-}
-
-// renderParamTable builds a Parameter | Value table from param rows.
-func renderParamTable(rows []paramRow) string {
-	body := make([][]string, 0, len(rows))
-	for _, r := range rows {
-		body = append(body, []string{r.label, r.value})
-	}
-	return mdTable([]string{"Parameter", "Value"}, body)
-}
-
 // This file holds the per-domain section renderers: Header, Processing Summary,
-// Loudness, Dynamics, Spectral, and the rest. Each is a pure func(...) string
-// reading ONLY the run record (and Timings for the summary) - no
-// AudioMeasurements, no .json re-read, no internal/logging.
-//
-// The metric tables share one shape: column 0 Metric (label), column 1 the
-// objective definition gloss + unit, then one value column per present stage
-// (Input/Filtered/Final). The Filtered and Final columns are omitted when their
-// stage pointer is nil (analysis-only / Pass-1-only records carry Input only).
-//
-// Input and output stages are DIFFERENT Go types (e.g. loudness input is
-// *InputLoudnessMetrics, filtered/final are *OutputLoudnessMetrics) that share
-// JSON field names. Each metric row pulls its value from whichever stage struct
-// is present via a small per-stage closure, so the type split stays local to the
-// row definition and the table builder sees only formatted strings.
-
-// metricFormat selects which formatMetric* rule a row uses, matching the unit
-// semantics the legacy .log formatters applied per metric class.
-type metricFormat int
-
-const (
-	fmtDB       metricFormat = iota // dB / dBFS levels: "< -120" digital-silence floor
-	fmtLUFS                         // LUFS loudness: "< -70" measurement floor
-	fmtPeakDB                       // dBTP true peak: dB scale, digital-silence floor
-	fmtSpectral                     // dimensionless / Hz spectral + astats values
-	fmtSigned                       // explicit-sign values (target offset)
-)
-
-// metricRow defines one table row: the RunRecord field key (for its definition)
-// the formatting rule, and per-stage value getters. A getter returns the metric
-// value and whether the stage carries it; a nil getter (or a getter reporting
-// false) leaves the cell as the placeholder. The value-vs-stage-type split lives
-// in the getter closures the section renderers supply.
-type metricRow struct {
-	key    string
-	format metricFormat
-	input  func() (float64, bool)
-	filt   func() (float64, bool)
-	final  func() (float64, bool)
-}
-
-// stageColumns reports which of Filtered/Final any row populates, so a renderer
-// can omit absent stage columns wholesale (analysis-only carries Input only).
-func stageColumns(rows []metricRow) (hasFiltered, hasFinal bool) {
-	for i := range rows {
-		if rows[i].filt != nil {
-			hasFiltered = true
-		}
-		if rows[i].final != nil {
-			hasFinal = true
-		}
-	}
-	return hasFiltered, hasFinal
-}
-
-// stageGetter builds a metricRow value getter for one stage struct: a nil stage
-// yields a nil getter (formatCell renders the placeholder), otherwise the getter
-// reads the metric off the stage and reports it present. It folds the nil-guarded
-// closure factory the section renderers share across their stage types.
-func stageGetter[T any](s *T, f func(*T) float64) func() (float64, bool) {
-	if s == nil {
-		return nil
-	}
-	return func() (float64, bool) { return f(s), true }
-}
-
-// formatCell formats one stage value through the row's metric rule, returning the
-// placeholder when the stage is absent (getter nil or reporting false).
-func formatCell(getter func() (float64, bool), format metricFormat) string {
-	if getter == nil {
-		return placeholder
-	}
-	value, ok := getter()
-	if !ok {
-		return placeholder
-	}
-	decimals := 2
-	if format == fmtSpectral {
-		decimals = 4
-	}
-	return formatByRule(value, format, decimals)
-}
-
-// formatByRule dispatches a value to the formatter named by the metric rule,
-// passing the caller-chosen decimal count. It holds the single format->formatter
-// mapping shared by formatCell and parseLoudnormCell; the callers own the decimal
-// count (formatCell uses 4 for spectral, 2 otherwise; parseLoudnormCell uses 2).
-func formatByRule(value float64, format metricFormat, decimals int) string {
-	switch format {
-	case fmtDB, fmtPeakDB:
-		return formatMetricDB(value, decimals)
-	case fmtLUFS:
-		return formatMetricLUFS(value, decimals)
-	case fmtSpectral:
-		return formatMetric(value, decimals)
-	case fmtSigned:
-		return formatMetricSigned(value, decimals)
-	default:
-		return formatMetric(value, decimals)
-	}
-}
-
-// renderMetricTable builds a metric table: Metric | Definition | Input
-// [| Filtered] [| Final]. The Filtered/Final columns are omitted when no row
-// populates them. Each row's second column carries the definition gloss and unit
-// from Definitions, so every metric row is self-describing.
-func renderMetricTable(rows []metricRow) string {
-	hasFiltered, hasFinal := stageColumns(rows)
-
-	headers := []string{"Metric", "Definition", "Input"}
-	if hasFiltered {
-		headers = append(headers, "Filtered")
-	}
-	if hasFinal {
-		headers = append(headers, "Final")
-	}
-
-	body := make([][]string, 0, len(rows))
-	for i := range rows {
-		row := &rows[i]
-		cells := []string{metricLabel(row.key), metricDefinition(row.key), formatCell(row.input, row.format)}
-		if hasFiltered {
-			cells = append(cells, formatCell(row.filt, row.format))
-		}
-		if hasFinal {
-			cells = append(cells, formatCell(row.final, row.format))
-		}
-		body = append(body, cells)
-	}
-
-	return mdTable(headers, body)
-}
-
-// metricLabel returns the human-readable label for a key, falling back to the raw
-// key when no definition exists (a missing definition is caught by the
-// required-key test, not here).
-func metricLabel(key string) string {
-	if d, ok := DefinitionFor(key); ok {
-		return d.Label
-	}
-	return key
-}
-
-// metricDefinition returns the objective gloss with its unit appended in
-// parentheses, e.g. "Gated programme loudness... (LUFS)". Unit-less metrics omit
-// the parenthetical. Every loudness/dynamics/spectral row carries this gloss.
-func metricDefinition(key string) string {
-	d, ok := DefinitionFor(key)
-	if !ok {
-		return placeholder
-	}
-	if d.Unit == "" {
-		return d.Gloss
-	}
-	return d.Gloss + " (" + d.Unit + ")"
-}
+// Loudness, Dynamics, Spectral, Noise Floor, Regions, and Interval Summary. Each
+// is a pure func(...) string reading ONLY the run record (and Timings for the
+// summary) - no AudioMeasurements, no .json re-read, no internal/logging. The
+// metric-table engine lives in metricrow.go; the filter/normalisation and
+// spectrogram renderers live in sections_filters.go and
+// sections_spectrograms.go.
 
 // =============================================================================
 // Header
@@ -412,19 +244,18 @@ func renderNoiseFloor(rec *processor.RunRecord) string {
 	}
 
 	rows := [][]string{
-		valueRow("floor_dbfs", formatMetricDB(n.Floor, 2)),
+		metricValueRow("floor_dbfs", n.Floor),
 		{metricLabel("floor_source"), metricDefinition("floor_source"), stringCell(n.FloorSource)},
-		valueRow("floor_prescan_dbfs", formatMetricDB(n.FloorPrescan, 2)),
-		valueRow("floor_astats_dbfs", formatMetricDB(n.FloorAstats, 2)),
-		valueRow("room_tone_detect_level_dbfs", formatMetricDB(n.RoomToneDetectLevel, 2)),
+		metricValueRow("floor_prescan_dbfs", n.FloorPrescan),
+		metricValueRow("floor_astats_dbfs", n.FloorAstats),
+		metricValueRow("room_tone_detect_level_dbfs", n.RoomToneDetectLevel),
 		{metricLabel("voice_activated"), metricDefinition("voice_activated"), boolCell(n.VoiceActivated)},
+		// reduction_headroom_db (unit "dB") renders through formatMetric, not the
+		// formatMetricDB its unit would select; keep it explicit.
 		valueRow("reduction_headroom_db", formatMetric(n.ReductionHeadroom, 2)),
 	}
 
-	var b strings.Builder
-	b.WriteString("## Noise Floor\n\n")
-	b.WriteString(mdTable([]string{"Metric", "Definition", "Value"}, rows))
-	return b.String()
+	return renderValueTable("## Noise Floor\n\n", rows)
 }
 
 // =============================================================================
@@ -483,16 +314,13 @@ func renderGateStatistics(g *processor.GateStatistics) string {
 	}
 
 	rows := [][]string{
-		valueRow("voiced_low_percentile_dbfs", formatMetricDB(g.VoicedLowPercentile, 2)),
-		valueRow("noise_high_percentile_dbfs", formatMetricDB(g.NoiseHighPercentile, 2)),
+		metricValueRow("voiced_low_percentile_dbfs", g.VoicedLowPercentile),
+		metricValueRow("noise_high_percentile_dbfs", g.NoiseHighPercentile),
+		// gate_separation_db (unit "dB") renders through formatMetric; keep it explicit.
 		valueRow("gate_separation_db", formatMetric(g.SeparationDB, 2)),
 	}
 
-	var b strings.Builder
-	b.WriteString("### Gate Statistics\n\n")
-	b.WriteString(mdTable([]string{"Metric", "Definition", "Value"}, rows))
-	b.WriteString("\n")
-	return b.String()
+	return renderValueTable("### Gate Statistics\n\n", rows)
 }
 
 // renderRoomToneElected renders the elected room-tone NoiseProfile metrics as a
@@ -504,22 +332,20 @@ func renderRoomToneElected(p *processor.NoiseProfile) string {
 	}
 
 	rows := [][]string{
+		// start_s / duration_s (unit "s") render through formatFloat; keep them explicit.
 		valueRow("start_s", formatFloat(p.Start.Seconds(), 2)),
 		valueRow("duration_s", formatFloat(p.Duration.Seconds(), 2)),
-		valueRow("measured_floor_dbfs", formatMetricDB(p.MeasuredNoiseFloor, 2)),
-		valueRow("peak_level_dbfs", formatMetricDB(p.PeakLevel, 2)),
+		metricValueRow("measured_floor_dbfs", p.MeasuredNoiseFloor),
+		metricValueRow("peak_level_dbfs", p.PeakLevel),
+		// crest_factor_db (unit "dB") renders through formatMetric; keep it explicit.
 		valueRow("crest_factor_db", formatMetric(p.CrestFactor, 2)),
-		valueRow("entropy", formatMetric(p.Entropy, 4)),
-		valueRow("spectral_centroid_hz", formatMetric(p.SpectralCentroid, 2)),
-		valueRow("spectral_flatness", formatMetric(p.SpectralFlatness, 4)),
-		valueRow("spectral_kurtosis", formatMetric(p.SpectralKurtosis, 4)),
+		metricValueRow("entropy", p.Entropy),
+		metricValueRow("spectral_centroid_hz", p.Spectral.Centroid),
+		metricValueRow("spectral_flatness", p.Spectral.Flatness),
+		metricValueRow("spectral_kurtosis", p.Spectral.Kurtosis),
 	}
 
-	var b strings.Builder
-	b.WriteString("**Elected profile**\n\n")
-	b.WriteString(mdTable([]string{"Metric", "Definition", "Value"}, rows))
-	b.WriteString("\n")
-	return b.String()
+	return renderValueTable("**Elected profile**\n\n", rows)
 }
 
 // renderSpeechElected renders the elected speech-candidate metrics (region length,
@@ -531,25 +357,23 @@ func renderSpeechElected(p *processor.SpeechCandidateMetrics) string {
 	}
 
 	rows := [][]string{
+		// duration_s (unit "s") renders through formatFloat; keep it explicit.
 		valueRow("duration_s", formatFloat(p.Region.Duration.Seconds(), 2)),
-		valueRow("rms_level_dbfs", formatMetricDB(p.RMSLevel, 2)),
-		valueRow("peak_level_dbfs", formatMetricDB(p.PeakLevel, 2)),
+		metricValueRow("rms_level_dbfs", p.RMSLevel),
+		metricValueRow("peak_level_dbfs", p.PeakLevel),
+		// crest_factor_db (unit "dB") renders through formatMetric; keep it explicit.
 		valueRow("crest_factor_db", formatMetric(p.CrestFactor, 2)),
-		valueRow("momentary_lufs", formatMetricLUFS(p.MomentaryLUFS, 2)),
-		valueRow("short_term_lufs", formatMetricLUFS(p.ShortTermLUFS, 2)),
-		valueRow("true_peak_dbtp", formatMetricDB(p.TruePeak, 2)),
-		valueRow("sample_peak_dbfs", formatMetricDB(p.SamplePeak, 2)),
-		valueRow("speech_band_body_rms_dbfs", formatMetricDB(p.BodyBandRMS, 2)),
-		valueRow("speech_band_sib_rms_dbfs", formatMetricDB(p.SibBandRMS, 2)),
-		valueRow("voicing_density", formatMetric(p.VoicingDensity, 4)),
-		valueRow("score", formatMetric(p.Score, 4)),
+		metricValueRow("momentary_lufs", p.MomentaryLUFS),
+		metricValueRow("short_term_lufs", p.ShortTermLUFS),
+		metricValueRow("true_peak_dbtp", p.TruePeak),
+		metricValueRow("sample_peak_dbfs", p.SamplePeak),
+		metricValueRow("speech_band_body_rms_dbfs", p.BodyBandRMS),
+		metricValueRow("speech_band_sib_rms_dbfs", p.SibBandRMS),
+		metricValueRow("voicing_density", p.VoicingDensity),
+		metricValueRow("score", p.Score),
 	}
 
-	var b strings.Builder
-	b.WriteString("**Elected profile**\n\n")
-	b.WriteString(mdTable([]string{"Metric", "Definition", "Value"}, rows))
-	b.WriteString("\n")
-	return b.String()
+	return renderValueTable("**Elected profile**\n\n", rows)
 }
 
 // renderCandidatesSummary renders the bare candidate summary: the evaluated count
@@ -646,33 +470,79 @@ func renderIntervalSummary(rec *processor.RunRecord) string {
 	}
 	if s.RMS != nil {
 		rows = append(rows,
-			valueRow("rms_dist_min_dbfs", formatMetricDB(s.RMS.Min, 2)),
-			valueRow("rms_dist_p10_dbfs", formatMetricDB(s.RMS.P10, 2)),
-			valueRow("rms_dist_p25_dbfs", formatMetricDB(s.RMS.P25, 2)),
-			valueRow("rms_dist_p50_dbfs", formatMetricDB(s.RMS.P50, 2)),
-			valueRow("rms_dist_p75_dbfs", formatMetricDB(s.RMS.P75, 2)),
-			valueRow("rms_dist_p90_dbfs", formatMetricDB(s.RMS.P90, 2)),
-			valueRow("rms_dist_max_dbfs", formatMetricDB(s.RMS.Max, 2)),
+			metricValueRow("rms_dist_min_dbfs", s.RMS.Min),
+			metricValueRow("rms_dist_p10_dbfs", s.RMS.P10),
+			metricValueRow("rms_dist_p25_dbfs", s.RMS.P25),
+			metricValueRow("rms_dist_p50_dbfs", s.RMS.P50),
+			metricValueRow("rms_dist_p75_dbfs", s.RMS.P75),
+			metricValueRow("rms_dist_p90_dbfs", s.RMS.P90),
+			metricValueRow("rms_dist_max_dbfs", s.RMS.Max),
 		)
 	}
 	if s.LargestGapDB != nil {
+		// largest_gap_db (unit "dB") renders through formatMetric; keep it explicit.
 		rows = append(rows, valueRow("largest_gap_db", formatMetric(*s.LargestGapDB, 2)))
 	}
 
-	var b strings.Builder
-	b.WriteString("## Interval Summary\n\n")
-	b.WriteString(mdTable([]string{"Metric", "Definition", "Value"}, rows))
-	return b.String()
+	return renderValueTable("## Interval Summary\n\n", rows)
 }
 
 // =============================================================================
 // Region/summary cell helpers
 // =============================================================================
 
+// renderValueTable builds a single-stage Metric | Definition | Value table under
+// the given heading, with a trailing blank line. It owns the header literal, the
+// builder, and the newline the five single-stage renderers (noise floor, gate
+// statistics, room-tone/speech elected, interval summary) shared verbatim.
+func renderValueTable(heading string, rows [][]string) string {
+	var b strings.Builder
+	b.WriteString(heading)
+	b.WriteString(mdTable([]string{"Metric", "Definition", "Value"}, rows))
+	b.WriteString("\n")
+	return b.String()
+}
+
 // valueRow builds a three-cell Metric | Definition | Value row for a single-stage
 // table, looking up the label and gloss from Definitions by key.
 func valueRow(key, value string) []string {
 	return []string{metricLabel(key), metricDefinition(key), value}
+}
+
+// metricValueRow builds a single-stage value row, formatting the float through
+// formatByRule keyed off the key's catalogued Unit so the formatter choice is not
+// re-encoded per call site. It covers the unit classes whose single-stage cells
+// route cleanly through formatByRule: dBFS/dBTP (formatMetricDB), LUFS
+// (formatMetricLUFS), and Hz / unit-less (formatMetric). Decimals follow the unit
+// (4 for unit-less spectral ratios, 2 otherwise), matching every existing cell.
+// Rows on other units (plain "dB" through formatMetric, "s" through formatFloat)
+// keep their explicit formatter at the call site; routing them here would change
+// the rendered bytes.
+func metricValueRow(key string, value float64) []string {
+	format, decimals := unitMetricFormat(key)
+	return valueRow(key, formatByRule(value, format, decimals))
+}
+
+// unitMetricFormat maps a metric key's catalogued Unit to the formatByRule rule
+// and decimal count for its single-stage cell. It is defined only for the unit
+// classes metricValueRow routes; an unhandled unit panics so a new single-stage
+// row cannot silently mis-format (the caller picks an explicit formatter instead).
+func unitMetricFormat(key string) (metricFormat, int) {
+	d, _ := DefinitionFor(key)
+	switch d.Unit {
+	case "dBFS":
+		return fmtDB, 2
+	case "dBTP":
+		return fmtPeakDB, 2
+	case "LUFS":
+		return fmtLUFS, 2
+	case "Hz":
+		return fmtSpectral, 2
+	case "":
+		return fmtSpectral, 4
+	default:
+		panic("report: metricValueRow: unrouted unit " + d.Unit + " for key " + key)
+	}
 }
 
 // stringCell renders a categorical string value, the placeholder when empty.
@@ -694,343 +564,4 @@ func boolCell(b bool) string {
 // formatInt renders an integer count cell.
 func formatInt(n int) string {
 	return strconv.Itoa(n)
-}
-
-// =============================================================================
-// Filter Chain
-// =============================================================================
-
-// renderFilters renders the Pass-2 filter chain in PROCESSING ORDER (downmix →
-// high-pass → low-pass → noise removal → gate → levelling compressor → de-esser), one
-// Parameter/Value sub-table per filter, plus the adaptive diagnostics block. Each
-// filter's heading carries the factual fixed-design label (e.g. "Rumble high-pass:
-// 80 Hz, 12 dB/oct") as a STATIC descriptive statement, not a per-file verdict;
-// the rows carry the per-file parameters off filters.<filter>.*. The gate
-// threshold_db/range_db are already dB-converted at record assembly
-// (newFiltersBlock), so they render as-is. Reads only rec.Filters. Returns the
-// empty string when the record carries no filters block (analysis-only).
-func renderFilters(rec *processor.RunRecord) string {
-	f := rec.Filters
-	if f == nil {
-		return ""
-	}
-
-	var b strings.Builder
-	b.WriteString("## Filter Chain\n\n")
-
-	b.WriteString("### Downmix\n\n")
-	b.WriteString("Stereo-to-mono downmix using FFmpeg's standard downmix matrix.\n\n")
-
-	b.WriteString("### Rumble high-pass\n\n")
-	b.WriteString("Removes subsonic rumble before the gate. Fixed corner, 2-pole Butterworth (12 dB/oct), non-adaptive.\n\n")
-	b.WriteString(renderParamTable([]paramRow{
-		{"Enabled", boolCell(f.RumbleHighPass.Enabled)},
-		{"Frequency (Hz)", formatMetric(f.RumbleHighPass.Frequency, 0)},
-		{"Poles", formatInt(f.RumbleHighPass.Poles)},
-		{"Width (Q)", formatMetric(f.RumbleHighPass.Width, 3)},
-		{"Mix", formatMetric(f.RumbleHighPass.Mix, 2)},
-		{"Transform", stringCell(f.RumbleHighPass.Transform)},
-	}))
-	b.WriteString("\n")
-
-	b.WriteString("### Band-limit low-pass\n\n")
-	b.WriteString("Unconditional 20.5 kHz band-limit (2-pole, 12 dB/oct), giving the encoder a consistent bandwidth. Non-adaptive.\n\n")
-	b.WriteString(renderParamTable([]paramRow{
-		{"Enabled", boolCell(f.BandlimitLowPass.Enabled)},
-		{"Frequency (Hz)", formatMetric(f.BandlimitLowPass.Frequency, 0)},
-		{"Poles", formatInt(f.BandlimitLowPass.Poles)},
-		{"Width (Q)", formatMetric(f.BandlimitLowPass.Width, 3)},
-		{"Mix", formatMetric(f.BandlimitLowPass.Mix, 2)},
-		{"Transform", stringCell(f.BandlimitLowPass.Transform)},
-	}))
-	b.WriteString("\n")
-
-	b.WriteString("### Noise removal\n\n")
-	b.WriteString("anlmdn Non-Local Means denoiser at the source rate, followed by an afftdn FFT spectral denoise tail.\n\n")
-	b.WriteString(renderParamTable([]paramRow{
-		{"Enabled", boolCell(f.NoiseReduction.Enabled)},
-		{"Strength (s)", formatMetric(f.NoiseReduction.Strength, 5)},
-		{"Patch (s)", formatMetric(f.NoiseReduction.PatchSec, 4)},
-		{"Research (s)", formatMetric(f.NoiseReduction.ResearchSec, 4)},
-		{"Smooth (m)", formatMetric(f.NoiseReduction.Smooth, 0)},
-		{"afftdn enabled", boolCell(f.NoiseReduction.AfftdnEnabled)},
-		{"afftdn noise reduction (dB)", formatMetric(f.NoiseReduction.AfftdnNoiseReduction, 0)},
-		{"afftdn noise floor (dB)", afftdnNoiseFloorCell(f.NoiseReduction.AfftdnNoiseFloor)},
-		{"afftdn noise type", stringCell(f.NoiseReduction.AfftdnNoiseType)},
-		{"afftdn band noise", stringCell(f.NoiseReduction.AfftdnBandNoise)},
-		{"afftdn track noise", boolCell(f.NoiseReduction.AfftdnTrackNoise)},
-	}))
-	b.WriteString("\n")
-
-	b.WriteString("### Speech gate\n\n")
-	b.WriteString("Soft expander for inter-speech cleanup. Threshold and range are adapted per file; the threshold and range values below are in dB.\n\n")
-	b.WriteString(renderParamTable([]paramRow{
-		{"Enabled", boolCell(f.SpeechGate.Enabled)},
-		{"Threshold (dB)", formatMetric(f.SpeechGate.Threshold, 2)},
-		{"Ratio", formatMetric(f.SpeechGate.Ratio, 1)},
-		{"Attack (ms)", formatMetric(f.SpeechGate.Attack, 0)},
-		{"Release (ms)", formatMetric(f.SpeechGate.Release, 0)},
-		{"Range (dB)", formatMetric(f.SpeechGate.Range, 2)},
-		{"Knee", formatMetric(f.SpeechGate.Knee, 1)},
-		{"Makeup", formatMetric(f.SpeechGate.Makeup, 1)},
-		{"Detection", stringCell(f.SpeechGate.Detection)},
-	}))
-	b.WriteString("\n")
-
-	b.WriteString("### Levelling compressor\n\n")
-	b.WriteString("Gentle levelling. Threshold is speech-RMS-relative (adapted per file); ratio, attack, release, knee are fixed.\n\n")
-	b.WriteString(renderParamTable([]paramRow{
-		{"Enabled", boolCell(f.LevellingCompressor.Enabled)},
-		{"Threshold (dB)", formatMetric(f.LevellingCompressor.Threshold, 2)},
-		{"Ratio", formatMetric(f.LevellingCompressor.Ratio, 1)},
-		{"Attack (ms)", formatMetric(f.LevellingCompressor.Attack, 0)},
-		{"Release (ms)", formatMetric(f.LevellingCompressor.Release, 0)},
-		{"Makeup (dB)", formatMetric(f.LevellingCompressor.Makeup, 1)},
-		{"Knee", formatMetric(f.LevellingCompressor.Knee, 1)},
-		{"Mix", formatMetric(f.LevellingCompressor.Mix, 2)},
-	}))
-	b.WriteString("\n")
-
-	b.WriteString("### De-esser\n\n")
-	b.WriteString("Sibilance reduction. Intensity is adapted from the speech-region sibilant-band excess; amount and frequency are fixed (FFmpeg deesser 0-1 normalised params).\n\n")
-	b.WriteString(renderParamTable([]paramRow{
-		{"Enabled", boolCell(f.Deesser.Enabled)},
-		{"Intensity (i)", formatMetric(f.Deesser.Intensity, 2)},
-		{"Amount (m)", formatMetric(f.Deesser.Amount, 2)},
-		{"Frequency (f)", formatMetric(f.Deesser.Frequency, 2)},
-	}))
-	b.WriteString("\n")
-
-	b.WriteString(renderFilterDiagnostics(f.Diagnostics))
-
-	return b.String()
-}
-
-// renderFilterDiagnostics renders the adaptive-adaptation rationale from
-// filters.diagnostics.* as objective values (separation, clamp reason, gate
-// depth, etc.) - no verdicts. Returns the empty string when no diagnostics
-// block is present.
-func renderFilterDiagnostics(d *processor.AdaptiveDiagnostics) string {
-	if d == nil {
-		return ""
-	}
-
-	var b strings.Builder
-	b.WriteString("### Adaptation diagnostics\n\n")
-	b.WriteString(renderParamTable([]paramRow{
-		{"Low-pass reason", stringCell(d.BandlimitLPReason)},
-		{"Gate dynamic range (dB)", formatMetric(d.SpeechGateDynamicRange, 2)},
-		{"Quiet-speech estimate (dBFS)", formatMetricDB(d.SpeechGateQuietSpeechEstimate, 2)},
-		{"Speech separation (dB)", formatMetric(d.SpeechGateSpeechSeparation, 2)},
-		{"Speech headroom (dB)", formatMetric(d.SpeechGateSpeechHeadroom, 2)},
-		{"Gate threshold unclamped (dB)", formatMetric(d.SpeechGateThresholdUnclamped, 2)},
-		{"Clamp reason", stringCell(d.SpeechGateClampReason)},
-		{"Gate depth (dB)", formatMetric(d.SpeechGateDepthDB, 2)},
-		{"afftdn enabled", boolCell(d.AfftdnEnabled)},
-		{"afftdn noise floor (dB)", afftdnNoiseFloorCell(d.AfftdnNoiseFloorDB)},
-		{"afftdn noise type", stringCell(d.AfftdnNoiseType)},
-		{"afftdn disable reason", stringCell(d.AfftdnDisableReason)},
-	}))
-	return b.String()
-}
-
-// afftdnNoiseFloorCell renders the afftdn nf value, showing the placeholder when
-// unset (zero or non-negative). A set floor is always negative. The value is the
-// VAD momentary-LUFS percentile floor, re-clamped to afftdn's [-80, -20] dB range.
-func afftdnNoiseFloorCell(floor float64) string {
-	if floor >= 0 {
-		return placeholder
-	}
-	return formatMetric(floor, 2)
-}
-
-// =============================================================================
-// Normalisation (Peak Limiter + Loudnorm)
-// =============================================================================
-
-// renderNormalisation renders the Pass 3/4 Peak Limiter and Loudnorm numbers from
-// normalisation.*. Reads the wrapped *NormalisationResult via the record's
-// Result() read seam (the wrapper type is unexported, like the elected-profile
-// seams in renderRegions). Returns the empty string when the record carries no
-// normalisation block (analysis-only).
-//
-// within_target is rendered as a RAW SIGNED LU deviation number, NOT a
-// "✓ Within target / ⚠ Outside tolerance" boolean: it
-// is output_integrated_lufs (the loudnorm-measured output, normalisation.
-// loudnorm_measured.output_integrated_lufs, parsed from LoudnormStats.OutputI)
-// minus normalisation.effective_target_lufs (EffectiveTargetI), formatted via
-// formatMetricSigned. No glyph, no boolean.
-func renderNormalisation(rec *processor.RunRecord) string {
-	r := rec.Normalisation.Result()
-	if r == nil {
-		return ""
-	}
-
-	var b strings.Builder
-	b.WriteString("## Peak Limiter\n\n")
-	b.WriteString("Transparent limiter that creates true-peak headroom so loudnorm reaches the target in linear mode. Pre-gain raises very quiet recordings before limiting.\n\n")
-	b.WriteString(renderParamTable([]paramRow{
-		{"Enabled", boolCell(r.LimiterEnabled)},
-		{"Ceiling (dBTP)", formatMetricDB(r.LimiterCeiling, 2)},
-		{"Gain required (dB)", formatMetric(r.LimiterGain, 2)},
-		{"Filtered true peak (dBTP)", formatMetricDB(r.LimiterFilteredTP, 2)},
-		{"Pre-gain (dB)", formatMetric(r.PreGainDB, 2)},
-		{"Ceiling clamped", boolCell(r.LimiterClamped)},
-	}))
-	b.WriteString("\n")
-
-	b.WriteString("## Loudnorm\n\n")
-	b.WriteString("EBU R128 loudness normalisation in linear mode using the Pass-3 measured input statistics.\n\n")
-	rows := []paramRow{
-		{"Requested target (LUFS)", formatMetricLUFS(r.RequestedTargetI, 2)},
-		{"Effective target (LUFS)", formatMetricLUFS(r.EffectiveTargetI, 2)},
-		{"Gain applied (dB)", formatMetric(r.GainApplied, 2)},
-		{"Linear mode forced", boolCell(r.LinearModeForced)},
-		{"Input loudness (LUFS)", formatMetricLUFS(r.InputLUFS, 2)},
-		{"Input true peak (dBTP)", formatMetricDB(r.InputTP, 2)},
-		{"Output loudness (LUFS)", formatMetricLUFS(r.OutputLUFS, 2)},
-		{"Output true peak (dBTP)", formatMetricDB(r.OutputTP, 2)},
-	}
-	if stats := r.LoudnormStats; stats != nil {
-		rows = append(rows,
-			paramRow{"Measured input integrated (LUFS)", parseLoudnormCell(stats.InputI, fmtLUFS)},
-			paramRow{"Measured input true peak (dBTP)", parseLoudnormCell(stats.InputTP, fmtPeakDB)},
-			paramRow{"Measured input LRA (LU)", parseLoudnormCell(stats.InputLRA, fmtSpectral)},
-			paramRow{"Measured input threshold (LUFS)", parseLoudnormCell(stats.InputThresh, fmtLUFS)},
-			paramRow{"Measured output integrated (LUFS)", parseLoudnormCell(stats.OutputI, fmtLUFS)},
-			paramRow{"Measured output true peak (dBTP)", parseLoudnormCell(stats.OutputTP, fmtPeakDB)},
-			paramRow{"Measured output LRA (LU)", parseLoudnormCell(stats.OutputLRA, fmtSpectral)},
-			paramRow{"Measured output threshold (LUFS)", parseLoudnormCell(stats.OutputThresh, fmtLUFS)},
-			paramRow{"Normalisation type", stringCell(stats.NormalizationType)},
-		)
-	}
-	// Raw signed LU deviation from the effective target: the loudnorm-measured
-	// output integrated loudness minus the effective target. A signed number,
-	// never a boolean or glyph.
-	rows = append(rows, paramRow{"Deviation from target (LU)", targetDeviationCell(r)})
-	b.WriteString(renderParamTable(rows))
-
-	return b.String()
-}
-
-// targetDeviationCell computes the raw signed LU deviation of the loudnorm-measured
-// output integrated loudness from the effective target:
-// output_integrated_lufs (parsed from LoudnormStats.OutputI) minus
-// effective_target_lufs. Returns the placeholder when the measured output value is
-// missing or unparseable, so the cell never fabricates a deviation.
-func targetDeviationCell(r *processor.NormalisationResult) string {
-	if r.LoudnormStats == nil {
-		return placeholder
-	}
-	out, err := strconv.ParseFloat(strings.TrimSpace(r.LoudnormStats.OutputI), 64)
-	if err != nil {
-		return placeholder
-	}
-	return formatMetricSigned(out-r.EffectiveTargetI, 2)
-}
-
-// parseLoudnormCell parses a loudnorm stats string value and formats it through
-// the given metric rule, returning the placeholder on a parse failure (graceful:
-// the cell never fabricates a value).
-func parseLoudnormCell(value string, format metricFormat) string {
-	f, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
-	if err != nil {
-		return placeholder
-	}
-	return formatByRule(f, format, 2)
-}
-
-// =============================================================================
-// Spectrograms
-// =============================================================================
-
-// spectrogramKindOrder is the stable kind order for the Spectrograms table
-// (whole-file first, then the two elected regions). Each kind carries the row
-// label shown in column 0.
-var spectrogramKindOrder = []struct {
-	kind  string
-	label string
-}{
-	{processor.SpectrogramKindWhole, "Whole file"},
-	{processor.SpectrogramKindRoomTone, "Room tone"},
-	{processor.SpectrogramKindSpeech, "Speech"},
-}
-
-// spectrogramStageOrder is the stable stage (column) order. Processing records
-// carry before+after; analysis-only records carry input only. A column is
-// emitted only when at least one image populates it, mirroring the absent-stage
-// convention the metric tables use (renderLoudness etc.).
-var spectrogramStageOrder = []struct {
-	stage  string
-	header string
-}{
-	{processor.SpectrogramStageBefore, "Before"},
-	{processor.SpectrogramStageAfter, "After"},
-	{processor.SpectrogramStageInput, "Input"},
-}
-
-// renderSpectrograms renders the Spectrograms section from rec.Spectrograms ONLY:
-// a Markdown table grouped by kind (whole -> roomtone -> speech) with one column
-// per present stage. Processing records yield a Before | After pair per kind;
-// analysis-only records yield a single Input column. Cells are Markdown image
-// links to the record's relative basenames (![<kind> <stage>](<path>)). This
-// renderer is a PURE record consumer - it reads the slice and builds Markdown,
-// never calling ffmpeg/exec. An empty slice returns "" so the orchestrator emits
-// no heading, matching the empty-section discipline the other renderers follow.
-func renderSpectrograms(rec *processor.RunRecord) string {
-	if len(rec.Spectrograms) == 0 {
-		return ""
-	}
-
-	// Index the images by kind+stage for stable, order-independent lookup.
-	type key struct{ kind, stage string }
-	byKey := make(map[key]processor.SpectrogramImage, len(rec.Spectrograms))
-	present := make(map[string]bool)
-	for _, img := range rec.Spectrograms {
-		byKey[key{img.Kind, img.Stage}] = img
-		present[img.Stage] = true
-	}
-
-	// Columns: keep only stages that at least one image populates.
-	stages := make([]struct{ stage, header string }, 0, len(spectrogramStageOrder))
-	for _, s := range spectrogramStageOrder {
-		if present[s.stage] {
-			stages = append(stages, s)
-		}
-	}
-
-	headers := make([]string, 0, len(stages)+1)
-	headers = append(headers, "Region")
-	for _, s := range stages {
-		headers = append(headers, s.header)
-	}
-
-	body := make([][]string, 0, len(spectrogramKindOrder))
-	for _, k := range spectrogramKindOrder {
-		row := []string{k.label}
-		any := false
-		for _, s := range stages {
-			img, ok := byKey[key{k.kind, s.stage}]
-			if !ok {
-				row = append(row, placeholder)
-				continue
-			}
-			any = true
-			row = append(row, spectrogramCell(k.kind, s.stage, img.Path))
-		}
-		if any {
-			body = append(body, row)
-		}
-	}
-
-	var b strings.Builder
-	b.WriteString("## Spectrograms\n\n")
-	b.WriteString(mdTable(headers, body))
-	return b.String()
-}
-
-// spectrogramCell renders one Markdown image link to a relative basename:
-// ![<kind> <stage>](<path>).
-func spectrogramCell(kind, stage, path string) string {
-	return "![" + kind + " " + stage + "](" + path + ")"
 }

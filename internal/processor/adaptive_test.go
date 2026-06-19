@@ -363,6 +363,27 @@ func TestTuneBandlimitLowPass(t *testing.T) {
 	}
 }
 
+func TestSibilanceExcessDB(t *testing.T) {
+	tests := []struct {
+		name string
+		sib  float64
+		body float64
+		want float64
+	}{
+		{"sib above body", -12.0, -18.0, 6.0},
+		{"sib below body", -24.0, -18.0, -6.0},
+		{"equal bands", -15.0, -15.0, 0.0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sp := &SpeechCandidateMetrics{SibBandRMS: tt.sib, BodyBandRMS: tt.body}
+			if got := sp.SibilanceExcessDB(); got != tt.want {
+				t.Errorf("SibilanceExcessDB() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestTuneDeesser(t *testing.T) {
 	// New engagement model (adaptive_deesser.go):
 	//   sibilanceExcess = SpeechProfile.SibBandRMS - SpeechProfile.BodyBandRMS  (dB)
@@ -1812,8 +1833,8 @@ func TestTuneNoiseReduction(t *testing.T) {
 			Regions: RegionMetrics{
 				GateSeparationDB: 15.0,
 				NoiseProfile: &NoiseProfile{
-					SpectralFlatness: 0.6,
-					BandsMeasured:    true,
+					Spectral:      SpectralMetrics{Flatness: 0.6},
+					BandsMeasured: true,
 					// Mean is -60; shapes are values minus mean: -1, 0, +1.
 					BandNoise: []float64{-61.0, -60.0, -59.0},
 				},
@@ -1850,8 +1871,8 @@ func TestTuneNoiseReduction(t *testing.T) {
 			Regions: RegionMetrics{
 				GateSeparationDB: 15.0,
 				NoiseProfile: &NoiseProfile{
-					SpectralFlatness: 0.6,
-					BandsMeasured:    true,
+					Spectral:      SpectralMetrics{Flatness: 0.6},
+					BandsMeasured: true,
 					// Mean over the finite bands is -60; the trailing NaN flattens to 0.0.
 					BandNoise: []float64{-61.0, -60.0, -59.0, math.NaN()},
 				},
@@ -1882,9 +1903,9 @@ func TestTuneNoiseReduction(t *testing.T) {
 			Regions: RegionMetrics{
 				GateSeparationDB: 15.0,
 				NoiseProfile: &NoiseProfile{
-					SpectralFlatness: 0.6,
-					BandsMeasured:    true,
-					BandNoise:        []float64{math.NaN(), math.Inf(-1), math.Inf(1)},
+					Spectral:      SpectralMetrics{Flatness: 0.6},
+					BandsMeasured: true,
+					BandNoise:     []float64{math.NaN(), math.Inf(-1), math.Inf(1)},
 				},
 			},
 		}
@@ -1907,9 +1928,9 @@ func TestTuneNoiseReduction(t *testing.T) {
 				Regions: RegionMetrics{
 					GateSeparationDB: 15.0,
 					NoiseProfile: &NoiseProfile{
-						SpectralFlatness: 0.6,
-						BandsMeasured:    true,
-						BandNoise:        []float64{-61.0, -60.0, -59.0},
+						Spectral:      SpectralMetrics{Flatness: 0.6},
+						BandsMeasured: true,
+						BandNoise:     []float64{-61.0, -60.0, -59.0},
 					},
 				},
 			}
@@ -1918,7 +1939,7 @@ func TestTuneNoiseReduction(t *testing.T) {
 		cases := map[string]func(*AudioMeasurements){
 			"bands unmeasured":   func(m *AudioMeasurements) { m.Regions.NoiseProfile.BandsMeasured = false },
 			"separation too low": func(m *AudioMeasurements) { m.Regions.GateSeparationDB = 11.0 },
-			"too tonal":          func(m *AudioMeasurements) { m.Regions.NoiseProfile.SpectralFlatness = 0.40 },
+			"too tonal":          func(m *AudioMeasurements) { m.Regions.NoiseProfile.Spectral.Flatness = 0.40 },
 			"no noise profile":   func(m *AudioMeasurements) { m.Regions.NoiseProfile = nil },
 		}
 

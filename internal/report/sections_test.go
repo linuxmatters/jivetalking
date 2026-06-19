@@ -258,9 +258,11 @@ func regionsRecord() *processor.RunRecord {
 		PeakLevel:          -71.22,
 		CrestFactor:        13.36,
 		Entropy:            0.0011,
-		SpectralCentroid:   8707.02,
-		SpectralFlatness:   0.8246,
-		SpectralKurtosis:   1.835,
+		Spectral: processor.SpectralMetrics{
+			Centroid: 8707.02,
+			Flatness: 0.8246,
+			Kurtosis: 1.835,
+		},
 	}
 	speech := processor.SpeechCandidateMetrics{
 		Region: processor.SpeechRegion{

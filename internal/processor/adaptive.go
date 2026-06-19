@@ -121,7 +121,7 @@ func useCustomAfftdnProfile(measurements *AudioMeasurements) bool {
 	if measurements.Regions.GateSeparationDB < afftdnCustomMinSeparationDB {
 		return false
 	}
-	return profile.SpectralFlatness >= afftdnCustomMinFlatness
+	return profile.Spectral.Flatness >= afftdnCustomMinFlatness
 }
 
 // tuneNoiseReduction adapts the afftdn FFT denoise tail to Pass 1 measurements.

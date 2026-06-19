@@ -2,7 +2,6 @@ package processor
 
 import (
 	"cmp"
-	"math"
 	"slices"
 	"time"
 )
@@ -203,7 +202,7 @@ func estimateNoiseFloorAndThreshold(intervals []IntervalSample, medians silenceM
 	seen := false
 	for i := 0; i < candidateCount; i++ {
 		level := scored[i].level
-		if math.IsInf(level, 0) || math.IsNaN(level) || level <= vadLevelFloorDB {
+		if isFlooredLevel(level) {
 			continue
 		}
 		if !seen || level > maxRoomToneLevel {

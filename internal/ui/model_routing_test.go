@@ -47,7 +47,7 @@ func TestFileCompleteMsgIndexRouting(t *testing.T) {
 	m = updated.(Model)
 	before := m.Files[0]
 
-	updated, _ = m.Update(FileCompleteMsg{FileIndex: 1, InputLUFS: -23, OutputLUFS: -16, OutputPath: "b-out.wav"})
+	updated, _ = m.Update(FileCompleteMsg{FileIndex: 1, CompletionResult: CompletionResult{InputLUFS: -23, OutputLUFS: -16, OutputPath: "b-out.wav"}})
 	m = updated.(Model)
 
 	if m.Files[1].Status != StatusComplete {
@@ -70,7 +70,7 @@ func TestUpdateOutOfRangeSafety(t *testing.T) {
 	for _, idx := range indices {
 		updated, _ := m.Update(ProgressMsg{FileIndex: idx, Pass: processor.PassProcessing, Progress: 0.9})
 		m = updated.(Model)
-		updated, _ = m.Update(FileCompleteMsg{FileIndex: idx, OutputPath: "x"})
+		updated, _ = m.Update(FileCompleteMsg{FileIndex: idx, CompletionResult: CompletionResult{OutputPath: "x"}})
 		m = updated.(Model)
 	}
 
@@ -116,9 +116,9 @@ func TestRenderOverallProgressFooter(t *testing.T) {
 	m := NewModel([]string{"a.wav", "b.wav", "c.wav"})
 
 	// One complete, one failed, one in progress.
-	updated, _ := m.Update(FileCompleteMsg{FileIndex: 0, OutputPath: "a-out.wav"})
+	updated, _ := m.Update(FileCompleteMsg{FileIndex: 0, CompletionResult: CompletionResult{OutputPath: "a-out.wav"}})
 	m = updated.(Model)
-	updated, _ = m.Update(FileCompleteMsg{FileIndex: 1, Error: errors.New("boom")})
+	updated, _ = m.Update(FileCompleteMsg{FileIndex: 1, CompletionResult: CompletionResult{Error: errors.New("boom")}})
 	m = updated.(Model)
 	updated, _ = m.Update(ProgressMsg{FileIndex: 2, Pass: processor.PassProcessing, Progress: 0.4})
 	m = updated.(Model)
