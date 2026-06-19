@@ -144,9 +144,10 @@ func main() {
 	// AllComplete sends do not block, and the acquire-time ctx.Done() select
 	// lets not-yet-started workers exit at once.
 	<-poolDone
+	close(reportWarnings)
 
-	if err := runErr; err != nil {
-		cli.PrintError(fmt.Sprintf("UI error: %v", err))
+	if runErr != nil {
+		cli.PrintError(fmt.Sprintf("UI error: %v", runErr))
 		if debugLog != nil {
 			debugLog.Close()
 		}
@@ -161,13 +162,8 @@ func main() {
 		fmt.Fprintln(colorprofile.NewWriter(os.Stdout, os.Environ()), ui.FinalSummary(m))
 	}
 
-	for {
-		select {
-		case warning := <-reportWarnings:
-			cli.PrintWarning(warning)
-		default:
-			return
-		}
+	for warning := range reportWarnings {
+		cli.PrintWarning(warning)
 	}
 }
 

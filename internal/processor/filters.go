@@ -81,13 +81,17 @@ const (
 	NormToleranceLU = 0.5
 )
 
-// NoiseReduction production defaults.
+// NoiseReduction production defaults (anlmdn parameters; matrix spike defaults at
+// .bench/anlmdn-matrix-spike):
+//   - s: strength (0.00001 = minimum, kept constant)
+//   - p: patch size in seconds (6ms = 0.006s, context window for similarity)
+//   - r: research radius in seconds (2.0ms = 0.0020s, r_min)
+//   - m: smoothing factor (3 = m_strict)
 //
-// The matrix spike at .bench/anlmdn-matrix-spike validated `r_min` (r=0.0020)
-// at native source rate against the previous 32 kHz cap path with r=0.0045,
-// confirming a ~35 % Pass 2 speedup at metric-equivalent quality. `m_strict`
-// (m=3) was a free quality lever - matched cleanup at zero speed cost on both
-// fixtures.
+// The matrix spike validated `r_min` (r=0.0020) at native source rate against the
+// previous 32 kHz cap path with r=0.0045, confirming a ~35 % Pass 2 speedup at
+// metric-equivalent quality. `m_strict` (m=3) was a free quality lever - matched
+// cleanup at zero speed cost on both fixtures.
 const (
 	noiseReductionProductionStrength    = 0.00001
 	noiseReductionProductionPatchSec    = 0.0060
@@ -177,18 +181,18 @@ type NoiseReductionConfig struct {
 	// must be capped at ~12 to avoid warble.
 	AfftdnEnabled        bool    `json:"afftdn_enabled"`
 	AfftdnNoiseReduction float64 `json:"afftdn_noise_reduction_db"`
-	AfftdnNoiseType      string  `json:"afftdn_noise_type"`
-	AfftdnTrackNoise     bool    `json:"afftdn_track_noise"`
+	// AfftdnNoiseType selects afftdn's noise model: "w" (white, the default) or
+	// "custom" (a measured spectral shape). On the custom path AfftdnBandNoise
+	// carries the per-band relative shape; nf still carries the absolute level and
+	// nr the depth, so all three stack.
+	AfftdnNoiseType  string `json:"afftdn_noise_type"`
+	AfftdnTrackNoise bool   `json:"afftdn_track_noise"`
 	// AfftdnNoiseFloor is the static measured noise floor (dB) fed to afftdn's nf
 	// parameter. The zero value means unset, so nf= is omitted and afftdn uses its
 	// own default; a real floor is always negative. tuneNoiseReduction sets it from
 	// the measured Noise.Floor (clamped to afftdn's [-80, -20] range) and turns
 	// track_noise off so afftdn holds the static measured floor.
 	AfftdnNoiseFloor float64 `json:"afftdn_noise_floor_db"`
-	// AfftdnNoiseType selects afftdn's noise model: "w" (white, the default) or
-	// "custom" (a measured spectral shape). On the custom path AfftdnBandNoise
-	// carries the per-band relative shape; nf still carries the absolute level and
-	// nr the depth, so all three stack.
 	// AfftdnBandNoise is the afftdn custom-profile band shape: up to 15 dB values,
 	// "|"-separated, one per fixed band, relative to the band mean (white = all
 	// zeros). Emitted as bn= only when AfftdnNoiseType is "custom" and the string is
@@ -781,11 +785,7 @@ func (cfg *EffectiveFilterConfig) buildBandlimitLowPassFilter() string {
 // Runs at the source sample rate; downstream filters (gate, levelling compressor,
 // de-esser, analysis) operate at the same rate.
 //
-// anlmdn parameters (matrix spike defaults at .bench/anlmdn-matrix-spike):
-// - s: strength (0.00001 = minimum, kept constant)
-// - p: patch size in seconds (6ms = 0.006s, context window for similarity)
-// - r: research radius in seconds (2.0ms = 0.0020s, r_min)
-// - m: smoothing factor (3 = m_strict)
+// anlmdn s/p/r/m values and their rationale: see the noise-reduction constant block.
 //
 // afftdn replaced the former compand residual-suppression stage. Sweeps on the
 // noisiest corpus stem showed anlmdn → afftdn matches

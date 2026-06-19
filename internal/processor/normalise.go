@@ -1151,6 +1151,22 @@ func finalizeLoudnormOutputMeasurements(
 	return finalMeasurements, regionMeasurementTime
 }
 
+// loudnormTPTargets resolves the two Pass-4 true-peak targets from a file's
+// loudnorm measurement: the TP= value loudnorm emits for itself and the
+// sample-peak ceiling the downstream brickwall enforces.
+//
+// emittedTP is the per-file internal TP (loudnormInternalTargetTP) clamped to
+// FFmpeg's accepted [-9, 0] range. brickwallCeilingDBTP is loudnorm.TargetTP less
+// the inter-sample allowance (brickwallTruePeakHeadroomDB) so realised oversampled
+// true peak lands ≤ loudnorm.TargetTP. The two are distinct by design: loudnorm
+// targets its own internal TP while the brickwall owns delivered ceiling.
+func loudnormTPTargets(loudnorm LoudnormConfig, measurement *LoudnormMeasurement) (emittedTP, brickwallCeilingDBTP float64) {
+	internalTP := loudnormInternalTargetTP(loudnorm, measurement.InputTP, measurement.InputI)
+	emittedTP = max(loudnormTPMinDB, min(internalTP, loudnormTPMaxDB))
+	brickwallCeilingDBTP = loudnorm.TargetTP - brickwallTruePeakHeadroomDB
+	return emittedTP, brickwallCeilingDBTP
+}
+
 // buildLoudnormFilterSpec constructs the filter chain for Pass 4 loudnorm application.
 //
 // Chain order: [volume+alimiter] → loudnorm → aresample → [adeclick] → brickwall → astats → aspectralstats → ebur128 → resample
@@ -1176,22 +1192,6 @@ func finalizeLoudnormOutputMeasurements(
 // makes the gain cap binding: when the cap lowers effectiveTargetI on a high-crest
 // stem, the matching offset pins the realised scalar gain to the capped I=, holding
 // the final true peak at targetTP. On a safe stem it equals the planned makeup.
-// loudnormTPTargets resolves the two Pass-4 true-peak targets from a file's
-// loudnorm measurement: the TP= value loudnorm emits for itself and the
-// sample-peak ceiling the downstream brickwall enforces.
-//
-// emittedTP is the per-file internal TP (loudnormInternalTargetTP) clamped to
-// FFmpeg's accepted [-9, 0] range. brickwallCeilingDBTP is loudnorm.TargetTP less
-// the inter-sample allowance (brickwallTruePeakHeadroomDB) so realised oversampled
-// true peak lands ≤ loudnorm.TargetTP. The two are distinct by design: loudnorm
-// targets its own internal TP while the brickwall owns delivered ceiling.
-func loudnormTPTargets(loudnorm LoudnormConfig, measurement *LoudnormMeasurement) (emittedTP, brickwallCeilingDBTP float64) {
-	internalTP := loudnormInternalTargetTP(loudnorm, measurement.InputTP, measurement.InputI)
-	emittedTP = max(loudnormTPMinDB, min(internalTP, loudnormTPMaxDB))
-	brickwallCeilingDBTP = loudnorm.TargetTP - brickwallTruePeakHeadroomDB
-	return emittedTP, brickwallCeilingDBTP
-}
-
 func buildLoudnormFilterSpec(config *EffectiveFilterConfig, measurement *LoudnormMeasurement, offset float64, preGainDB float64, ceiling float64, needsLimiting bool, sourceSampleRate int, statsPath string) string {
 	var filters []string
 	loudnorm := config.Loudnorm

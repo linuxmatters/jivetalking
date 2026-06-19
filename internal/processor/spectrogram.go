@@ -167,26 +167,39 @@ func spectrogramBounds(kind string, rec *RunRecord) (*regionBounds, error) {
 	case SpectrogramKindWhole:
 		return nil, nil //nolint:nilnil // whole-file: nil bounds is the success signal
 	case SpectrogramKindRoomTone:
-		if rec == nil || rec.Regions == nil {
-			return nil, fmt.Errorf("room-tone spectrogram requested but no regions on record")
-		}
-		p := rec.Regions.RoomTone.ElectedProfile()
-		if p == nil {
-			return nil, fmt.Errorf("room-tone spectrogram requested but no elected profile")
-		}
-		return &regionBounds{Start: p.Start.Seconds(), Duration: p.Duration.Seconds()}, nil
+		return boundsForProfile(rec, "room-tone", func() *regionBounds {
+			p := rec.Regions.RoomTone.ElectedProfile()
+			if p == nil {
+				return nil
+			}
+			return &regionBounds{Start: p.Start.Seconds(), Duration: p.Duration.Seconds()}
+		})
 	case SpectrogramKindSpeech:
-		if rec == nil || rec.Regions == nil {
-			return nil, fmt.Errorf("speech spectrogram requested but no regions on record")
-		}
-		p := rec.Regions.Speech.ElectedProfile()
-		if p == nil {
-			return nil, fmt.Errorf("speech spectrogram requested but no elected profile")
-		}
-		return &regionBounds{Start: p.Region.Start.Seconds(), Duration: p.Region.Duration.Seconds()}, nil
+		return boundsForProfile(rec, "speech", func() *regionBounds {
+			p := rec.Regions.Speech.ElectedProfile()
+			if p == nil {
+				return nil
+			}
+			return &regionBounds{Start: p.Region.Start.Seconds(), Duration: p.Region.Duration.Seconds()}
+		})
 	default:
 		return nil, fmt.Errorf("unknown spectrogram kind %q", kind)
 	}
+}
+
+// boundsForProfile holds the shared region-spectrogram guards: it checks the
+// record carries regions, then calls extract to fetch the elected profile's
+// bounds, treating a nil result as the no-elected-profile error. label names the
+// kind in both error messages.
+func boundsForProfile(rec *RunRecord, label string, extract func() *regionBounds) (*regionBounds, error) {
+	if rec == nil || rec.Regions == nil {
+		return nil, fmt.Errorf("%s spectrogram requested but no regions on record", label)
+	}
+	bounds := extract()
+	if bounds == nil {
+		return nil, fmt.Errorf("%s spectrogram requested but no elected profile", label)
+	}
+	return bounds, nil
 }
 
 // setupSpectrumGraph builds the mixed-media graph: an abuffer audio source
