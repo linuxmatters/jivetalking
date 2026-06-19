@@ -86,7 +86,7 @@ func measureNoiseBands(ctx context.Context, filename string, measurements *Audio
 		defer reader.Close()
 
 		lowHz, highHz := afftdnBandEdgesHz(i)
-		rms, ok, err := measureSpeechBandRMS(ctx, reader, profile.Start, profile.Duration, lowHz, highHz)
+		rms, ok, err := measureSpeechBandRMS(ctx, reader, profile.Start, profile.Duration, lowHz, highHz, log)
 		if err != nil {
 			log.Logf("Warning: noise band %d RMS measurement failed: %v", i, err)
 			return

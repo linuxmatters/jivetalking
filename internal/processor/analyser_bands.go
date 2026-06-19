@@ -38,7 +38,9 @@ const speechBandAnalysisFilterFormat = "aformat=channel_layouts=mono,atrim=start
 // band-limiting the downmixed signal before astats. Returns the RMS in dBFS and
 // ok=false when no RMS metadata was captured (e.g. region shorter than astats
 // warmup).
-func measureSpeechBandRMS(ctx context.Context, reader *audio.Reader, start, duration time.Duration, lowHz, highHz float64) (float64, bool, error) {
+//
+// log sinks the non-fatal region-seek warning.
+func measureSpeechBandRMS(ctx context.Context, reader *audio.Reader, start, duration time.Duration, lowHz, highHz float64, log debugLogger) (float64, bool, error) {
 	if start < 0 {
 		return 0, false, fmt.Errorf("invalid region: negative start time")
 	}
@@ -53,6 +55,12 @@ func measureSpeechBandRMS(ctx context.Context, reader *audio.Reader, start, dura
 		lowHz,
 		highHz,
 	)
+
+	// Skip the pre-region span: seek the demuxer near the region before decoding
+	// rather than decoding from frame 0 and letting atrim discard everything
+	// ahead of start. The atrim window stays region-absolute, so the measured
+	// span is unchanged (see regionSeekPreRoll).
+	seekReaderBeforeRegion(reader, start, log)
 
 	filterGraph, bufferSrcCtx, bufferSinkCtx, err := setupFilterGraph(reader.GetDecoderContext(), filterSpec)
 	if err != nil {
@@ -130,7 +138,7 @@ func measureSpeechBands(ctx context.Context, filename string, measurements *Audi
 		defer reader.Close()
 
 		band := speechBandPlan[i]
-		rms, ok, err := measureSpeechBandRMS(ctx, reader, region.Start, region.Duration, band.lowHz, band.highHz)
+		rms, ok, err := measureSpeechBandRMS(ctx, reader, region.Start, region.Duration, band.lowHz, band.highHz, log)
 		if err != nil {
 			log.Logf("Warning: speech band %d RMS measurement failed: %v", i, err)
 			return
