@@ -33,15 +33,15 @@ type RoomToneRegion struct {
 
 // NoiseProfile contains measurements from the elected room tone region.
 // These measurements serve as a reference baseline for adaptive filter tuning:
-//   - MeasuredNoiseFloor → elected noise floor (Noise.Floor) feeding the speech
-//     gate threshold and de-esser/quality references.
+//   - MeasuredNoiseFloor → elected noise floor (Noise.Floor), which drives the
+//     VAD split, the Recording-score cleanliness axis, and the afftdn nf seed.
 //   - CrestFactor/PeakLevel → peak-reference input to the legacy speech gate
 //     threshold path (calculateSpeechGateThresholdLegacy via adaptive_speech_gate.go),
 //     reached only when no SpeechProfile is elected.
 //
 // Entropy and the spectral fields are measured here for the report and
-// contamination detection; the current adaptive gate keys its release/range on
-// flux, LRA, and noise floor, not on room-tone entropy.
+// contamination detection; the current adaptive gate uses fixed release and
+// range, so it does not key either on room-tone entropy or spectral metrics.
 //
 // Note: The room tone region is also re-measured in Pass 2 and Pass 4 for
 // before/after comparison of noise reduction effectiveness.
@@ -340,12 +340,12 @@ func AnalyseAudio(ctx stdcontext.Context, filename string, config *BaseFilterCon
 	// Unified Pass 1 voice-activity detector: one bimodal split feeds both the
 	// elected SpeechProfile and the NoiseProfile / Noise.Floor. The pre-scan floor
 	// anchors the split clamp; the hop and axis are the single configurable choices.
-	// It must finish before either band function runs: it elects the speech and
-	// room-tone regions both measure.
+	// It must finish before either band function runs, because it elects the
+	// speech and room-tone regions that both band functions go on to measure.
 	detectVoiceActivity(measurements, intervals, measurements.Noise.FloorPrescan, analysisIntervalHop, axisMomentaryLUFS, config.logger)
 
 	// Post-loop band phase: the main decode loop is capped at BandPhaseProgressStart
-	// (0.85); the two band functions drive 0.85..1.0 by reporting each completed
+	// (0.95); the two band functions drive 0.95..1.0 by reporting each completed
 	// band decode through one shared tracker (atomic counter, monotonic, clamped to
 	// 1.0). The total is the combined speech + noise band budget, so a band function
 	// that early-returns still drains its share via drainBandProgress and the phase

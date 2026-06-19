@@ -34,17 +34,17 @@ type RunRecord struct {
 	// (see normalisationRecord); the source struct is untouched.
 	Normalisation *normalisationRecord `json:"normalisation,omitempty"`
 
-	// IntervalSummary holds the per-250ms RMS distribution and gap summary (task
-	// 3.1). The full per-interval series lives in the .intervals.jsonl sidecar; the
-	// summary stays inline. nil + omitempty drops it when no intervals exist.
+	// IntervalSummary holds the per-250ms RMS distribution and gap summary. The
+	// full per-interval series lives in the .intervals.jsonl sidecar; the summary
+	// stays inline. nil + omitempty drops it when no intervals exist.
 	IntervalSummary *IntervalSummary `json:"interval_summary,omitempty"`
 
 	// Spectrograms is the deterministic before/after (processing) or input
 	// (analysis-only) spectrogram image list, attached synchronously by the
-	// --diagnostics write site (T4) via deriveSpectrogramImages before the
-	// background PNG renders run. The renderer links these relative paths; the paths
-	// are known before the files land. Empty + omitempty drops it when the flag is
-	// off or no region beyond whole-file is elected.
+	// --diagnostics write site via deriveSpectrogramImages before the background
+	// PNG renders run. The renderer links these relative paths; the paths are known
+	// before the files land. Empty + omitempty drops it when the flag is off or no
+	// region beyond whole-file is elected.
 	Spectrograms []SpectrogramImage `json:"spectrograms,omitempty"`
 }
 
@@ -111,8 +111,8 @@ type FiltersBlock struct {
 
 // IntervalSummary is the §8.1 `interval_summary` block: the RMS distribution and
 // largest-gap summary derived from the full per-250ms IntervalSamples series. The
-// full series itself lands in the .intervals.jsonl sidecar (§8.5 call 2); only
-// this summary is inline. newIntervalSummary owns the maths.
+// full series itself lands in the .intervals.jsonl sidecar; only this summary is
+// inline. newIntervalSummary owns the maths.
 type IntervalSummary struct {
 	Count int `json:"count"`
 
@@ -142,7 +142,7 @@ type RMSDistribution struct {
 // score), and the per-stage before/after samples. Assembly-side type only - it
 // points into the live ProcessingResult data BY REFERENCE (§9.2), never copying
 // values. The full candidate arrays and interval series are NOT inline; they live
-// in the .candidates.jsonl / .intervals.jsonl sidecars (§8.5 call 2, §9.3).
+// in the .candidates.jsonl / .intervals.jsonl sidecars.
 type RegionsBlock struct {
 	RoomTone       RoomToneRegionRecord `json:"room_tone"`
 	Speech         SpeechRegionRecord   `json:"speech"`
@@ -199,7 +199,7 @@ func (s SpeechRegionRecord) ElectedProfile() *SpeechCandidateMetrics {
 	return s.Elected.Profile()
 }
 
-// CandidatesSummary is the inline stand-in for a full candidate array (§9.3): the
+// CandidatesSummary is the inline stand-in for a full candidate array: the
 // number evaluated and the elected candidate's score. The elected candidate's
 // full metrics already live in regions.<kind>.elected; the full scored array is
 // streamed to the .candidates.jsonl sidecar. ElectedScore is a pointer so an
@@ -231,7 +231,7 @@ func NewRunRecord(result *ProcessingResult) *RunRecord {
 		rec.Loudness.Stages.Filtered = &fm.Loudness
 		rec.Dynamics.Stages.Filtered = &fm.Dynamics
 		rec.Spectral.Stages.Filtered = &fm.Spectral
-		// Pass 2 before/after region samples (task 1.2), referenced not copied.
+		// Pass 2 before/after region samples, referenced not copied.
 		if rec.Regions != nil {
 			rec.Regions.RoomTone.Samples.Filtered = fm.RoomToneSample
 			rec.Regions.Speech.Samples.Filtered = fm.SpeechSample
@@ -243,7 +243,7 @@ func NewRunRecord(result *ProcessingResult) *RunRecord {
 			rec.Loudness.Stages.Final = &fm.Loudness
 			rec.Dynamics.Stages.Final = &fm.Dynamics
 			rec.Spectral.Stages.Final = &fm.Spectral
-			// Pass 4 before/after region samples (task 1.2), referenced not copied.
+			// Pass 4 before/after region samples, referenced not copied.
 			if rec.Regions != nil {
 				rec.Regions.RoomTone.Samples.Final = fm.RoomToneSample
 				rec.Regions.Speech.Samples.Final = fm.SpeechSample

@@ -503,15 +503,16 @@ func TestTuneDeesser(t *testing.T) {
 func TestTuneSpeechGate(t *testing.T) {
 	// Tests the comprehensive gate tuning which calculates all gate parameters
 	// based on measurements including NoiseProfile (extracted from the elected
-	// room-tone region).
+	// room-tone region). The threshold subtests below have no SpeechProfile, so
+	// they exercise the legacy noise-floor threshold path.
 	//
-	// Key constants from adaptive.go:
-	// gateThresholdMinDB = -50.0 dB (quiet speech floor)
-	// gateThresholdMaxDB = -25.0 dB (never gate above this - would cut speech)
-	// gateCrestFactorThreshold = 20.0 dB (when to use peak vs floor)
-	// gateTargetReductionDB = 12.0 dB (target noise reduction)
-	// gateTargetThresholdDB = -40.0 dB (target for clean recordings)
-	// gateRatioGentle = 1.5 (wide LRA), gateRatioMod = 2.0 (cap, all else)
+	// Key constants from adaptive_speech_gate.go:
+	// speechGateThresholdMinDB = -80.0 dB (minimum threshold)
+	// speechGateThresholdMaxDB = -25.0 dB (never gate above this - would cut speech)
+	// speechGateCrestFactorThreshold = 20.0 dB (when to use peak vs floor)
+	// speechGateTargetReductionDB = 12.0 dB (target noise reduction)
+	// speechGateTargetThresholdDB = -40.0 dB (target for clean recordings)
+	// speechGateRatioGentle = 1.5 (wide LRA), speechGateRatioMod = 2.0 (cap, all else)
 	//
 	// Gap is derived from ratio: gap = targetReduction / (1 - 1/ratio)
 	// - ratio 1.5 → gap = 12 / 0.333 = 36 dB
@@ -710,7 +711,7 @@ func TestTuneSpeechGate(t *testing.T) {
 
 	t.Run("knee is fixed", func(t *testing.T) {
 		// Knee collapsed to a single fixed value; spectral crest no longer matters
-		// and there is no override (the gentle-mode override is gone, task 4.4).
+		// and there is no override (no gentle-mode override exists).
 		tests := []struct {
 			name  string
 			crest float64
@@ -932,11 +933,11 @@ func TestTuneSpeechGate(t *testing.T) {
 	})
 }
 
-// TestCalculateSpeechGateThreshold covers the voiced-p10-anchored placement
-// (Phase 4 task 4.1): the threshold lands at voiced p10 minus the speech margin,
-// the narrow-gap signal flips at separation = speechMargin + noiseMargin (12 dB),
-// and a crossed (narrow) gap keeps the threshold on the speech side rather than
-// raising it to clear the loud noise.
+// TestCalculateSpeechGateThreshold covers the voiced-p10-anchored placement: the
+// threshold lands at voiced p10 minus the speech margin, the narrow-gap signal
+// flips at separation = speechMargin + noiseMargin (12 dB), and a crossed (narrow)
+// gap keeps the threshold on the speech side rather than raising it to clear the
+// loud noise.
 func TestCalculateSpeechGateThreshold(t *testing.T) {
 	const narrowGapBoundary = speechGateThresholdSpeechMarginDB + speechGateThresholdNoiseMarginDB // 12 dB
 
@@ -1007,8 +1008,8 @@ func TestCalculateSpeechGateThreshold(t *testing.T) {
 }
 
 // TestTuneSpeechGateNewBasis is an integration-style check over in-memory
-// AudioMeasurements that drives the whole tuneSpeechGate body (task 4.4). It
-// asserts the new basis end to end: a wide-gap profile case (full fixed depth,
+// AudioMeasurements that drives the whole tuneSpeechGate body. It asserts the
+// basis end to end: a wide-gap profile case (full fixed depth,
 // voiced-anchored threshold), a narrow-gap profile case (reduced fixed depth,
 // threshold still on the speech side), and a no-profile case (the legacy safety
 // path, which cannot place an in-speech threshold because there is no voiced
@@ -1064,7 +1065,7 @@ func TestTuneSpeechGateNewBasis(t *testing.T) {
 			t.Fatalf("expected narrow gap at separation %.1f dB", separation)
 		}
 		// Threshold stays on the speech side (voiced p10 minus margin), never raised
-		// toward the noise (research W4 / proposal CAVEAT).
+		// toward the noise.
 		wantThdDB := voicedP10 - speechGateThresholdSpeechMarginDB
 		if gotDB := linearToDB(config.SpeechGate.Threshold); math.Abs(gotDB-wantThdDB) > 0.01 {
 			t.Errorf("threshold = %.2f dB, want speech-side %.2f dB on a narrow gap", gotDB, wantThdDB)

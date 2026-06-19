@@ -209,8 +209,8 @@ func TestRunAnalysisOnlyWithDeps_NonTTYOmitsBenchPath(t *testing.T) {
 	}
 }
 
-// TestRunAnalysisOnlyWithDeps_DiagnosticsGatesSidecars proves the T2.2 contract
-// on the analysis-only path: with --diagnostics off the .jsonl sidecar write is
+// TestRunAnalysisOnlyWithDeps_DiagnosticsGatesSidecars proves the diagnostics
+// gate on the analysis-only path: with --diagnostics off the .jsonl sidecar write is
 // skipped while the .md report and .json record still write; with it on the
 // sidecar write fires exactly once, beside the record. The deps stubs record
 // each write so the test asserts the gate without touching the filesystem.
@@ -537,7 +537,7 @@ func TestRunAnalysisOnlyWithDeps_NonTTYBannerThenOrderedReports(t *testing.T) {
 
 	// stdout starts with the up-front banner (byte-for-byte: single U+2026
 	// ellipsis, trailing newline), matching the production main.go no-TTY
-	// branch and the 3.3 test assertion.
+	// branch.
 	banner := "Analysing 3 files…\n"
 	if !strings.HasPrefix(got, banner) {
 		t.Fatalf("output does not start with banner %q:\n%s", banner, got)

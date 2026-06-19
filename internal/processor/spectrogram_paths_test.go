@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// outputStem mirrors the processing stem derivation (pool.go:113):
+// outputStem mirrors the processing stem derivation in pool.go:
 // strings.TrimSuffix(OutputPath, filepath.Ext(OutputPath)). The derivation stores
 // filepath.Base of this, so a directory prefix must not leak into the Path.
 const testOutputStem = "/tmp/out/episode-LUFS-16-processed"

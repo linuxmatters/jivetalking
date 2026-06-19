@@ -20,8 +20,8 @@ import (
 // resource pointers nil) neither panics nor double-frees, and that calling it
 // repeatedly is safe. Every Close branch is nil-guarded, so a fresh Reader{}
 // reaches each guard's false arm; a regression that dropped a guard would panic
-// here. This is the fake-backed Close idempotency check the peer review asked
-// for, with no CGO allocation required.
+// here. This is the fake-backed Close idempotency check, with no CGO
+// allocation required.
 func TestReaderClose_ZeroValueIdempotent(t *testing.T) {
 	t.Parallel()
 

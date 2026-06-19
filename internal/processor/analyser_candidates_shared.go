@@ -259,11 +259,9 @@ func scoreSpeechIntervalWindow(intervals []IntervalSample) float64 {
 	}
 
 	// Rolloff score: prefer regions with rolloff in typical voiced speech range.
-	// Uses shared helper function for consistency with scoreSpeechCandidate.
 	rolloffScore := calculateRolloffScore(avgRolloff)
 
 	// Flux score: prefer regions with low spectral flux (stable voicing).
-	// Uses shared helper function for consistency with scoreSpeechCandidate.
 	fluxScore := calculateFluxScore(avgFlux)
 
 	// Weighted combination optimised for measurement stability (weights sum to 1.0;

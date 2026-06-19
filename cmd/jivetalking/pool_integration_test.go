@@ -200,8 +200,8 @@ func TestProcessAudio_ConcurrentRaceClean(t *testing.T) {
 	}
 }
 
-// TestRunWorkerPool_CancellationNoTempResidue exercises AC5 against REAL audio:
-// the real processor creates the .processing-* / .loudnorm-* temp dotfiles, so
+// TestRunWorkerPool_CancellationNoTempResidue exercises cancellation against REAL
+// audio: the real processor creates the .processing-* / .loudnorm-* temp dotfiles, so
 // the seam fake cannot stand in here. It copies a fixture into a dedicated input
 // dir, launches the pool with jobs >= 2, cancels mid-run, waits for the pool to
 // unwind, then lists the input dir to prove no temp dotfile residue remains.
@@ -276,7 +276,7 @@ func TestRunWorkerPool_CancellationNoTempResidue(t *testing.T) {
 		t.Logf("report warning (non-fatal): %s", warning)
 	}
 
-	// Hard AC5 requirement: zero temp dotfiles remain in the input dir.
+	// Hard requirement: zero temp dotfiles remain in the input dir.
 	for _, pattern := range []string{
 		filepath.Join(dir, ".processing-*.tmp.flac"),
 		filepath.Join(dir, ".loudnorm-*.tmp.flac"),

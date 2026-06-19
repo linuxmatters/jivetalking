@@ -11,9 +11,8 @@ import (
 //
 // These run in buildInputMeasurements BEFORE the voice-activity detector: they
 // produce the measured pre-scan floor (Noise.FloorPrescan) that anchors the
-// detector's split clamp. They were moved here from the room-tone candidate
-// files when the scored room-tone election was deleted; the unified detector
-// keeps only this seed path plus the shared golden-window bounds.
+// detector's split clamp. The unified detector keeps only this seed path plus
+// the shared golden-window bounds; it has no scored room-tone election.
 
 // Golden sub-region refinement bounds, shared by the room-tone region picker
 // (pickLowClusterRegion) and the shared sliding-window refinement
@@ -75,8 +74,8 @@ const (
 // The amplitude cue reads the momentary-LUFS axis (interval.MomentaryLUFS), the
 // same axis the VAD split, floor, and noise margin operate on, so the seed and the
 // detector share one scale. It feeds the pre-scan noise-floor estimator
-// (estimateNoiseFloorAndThreshold); the richer spectral metrics are no longer
-// used now the scored room-tone election is gone.
+// (estimateNoiseFloorAndThreshold); only the amplitude and flux cues are used,
+// the richer spectral metrics are not, since there is no scored room-tone election.
 func roomToneScore(interval IntervalSample, levelP50, fluxP50 float64) float64 {
 	// Amplitude component: quieter = more likely room tone
 	// Score 1.0 if at or below median, decreasing above

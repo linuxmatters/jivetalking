@@ -342,9 +342,9 @@ const (
 // SNR penalty into the score by taking the noise floor as a parameter, so the
 // election helper no longer carries scoring maths (god-function mitigation).
 //
-// Design note (proposal Risk 5/6; VAD-RESEARCH.md:920-927): the old composite
-// clustered candidates at 0.58-0.65 and never ranked them, so the SNR axis here
-// MUST spread across the candidates within a file. The SNR term is
+// Design note: the old composite clustered candidates at 0.58-0.65 and never
+// ranked them, so the SNR axis here MUST spread across the candidates within a
+// file. The SNR term is
 // relative-within-file: it depends on RMSLevel - noiseFloorDB, so a constant floor
 // offset shifts every candidate equally and does not change their ranking. The SNR
 // saturation point (snrSaturationMargin) is a placeholder set by the Phase 3

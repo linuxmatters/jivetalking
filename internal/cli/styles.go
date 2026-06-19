@@ -44,19 +44,16 @@ var (
 	ColorBlue = compat.AdaptiveColor{Light: lipgloss.Color("#2563EB"), Dark: lipgloss.Color("#3B82F6")}
 )
 
-// Styles
+// Text styles for the version banner and the Print* helpers below.
 var (
-	// Error message style
 	errorStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(ColorRed)
 
-	// Warning message style
 	warningStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(ColorOrange)
 
-	// Key-value pair styles
 	keyStyle = lipgloss.NewStyle().
 			Foreground(ColorMuted)
 

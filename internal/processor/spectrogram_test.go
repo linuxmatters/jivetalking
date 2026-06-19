@@ -78,7 +78,7 @@ func TestSpectrogramRegistryGate(t *testing.T) {
 //
 //   - nil bounds   → the bare frozen spec (whole file, no atrim, full stream).
 //   - bounds set   → atrim=start=%f:duration=%f,asetpts=PTS-STARTPTS, prepended,
-//     mirroring outputRegionAnalysisFilterFormat (analyser_output.go:18) with the
+//     mirroring outputRegionAnalysisFilterFormat (analyser_output.go) with the
 //     astats,… tail swapped for showspectrumpic=<frozen>.
 func TestSpectrogramFilterSpecBranches(t *testing.T) {
 	t.Run("nil_bounds_whole_file", func(t *testing.T) {
@@ -96,7 +96,7 @@ func TestSpectrogramFilterSpecBranches(t *testing.T) {
 	t.Run("bounds_prepend_atrim", func(t *testing.T) {
 		b := &regionBounds{Start: 12.5, Duration: 3.25}
 		got := spectrogramFilterSpec(b)
-		// Same %f seconds formatting as outputRegionAnalysisFilterFormat.
+		// Same %f seconds formatting as outputRegionAnalysisFilterFormat (analyser_output.go).
 		want := fmt.Sprintf(
 			"atrim=start=%f:duration=%f,asetpts=PTS-STARTPTS,showspectrumpic=%s",
 			b.Start, b.Duration, frozenSpectrogramSpec,
@@ -144,8 +144,8 @@ func TestSpectrogramFilterSpecDeterministic(t *testing.T) {
 // Pure-string, always runs. The render side of this contract (the frozen params
 // reaching ffmpeg unchanged) is exercised by the render tests below.
 func TestSpectrogramFrozenParamSingleDefinition(t *testing.T) {
-	// The constant carries the load-bearing terms (decision #8); assert the spec
-	// embeds it verbatim rather than re-deriving any term per call.
+	// The constant carries the load-bearing terms; assert the spec embeds it
+	// verbatim rather than re-deriving any term per call.
 	for _, c := range []*regionBounds{nil, {Start: 5, Duration: 3}} {
 		spec := spectrogramFilterSpec(c)
 		if !strings.Contains(spec, frozenSpectrogramSpec) {
@@ -161,7 +161,7 @@ func TestSpectrogramFrozenParamSingleDefinition(t *testing.T) {
 // ---------------------------------------------------------------------------
 // 2b. RenderSpectrogramImage source/bounds resolution (pure mapping, no ffmpeg,
 //     no testdata). The render itself is exercised by section 3; here the
-//     source-file and region-bounds resolution rules (T4.1) are pinned.
+//     source-file and region-bounds resolution rules are pinned.
 // ---------------------------------------------------------------------------
 
 // TestSpectrogramSourceResolution pins the stage→source-file mapping: before and

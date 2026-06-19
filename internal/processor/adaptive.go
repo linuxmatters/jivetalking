@@ -50,8 +50,7 @@ const (
 // is used only when the room-tone band measurement is trustworthy: a clear
 // speech/noise gap so the elected room tone is genuine ambience, and a flat
 // (noise-like) room-tone spectrum so the measured shape describes broadband
-// noise rather than tonal bleed. Both thresholds are corpus-derived starting
-// points, to be confirmed by the A/B sweep.
+// noise rather than tonal bleed. Both thresholds are corpus-derived.
 const (
 	// afftdnCustomMinSeparationDB is the minimum gate separation (voiced p10 minus
 	// noise p95) for the custom profile. Below it the room tone may be contaminated

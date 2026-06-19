@@ -10,7 +10,8 @@ import (
 	"github.com/charmbracelet/colorprofile"
 )
 
-// Custom help styles
+// Help styles for the section headers, flag names, and argument names in the
+// StyledHelpPrinter output.
 var (
 	helpDescStyle = lipgloss.NewStyle().
 			Foreground(ColorOrange).
@@ -31,7 +32,9 @@ var (
 			Bold(true)
 )
 
-// StyledHelpPrinter creates a custom help printer with Lipgloss styling
+// StyledHelpPrinter returns a Kong help printer that renders the title,
+// usage, arguments, and flags with the package Lipgloss styles, writing
+// through a colorprofile writer so colour downsamples to the terminal.
 func StyledHelpPrinter() func(kong.HelpOptions, *kong.Context) error {
 	return func(options kong.HelpOptions, ctx *kong.Context) error {
 		var sb strings.Builder
@@ -101,7 +104,6 @@ type flag struct {
 func getArguments(ctx *kong.Context) []argument {
 	var args []argument
 
-	// Parse arguments from the model
 	for _, arg := range ctx.Model.Positional {
 		name := arg.Summary()
 		help := arg.Help
@@ -114,7 +116,7 @@ func getArguments(ctx *kong.Context) []argument {
 func getFlags(ctx *kong.Context) []flag {
 	var flags []flag
 
-	// Always include help flag
+	// Kong omits --help from Model.Flags, so prepend it by hand.
 	flags = append(flags, flag{
 		flags: "-h, --help",
 		help:  "Show context-sensitive help.",
@@ -123,7 +125,7 @@ func getFlags(ctx *kong.Context) []flag {
 	// Parse flags from the model
 	for _, f := range ctx.Model.Flags {
 		if f.Name == "help" {
-			continue // Already added
+			continue // the help flag is prepended above
 		}
 
 		var flagStr string

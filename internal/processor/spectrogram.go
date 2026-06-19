@@ -1,10 +1,10 @@
 // Package processor: spectrogram generation (Stage 3, AUDIO-MEASUREMENTS.md §7.2).
 //
 // This file holds the frozen showspectrumpic parameter string and the
-// audio-decode → showspectrumpic → PNG generation function (T1.2). The honesty
-// contract is ONE frozen parameter string, applied identically to both sides of
-// every before/after pair: s, gain, and the start/stop frequency range are
-// LITERAL, never computed per file or per duration.
+// audio-decode → showspectrumpic → PNG generation function. The honesty contract
+// is ONE frozen parameter string, applied identically to both sides of every
+// before/after pair: s, gain, and the start/stop frequency range are LITERAL,
+// never computed per file or per duration.
 package processor
 
 import (
@@ -21,9 +21,8 @@ import (
 
 // frozenSpectrogramSpec is the single, frozen showspectrumpic parameter string for
 // every spectrogram image. It is applied identically to both sides of every
-// before/after pair, the honest-comparison contract (decision #8, proposal
-// §"Honest comparison, the locked showspectrumpic parameters"). The example it is
-// derived from is docs/Spectral-Metrics-Reference.md:168.
+// before/after pair, the honest-comparison contract. It is derived from the
+// showspectrumpic example in docs/Spectral-Metrics-Reference.md.
 //
 // Why each term is load-bearing:
 //   - s=1024x512   fixed pixel dimensions across before/after (the §7.2 hard
@@ -35,19 +34,20 @@ import (
 //   - gain=1       no per-image auto-gain that would silently re-reference the scale.
 //   - color=intensity  same palette both sides.
 //
-// legend=1 is RESOLVED (T1.4): the legend renders a FIXED 0 → -117 dBFS colour-to-dB
-// scale, NOT a per-image auto-scaled one. A real before/after pair (raw input vs its
-// -LUFS-NN-processed output) produced byte-identical legend strips (same SHA-256), so
-// the dB key matches across the pair, gain=1 pins the magnitude reference and legend
-// reads off it. legend=1 is kept; no magnitude-pinning term was needed.
+// legend=1 renders a FIXED 0 → -117 dBFS colour-to-dB scale, NOT a per-image
+// auto-scaled one: a real before/after pair (raw input vs its -LUFS-NN-processed
+// output) produces byte-identical legend strips, so the dB key matches across the
+// pair. gain=1 pins the magnitude reference and the legend reads off it; no
+// separate magnitude-pinning term is needed.
 //
 // One definition, never mutated or derived per call.
 const frozenSpectrogramSpec = "s=1024x512:scale=log:fscale=log:start=20:stop=20000:gain=1:color=intensity:legend=1"
 
 // regionBounds is an optional time window for a region spectrogram. Both fields
-// are in SECONDS, matching the atrim=start=%f:duration=%f precedent at
-// analyser_output.go:18 and the record's Elected profile _s float seconds. A nil
-// *regionBounds means the whole-file path (no atrim, full stream).
+// are in SECONDS, matching the atrim=start=%f:duration=%f precedent in
+// outputRegionAnalysisFilterFormat (analyser_output.go) and the record's Elected
+// profile _s float seconds. A nil *regionBounds means the whole-file path (no
+// atrim, full stream).
 type regionBounds struct {
 	Start    float64
 	Duration float64
@@ -55,7 +55,7 @@ type regionBounds struct {
 
 // spectrogramFilterSpec builds the showspectrumpic filter spec for a graph.
 // With nil bounds it is the bare frozen spec (whole file). With bounds, it
-// prepends an atrim window (T1.3), mirroring outputRegionAnalysisFilterFormat:
+// prepends an atrim window, mirroring outputRegionAnalysisFilterFormat:
 //
 //	atrim=start=%f:duration=%f,asetpts=PTS-STARTPTS,showspectrumpic=<frozen>
 //
@@ -74,18 +74,18 @@ func spectrogramFilterSpec(bounds *regionBounds) string {
 
 // generateSpectrogram renders one showspectrumpic PNG for inputPath to pngPath.
 // With nil bounds it renders the whole file; with bounds it renders that time
-// window (T1.3). It runs ONE audio-decode → mixed-media filter graph →
-// single-frame pull → PNG encode/mux per call.
+// window. It runs ONE audio-decode → mixed-media filter graph → single-frame pull
+// → PNG encode/mux per call.
 //
 // The audio-in/video-out graph is hand-wired through a single AVFilterGraphParsePtr
-// pass (the seam proven by the T0.1 smoke test): an abuffer audio source feeds the
-// spec into a hand-allocated video buffersink whose pix_fmts is pinned to rgb24
-// before init. showspectrumpic emits its single frame at EOF, so the loop drives
-// the decode, flushes with a nil frame, then pulls the one frame.
+// pass: an abuffer audio source feeds the spec into a hand-allocated video
+// buffersink whose pix_fmts is pinned to rgb24 before init. showspectrumpic emits
+// its single frame at EOF, so the loop drives the decode, flushes with a nil
+// frame, then pulls the one frame.
 //
 // ctx discipline: the decode/push loop checks ctx.Err(); on cancellation (or any
 // failure) the partial pngPath is removed best-effort so no residue survives. Any
-// failure returns a non-nil error so the caller (T4.1/T4.2) decides fatality.
+// failure returns a non-nil error so the caller decides fatality.
 func generateSpectrogram(ctx context.Context, inputPath string, bounds *regionBounds, pngPath string) (err error) {
 	// Remove any partial output on failure or cancellation (best-effort).
 	defer func() {
@@ -120,7 +120,7 @@ func generateSpectrogram(ctx context.Context, inputPath string, bounds *regionBo
 // goroutine, keeping the source/bounds/dest resolution INSIDE this package, which
 // owns the record, the kind/stage constants, and the elected-region bounds.
 //
-// Resolution (proposal §4, plan T4.1):
+// Resolution:
 //   - source: Stage before/input → inputPath; Stage after → outputPath.
 //   - bounds: Kind whole → nil (whole file); Kind roomtone/speech → the elected
 //     profile's Start/Duration as seconds. deriveSpectrogramImages already omits a

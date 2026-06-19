@@ -79,7 +79,7 @@ func (m recordingModel) View() tea.View { return tea.NewView("") }
 
 // runPoolWithFake drives runWorkerPool over n synthetic file paths under a
 // headless recording program, returning the fake plus observed completion
-// counts. It reuses 6.1's headless tea.Program setup (no renderer, nil input).
+// counts under a headless tea.Program (no renderer, nil input).
 func runPoolWithFake(t *testing.T, jobs, n int) (*inflightFake, int, bool) {
 	t.Helper()
 
@@ -158,8 +158,8 @@ func TestRunWorkerPool_BoundHonouredForN(t *testing.T) {
 // exactly one designated input path errors while every sibling succeeds.
 // Successful calls return a
 // ProcessingResult whose OutputPath sits next to the (synthetic) input so the
-// pool's report write produces its .md without a report warning. It mirrors
-// AC4: one failing input must leave siblings unaffected.
+// pool's report write produces its .md without a report warning. One failing
+// input must leave siblings unaffected.
 type isolationFake struct {
 	failPath string
 }
@@ -182,7 +182,7 @@ func (f *isolationFake) fn(_ context.Context, inputPath string, _ *processor.Bas
 
 // isolationModel records per-file completion detail: how many FileCompleteMsg
 // arrived, which file indices carried an Error, and whether AllCompleteMsg fired.
-// It is a richer sibling of recordingModel for AC4 assertions.
+// It is a richer sibling of recordingModel for failure-isolation assertions.
 type isolationModel struct {
 	mu          *sync.Mutex
 	completed   *int
@@ -213,7 +213,7 @@ func (m isolationModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m isolationModel) View() tea.View { return tea.NewView("") }
 
 // TestRunWorkerPool_FailureIsolation drives the pool over several files where one
-// designated input errors and the rest succeed. It asserts AC4: every sibling
+// designated input errors and the rest succeed. It asserts every sibling
 // completes with no error, the failing file's FileCompleteMsg carries its Error,
 // AllCompleteMsg still fires (the partial-failure run completes), and all N files
 // report exactly once (no early abort). Seam-based, so no real audio is needed.

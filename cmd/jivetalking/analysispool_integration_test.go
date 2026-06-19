@@ -39,7 +39,7 @@ import (
 //
 // Driven with p == nil so no real terminal is needed. Production sends
 // ui.AllCompleteMsg after wg.Wait() unconditionally when p != nil; that TTY path
-// is covered by the model quit tests (1.5 / 5.1). [AC5 / 5.6]
+// is covered by the model quit tests.
 func TestRunAnalysisPool_CancellationAbortsPromptly(t *testing.T) {
 	const n = 6
 	const jobs = 2 // < n so the other n-jobs workers stay queued at the acquire select
@@ -122,13 +122,13 @@ func waitForExtraEntry(entered <-chan struct{}, d time.Duration) bool {
 // TestRunAnalysisPool_ConcurrentRaceClean drives runAnalysisPool with jobs >= 2
 // over two distinct REAL fixture copies through the REAL
 // processor.AnalyseOnlyDetailed and the REAL openAudioMetadata opener. Unlike the
-// seam-based 2.3 tests, it runs actual concurrent FFmpeg analysis so `-race`
+// seam-based unit tests, it runs actual concurrent FFmpeg analysis so `-race`
 // observes the genuine concurrent paths: the shared debugSink-backed logger
 // (whole-line atomic writes), the per-worker CloneForWorker config clones, and the
 // pre-allocated results/metas/errs slots each worker writes only its own slot of.
 // It drives with p == nil (no tea.Program, no TTY) to keep the race test focused
 // on the pool internals. After the run every slot must be populated
-// (results[i] != nil, errs[i] == nil, metas[i] != nil). [AC2 / 5.1]
+// (results[i] != nil, errs[i] == nil, metas[i] != nil).
 func TestRunAnalysisPool_ConcurrentRaceClean(t *testing.T) {
 	src := findPoolTestAudio(t)
 	if src == "" {

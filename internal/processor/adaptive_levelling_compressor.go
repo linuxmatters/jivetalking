@@ -23,7 +23,7 @@ const (
 	// corpus's level spread.
 	levellingCompressorThresholdSpeechOffsetDB = 9.0
 
-	// Threshold clamp bounds (dBFS). Preserve the prior sane range.
+	// Threshold clamp bounds (dBFS): a sane operating range for the threshold.
 	levellingCompressorThresholdMin = -45.0
 	levellingCompressorThresholdMax = -6.0
 

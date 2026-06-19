@@ -426,7 +426,8 @@ func TestAdaptiveDiagnosticsJSON_HasCanonicalKeys(t *testing.T) {
 
 // TestNormalisationResultJSON_HasCanonicalKeys asserts the §8.4 keys for the
 // `normalisation` block, that LoudnormStats nests under loudnorm_measured, and
-// that FinalMeasurements is excluded (assembled into stages at RunRecord 2.4).
+// that FinalMeasurements is excluded (assembled into the loudness/dynamics/spectral
+// stages instead).
 func TestNormalisationResultJSON_HasCanonicalKeys(t *testing.T) {
 	res := NormalisationResult{
 		InputLUFS: -18, InputTP: -2, OutputLUFS: -16, OutputTP: -2,

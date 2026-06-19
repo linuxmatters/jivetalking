@@ -96,7 +96,7 @@ func (f *inflightAnalysisFake) fn(_ context.Context, inputPath string, _ *proces
 // TestRunAnalysisPool_InFlightBoundedToJobs asserts jobs == 3 caps in-flight
 // analysis workers at 3 over 8 files while still reaching real concurrency (>1),
 // proving the semaphore both bounds and permits parallelism. Drives the pool
-// with p == nil (no real tea.Program). [AC3 / 2.3(a)]
+// with p == nil (no real tea.Program).
 func TestRunAnalysisPool_InFlightBoundedToJobs(t *testing.T) {
 	const n = 8
 	const jobs = 3
@@ -126,7 +126,7 @@ func TestRunAnalysisPool_InFlightBoundedToJobs(t *testing.T) {
 
 // TestRunAnalysisPool_SerialParityJobs1 asserts jobs == 1 holds in-flight
 // analysis workers to a single concurrent call (high-water == 1), the serial
-// outcome under the pool. [AC3 / 2.3(b)]
+// outcome under the pool.
 func TestRunAnalysisPool_SerialParityJobs1(t *testing.T) {
 	const n = 8
 
@@ -160,7 +160,7 @@ func TestRunAnalysisPool_SerialParityJobs1(t *testing.T) {
 // barrier, then blocks on barrier.Wait(), so no worker proceeds until all three
 // are simultaneously in-flight. high-water therefore reaches exactly 3 every run.
 // Were the pool to cap below 3, fewer than 3 workers would enter, barrier.Wait()
-// would never release, and the test would hang rather than flake. [AC3 / 5.2]
+// would never release, and the test would hang rather than flake.
 func TestRunAnalysisPool_JobsAboveFileCountNoCap(t *testing.T) {
 	const n = 3
 	const jobs = 64 // > n and > any realistic NumCPU
@@ -215,7 +215,7 @@ func TestRunAnalysisPool_JobsAboveFileCountNoCap(t *testing.T) {
 // first, so completion order is the reverse of submission order. With jobs >= n
 // every worker runs concurrently, so the staggered delays decide completion
 // order. Each slot must still carry its own index (encoded in
-// AdaptationDuration and in metas' SampleRate). [AC1 / 2.3(c)]
+// AdaptationDuration and in metas' SampleRate).
 func TestRunAnalysisPool_OrderedSlots(t *testing.T) {
 	const n = 6
 
@@ -280,7 +280,7 @@ func TestRunAnalysisPool_OrderedSlots(t *testing.T) {
 // TestRunAnalysisPool_FailureIsolation drives the pool where one index errors and
 // the rest succeed. It asserts errs[failIdx] is set, sibling results are non-nil
 // with nil errs, and (with p == nil) runAnalysisPool returns only after ALL
-// workers finish (no early abort). [AC4 / 2.3(d)]
+// workers finish (no early abort).
 func TestRunAnalysisPool_FailureIsolation(t *testing.T) {
 	const n = 6
 	const failIdx = 1

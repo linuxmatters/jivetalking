@@ -12,7 +12,7 @@ package report
 // Risk: definition drift. If a metric's computation, unit, or key changes in the
 // reference or the record schema, update the matching entry here. The
 // required-key test (definitions_test.go) fails when a renderer-needed key has no
-// definition, but it cannot detect a stale gloss, keep this file aligned with
+// definition, but it cannot detect a stale gloss. Keep this file aligned with
 // the reference by hand.
 //
 // Glosses are OBJECTIVE: what the metric is and, in brief, how it is computed. No

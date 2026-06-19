@@ -11,8 +11,8 @@ import (
 // the one owner of the interval duration: collectAnalysisFrames reads it to
 // close each interval window, and the voice-activity detector reads it to
 // convert its duration-expressed bounds into interval counts. The value is a
-// measured choice; the hop-separation sweep (Phase 6.1) may revise it. Keeping
-// it a single named value means that revision is a one-line change.
+// measured choice a future hop-separation sweep may revise. Keeping it a single
+// named value means that revision is a one-line change.
 const analysisIntervalHop = 250 * time.Millisecond
 
 // Voice-activity detector run-formation bounds, expressed as durations rather
@@ -43,8 +43,8 @@ func intervalsForDuration(d, hop time.Duration) int {
 }
 
 // levelAxis names the per-interval amplitude signal the detector splits on. It
-// is the single named choice the validation gate (Phase 6.2) may flip, so the
-// fallback is a one-line change.
+// is the single named choice a future validation gate may flip, so the fallback
+// is a one-line change.
 type levelAxis int
 
 const (

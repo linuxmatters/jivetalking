@@ -184,7 +184,7 @@ func TestRunRecord_NonFiniteFloatSerialisesAsNull(t *testing.T) {
 // full (processing) record: room_tone and speech each carry elected, candidates,
 // and samples; the elected profiles are present; the speech input sample wires
 // from SpeechProfile.RegionSample; and filtered/final samples wire from the
-// output measurements (task 2.7).
+// output measurements.
 func TestRunRecord_RegionsNestedShape(t *testing.T) {
 	result := populatedProcessingResult()
 	// Wire output region samples on both filtered and final stages so the
@@ -282,8 +282,8 @@ func TestRunRecord_RegionsNestedShape(t *testing.T) {
 		}
 	}
 
-	// Room-tone input sample is now populated from the elected candidate's
-	// RegionSample captured at election (FIX 1).
+	// Room-tone input sample is populated from the elected candidate's RegionSample
+	// captured at election.
 	rtSamples := rt["samples"].(map[string]any)
 	rtInput, ok := rtSamples["input"].(map[string]any)
 	if !ok {
@@ -303,7 +303,7 @@ func TestRunRecord_RegionsNestedShape(t *testing.T) {
 
 // TestRunRecord_RegionsAnalysisOnlyDropsSamples asserts the before/after samples
 // drop in an analysis-only record (no FilteredMeasurements / NormResult): the
-// nested elected/candidates stay, but filtered/final samples are omitted (task 2.7).
+// nested elected/candidates stay, but filtered/final samples are omitted.
 func TestRunRecord_RegionsAnalysisOnlyDropsSamples(t *testing.T) {
 	rec := NewAnalysisRunRecord("/tmp/episode.flac", populatedAudioMeasurements())
 	tree, _ := marshalRecordTree(t, rec)
@@ -335,8 +335,8 @@ func TestRunRecord_RegionsAnalysisOnlyDropsSamples(t *testing.T) {
 	}
 }
 
-// TestRunRecord_RegionDurationsAreSeconds asserts FIX 2(a): region time bounds
-// emit as _s float seconds, not raw nanoseconds, and the ns keys are absent.
+// TestRunRecord_RegionDurationsAreSeconds asserts region time bounds emit as _s
+// float seconds, not raw nanoseconds, and the ns keys are absent.
 func TestRunRecord_RegionDurationsAreSeconds(t *testing.T) {
 	rec := NewRunRecord(populatedProcessingResult())
 	tree, _ := marshalRecordTree(t, rec)
@@ -381,8 +381,8 @@ func TestRunRecord_RegionDurationsAreSeconds(t *testing.T) {
 	}
 }
 
-// TestRunRecord_LoudnormMeasuredNumeric asserts FIX 2(b): normalisation.loudnorm_measured
-// is the §8.4 numeric sub-block, not FFmpeg's raw string keys, with normalization_type
+// TestRunRecord_LoudnormMeasuredNumeric asserts normalisation.loudnorm_measured is
+// the §8.4 numeric sub-block, not FFmpeg's raw string keys, with normalization_type
 // kept as a categorical string.
 func TestRunRecord_LoudnormMeasuredNumeric(t *testing.T) {
 	rec := NewRunRecord(populatedProcessingResult())

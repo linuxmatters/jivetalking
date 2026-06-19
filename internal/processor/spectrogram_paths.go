@@ -3,9 +3,8 @@ package processor
 import "path/filepath"
 
 // Spectrogram kind and stage constants. The path suffix convention is
-// `<stem-basename>.spectrogram-<kind>-<stage>.png` (proposal §1 "Naming"). These
-// are the single source of truth for the strings T3.2 (renderer) and T4
-// (generator) reuse - no scattered literals.
+// `<stem-basename>.spectrogram-<kind>-<stage>.png`. These are the single source of
+// truth for the strings the renderer and generator reuse - no scattered literals.
 const (
 	// SpectrogramKindWhole is the whole-file spectrogram, always rendered.
 	SpectrogramKindWhole = "whole"
@@ -50,10 +49,10 @@ func DeriveSpectrogramImages(rec *RunRecord, outputStem string, stages []string)
 
 // deriveSpectrogramImages returns the deterministic spectrogram image list for a
 // run. It is PURE: no I/O, no ffmpeg - only the record's elected-region presence
-// and the output stem drive the result. The renderer (T3.2) links these paths and
-// the generator (T4) fills them.
+// and the output stem drive the result. The renderer links these paths and the
+// generator fills them.
 //
-// Rules (proposal §1, plan T3.1):
+// Rules:
 //   - whole: always present.
 //   - roomtone: only when a room-tone profile is elected.
 //   - speech: only when a speech profile is elected.

@@ -198,7 +198,6 @@ func (e *Encoder) receivePackets() error {
 // Close closes the encoder and output file
 // Safe to call multiple times - subsequent calls are no-ops.
 func (e *Encoder) Close() error {
-	// Guard against double-close
 	if e.fmtCtx == nil {
 		return nil
 	}
@@ -220,7 +219,7 @@ func (e *Encoder) Close() error {
 	}
 
 	ffmpeg.AVFormatFreeContext(e.fmtCtx)
-	e.fmtCtx = nil // Mark as closed
+	e.fmtCtx = nil // nil fmtCtx marks the encoder closed, so a second Close is a no-op
 
 	return nil
 }
@@ -230,8 +229,8 @@ func (e *Encoder) Close() error {
 // package must not import internal/ui, so the value is mirrored here.
 const meterLevelFloorDB = -70.0
 
-// calculateFrameLevel calculates the RMS (Root Mean Square) level of an audio frame in dB
-// This provides accurate audio level measurement for VU meter display
+// calculateFrameLevel returns the RMS (Root Mean Square) level of an audio frame
+// in dB, clamped to the VU-meter display range [meterLevelFloorDB, 0].
 func calculateFrameLevel(frame *ffmpeg.AVFrame) float64 {
 	sumSquares, sampleCount, _, ok := frameSumSquaresAndPeak(frame)
 	if !ok {
@@ -241,13 +240,11 @@ func calculateFrameLevel(frame *ffmpeg.AVFrame) float64 {
 		return meterLevelFloorDB // Silence threshold
 	}
 
-	// Calculate RMS (Root Mean Square)
 	rms := math.Sqrt(sumSquares / float64(sampleCount))
 
-	// Convert to dB: 20 * log10(rms)
-	// Add small epsilon to avoid log(0)
+	// Floor near-silence before the log so 20*log10(rms) never sees rms<=0.
 	if rms < 0.00001 { // Equivalent to -100 dB
-		return meterLevelFloorDB // Floor for silence
+		return meterLevelFloorDB
 	}
 
 	levelDB := 20.0 * math.Log10(rms)

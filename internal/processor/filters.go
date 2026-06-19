@@ -299,7 +299,7 @@ type AdaptiveDiagnostics struct {
 	// SpeechGateNarrowGap is set when the voiced-anchored threshold cannot clear
 	// the loud noise (voiced p10 minus the speech margin sits below noise p95 plus
 	// the noise margin). The threshold stays on the speech side; this signal tells
-	// the depth step (Phase 4 task 4.3) to back off rather than over-gate.
+	// the depth step to back off rather than over-gate.
 	SpeechGateNarrowGap bool `json:"narrow_gap"`
 
 	// AfftdnEnabled records whether the afftdn FFT denoise tail stays in the chain.
@@ -629,8 +629,8 @@ func (cfg *EffectiveFilterConfig) buildDownmixFilter() string {
 // measure the original signal format, then ebur128 does its own internal upsampling
 // for accurate true peak detection without affecting other measurements.
 //
-// NOTE: loudnorm is NOT included here because it has no "measure only" mode -
-// it always processes/normalizes audio. Loudnorm measurement for Pass 3 is done
+// NOTE: loudnorm is NOT included here because it has no "measure only" mode.
+// It always processes/normalises audio. Loudnorm measurement for Pass 3 is done
 // separately via measureWithLoudnorm() which reads the processed file without
 // encoding output.
 func (cfg *EffectiveFilterConfig) buildAnalysisFilter() string {
@@ -671,9 +671,9 @@ func (cfg *EffectiveFilterConfig) buildAnalysisFilter() string {
 	// Note: astats measure_perchannel=all requests all available per-channel statistics
 	//
 	// IMPORTANT: loudnorm is NOT included here, even for Pass 2, because loudnorm
-	// doesn't have a "measure only" mode - it always processes/normalizes audio.
-	// Loudnorm measurement for Pass 3 is done separately via measureWithLoudnorm()
-	// which reads the file without encoding output.
+	// has no "measure only" mode. It always processes/normalises audio. Loudnorm
+	// measurement for Pass 3 is done separately via measureWithLoudnorm() which
+	// reads the file without encoding output.
 	return fmt.Sprintf(
 		"astats=metadata=1:measure_perchannel=all,"+
 			"aspectralstats=win_size=2048:win_func=hann:measure=all,"+

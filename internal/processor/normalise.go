@@ -555,7 +555,7 @@ func loudnormInternalTargetTP(loudnorm LoudnormConfig, measuredTP, measuredI flo
 }
 
 // calculateLinearModeTarget calculates the target I and offset that ensure loudnorm
-// stays in linear mode (never falls back to dynamic normalization).
+// stays in linear mode (never falls back to dynamic normalisation).
 //
 // For linear mode, loudnorm requires: measured_TP + (target_I - measured_I) <= target_TP
 // Rearranging: target_I <= target_TP - measured_TP + measured_I
@@ -621,7 +621,7 @@ type NormalisationResult struct {
 	InputTP           float64        `json:"input_dbtp"`            // Pre-normalisation true peak (from Pass 2 loudnorm measurement)
 	OutputLUFS        float64        `json:"output_lufs"`           // Post-normalisation loudness (measured)
 	OutputTP          float64        `json:"output_dbtp"`           // Post-normalisation true peak (measured)
-	GainApplied       float64        `json:"gain_applied_db"`       // Gain adjustment applied (dB) - loudnorm's target_offset
+	GainApplied       float64        `json:"gain_applied_db"`       // Gain adjustment applied (dB): the capped linear makeup (effectiveTargetI - measured_I)
 	WithinTarget      bool           `json:"within_target"`         // True if final output is within tolerance of target
 	Skipped           bool           `json:"skipped"`               // True if normalisation was skipped (already within tolerance)
 	LoudnormStats     *LoudnormStats `json:"loudnorm_measured"`     // Diagnostic output from loudnorm second pass (nil if capture failed)
@@ -657,20 +657,21 @@ func loudnormFellBackToDynamic(stats *LoudnormStats, inputPath string, log debug
 	return true
 }
 
-// ApplyNormalisation performs Pass 3: EBU R128 dynamic loudness normalisation.
-// Uses FFmpeg's loudnorm filter in two-pass mode.
+// ApplyNormalisation performs Pass 3/4: EBU R128 loudness normalisation via
+// FFmpeg's loudnorm filter in two-pass mode, driven into linear mode.
 //
 // Workflow:
-// 1. Pass 3a: Run loudnorm measurement pass on Pass 2 output (measureWithLoudnorm)
-// 2. Pass 3b: Apply loudnorm with linear=true using those measurements
+// 1. Pass 3: Run loudnorm measurement pass on Pass 2 output (measureWithLoudnorm)
+// 2. Pass 4: Apply loudnorm with linear=true using those measurements
 //
-// This uses loudnorm's own target_offset from the measurement pass, not one we
-// calculate ourselves from ebur128 measurements (per ffmpeg-loudnorm-helper).
+// The applied offset is the capped linear makeup we derive (effectiveTargetI -
+// measured_I), not loudnorm's own first-pass target_offset, so the gain cap binds
+// on high-crest stems.
 //
-// Unlike simple linear gain, loudnorm:
-// - Applies adaptive gain (more to quiet sections, less to loud sections)
-// - Includes 100ms lookahead true peak limiter (upsamples to 192kHz internally)
-// - Prevents noise floor from being elevated into audibility
+// In linear mode loudnorm:
+// - Applies one consistent scalar gain (no adaptive per-section EQ)
+// - Includes a 100ms lookahead true peak limiter (upsamples to 192kHz internally)
+// - Keeps the noise floor from being elevated into audibility
 // - Preserves natural dynamics while hitting target loudness
 //
 // Parameters:

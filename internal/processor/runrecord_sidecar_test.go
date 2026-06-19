@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// TestRunRecord_IntervalSummaryInlineSeriesAbsent asserts task 3.1's split: the
+// TestRunRecord_IntervalSummaryInlineSeriesAbsent asserts the interval split: the
 // inline record carries interval_summary (count + RMS distribution + largest gap)
 // and never the full interval_samples series.
 func TestRunRecord_IntervalSummaryInlineSeriesAbsent(t *testing.T) {
@@ -46,7 +46,7 @@ func TestRunRecord_IntervalSummaryInlineSeriesAbsent(t *testing.T) {
 }
 
 // TestNewIntervalSummary_MatchesReportMaths asserts the percentile/gap selection
-// reproduces the .log diagnostic's integer-index maths exactly.
+// uses the integer-index maths the inline summary reports verbatim.
 func TestNewIntervalSummary_MatchesReportMaths(t *testing.T) {
 	// 11 distinct RMS values above the -120 silence floor.
 	vals := []float64{-70, -68, -66, -64, -62, -40, -38, -36, -34, -32, -30}
@@ -77,8 +77,8 @@ func TestNewIntervalSummary_MatchesReportMaths(t *testing.T) {
 	}
 }
 
-// TestNewIntervalSummary_BelowThresholdDropsDistribution mirrors the .log: fewer
-// than 10 non-silence intervals prints count only, no distribution/gap.
+// TestNewIntervalSummary_BelowThresholdDropsDistribution asserts the threshold
+// rule: fewer than 10 non-silence intervals yields count only, no distribution/gap.
 func TestNewIntervalSummary_BelowThresholdDropsDistribution(t *testing.T) {
 	samples := syntheticIntervals(5)
 	s := newIntervalSummary(samples)

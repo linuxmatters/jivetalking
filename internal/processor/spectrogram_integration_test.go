@@ -93,8 +93,8 @@ func TestGenerateSpectrogramCancellation(t *testing.T) {
 	}
 }
 
-// TestGenerateSpectrogramDimensionParity (A3) renders a whole-file image and a
-// region image of the SAME input, decodes both, and asserts identical Dx()/Dy().
+// TestGenerateSpectrogramDimensionParity renders a whole-file image and a region
+// image of the SAME input, decodes both, and asserts identical Dx()/Dy().
 // The frozen s=1024x512 plus the fixed legend make dimensions content- and
 // duration-independent, so the before/after pair always matches pixel-for-pixel
 // in size.

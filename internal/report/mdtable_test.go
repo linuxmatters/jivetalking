@@ -80,7 +80,7 @@ func TestEscapeCellPassThrough(t *testing.T) {
 	}
 }
 
-// TestIsDigitalSilence pins the legacy threshold semantics (table.go:131): -Inf
+// TestIsDigitalSilence pins the isDigitalSilence threshold semantics: -Inf
 // or at/below -120 dBFS is digital silence.
 func TestIsDigitalSilence(t *testing.T) {
 	cases := []struct {
@@ -102,7 +102,7 @@ func TestIsDigitalSilence(t *testing.T) {
 }
 
 // TestFormatMetricDB pins the "< -120" digital-silence rendering and the
-// placeholder for NaN/+Inf (table.go:158).
+// placeholder for NaN/+Inf in formatMetricDB.
 func TestFormatMetricDB(t *testing.T) {
 	cases := []struct {
 		in   float64
@@ -123,7 +123,7 @@ func TestFormatMetricDB(t *testing.T) {
 	}
 }
 
-// TestFormatMetricLUFS pins the "< -70" measurement-floor rendering (table.go:174).
+// TestFormatMetricLUFS pins the "< -70" measurement-floor rendering in formatMetricLUFS.
 func TestFormatMetricLUFS(t *testing.T) {
 	cases := []struct {
 		in   float64
@@ -150,8 +150,8 @@ func TestFormatMetricSpectral(t *testing.T) {
 	}
 }
 
-// TestFormatMetricScientific pins the scientific-notation path for very small
-// non-zero magnitudes (table.go:148).
+// TestFormatMetricScientific pins the scientific-notation path in formatMetric for
+// very small non-zero magnitudes.
 func TestFormatMetricScientific(t *testing.T) {
 	if got := formatMetric(0.00001, 4); got != "1.00e-05" {
 		t.Errorf("formatMetric(0.00001) = %q, want %q", got, "1.00e-05")
@@ -161,7 +161,7 @@ func TestFormatMetricScientific(t *testing.T) {
 	}
 }
 
-// TestFormatMetricSigned pins explicit-sign rendering (table.go:219).
+// TestFormatMetricSigned pins explicit-sign rendering in formatMetricSigned.
 func TestFormatMetricSigned(t *testing.T) {
 	cases := []struct {
 		in   float64
@@ -179,8 +179,7 @@ func TestFormatMetricSigned(t *testing.T) {
 	}
 }
 
-// TestFormatDuration pins the legacy human-readable duration output
-// (report_common.go:45).
+// TestFormatDuration pins the human-readable duration output of formatDuration.
 func TestFormatDuration(t *testing.T) {
 	cases := []struct {
 		in   time.Duration
@@ -199,7 +198,7 @@ func TestFormatDuration(t *testing.T) {
 	}
 }
 
-// TestChannelName pins the legacy channel-name output (report_common.go:63).
+// TestChannelName pins the channel-name output of channelName.
 func TestChannelName(t *testing.T) {
 	cases := []struct {
 		in   int

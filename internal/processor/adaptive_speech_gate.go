@@ -3,9 +3,8 @@ package processor
 const (
 	// LUFS gap threshold used only by the no-profile legacy threshold path: above
 	// this gap the peak-reference branch is disabled (the recording is too quiet
-	// for a room-tone peak to be a trustworthy threshold anchor). The former
-	// gentle-mode override that also read this constant is gone (task 4.4);
-	// anti-hunting now comes from the narrow-separation depth reduction (task 4.3).
+	// for a room-tone peak to be a trustworthy threshold anchor). Anti-hunting
+	// comes from the narrow-separation depth reduction, not a gentle-mode override.
 	lufsGapExtreme = 25.0 // dB - extreme gap, disables the legacy peak-reference branch
 
 	// Threshold calculation: ensures sufficient gap above noise for effective soft expansion
@@ -15,15 +14,14 @@ const (
 	speechGateTargetReductionDB    = 12.0  // dB - target noise reduction from soft expander
 	speechGateTargetThresholdDB    = -40.0 // dB - target threshold for clean recordings (quiet speech/breath level)
 
-	// Voiced-anchored threshold placement (Phase 4 task 4.1). The threshold is
-	// pinned a fixed margin below the voiced-speech low percentile (p10), the soft
-	// edge of speech measured over the elected region. Sitting below that edge means
-	// the gate never attenuates a voiced word, even its quietest tail. The noise
-	// margin is the clearance above the noise high percentile (p95) we would like
-	// the threshold to keep; it is used ONLY to detect a narrow gap (when the
-	// speech-side placement cannot also clear the loud noise). On a narrow gap we
-	// stay on the speech side and let depth back off rather than raise the threshold
-	// into the voice. Both margins are tunable by ear in the Phase 5 sweep.
+	// Voiced-anchored threshold placement. The threshold is pinned a fixed margin
+	// below the voiced-speech low percentile (p10), the soft edge of speech measured
+	// over the elected region. Sitting below that edge means the gate never attenuates
+	// a voiced word, even its quietest tail. The noise margin is the clearance above
+	// the noise high percentile (p95) the threshold would like to keep; it detects a
+	// narrow gap ONLY (when the speech-side placement cannot also clear the loud
+	// noise). On a narrow gap the threshold stays on the speech side and depth backs
+	// off rather than raising the threshold into the voice.
 	speechGateThresholdSpeechMarginDB = 6.0 // dB - how far below voiced p10 the threshold sits (soft-word safety margin)
 	speechGateThresholdNoiseMarginDB  = 6.0 // dB - clearance above noise p95 used only to detect a narrow gap
 
@@ -41,27 +39,25 @@ const (
 	// Release: fixed 200 ms, with the hold folded in. agate has no hold parameter,
 	// so the release alone holds the gate open across the short gaps inside speech;
 	// 200 ms is long enough to ride those gaps without pumping and short enough to
-	// close cleanly at word ends. Light-touch testing confirmed ~200 ms is good
-	// enough, so the stacked flux/ZCR/LRA terms are dropped. Phase 4 task 4.2
-	// reuses this constant.
+	// close cleanly at word ends. A single fixed value, not a stacked flux/ZCR/LRA
+	// sum.
 	speechGateReleaseFixedMS = 200.0 // ms - fixed release (hold folded in)
 
 	// Range: fixed 14 dB of attenuation, the midpoint of the 12 to 15 dB
 	// transparent band (moderate depth, never a full mute, so the floor under
-	// speech stays natural rather than pumping to silence). The Phase 5 sweep
-	// confirms 14 dB. Phase 4 task 4.3 reuses this constant.
+	// speech stays natural rather than pumping to silence).
 	speechGateDepthFixedDB = 14.0 // dB - fixed attenuation depth (transparent band midpoint)
 
 	// Range on a narrow gap: a gentler fixed depth. A narrow gap means little
 	// headroom between the quietest voiced speech and the loud noise, so gating
 	// the full depth would pump the floor. Back off to a shallower fixed cut
 	// (never a full mute, never 0). Two fixed levels only, normal and narrow, not
-	// proportional to separation. Tunable by ear in the Phase 5 sweep.
+	// proportional to separation.
 	speechGateDepthNarrowDB = 8.0 // dB - reduced attenuation depth on a narrow gap
 
 	// Knee: fixed, within the 3 to 10 dB band. Spectral crest is the wrong signal
-	// to key it off (per the de-esser/compressor reviews), so the knee is a single
-	// value. A soft knee stands in for the hysteresis agate lacks: it smooths the
+	// to key it off, so the knee is a single value. A soft knee stands in for the
+	// hysteresis agate lacks: it smooths the
 	// open/close boundary so the gate does not chatter on level wobble near the
 	// threshold. There is no override; the knee is the same for all content.
 	speechGateKneeFixed = 3.0 // standard knee for all content (3 to 10 dB band)
@@ -77,8 +73,8 @@ const (
 //
 // Parameters are tuned as follows:
 //   - Threshold: voiced-anchored placement a fixed margin below the voiced p10 when
-//     a SpeechProfile is elected (task 4.1); the legacy noise-floor path is the
-//     no-profile safety fallback
+//     a SpeechProfile is elected; the legacy noise-floor path is the no-profile
+//     safety fallback
 //   - Ratio: based on LRA (wide dynamics = gentle ratio)
 //   - Release: fixed 200 ms, with the hold folded in (agate has no hold parameter)
 //   - Range: fixed moderate depth, reduced to a gentler fixed depth on a narrow gap
@@ -123,10 +119,10 @@ func tuneSpeechGate(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagnost
 	// Calculate ratio FIRST since threshold depends on it
 	config.SpeechGate.Ratio = calculateSpeechGateRatio(measurements.Loudness.InputLRA)
 
-	// 1. Threshold: voiced-anchored placement when a SpeechProfile is elected
-	// (task 4.1), otherwise the legacy noise-floor safety path. The voiced path
-	// pins the threshold a fixed margin below the voiced p10, so words never clip,
-	// and reports a narrow-gap signal that the depth step (task 4.3) consumes.
+	// 1. Threshold: voiced-anchored placement when a SpeechProfile is elected,
+	// otherwise the legacy noise-floor safety path. The voiced path pins the
+	// threshold a fixed margin below the voiced p10, so words never clip, and reports
+	// a narrow-gap signal that the depth step consumes.
 	var narrowGap bool
 	if measurements.Regions.SpeechProfile != nil {
 		threshold, gap := calculateSpeechGateThreshold(
@@ -166,8 +162,8 @@ func tuneSpeechGate(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagnost
 	config.SpeechGate.Release = calculateSpeechGateRelease()
 
 	// 5. Range: fixed moderate depth, reduced to a gentler fixed depth on a narrow
-	// gap (task 4.3). depthDB is a positive attenuation depth, so negate it for the
-	// config's linear-amplitude range.
+	// gap. depthDB is a positive attenuation depth, so negate it for the config's
+	// linear-amplitude range.
 	depthDB := calculateSpeechGateRangeDB(narrowGap)
 	config.SpeechGate.Range = Decibels(-depthDB).LinearAmplitude().Float64()
 	if diagnostics != nil {
@@ -182,11 +178,10 @@ func tuneSpeechGate(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagnost
 
 	// Note: Makeup gain left at default (1.0 unity) - loudnorm handles all level adjustment
 	//
-	// Anti-hunting: the former gentle-mode override (extreme LUFS gap + low LRA
-	// forced ratio 1.2 and knee 2.0) is gone. Hunting on uniform quiet recordings
-	// is now prevented by the narrow-separation depth reduction in
-	// calculateSpeechGateRangeDB (task 4.3): a shallow gap takes a gentler fixed
-	// depth instead of the full cut, so a single signal (separation) governs it.
+	// Anti-hunting: there is no gentle-mode override. Hunting on uniform quiet
+	// recordings is prevented by the narrow-separation depth reduction in
+	// calculateSpeechGateRangeDB: a shallow gap takes a gentler fixed depth instead
+	// of the full cut, so a single signal (separation) governs it.
 }
 
 // noiseContext bundles the noise-floor and room-tone references the threshold
@@ -212,8 +207,8 @@ type noiseContext struct {
 // route into this function. This noise-floor maths can only place a threshold from
 // the noise references, and it runs only when there is no voiced population to clip
 // in the first place. There is no separation-based escape hatch from the voiced
-// path into the legacy maths: the old "separation < 5 dB" guard that keyed off a
-// fabricated proxy is gone (task 4.1). Selection is structural, not numeric.
+// path into the legacy maths: there is no "separation < 5 dB" guard keying off a
+// fabricated proxy. Selection is structural, not numeric.
 //
 // noise.roomTonePeak and noise.roomToneCrest describe the noise profile extracted
 // from the elected room-tone region.
@@ -252,11 +247,11 @@ func calculateSpeechGateThresholdLegacy(noise noiseContext, ratio, lufsGap float
 //
 // which is exactly GateSeparationDB < speechMargin + noiseMargin (separation =
 // VoicedLowPercentile - NoiseHighPercentile), so the noise percentile enters only
-// through the precomputed separation. On a narrow gap we resolve toward the speech
-// side per the proposal CAVEAT: the threshold stays at the speech-side value (it is
-// NOT raised to clear the noise, so residual noise is accepted) and the returned
-// narrowGap flag tells the depth step (task 4.3) to back off. The dB threshold is
-// converted to the config's linear-amplitude form with the existing Decibels helper.
+// through the precomputed separation. On a narrow gap the resolution favours the
+// speech side: the threshold stays at the speech-side value (it is NOT raised to
+// clear the noise, so residual noise is accepted) and the returned narrowGap flag
+// tells the depth step to back off. The dB threshold is converted to the config's
+// linear-amplitude form with the existing Decibels helper.
 //
 // The threshold is clamped to the global gate limits as a final safety net.
 func calculateSpeechGateThreshold(voicedLowPercentile, separation float64) (threshold float64, narrowGap bool) {
@@ -287,16 +282,15 @@ func calculateSpeechGateRatio(lra float64) float64 {
 // calculateSpeechGateRelease returns the fixed release time. agate has no hold
 // parameter, so the hold is folded into the release: a longer release holds the
 // gate open through the short intra-syllable dips inside speech so it does not
-// pump, while staying short enough to close cleanly at word ends. Light-touch
-// testing confirmed ~200 ms is good enough, so the former stacked flux/ZCR/LRA
-// compensation terms are dropped in favour of this single fixed value.
+// pump, while staying short enough to close cleanly at word ends. A single fixed
+// value (~200 ms), not a stacked flux/ZCR/LRA sum.
 func calculateSpeechGateRelease() float64 {
 	return speechGateReleaseFixedMS
 }
 
 // calculateSpeechGateRangeDB returns the gate attenuation depth in dB. It emits a
 // fixed moderate depth on a normal (wide) gap, and a gentler fixed depth when the
-// narrow-gap signal is set (from the threshold step, task 4.1). A narrow gap means
+// narrow-gap signal is set (from the threshold step). A narrow gap means
 // little headroom between the quietest voiced speech and the loud noise, so the
 // full depth would pump the floor; the gentler depth gates more softly. Two fixed
 // levels only, never proportional to separation, and never a full mute. The

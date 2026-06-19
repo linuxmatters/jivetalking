@@ -7,8 +7,7 @@ import (
 
 // GainAdviceKind is the single outcome of input-gain advice. The advice keys off
 // ONE binding constraint (input true peak) against ONE target, so the direction
-// is never ambiguous: it never says "raise" and "lower" in the same breath the
-// way the scrapped per-metric advice did.
+// is never ambiguous: it never says "raise" and "lower" in the same breath.
 type GainAdviceKind int
 
 const (
