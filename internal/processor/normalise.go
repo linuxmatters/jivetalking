@@ -28,65 +28,33 @@ func normaliseDuration(m *AudioMeasurements) float64 {
 // Limiter ceiling constants used by calculateLimiterCeiling and pre-gain deficit
 // calculation.
 const (
-	// minLimiterCeilingDB is the practical minimum for FFmpeg's alimiter.
-	// limit=0.0625 = 20*log10(0.0625) ≈ -24.08 dBTP; we use -24.0 with a small buffer.
-	// This is the alimiter engine floor, not a tuning constant.
+	// minLimiterCeilingDB is the practical minimum for FFmpeg's alimiter ceiling
+	// (dBTP). Engine floor, not a tuning constant.
+	// See docs/Normalisation-Tuning.md for the corpus derivation.
 	minLimiterCeilingDB = -24.0 // dBTP
 
-	// brickwallTruePeakHeadroomDB is the inter-sample (sample-peak vs true-peak)
-	// allowance subtracted from loudnorm's TargetTP to set the brickwall's
-	// sample-peak ceiling. The brickwall alimiter limits SAMPLE peak, but the spec
-	// targets oversampled TRUE peak; the gap between them (the inter-sample excess)
-	// pushes realised true peak above the sample ceiling.
-	//
-	// Corpus-derived (testdata/validation-0.5.x-vs-0.6.x/out-combined,
-	// _combined-metrics.csv): across the combined post-Phase-2 run the
-	// inter-sample excess (final true_peak dBTP − sample_peak dBFS) peaked at
-	// 0.817 dB on LMP-76 popey, driven up by the Phase-2 loudness-cap relaxation
-	// (the former static loudnorm TP relax) from the 0.60 dB the earlier 0.7 value
-	// was sized for. The excess is positive on every file, realised true peak sits above
-	// the sample ceiling on all of them. 0.9 dB covers the p100 of 0.817 with a
-	// ~0.08 dB safety allowance, so the sample-peak brickwall keeps oversampled
-	// true peak ≤ the loudnorm TargetTP on the whole corpus.
+	// brickwallTruePeakHeadroomDB is the inter-sample allowance (dB) subtracted
+	// from loudnorm's TargetTP to set the brickwall's sample-peak ceiling.
+	// See docs/Normalisation-Tuning.md for the corpus derivation.
 	brickwallTruePeakHeadroomDB = 0.9 // dB
 
-	// measurementCushionDB is the fixed measurement-disagreement cushion added to
-	// loudnorm's INTERNAL true-peak target (loudnormInternalTargetTP). It guards
-	// the per-file projected post-gain peak against loudnorm's OWN internal
-	// oversampled true-peak estimate disagreeing with our Pass-3 measured TP: Go
-	// computes projectedPeak from measured_TP/measured_I; FFmpeg's loudnorm
-	// computes its own output-peak estimate at a different point. If loudnorm's
-	// estimate exceeds our projection by more than the cushion, loudnorm can trip
-	// to DYNAMIC mode, the failure the Pass-4 leveling limiter exists to prevent.
-	//
-	// Corpus-measured (testdata/validation-0.5.x-vs-0.6.x/out-final/*.json):
-	// delta = loudnorm_output_tp − projectedPeak is ≤ 0.05 dB across all 48 files,
-	// one-sided positive (loudnorm estimates its peak ≈0.04 dB HOTTER on every
-	// file). 0.2 clears the measured 0.05 bias ~4×, leaving headroom for
-	// off-corpus material (other producers' audio) where the Go/FFmpeg estimator
-	// gap could be larger.
-	//
-	// This is the ONLY static margin left in loudnorm's internal targeting. The
-	// variable, corpus-dependent loudness shortfall the former 0.5 relax constant
-	// covered is now derived per file from each file's Pass-3 measured_I/measured_TP
-	// (see loudnormInternalTargetTP), so no corpus-tuned number remains. It applies
-	// ONLY to loudnorm's internal targeting; the brickwall ceiling stays at
-	// TargetTP − brickwallTruePeakHeadroomDB, unchanged.
+	// measurementCushionDB is the fixed measurement-disagreement cushion (dB) added
+	// to loudnorm's internal true-peak target (loudnormInternalTargetTP). It is the
+	// only static margin left in loudnorm's internal targeting.
+	// See docs/Normalisation-Tuning.md for the corpus derivation.
 	measurementCushionDB = 0.2 // dB
 
-	// linearSafetyMargin keeps loudnorm safely inside linear-mode bounds in the
-	// calculateLinearModeTarget guard. It accounts for floating-point precision
-	// differences between Go and FFmpeg, rounding in filter parameter passing, and
-	// measurement variance. loudnormInternalTargetTP folds it into the per-file
-	// internal TP so the linear-mode cap is inert by construction.
+	// linearSafetyMargin keeps loudnorm inside linear-mode bounds (dB) in the
+	// calculateLinearModeTarget guard. loudnormInternalTargetTP folds the same value
+	// into the per-file internal TP so the cap is inert by construction.
+	// See docs/Normalisation-Tuning.md for the corpus derivation.
 	linearSafetyMargin = 0.1 // dB
 
-	// loudnormTPMaxDB / loudnormTPMinDB bound the value emitted into loudnorm's
-	// TP= option. FFmpeg's af_loudnorm rejects a TP outside [-9.0, 0.0] dBTP
-	// (AVERROR(ERANGE) at graph build, see set_options in af_loudnorm.c). The
-	// per-file loudnormInternalTargetTP is unbounded by construction, so the
-	// emitted TP= is clamped to this range; the linear-mode guard keeps the
-	// unclamped value (see the clamp site in the loudnorm filter string).
+	// loudnormTPMaxDB / loudnormTPMinDB bound the value emitted into loudnorm's TP=
+	// option (dBTP). FFmpeg's af_loudnorm rejects a TP outside [-9.0, 0.0]; the
+	// per-file loudnormInternalTargetTP is clamped to this range, the linear-mode
+	// guard keeps the unclamped value.
+	// See docs/Normalisation-Tuning.md for the engine constraint.
 	loudnormTPMaxDB = 0.0  // dBTP
 	loudnormTPMinDB = -9.0 // dBTP
 )
