@@ -41,7 +41,7 @@ func TestAfftdnCustomSpecParsesInFilterGraph(t *testing.T) {
 		t.Fatalf("unexpected spec under test: %q", spec)
 	}
 
-	graph, src, sink, err := setupFilterGraph(reader.GetDecoderContext(), spec)
+	graph, src, sink, err := setupFilterGraph(reader.DecoderContext(), spec)
 	if err != nil {
 		t.Fatalf("custom afftdn spec failed to parse/init in filter graph: %v\nspec: %s", err, spec)
 	}

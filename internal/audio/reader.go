@@ -169,8 +169,10 @@ func (r *Reader) ReadFrame() (*ffmpeg.AVFrame, error) {
 	}
 }
 
-// GetDecoderContext returns the decoder context (needed for filter graph setup)
-func (r *Reader) GetDecoderContext() *ffmpeg.AVCodecContext {
+// DecoderContext returns the decoder context for filter graph setup. The
+// Reader owns this context and frees it in Close. Callers must not retain it
+// or use it after Close, or they read freed cgo memory.
+func (r *Reader) DecoderContext() *ffmpeg.AVCodecContext {
 	return r.decCtx
 }
 

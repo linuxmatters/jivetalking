@@ -451,12 +451,6 @@ func peakMarkerColor(elapsed time.Duration) color.Color {
 // across width.
 const gainBarWidth = 5
 
-// gainBar returns the gain bar; thin alias kept for in-package call sites,
-// mirroring qualityStars/QualityStars. See GainBar.
-func gainBar(inputTP float64) string {
-	return GainBar(inputTP)
-}
-
 // GainBar renders the input true peak as a short horizontal bar that fills and
 // colours with the peak, mirroring separationBar's grammar. It is pure
 // presentation, derived from the same true peak as GainAdvice, with the fill and
@@ -759,20 +753,15 @@ func renderDoneBox(file FileProgress) string {
 	// Quality rows: source-capture stars (Recording) above output-quality stars
 	// (Processed). The pair tells the value story: a low Recording beside a high
 	// Processed shows what the tool rescued. Both use the same star/label styling.
-	recStars := starStyle.Render(qualityStars(file.RecordingQuality.Stars))
+	recStars := starStyle.Render(QualityStars(file.RecordingQuality.Stars))
 	fmt.Fprintf(&content, "%s%s  %s\n",
 		labelStyle.Render("Recording"), recStars, valueStyle.Render(file.RecordingQuality.Label))
 
-	procStars := starStyle.Render(qualityStars(file.Quality.Stars))
+	procStars := starStyle.Render(QualityStars(file.Quality.Stars))
 	fmt.Fprintf(&content, "%s%s  %s",
 		labelStyle.Render("Processed"), procStars, valueStyle.Render(file.Quality.Label))
 
 	return heading + "\n" + box.Render(content.String())
-}
-
-// qualityStars renders an n-of-5 star bar as filled ★ followed by empty ☆.
-func qualityStars(n int) string {
-	return QualityStars(n)
 }
 
 // QualityStars renders an n-of-5 star bar as filled ★ followed by empty ☆,

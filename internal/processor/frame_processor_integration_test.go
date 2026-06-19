@@ -59,7 +59,7 @@ func openTestFilterGraph(t *testing.T) (
 		t.Fatalf("failed to open test audio %s: %v", inputPath, err)
 	}
 
-	graph, srcCtx, sinkCtx, err := setupFilterGraph(r.GetDecoderContext(), "anull")
+	graph, srcCtx, sinkCtx, err := setupFilterGraph(r.DecoderContext(), "anull")
 	if err != nil {
 		r.Close()
 		t.Fatalf("failed to create filter graph: %v", err)

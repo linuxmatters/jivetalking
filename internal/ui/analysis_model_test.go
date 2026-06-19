@@ -105,7 +105,7 @@ func TestGainBarFill(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			n := countFilled(gainBar(tc.inputTP))
+			n := countFilled(GainBar(tc.inputTP))
 			if n < tc.minF || n > tc.maxF {
 				t.Errorf("inputTP=%.1f: %d filled cells, want [%d,%d]", tc.inputTP, n, tc.minF, tc.maxF)
 			}

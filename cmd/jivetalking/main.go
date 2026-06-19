@@ -183,7 +183,7 @@ type analysisOnlyDeps struct {
 	stdout              io.Writer
 	hasTTY              func() bool
 	openMetadata        func(string) (*audio.Metadata, error)
-	analyseDetailed     func(context.Context, string, *processor.BaseFilterConfig, processor.ProgressCallback) (*processor.AnalysisResult, error)
+	analyse             func(context.Context, string, *processor.BaseFilterConfig, processor.ProgressCallback) (*processor.AnalysisResult, error)
 	printError          func(string)
 	writeMarkdownReport func(*processor.RunRecord, report.Timings, string) error
 	writeRunRecord      func(*processor.RunRecord, string) error
@@ -196,7 +196,7 @@ func defaultAnalysisOnlyDeps() analysisOnlyDeps {
 		stdout:              os.Stdout,
 		hasTTY:              isTTY,
 		openMetadata:        pool.openMetadata,
-		analyseDetailed:     pool.analyse,
+		analyse:             pool.analyse,
 		printError:          cli.PrintError,
 		writeMarkdownReport: report.WriteMarkdownReport,
 		writeRunRecord:      processor.WriteRunRecord,
@@ -322,7 +322,7 @@ func runAnalysisOnlyWithDeps(files []string, config *processor.BaseFilterConfig,
 	slots := make([]analysisSlot, len(files))
 
 	poolDeps := analysisPoolDeps{
-		analyse:      deps.analyseDetailed,
+		analyse:      deps.analyse,
 		openMetadata: deps.openMetadata,
 	}
 

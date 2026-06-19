@@ -546,7 +546,7 @@ func collectAnalysisFrames(ctx stdcontext.Context, filename string, config *Base
 	estimatedTotalFrames := (totalDuration * sampleRate) / samplesPerFrame
 
 	filterGraph, bufferSrcCtx, bufferSinkCtx, err := createAnalysisFilterGraph(
-		reader.GetDecoderContext(),
+		reader.DecoderContext(),
 		config,
 		pass,
 	)
@@ -571,7 +571,7 @@ func collectAnalysisFrames(ctx stdcontext.Context, filename string, config *Base
 	var intervalStartTime time.Duration
 
 	var inputSamplesProcessed int64
-	inputSampleRate := float64(reader.GetDecoderContext().SampleRate())
+	inputSampleRate := float64(reader.DecoderContext().SampleRate())
 
 	if err := runFilterGraph(ctx, reader, bufferSrcCtx, bufferSinkCtx, FrameLoopConfig{
 		OnReadError: func(err error) error {

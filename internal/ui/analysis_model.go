@@ -213,9 +213,9 @@ func renderAnalysisVerdict(m *processor.AudioMeasurements) string {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "   %s  %s  %s\n",
-		labelStyle.Render("Recording"), starStyle.Render(qualityStars(rec.Stars)), rec.Label)
+		labelStyle.Render("Recording"), starStyle.Render(QualityStars(rec.Stars)), rec.Label)
 	fmt.Fprintf(&b, "   %s  %s  %s\n",
-		labelStyle.Render("Gain     "), gainBar(m.Loudness.InputTP), advice.Message())
+		labelStyle.Render("Gain     "), GainBar(m.Loudness.InputTP), advice.Message())
 	return b.String()
 }
 

@@ -1259,7 +1259,7 @@ func TestRunFilterGraph(t *testing.T) {
 
 	// Create a passthrough filter graph (anull = audio null filter, passes through unchanged)
 	filterGraph, bufferSrcCtx, bufferSinkCtx, err := setupFilterGraph(
-		reader.GetDecoderContext(),
+		reader.DecoderContext(),
 		"anull",
 	)
 	if err != nil {
@@ -1315,7 +1315,7 @@ func TestRunFilterGraphLenientErrors(t *testing.T) {
 	defer reader.Close()
 
 	filterGraph, bufferSrcCtx, bufferSinkCtx, err := setupFilterGraph(
-		reader.GetDecoderContext(),
+		reader.DecoderContext(),
 		"anull",
 	)
 	if err != nil {

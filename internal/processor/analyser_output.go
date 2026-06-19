@@ -112,7 +112,7 @@ func measureOutputRegionFromReader(ctx context.Context, reader *audio.Reader, st
 	// span is unchanged (see regionSeekPreRoll).
 	seekReaderBeforeRegion(reader, start, log)
 
-	filterGraph, bufferSrcCtx, bufferSinkCtx, err := setupFilterGraph(reader.GetDecoderContext(), filterSpec)
+	filterGraph, bufferSrcCtx, bufferSinkCtx, err := setupFilterGraph(reader.DecoderContext(), filterSpec)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create analysis filter graph: %w", err)
 	}

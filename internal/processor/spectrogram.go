@@ -112,7 +112,7 @@ func generateSpectrogram(ctx context.Context, inputPath string, bounds *regionBo
 		seekReaderBeforeRegion(reader, time.Duration(bounds.Start*float64(time.Second)), log)
 	}
 
-	graph, srcCtx, sinkCtx, err := setupSpectrumGraph(reader.GetDecoderContext(), spectrogramFilterSpec(bounds))
+	graph, srcCtx, sinkCtx, err := setupSpectrumGraph(reader.DecoderContext(), spectrogramFilterSpec(bounds))
 	if err != nil {
 		return err
 	}

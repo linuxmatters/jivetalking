@@ -103,19 +103,19 @@ func TestProgressCallbackBoundariesUseProcessorEvent(t *testing.T) {
 	progressUpdateType := reflect.TypeFor[processor.ProgressUpdate]()
 
 	depsType := reflect.TypeFor[analysisOnlyDeps]()
-	analyseDetailed, ok := depsType.FieldByName("analyseDetailed")
+	analyse, ok := depsType.FieldByName("analyse")
 	if !ok {
-		t.Fatal("analysisOnlyDeps has no analyseDetailed field")
+		t.Fatal("analysisOnlyDeps has no analyse field")
 	}
-	if analyseDetailed.Type.Kind() != reflect.Func {
-		t.Fatalf("analysisOnlyDeps.analyseDetailed = %s, want func", analyseDetailed.Type)
+	if analyse.Type.Kind() != reflect.Func {
+		t.Fatalf("analysisOnlyDeps.analyse = %s, want func", analyse.Type)
 	}
-	if analyseDetailed.Type.NumIn() != 4 {
-		t.Fatalf("analysisOnlyDeps.analyseDetailed has %d parameters, want 4", analyseDetailed.Type.NumIn())
+	if analyse.Type.NumIn() != 4 {
+		t.Fatalf("analysisOnlyDeps.analyse has %d parameters, want 4", analyse.Type.NumIn())
 	}
-	if analyseDetailed.Type.In(3) != progressCallbackType {
-		t.Fatalf("analysisOnlyDeps.analyseDetailed progress callback = %s, want %s",
-			analyseDetailed.Type.In(3), progressCallbackType)
+	if analyse.Type.In(3) != progressCallbackType {
+		t.Fatalf("analysisOnlyDeps.analyse progress callback = %s, want %s",
+			analyse.Type.In(3), progressCallbackType)
 	}
 
 	callbackType := reflect.TypeOf((&progressHandler{}).callback)
@@ -135,7 +135,7 @@ func TestRunAnalysisOnlyWithDeps_NonTTYOmitsBenchPath(t *testing.T) {
 
 	analyse := func(_ context.Context, path string, cfg *processor.BaseFilterConfig, progress processor.ProgressCallback) (*processor.AnalysisResult, error) {
 		if path != inputPath {
-			t.Fatalf("analyseDetailed path = %q, want %q", path, inputPath)
+			t.Fatalf("analyse path = %q, want %q", path, inputPath)
 		}
 		effective, diagnostics := processor.AdaptConfig(cfg, makeAnalysisOnlyTestMeasurements())
 		return &processor.AnalysisResult{
@@ -163,7 +163,7 @@ func TestRunAnalysisOnlyWithDeps_NonTTYOmitsBenchPath(t *testing.T) {
 				Channels:   1,
 			}, nil
 		},
-		analyseDetailed: analyse,
+		analyse: analyse,
 		printError: func(message string) {
 			t.Fatalf("printError called: %s", message)
 		},
@@ -240,7 +240,7 @@ func TestRunAnalysisOnlyWithDeps_DiagnosticsGatesSidecars(t *testing.T) {
 			openMetadata: func(string) (*audio.Metadata, error) {
 				return &audio.Metadata{Duration: 120, SampleRate: 48000, Channels: 1}, nil
 			},
-			analyseDetailed: analyse,
+			analyse: analyse,
 			// The synthetic input (stem.wav) does not exist on disk, so the
 			// diagnostics-on spectrogram renders fail to open it and surface a
 			// non-fatal "Failed to render analysis spectrogram" message. That is
@@ -335,7 +335,7 @@ func TestRunAnalysisOnlyWithDeps_PassesPerWorkerConfigClones(t *testing.T) {
 				Channels:   1,
 			}, nil
 		},
-		analyseDetailed: analyse,
+		analyse: analyse,
 		printError: func(message string) {
 			t.Fatalf("printError called: %s", message)
 		},
@@ -381,7 +381,7 @@ func TestRunAnalysisOnlyWithDeps_OrderedOutputParityAcrossJobs(t *testing.T) {
 	analyse := func(_ context.Context, path string, _ *processor.BaseFilterConfig, _ processor.ProgressCallback) (*processor.AnalysisResult, error) { //nolint:unparam // signature must match processor.AnalyseOnlyDetailed
 		index, ok := fileIndex[path]
 		if !ok {
-			t.Fatalf("analyseDetailed unexpected path %q", path)
+			t.Fatalf("analyse unexpected path %q", path)
 		}
 
 		// Later indices sleep less, so under concurrency they complete first.
@@ -420,7 +420,7 @@ func TestRunAnalysisOnlyWithDeps_OrderedOutputParityAcrossJobs(t *testing.T) {
 					Channels:   1,
 				}, nil
 			},
-			analyseDetailed:     analyse,
+			analyse:             analyse,
 			writeMarkdownReport: reports.write,
 			printError: func(message string) {
 				t.Fatalf("printError called: %s", message)
@@ -489,7 +489,7 @@ func TestRunAnalysisOnlyWithDeps_NonTTYBannerThenOrderedReports(t *testing.T) {
 	analyse := func(_ context.Context, path string, _ *processor.BaseFilterConfig, _ processor.ProgressCallback) (*processor.AnalysisResult, error) {
 		index, ok := fileIndex[path]
 		if !ok {
-			t.Fatalf("analyseDetailed unexpected path %q", path)
+			t.Fatalf("analyse unexpected path %q", path)
 		}
 
 		delay := time.Duration(len(files)-index) * 20 * time.Millisecond
@@ -524,7 +524,7 @@ func TestRunAnalysisOnlyWithDeps_NonTTYBannerThenOrderedReports(t *testing.T) {
 				Channels:   1,
 			}, nil
 		},
-		analyseDetailed:     analyse,
+		analyse:             analyse,
 		writeMarkdownReport: reports.write,
 		printError: func(message string) {
 			t.Fatalf("printError called: %s", message)
@@ -599,7 +599,7 @@ func TestRunAnalysisOnlyWithDeps_FailureIsolation(t *testing.T) {
 	analyse := func(_ context.Context, path string, _ *processor.BaseFilterConfig, _ processor.ProgressCallback) (*processor.AnalysisResult, error) {
 		index, ok := fileIndex[path]
 		if !ok {
-			t.Fatalf("analyseDetailed unexpected path %q", path)
+			t.Fatalf("analyse unexpected path %q", path)
 		}
 		if index == failIndex {
 			return nil, boom
@@ -633,7 +633,7 @@ func TestRunAnalysisOnlyWithDeps_FailureIsolation(t *testing.T) {
 				Channels:   1,
 			}, nil
 		},
-		analyseDetailed:     analyse,
+		analyse:             analyse,
 		writeMarkdownReport: reports.write,
 		printError: func(message string) {
 			printErrMu.Lock()

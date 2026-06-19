@@ -282,7 +282,7 @@ func processWithFilters(ctx context.Context, inputPath, outputPath string, confi
 	// NOTE: loudnorm is NOT in the Pass 2 filter chain because it always processes audio
 	// (no measure-only mode). Loudnorm measurement is done separately in Pass 3.
 	filterGraph, bufferSrcCtx, bufferSinkCtx, err := CreateProcessingFilterGraph(
-		reader.GetDecoderContext(),
+		reader.DecoderContext(),
 		config,
 	)
 	if err != nil {

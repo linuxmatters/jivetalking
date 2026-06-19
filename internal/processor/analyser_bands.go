@@ -62,7 +62,7 @@ func measureSpeechBandRMS(ctx context.Context, reader *audio.Reader, start, dura
 	// span is unchanged (see regionSeekPreRoll).
 	seekReaderBeforeRegion(reader, start, log)
 
-	filterGraph, bufferSrcCtx, bufferSinkCtx, err := setupFilterGraph(reader.GetDecoderContext(), filterSpec)
+	filterGraph, bufferSrcCtx, bufferSinkCtx, err := setupFilterGraph(reader.DecoderContext(), filterSpec)
 	if err != nil {
 		return 0, false, fmt.Errorf("failed to create band analysis filter graph: %w", err)
 	}

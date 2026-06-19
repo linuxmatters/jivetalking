@@ -175,7 +175,7 @@ func runFullbenchFilterSpecCore(tb testing.TB, inputPath, outputPath, filterSpec
 		DurationSecs: metadata.Duration,
 	}
 
-	filterGraph, bufferSrcCtx, bufferSinkCtx, err := setupFilterGraph(reader.GetDecoderContext(), filterSpec)
+	filterGraph, bufferSrcCtx, bufferSinkCtx, err := setupFilterGraph(reader.DecoderContext(), filterSpec)
 	if err != nil {
 		tb.Fatalf("failed to create fullbench filter graph: %v", err)
 	}

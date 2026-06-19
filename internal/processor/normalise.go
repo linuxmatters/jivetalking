@@ -301,7 +301,7 @@ func measureWithLoudnorm(ctx context.Context, inputPath string, config *Effectiv
 
 	// Create filter graph
 	filterGraph, bufferSrcCtx, bufferSinkCtx, err := deps.setupFilterGraph(
-		reader.GetDecoderContext(),
+		reader.DecoderContext(),
 		filterSpec,
 	)
 	if err != nil {
@@ -1026,7 +1026,7 @@ func prepareLoudnormApplication(ctx context.Context, request loudnormApplication
 		statsPath,
 	)
 	filterGraph, bufferSrcCtx, bufferSinkCtx, err := deps.setupFilterGraph(
-		reader.GetDecoderContext(),
+		reader.DecoderContext(),
 		filterSpec,
 	)
 	if err != nil {
