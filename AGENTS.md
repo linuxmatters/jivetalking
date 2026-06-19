@@ -101,6 +101,8 @@ Pass 3: [volume (pre-gain, when clamped) → alimiter (levelling limiter)] → l
 Pass 4: volume (pre-gain, when clamped) → alimiter (levelling limiter, peak reduction) → loudnorm (linear mode, input stats from Pass 3) → aresample (source rate) → adeclick → alimiter (final-stage brickwall, source rate) → astats → aspectralstats → ebur128
 ```
 
+> The corpus derivation for the loudnorm and limiter tuning constants (`brickwallTruePeakHeadroomDB`, `measurementCushionDB`, `linearSafetyMargin`, the `loudnormTP`/`minLimiterCeiling` bounds) lives in `docs/Normalisation-Tuning.md`. The code comments in `normalise.go` point there; do not re-inline the rationale.
+
 **Output filename:** `<name>-LUFS-NN-processed.<ext>` where NN is the rounded (nearest whole) absolute LUFS value of the final output (e.g., -26.8 LUFS produces `LUFS-27`). The matching always-on report is `<name>-LUFS-NN-processed.md`; analysis-only writes `<input>-analysis.md`.
 
 **Diagnostic artefacts (`--diagnostics`, default OFF):** the flag gates three bulk diagnostic outputs written beside the `.md`/`.json`/`.flac`:
