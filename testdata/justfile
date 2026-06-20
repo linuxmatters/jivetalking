@@ -6,13 +6,13 @@
 testdata := source_directory()
 
 # Current episode (override per run, e.g. `just ep=82 process-presenters`)
-ep := "83"
+ep := "85"
 
 # Presenters processed by the batch recipes
 presenters := "mark martin popey"
 
 # Episodes processed by the `*-all` recipes
-episodes_list := "68 69 70 71 72 73 74 75 76 77 78 79 80 81"
+episodes_list := "68 69 70 71 72 73 74 75 76 77 78 79 80 81 82 83 84 85"
 
 # Set diagnostics=1 (any non-empty value) to add --diagnostics: emit the .jsonl
 # sidecars + before/after spectrogram PNGs. Off by default. Works on every
@@ -112,7 +112,7 @@ process-corpus ver="":
     set -euo pipefail
     # Collects artefacts into testdata/corpus-<label>/out/ for later LLM A/B analysis.
     #   `just process-corpus`        -> source build (./jivetalking), label "source", --diagnostics
-    #   `just process-corpus 0.5.1`  -> fetch release 0.5.1, no report flag
+    #   `just process-corpus 0.5.0`  -> fetch release 0.5.0, no report flag
     #   `just process-corpus 0.6.0`  -> fetch release 0.6.0, --diagnostics
     # Floor 0.5.1 (inclusive). Needs util-linux `script` (GNU/util-linux flags
     # -qefc); macOS/BSD `script` differs and is out of scope. Release path needs an
@@ -131,8 +131,8 @@ process-corpus ver="":
     # --- Version gate (inclusive floor 0.5.1) ---------------------------------
     # sort -V so 0.5.10 > 0.5.1 (not a string compare). Empty ver = source path.
     if [[ -n "$ver" ]]; then
-        lowest="$(printf '%s\n%s\n' "0.5.1" "$ver" | sort -V | head -1)"
-        [[ "$lowest" == "0.5.1" ]] || die "version $ver < 0.5.1 not supported"
+        lowest="$(printf '%s\n%s\n' "0.5.0" "$ver" | sort -V | head -1)"
+        [[ "$lowest" == "0.5.0" ]] || die "version $ver < 0.5.0 not supported"
     fi
 
     # --- Label + bounded purge of out/ ----------------------------------------
@@ -170,14 +170,14 @@ process-corpus ver="":
     fi
 
     # --- Flag selection per tier ----------------------------------------------
-    # Source or > 0.5.1 -> --diagnostics. Exactly 0.5.1 -> no report flag.
+    # Source or > 0.5.0 -> --diagnostics. Exactly 0.5.0 -> no report flag.
     # Never --logs (a removed 0.3.1 flag; Kong rejects unknown flags).
     REPORT_FLAGS=()
     if [[ -z "$ver" ]]; then
         REPORT_FLAGS=(--diagnostics)
     else
-        lowest="$(printf '%s\n%s\n' "0.5.1" "$ver" | sort -V | head -1)"
-        if [[ "$ver" != "0.5.1" && "$lowest" == "0.5.1" ]]; then
+        lowest="$(printf '%s\n%s\n' "0.5.0" "$ver" | sort -V | head -1)"
+        if [[ "$ver" != "0.5.0" && "$lowest" == "0.5.0" ]]; then
             REPORT_FLAGS=(--diagnostics)
         fi
     fi
@@ -187,7 +187,7 @@ process-corpus ver="":
     # fixture-5m.flac is excluded (a test fixture, not a recording).
     files=()
     for f in \
-        {{ testdata }}/LMP-{68..83}-{mark,martin,popey}.flac \
+        {{ testdata }}/LMP-{68..85}-{mark,martin,popey}.flac \
         {{ testdata }}/LMP-81s-{mark,martin,popey}.flac \
         {{ testdata }}/TT-202-{anna,marius,patrick}.wav \
         {{ testdata }}/BF-08-stephen.wav; do

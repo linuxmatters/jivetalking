@@ -112,12 +112,13 @@ func TestNewAdaptedSummaryNoSpeech(t *testing.T) {
 	}
 }
 
-// TestLiveBoxFloorMatchesDoneBoxFloor locks the bug-fix invariant: the live
+// TestLiveBoxFloorMatchesDoneBoxFloor locks the one-resolver invariant: the live
 // Analysis box "Noise floor" (summary NoiseFloorDB) equals the done-box "before"
-// (processor.InputNoiseFloor) for the same measurements, on the astats RMS axis,
-// never the internal momentary-LUFS floor. Both surfaces read the one resolver,
-// so when an elected sample exists they agree on its value, and when it is
-// absent they both report no floor (neither leaks the momentary-LUFS field).
+// (processor.InputNoiseFloor) for the same measurements, because both read the one
+// resolver (processor.InputDisplayNoiseFloorDB). For a normal capture that is the
+// astats room-tone floor (never the internal Noise.Floor field); for a
+// voice-activated capture both surfaces show the VAD momentary-LUFS floor. When no
+// floor is measurable both report none.
 func TestLiveBoxFloorMatchesDoneBoxFloor(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -140,11 +141,26 @@ func TestLiveBoxFloorMatchesDoneBoxFloor(t *testing.T) {
 			m: func() *processor.AudioMeasurements {
 				m := &processor.AudioMeasurements{}
 				m.Noise.Floor = -85
-				// Only the momentary-LUFS field is set; neither surface may use it.
+				// Only the momentary-LUFS field is set; a NORMAL capture's surfaces may
+				// not use it (VoiceActivated is false), so both report no floor.
 				m.Regions.NoiseProfile = &processor.NoiseProfile{MeasuredNoiseFloor: -70}
 				return m
 			}(),
 			wantFloor: false,
+		},
+		{
+			name: "voice-activated: both surfaces show the momentary floor",
+			m: func() *processor.AudioMeasurements {
+				m := &processor.AudioMeasurements{}
+				m.Noise.VoiceActivated = true
+				m.Noise.Floor = -85 // internal; the display reads MeasuredNoiseFloor, not this
+				// Room tone is digital silence (astats -120 sentinel); both surfaces must
+				// show the VAD momentary floor instead, and identically.
+				m.Regions.ElectedRoomToneSample = &processor.RegionSample{RMSLevel: -120}
+				m.Regions.NoiseProfile = &processor.NoiseProfile{MeasuredNoiseFloor: -62}
+				return m
+			}(),
+			wantFloor: true,
 		},
 	}
 
@@ -233,6 +249,70 @@ func TestSeparationDBSameAxis(t *testing.T) {
 	}
 	if s.SeparationDB != -22-(-70) {
 		t.Errorf("SeparationDB = %v, want %v (same-axis RMS)", s.SeparationDB, -22-(-70.0))
+	}
+}
+
+// TestSeparationDBVoiceActivatedMomentary confirms that for a voice-activated
+// capture the SNR Gap is recomputed from the momentary-LUFS pair
+// (SpeechProfile.MomentaryLUFS - NoiseProfile.MeasuredNoiseFloor), NOT the astats
+// path. The room tone is digital silence, so the astats floor pins to the -120
+// sentinel and the astats gap inflates; the momentary pair excludes the silence.
+func TestSeparationDBVoiceActivatedMomentary(t *testing.T) {
+	m := &processor.AudioMeasurements{}
+	m.Noise.VoiceActivated = true
+	// Astats floor is the digital-silence sentinel; the astats gap would be huge.
+	m.Regions.ElectedRoomToneSample = &processor.RegionSample{RMSLevel: -120}
+	m.Regions.NoiseProfile = &processor.NoiseProfile{MeasuredNoiseFloor: -62}
+	m.Regions.SpeechProfile = &processor.SpeechCandidateMetrics{}
+	m.Regions.SpeechProfile.MomentaryLUFS = -24
+	m.Regions.SpeechProfile.RMSLevel = -22 // astats voice term; must NOT enter the gap
+
+	s := NewAdaptedSummary(&processor.EffectiveFilterConfig{}, nil, m)
+
+	// Noise floor is the VAD momentary-LUFS floor (-62), NOT the astats -120 sentinel.
+	if s.NoiseFloorDB != -62 {
+		t.Errorf("NoiseFloorDB = %v, want -62 (momentary floor, voice-activated, not the -120 sentinel)", s.NoiseFloorDB)
+	}
+	if !s.HasNoiseFloor {
+		t.Error("HasNoiseFloor should stay true with a momentary floor override")
+	}
+	// SNR Gap is the momentary difference, both K-weighted momentary-LUFS.
+	if s.SeparationDB != -24-(-62) {
+		t.Errorf("SeparationDB = %v, want %v (momentary pair, voice-activated)", s.SeparationDB, -24-(-62.0))
+	}
+	// Floor and gap reconcile: SeparationDB == SpeechMomentary - NoiseFloorDB.
+	if s.SeparationDB != -24-s.NoiseFloorDB {
+		t.Errorf("gap %v must reconcile with momentary floor %v (SpeechMomentary - NoiseFloorDB)", s.SeparationDB, s.NoiseFloorDB)
+	}
+	// It is NOT the astats voice-term gap (VoiceAvgDB is astats -22, not -24).
+	if s.SeparationDB == s.VoiceAvgDB-s.NoiseFloorDB {
+		t.Errorf("voice-activated gap must not use the astats VoiceAvgDB (%v)", s.VoiceAvgDB-s.NoiseFloorDB)
+	}
+}
+
+// TestSeparationDBNotVoiceActivatedAstats confirms that for a normal (not
+// voice-activated) capture the astats path is unchanged: SNR Gap stays
+// VoiceAvgDB - NoiseFloorDB even when momentary values are present.
+func TestSeparationDBNotVoiceActivatedAstats(t *testing.T) {
+	m := &processor.AudioMeasurements{}
+	m.Noise.VoiceActivated = false
+	m.Regions.ElectedRoomToneSample = &processor.RegionSample{RMSLevel: -70}
+	m.Regions.NoiseProfile = &processor.NoiseProfile{MeasuredNoiseFloor: -62}
+	m.Regions.SpeechProfile = &processor.SpeechCandidateMetrics{}
+	m.Regions.SpeechProfile.MomentaryLUFS = -24
+	m.Regions.SpeechProfile.RMSLevel = -22
+
+	s := NewAdaptedSummary(&processor.EffectiveFilterConfig{}, nil, m)
+
+	// Floor stays the astats room-tone RMS (-70), not the momentary -62.
+	if s.NoiseFloorDB != -70 {
+		t.Errorf("NoiseFloorDB = %v, want -70 (astats floor unchanged, not the momentary -62)", s.NoiseFloorDB)
+	}
+	if s.SeparationDB != s.VoiceAvgDB-s.NoiseFloorDB {
+		t.Errorf("SeparationDB = %v, want astats VoiceAvgDB - NoiseFloorDB = %v", s.SeparationDB, s.VoiceAvgDB-s.NoiseFloorDB)
+	}
+	if s.SeparationDB != -22-(-70) {
+		t.Errorf("SeparationDB = %v, want %v (astats path unchanged)", s.SeparationDB, -22-(-70.0))
 	}
 }
 

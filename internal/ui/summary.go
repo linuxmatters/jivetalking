@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"math"
+
 	"github.com/linuxmatters/jivetalking/internal/processor"
 )
 
@@ -74,12 +76,13 @@ func NewAdaptedSummary(cfg *processor.EffectiveFilterConfig, diag *processor.Ada
 	s.DeesserI = cfg.Deesser.Intensity
 	s.DeesserOn = cfg.Deesser.Intensity > 0
 
-	// Analysis. Noise floor is the input room-tone RMS (astats dBFS), the same
-	// canonical value the done-box "before" shows (processor.InputRoomToneFloorDB),
-	// NOT the K-weighted momentary-LUFS VAD floor (m.Noise.Floor); the latter stays
-	// internal (VAD split, Recording score, afftdn seed). Sourcing both surfaces
-	// from one resolver guarantees live-box == done-box for a given file.
-	s.NoiseFloorDB, s.HasNoiseFloor = processor.InputRoomToneFloorDB(m)
+	// Analysis. Noise floor is the displayed input floor from the one shared
+	// resolver (processor.InputDisplayNoiseFloorDB): the astats room-tone RMS
+	// normally, or the VAD momentary-LUFS floor for voice-activated captures (where
+	// the astats room tone is digital silence and pins to the -120 sentinel). The
+	// done-box "before" reads the same resolver via processor.InputNoiseFloor, so
+	// the live box and the done box always show the same input floor for a file.
+	s.NoiseFloorDB, s.HasNoiseFloor = processor.InputDisplayNoiseFloorDB(m)
 	s.InputLRA = m.Loudness.InputLRA
 	s.GateRatio = cfg.SpeechGate.Ratio
 	s.TruePeakDBTP = m.Loudness.InputTP
@@ -95,6 +98,22 @@ func NewAdaptedSummary(cfg *processor.EffectiveFilterConfig, diag *processor.Ada
 		// same pair (HasSpeech && HasNoiseFloor).
 		if s.HasNoiseFloor {
 			s.SeparationDB = s.VoiceAvgDB - s.NoiseFloorDB
+			// Voice-activated captures gate the room tone to digital silence, so the
+			// astats gap above would inflate to a meaningless 75-85 dB. Recompute it
+			// from the momentary-LUFS pair (SpeechProfile.MomentaryLUFS -
+			// NoiseProfile.MeasuredNoiseFloor), which excludes the silence gaps. Both
+			// operands are K-weighted momentary-LUFS, a single axis matching the
+			// Recording score and the momentary floor the resolver set above; never
+			// mix with the astats VoiceAvgDB. Read MeasuredNoiseFloor from the profile,
+			// not s.NoiseFloorDB, so the two computations stay independent. If either
+			// momentary value is missing or non-finite, keep the astats gap.
+			if m.Noise.VoiceActivated {
+				if np := m.Regions.NoiseProfile; np != nil {
+					if mom := sp.MomentaryLUFS - np.MeasuredNoiseFloor; !math.IsNaN(mom) && !math.IsInf(mom, 0) {
+						s.SeparationDB = mom
+					}
+				}
+			}
 		}
 		if sp.BandsMeasured {
 			s.HasSibilance = true

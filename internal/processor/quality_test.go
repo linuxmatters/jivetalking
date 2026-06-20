@@ -139,10 +139,12 @@ func TestInputNoiseFloorPrefersElectedSample(t *testing.T) {
 	}
 }
 
-// TestInputNoiseFloorNoMomentaryLeakage locks the axis contract: with no elected
-// room-tone sample, InputNoiseFloor returns ok = false. It must NOT fall back to
-// NoiseProfile.MeasuredNoiseFloor, which is on the K-weighted momentary-LUFS
-// axis, not the displayed astats RMS dBFS axis.
+// TestInputNoiseFloorNoMomentaryLeakage locks the axis contract for a normal
+// (non-voice-activated) capture: with no elected room-tone sample, InputNoiseFloor
+// returns ok = false. It must NOT fall back to NoiseProfile.MeasuredNoiseFloor,
+// which is on the K-weighted momentary-LUFS axis, not the displayed astats RMS
+// dBFS axis. Voice-activated captures intentionally use the momentary floor; see
+// TestInputNoiseFloorVoiceActivatedMomentary.
 func TestInputNoiseFloorNoMomentaryLeakage(t *testing.T) {
 	result := &ProcessingResult{
 		Measurements: &AudioMeasurements{
@@ -176,6 +178,34 @@ func TestInputNoiseFloorAbsent(t *testing.T) {
 	}
 	if _, ok := InputNoiseFloor(nil); ok {
 		t.Error("InputNoiseFloor(nil): ok = true, want false")
+	}
+}
+
+// TestInputNoiseFloorVoiceActivatedMomentary confirms the voice-activated display
+// override: the room tone is digital silence (astats -120 sentinel), so the
+// done-box "before" and the live box (both via InputDisplayNoiseFloorDB) show the
+// VAD momentary-LUFS floor instead, reconciling the two surfaces. The quality
+// score still reads the astats InputRoomToneFloorDB, so its axis is unchanged.
+func TestInputNoiseFloorVoiceActivatedMomentary(t *testing.T) {
+	m := &AudioMeasurements{
+		Regions: RegionMetrics{
+			ElectedRoomToneSample: &RegionSample{RMSLevel: -120}, // astats silence sentinel
+			NoiseProfile:          &NoiseProfile{MeasuredNoiseFloor: -62},
+		},
+	}
+	m.Noise.VoiceActivated = true
+	result := &ProcessingResult{Measurements: m}
+
+	floor, ok := InputNoiseFloor(result)
+	if !ok {
+		t.Fatal("InputNoiseFloor: ok = false, want true")
+	}
+	if floor != -62.0 {
+		t.Errorf("InputNoiseFloor = %.1f, want -62.0 (VAD momentary floor for voice-activated, not the -120 sentinel)", floor)
+	}
+	// The quality-score input floor stays astats (the elected sample), unaffected.
+	if score, ok := InputRoomToneFloorDB(m); !ok || score != -120.0 {
+		t.Errorf("InputRoomToneFloorDB = %.1f (ok=%v), want -120.0 (astats, unchanged for the score)", score, ok)
 	}
 }
 

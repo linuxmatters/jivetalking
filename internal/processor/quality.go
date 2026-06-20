@@ -149,19 +149,21 @@ func OutputNoiseFloor(result *ProcessingResult) (float64, bool) {
 	return finalRoomToneRMS(result)
 }
 
-// InputNoiseFloor resolves the input room-tone RMS floor (dBFS) for display,
-// the before half of the done-box before->after pair whose after half is
-// OutputNoiseFloor. Both ends are RegionSample.RMSLevel on the same astats RMS
-// dBFS axis, so the pair is honestly comparable. It delegates to
-// InputRoomToneFloorDB, which reads only the elected room-tone RegionSample
-// (ElectedRoomToneSample, measured by the same interval accumulation that
-// MeasureOutputRegions uses for the output). The bool is false when no elected
-// sample exists.
+// InputNoiseFloor resolves the input noise floor (dBFS) for display, the before
+// half of the done-box before->after pair whose after half is OutputNoiseFloor.
+// It delegates to InputDisplayNoiseFloorDB, the same resolver the live Analysis
+// box uses, so the live box and the done-box "before" always show the same number
+// for a file. For normal captures that is the astats room-tone RMS floor, the same
+// axis as OutputNoiseFloor so the pair is honestly comparable. For voice-activated
+// captures it is the VAD momentary-LUFS floor (the astats room tone is digital
+// silence); the after half stays astats and the noise-floor row shows no delta, so
+// the two ends are read side by side without a cross-axis subtraction. The bool is
+// false when no floor is measurable.
 func InputNoiseFloor(result *ProcessingResult) (float64, bool) {
 	if result == nil {
 		return 0, false
 	}
-	return InputRoomToneFloorDB(result.Measurements)
+	return InputDisplayNoiseFloorDB(result.Measurements)
 }
 
 // InputRoomToneFloorDB resolves the canonical input room-tone RMS floor (dBFS)
@@ -190,6 +192,31 @@ func InputRoomToneFloorDB(m *AudioMeasurements) (float64, bool) {
 		return 0, false
 	}
 	return floor, true
+}
+
+// InputDisplayNoiseFloorDB resolves the input noise floor SHOWN to the user, the
+// single source of truth for the live Analysis box (summary.go) and the done-box
+// "before" (via InputNoiseFloor). Both surfaces call this so they never diverge.
+//
+// Normally it returns the astats room-tone RMS floor (InputRoomToneFloorDB). For
+// voice-activated captures the room tone is digital silence, so that astats floor
+// pins to the -120 sentinel and is meaningless; it returns the VAD momentary-LUFS
+// floor (NoiseProfile.MeasuredNoiseFloor) instead, which excludes the silence gaps
+// and is the floor the Recording score uses. A 0 or non-finite momentary value is
+// the unmeasured sentinel, so it falls back to the astats floor.
+//
+// This is display-only. The quality SCORE keeps reading InputRoomToneFloorDB
+// (astats) directly via inputRoomToneRMS, so the axis the scorer compares against
+// is unchanged. See the "Measurement axes" section in AGENTS.md.
+func InputDisplayNoiseFloorDB(m *AudioMeasurements) (float64, bool) {
+	if m != nil && m.Noise.VoiceActivated {
+		if np := m.Regions.NoiseProfile; np != nil {
+			if f := np.MeasuredNoiseFloor; f != 0 && !math.IsNaN(f) && !math.IsInf(f, 0) {
+				return f, true
+			}
+		}
+	}
+	return InputRoomToneFloorDB(m)
 }
 
 // OutputTP resolves the final-output true peak (dBTP) for the done-box
