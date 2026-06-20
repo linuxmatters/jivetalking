@@ -6,7 +6,9 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/progress"
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/harmonica"
 	"github.com/linuxmatters/jivetalking/internal/cli"
 	"github.com/linuxmatters/jivetalking/internal/processor"
@@ -228,6 +230,15 @@ type Model struct {
 	// Progress bar (owned by Update; rendered via ViewAs)
 	progress progress.Model
 
+	// vp scrolls the file queue inside the alt-screen processing view, which has
+	// no native scrollback. The title + overall-progress header stays pinned
+	// above it; vp holds only the file list. Built on the first WindowSizeMsg
+	// (the zero Model has no usable viewport: New() sets MouseWheelEnabled and the
+	// initialised flag), then resized on each subsequent resize. vpReady gates the
+	// pre-size frames so View() renders the unscrolled fallback until then.
+	vp      viewport.Model
+	vpReady bool
+
 	// Eased audio level meter and progress bar state, parallel to Files (keyed
 	// by file index). Owned and mutated only in Update; never touched by pool
 	// workers.
@@ -306,9 +317,79 @@ func (m Model) Init() tea.Cmd {
 	return meterTick()
 }
 
+// processingFooterHeight is the row count View() reserves below the viewport.
+// The processing view has no footer, so it is zero; named so the viewport-height
+// maths reads symmetrically with the header reservation.
+const processingFooterHeight = 0
+
+// sizeViewport (re)builds and sizes the file-queue viewport from the current
+// terminal dimensions. The viewport height is the terminal height minus the
+// rendered header height (title + overall box) and the footer reservation,
+// floored at 1 so a tiny terminal still yields a usable viewport. The header
+// height is measured from the rendered header, not guessed, so it tracks any
+// future header change automatically.
+func (m *Model) sizeViewport() {
+	if m.Width <= 0 || m.Height <= 0 {
+		return
+	}
+	headerHeight := lipgloss.Height(renderProcessingHeader(*m))
+	vpHeight := max(m.Height-headerHeight-processingFooterHeight, 1)
+	if !m.vpReady {
+		m.vp = viewport.New(viewport.WithWidth(m.Width), viewport.WithHeight(vpHeight))
+		m.vpReady = true
+		return
+	}
+	m.vp.SetWidth(m.Width)
+	m.vp.SetHeight(vpHeight)
+}
+
+// refreshViewportContent re-renders the file queue into the PERSISTENT viewport
+// so its content (and therefore its scrollable height) tracks the model. It must
+// run in Update, not View: View has a value receiver, so any SetContent there
+// mutates a throwaway copy and the real viewport stays empty and unscrollable.
+//
+// Follow-the-active-files: if the user has not scrolled up (still at the bottom),
+// re-pin to the bottom after setting content so in-progress entries stay visible
+// as the list grows. A user who scrolled up keeps their offset (the wheel/key
+// branch never calls this, so it never yanks them back down). renderFileQueue
+// takes the model by value, hence *m.
+func (m *Model) refreshViewportContent() {
+	if !m.vpReady {
+		return
+	}
+	atBottom := m.vp.AtBottom()
+	m.vp.SetContent(renderFileQueue(*m, m.progress))
+	if atBottom {
+		m.vp.GotoBottom()
+	}
+}
+
 // Update handles messages and updates the model
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if handled, cmd := handleCommonMsg(msg, &m.Width, &m.Height, &m.Done, &m.progress, processingBarOverhead); handled {
+		// handleCommonMsg owns WindowSizeMsg (it stores the new dimensions); size
+		// the file-queue viewport to the area below the fixed header, then load its
+		// content so the scrollable height is correct from the first frame.
+		if _, ok := msg.(tea.WindowSizeMsg); ok {
+			m.sizeViewport()
+			m.refreshViewportContent()
+		}
+		// Scroll keys (PgUp/PgDn/arrows) are KeyPressMsg values that handleCommonMsg
+		// does NOT own (only the quit keys), so they fall through below. The quit
+		// keys return tea.Quit here and never reach the viewport.
+		return m, cmd
+	}
+
+	// Forward scroll input (mouse wheel + pager keys) to the viewport so it can
+	// page the file queue. handleCommonMsg already consumed the quit keys and the
+	// resize, so they never reach here; everything else is safe to forward. Do NOT
+	// refresh content here: refreshViewportContent re-pins to the bottom, which
+	// would cancel the user's upward scroll. The content set on the prior message
+	// is still loaded, so there is something to scroll.
+	switch msg.(type) {
+	case tea.MouseWheelMsg, tea.KeyPressMsg:
+		var cmd tea.Cmd
+		m.vp, cmd = m.vp.Update(msg)
 		return m, cmd
 	}
 
@@ -318,6 +399,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Deliberate in-place write into the aliased Files backing array; safe because Bubbletea drives Update/View serially.
 			m.Files[msg.FileIndex] = updateFileProgress(m.Files[msg.FileIndex], msg)
 		}
+		m.refreshViewportContent()
 		return m, nil
 
 	case FileStartMsg:
@@ -325,6 +407,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.Files[msg.FileIndex].Status = StatusAnalysing
 			m.Files[msg.FileIndex].StartTime = time.Now()
 		}
+		m.refreshViewportContent()
 		return m, nil
 
 	case AdaptedSummaryMsg:
@@ -339,6 +422,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// input the panels read.
 			m.Files[msg.FileIndex].statusBoxCache.valid = false
 		}
+		m.refreshViewportContent()
 		return m, nil
 
 	case FileCompleteMsg:
@@ -353,6 +437,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.CompletedFiles++
 			}
 		}
+		m.refreshViewportContent()
 		return m, nil
 
 	case meterTickMsg:
@@ -378,6 +463,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.meters[i].peakPos, m.meters[i].peakVel = m.peakSpring.Update(
 				m.meters[i].peakPos, m.meters[i].peakVel, m.Files[i].PeakLevel)
 		}
+		// The meters change every tick, so the eased display in the viewport must
+		// re-render every tick too, else the live level/progress freezes once the
+		// content is loaded.
+		m.refreshViewportContent()
 		if !m.anyActive() {
 			return m, nil
 		}
@@ -398,12 +487,32 @@ func (m Model) View() tea.View {
 
 	var view tea.View
 	if m.Done {
+		// On completion the program quits to the normal buffer (AllCompleteMsg ->
+		// tea.Quit), where the completion summary is reprinted with native
+		// scrollback. Render it whole here for the brief final frame.
 		view = tea.NewView(renderCompletionSummary(m))
 	} else {
-		view = tea.NewView(renderProcessingView(m))
+		view = tea.NewView(m.renderScrollingView())
 	}
 	view.AltScreen = true
+	// Enable mouse cell-motion so the viewport receives MouseWheelMsg; its own
+	// MouseWheelEnabled (default true) then scrolls the file queue.
+	view.MouseMode = tea.MouseModeCellMotion
 	return view
+}
+
+// renderScrollingView composes the pinned header with the scrollable file queue.
+// The header (title + overall progress) stays fixed; the file list lives inside
+// the viewport so the user can scroll it with the wheel or pager keys during a
+// run. Before the first WindowSizeMsg sizes the viewport, it falls back to the
+// unscrolled stack so early frames still render.
+func (m Model) renderScrollingView() string {
+	if !m.vpReady {
+		return renderProcessingView(m)
+	}
+	// Pure render: the viewport's content and scroll offset are managed in Update
+	// (refreshViewportContent), since View's value receiver discards any mutation.
+	return renderProcessingHeader(m) + "\n" + m.vp.View()
 }
 
 // updateFileProgress updates a FileProgress based on a ProgressMsg
