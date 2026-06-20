@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/linuxmatters/jivetalking/internal/processor"
 )
@@ -104,12 +105,156 @@ func TestWindowSizeMsgPreservesRoutedFiles(t *testing.T) {
 	if m.Width != 120 || m.Height != 40 {
 		t.Errorf("dimensions not stored: Width=%d Height=%d, want 120/40", m.Width, m.Height)
 	}
+	// The resize builds and fills the viewport, so the file queue now renders
+	// inside Update on the persistent model. Rendering populates the presentation
+	// -only render caches (statusBoxCache / fileDetailsTitleCache) in place, so a
+	// whole-struct equality would trip on those. Assert the routed DATA contract
+	// survives instead (that is what this test guards); the render caches are
+	// derived state and excluded by clearing them on both sides before comparing.
 	for i := range want {
-		if m.Files[i] != want[i] {
-			t.Errorf("Files[%d] changed after WindowSizeMsg: got %+v, want %+v", i, m.Files[i], want[i])
+		got := m.Files[i]
+		got.statusBoxCache = statusBoxCache{}
+		got.fileDetailsTitleCache = overlayTitleCache{}
+		wantData := want[i]
+		wantData.statusBoxCache = statusBoxCache{}
+		wantData.fileDetailsTitleCache = overlayTitleCache{}
+		if got != wantData {
+			t.Errorf("Files[%d] routed data changed after WindowSizeMsg: got %+v, want %+v", i, got, wantData)
 		}
 	}
 	_ = m.progress.ViewAs(m.Files[0].Progress)
+}
+
+func TestWindowSizeMsgSizesViewport(t *testing.T) {
+	m := NewModel([]string{"a.wav", "b.wav"})
+
+	// Before a resize the viewport is not built.
+	if m.vpReady {
+		t.Fatal("viewport ready before any WindowSizeMsg, want unbuilt")
+	}
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = updated.(Model)
+
+	if !m.vpReady {
+		t.Fatal("WindowSizeMsg did not build the viewport")
+	}
+	if m.vp.Width() != 100 {
+		t.Errorf("viewport width = %d, want 100", m.vp.Width())
+	}
+	// Height must be the terminal height minus the rendered header, never the
+	// full terminal height (the header stays pinned outside the viewport).
+	headerHeight := lipgloss.Height(renderProcessingHeader(m))
+	wantHeight := 30 - headerHeight
+	if m.vp.Height() != wantHeight {
+		t.Errorf("viewport height = %d, want %d (30 - header %d)", m.vp.Height(), wantHeight, headerHeight)
+	}
+	if m.vp.Height() >= 30 {
+		t.Errorf("viewport height %d not reduced below terminal height 30; header not reserved", m.vp.Height())
+	}
+
+	// A second resize re-sizes the existing viewport rather than rebuilding.
+	updated, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m = updated.(Model)
+	if m.vp.Width() != 80 {
+		t.Errorf("viewport width after resize = %d, want 80", m.vp.Width())
+	}
+}
+
+func TestQuitKeysStillQuitWithViewport(t *testing.T) {
+	m := NewModel([]string{"a.wav"})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = updated.(Model)
+
+	keys := []tea.KeyPressMsg{
+		{Text: "q", Code: 'q'},
+		{Mod: tea.ModCtrl, Code: 'c'},
+	}
+	for _, key := range keys {
+		_, cmd := m.Update(key)
+		if cmd == nil {
+			t.Fatalf("%q produced nil cmd, want tea.Quit", key.String())
+		}
+		if msg := cmd(); msg == nil {
+			t.Errorf("%q cmd yielded nil msg, want a QuitMsg", key.String())
+		} else if _, ok := msg.(tea.QuitMsg); !ok {
+			t.Errorf("%q cmd yielded %T, want tea.QuitMsg", key.String(), msg)
+		}
+	}
+}
+
+// scrollableModel builds a processing model with enough queued files that the
+// file queue overflows a short viewport, so scrolling has somewhere to go. It
+// drives only real messages through Update, so the PERSISTENT viewport holds the
+// content (the regression these tests guard: content was previously set on a
+// throwaway copy in View and never reached the real viewport).
+func scrollableModel(t *testing.T) Model {
+	t.Helper()
+	files := make([]string, 40)
+	for i := range files {
+		files[i] = "file.wav"
+	}
+	m := NewModel(files)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 12})
+	return updated.(Model)
+}
+
+// TestViewportReceivesContentFromUpdate proves the file queue reaches the
+// PERSISTENT viewport, not a throwaway copy in View. After a resize plus a
+// routed message, the viewport's content height must exceed its own height so it
+// is actually scrollable. This fails against the prior View-only SetContent,
+// where the real viewport stayed empty (content height <= viewport height).
+func TestViewportReceivesContentFromUpdate(t *testing.T) {
+	m := scrollableModel(t)
+
+	// A routed message goes through the content-refresh path in Update.
+	updated, _ := m.Update(FileStartMsg{FileIndex: 0})
+	m = updated.(Model)
+
+	// TotalLineCount reflects the loaded content; a scrollable viewport has more
+	// content lines than its own height.
+	if got := m.vp.TotalLineCount(); got <= m.vp.Height() {
+		t.Errorf("viewport content height = %d, want > viewport height %d (content did not reach the persistent viewport)", got, m.vp.Height())
+	}
+}
+
+// TestScrollKeysForwardedToViewport confirms a pager key (PgDown) moves the
+// viewport offset. Content is loaded purely by Update (the WindowSizeMsg refresh
+// in scrollableModel), then GotoTop puts it at the top so PgDown has room to move
+// down.
+func TestScrollKeysForwardedToViewport(t *testing.T) {
+	m := scrollableModel(t)
+	m.vp.GotoTop()
+	startOffset := m.vp.YOffset()
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	m = updated.(Model)
+
+	if m.vp.YOffset() <= startOffset {
+		t.Errorf("PgDown did not scroll the viewport: offset %d, want > %d", m.vp.YOffset(), startOffset)
+	}
+}
+
+// TestMouseWheelMovesOffset confirms a wheel-up event moves the persistent
+// viewport's scroll offset. Driven from the bottom-pinned state the Update path
+// leaves after content load: a wheel up must DECREASE the offset. This fails on
+// the old code path, where the real viewport had no content and the offset was
+// pinned at zero with nowhere to move.
+func TestMouseWheelMovesOffset(t *testing.T) {
+	m := scrollableModel(t)
+
+	// scrollableModel leaves the viewport bottom-pinned (content loaded on resize).
+	startOffset := m.vp.YOffset()
+	if startOffset == 0 {
+		t.Fatalf("expected a non-zero bottom-pinned offset after content load, got 0 (content did not reach the persistent viewport)")
+	}
+
+	updated, _ := m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	m = updated.(Model)
+
+	if m.vp.YOffset() >= startOffset {
+		t.Errorf("wheel up did not scroll up: offset %d, want < %d", m.vp.YOffset(), startOffset)
+	}
 }
 
 func TestRenderOverallProgressFooter(t *testing.T) {

@@ -62,7 +62,7 @@ internal/
 ├── ui/
 │   ├── analysis_model.go   # AnalysisModel - Bubbletea model for --analysis-only progress TUI
 │   ├── messages.go         # ProgressMsg, FileStartMsg, FileCompleteMsg, AllCompleteMsg
-│   ├── model.go            # Main processing TUI model
+│   ├── model.go            # Main processing TUI model; file queue sits in a bubbles/v2 viewport (scrollable under alt-screen), header pinned above
 │   └── views.go            # TUI rendering
 └── cli/                    # Help styling, version output, error formatting
 ```
@@ -120,7 +120,7 @@ Pass 4: volume (pre-gain, when clamped) → alimiter (levelling limiter, peak re
 - **Stream processing:** Check `AVErrorEOF` and `EAgain` for processing loops
 - **Submodule:** Uses `github.com/linuxmatters/ffmpeg-statigo` in `third_party/ffmpeg-statigo/` (go.mod replace directive points there)
 - **Debug logging:** `processor.DebugLog` is a package-level `func(string, ...any)` set by `main.go` when `--debug` is active; use `debugLog()` (internal wrapper) inside the processor package
-- **Charm v2:** Import `charm.land/bubbletea/v2` and `charm.land/lipgloss/v2`; never `github.com/charmbracelet/...`. Models return `View() tea.View` built with `tea.NewView(...)`, not `View() string`. Match key presses on `tea.KeyPressMsg` (interface), not `tea.KeyMsg`. Set program options as View fields (`view.AltScreen = true`), not via `tea.WithAltScreen()`. `lipgloss.Color` returns `image/color.Color`.
+- **Charm v2:** Import `charm.land/bubbletea/v2` and `charm.land/lipgloss/v2`; never `github.com/charmbracelet/...`. Models return `View() tea.View` built with `tea.NewView(...)`, not `View() string`. Match key presses on `tea.KeyPressMsg` (interface), not `tea.KeyMsg`. Set program options as View fields (`view.AltScreen = true`, `view.MouseMode = tea.MouseModeCellMotion`), not via `tea.WithAltScreen()`/`tea.WithMouseCellMotion()`. `lipgloss.Color` returns `image/color.Color`. The processing model (`model.go`) runs alt-screen (no native scrollback), so its file queue lives in a `charm.land/bubbles/v2/viewport`: built on the first `WindowSizeMsg` (sized to terminal height minus the rendered header). `View` has a VALUE receiver, so it must stay pure: content is set on the PERSISTENT viewport in `Update` via `refreshViewportContent` (called after every queue-changing message AND every `meterTickMsg`, so the live meters animate), never in `View` (a `SetContent` there mutates a throwaway copy and the real viewport stays empty/unscrollable). Scrolling: mouse wheel + pager keys are forwarded through `m.vp.Update(msg)` after `handleCommonMsg` (which owns the quit keys and the resize); that branch does NOT call `refreshViewportContent` (re-pinning would cancel an upward scroll). The header (title + overall box) is pinned outside the viewport. The viewport follows the active files (`refreshViewportContent` re-pins to bottom while the user is at bottom; a user who scrolls up keeps position).
 
 ## Testing instructions
 

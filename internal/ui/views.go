@@ -15,8 +15,19 @@ import (
 	"github.com/linuxmatters/jivetalking/internal/processor"
 )
 
-// renderProcessingView renders the main processing view
+// renderProcessingView renders the header and file queue as one unscrolled
+// stack. View() drives the live UI through the viewport instead; this is the
+// pre-size fallback (before the first WindowSizeMsg builds the viewport) and the
+// section-order reference the layout tests assert against.
 func renderProcessingView(m Model) string {
+	return renderProcessingHeader(m) + "\n" + renderFileQueue(m, m.progress)
+}
+
+// renderProcessingHeader renders the fixed header above the scrollable file
+// queue: the title and the overall-progress box. View() keeps this outside the
+// viewport so it stays pinned while the file list scrolls. The two trailing
+// blank lines reproduce the prior gap between the box and the first file entry.
+func renderProcessingHeader(m Model) string {
 	var b strings.Builder
 
 	// Header (title only)
@@ -25,10 +36,7 @@ func renderProcessingView(m Model) string {
 
 	// Overall progress box, directly under the title
 	b.WriteString(renderOverallProgress(m))
-	b.WriteString("\n\n")
-
-	// File queue
-	b.WriteString(renderFileQueue(m, m.progress))
+	b.WriteString("\n")
 
 	return b.String()
 }
