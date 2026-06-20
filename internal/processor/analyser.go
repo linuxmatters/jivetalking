@@ -35,8 +35,8 @@ type RoomToneRegion struct {
 // These measurements serve as a reference baseline for adaptive filter tuning:
 //   - MeasuredNoiseFloor → elected noise floor (Noise.Floor), which drives the
 //     VAD split, the Recording-score cleanliness axis, and the afftdn nf seed.
-//   - CrestFactor/PeakLevel → peak-reference input to the legacy speech gate
-//     threshold path (calculateSpeechGateThresholdLegacy via adaptive_speech_gate.go),
+//   - CrestFactor/PeakLevel → peak-reference input to the no-profile speech gate
+//     threshold path (calculateSpeechGateThresholdNoProfile via adaptive_speech_gate.go),
 //     reached only when no SpeechProfile is elected.
 //
 // Entropy and the spectral fields are measured here for the report and

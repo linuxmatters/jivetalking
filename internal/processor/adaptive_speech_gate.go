@@ -143,8 +143,8 @@ func tuneSpeechGate(config *EffectiveFilterConfig, diagnostics *AdaptiveDiagnost
 		}
 	} else {
 		// No SpeechProfile: voiced statistics are unmeasurable, so fall back to the
-		// legacy noise-floor-based threshold (the no-profile safety path).
-		config.SpeechGate.Threshold = calculateSpeechGateThresholdLegacy(
+		// noise-floor-based threshold (the no-profile safety path).
+		config.SpeechGate.Threshold = calculateSpeechGateThresholdNoProfile(
 			noiseContext{floor: measurements.Noise.Floor, roomTonePeak: roomTonePeak, roomToneCrest: roomToneCrest},
 			config.SpeechGate.Ratio,
 			lufsGap,
@@ -190,7 +190,7 @@ type noiseContext struct {
 	roomToneCrest float64
 }
 
-// calculateSpeechGateThresholdLegacy positions the threshold from the noise floor
+// calculateSpeechGateThresholdNoProfile positions the threshold from the noise floor
 // (or room-tone peak for high-crest bleed). It is the no-SpeechProfile safety path
 // ONLY: tuneSpeechGate calls it solely in the else branch, when no profile is
 // elected and the voiced statistics are therefore unmeasurable. Speech sources
@@ -203,12 +203,12 @@ type noiseContext struct {
 // route into this function. This noise-floor maths can only place a threshold from
 // the noise references, and it runs only when there is no voiced population to clip
 // in the first place. There is no separation-based escape hatch from the voiced
-// path into the legacy maths: there is no "separation < 5 dB" guard keying off a
+// path into this maths: there is no "separation < 5 dB" guard keying off a
 // fabricated proxy. Selection is structural, not numeric.
 //
 // noise.roomTonePeak and noise.roomToneCrest describe the noise profile extracted
 // from the elected room-tone region.
-func calculateSpeechGateThresholdLegacy(noise noiseContext, ratio, lufsGap float64) float64 {
+func calculateSpeechGateThresholdNoProfile(noise noiseContext, ratio, lufsGap float64) float64 {
 	var thresholdDB float64
 
 	usePeakReference := noise.roomToneCrest > speechGateCrestFactorThreshold &&

@@ -525,7 +525,7 @@ func TestTuneSpeechGate(t *testing.T) {
 	// Tests the comprehensive gate tuning which calculates all gate parameters
 	// based on measurements including NoiseProfile (extracted from the elected
 	// room-tone region). The threshold subtests below have no SpeechProfile, so
-	// they exercise the legacy noise-floor threshold path.
+	// they exercise the no-profile noise-floor threshold path.
 	//
 	// Key constants from adaptive_speech_gate.go:
 	// speechGateThresholdMinDB = -80.0 dB (minimum threshold)
@@ -928,8 +928,8 @@ func TestTuneSpeechGate(t *testing.T) {
 	})
 
 	t.Run("fresh diagnostics without speech metrics", func(t *testing.T) {
-		// No SpeechProfile: the voiced-anchored diagnostics stay zero and the legacy
-		// threshold path runs.
+		// No SpeechProfile: the voiced-anchored diagnostics stay zero and the
+		// no-profile threshold path runs.
 		config := newTestConfig()
 		diagnostics := tuneSpeechGateForTest(config, &AudioMeasurements{
 			Spectral: SpectralMetrics{Flux: 0.02},
@@ -1032,8 +1032,8 @@ func TestCalculateSpeechGateThreshold(t *testing.T) {
 // AudioMeasurements that drives the whole tuneSpeechGate body. It asserts the
 // basis end to end: a wide-gap profile case (full fixed depth,
 // voiced-anchored threshold), a narrow-gap profile case (reduced fixed depth,
-// threshold still on the speech side), and a no-profile case (the legacy safety
-// path, which cannot place an in-speech threshold because there is no voiced
+// threshold still on the speech side), and a no-profile case (the no-profile
+// safety path, which cannot place an in-speech threshold because there is no voiced
 // population). It also pins the fixed parameters (attack, release, knee,
 // detection) and confirms the emitted gate depth surfaces on the diagnostic.
 func TestTuneSpeechGateNewBasis(t *testing.T) {
@@ -1103,9 +1103,9 @@ func TestTuneSpeechGateNewBasis(t *testing.T) {
 		}
 	})
 
-	t.Run("no profile: legacy safety path cannot place an in-speech threshold", func(t *testing.T) {
+	t.Run("no profile: no-profile safety path cannot place an in-speech threshold", func(t *testing.T) {
 		config := newTestConfig()
-		// No SpeechProfile, so the legacy noise-floor path runs. With no voiced
+		// No SpeechProfile, so the no-profile noise-floor path runs. With no voiced
 		// population there is nothing to clip; the threshold is anchored to the noise
 		// floor and clamped to the global limits, so it cannot land inside speech.
 		diag := tuneSpeechGateForTest(config, &AudioMeasurements{
@@ -1115,7 +1115,7 @@ func TestTuneSpeechGateNewBasis(t *testing.T) {
 
 		gotDB := linearToDB(config.SpeechGate.Threshold)
 		if gotDB < speechGateThresholdMinDB || gotDB > speechGateThresholdMaxDB {
-			t.Errorf("legacy threshold = %.2f dB, want within global limits [%.1f, %.1f]",
+			t.Errorf("no-profile threshold = %.2f dB, want within global limits [%.1f, %.1f]",
 				gotDB, speechGateThresholdMinDB, speechGateThresholdMaxDB)
 		}
 		// The voiced-anchored diagnostics stay zero on the no-profile path.
