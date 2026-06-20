@@ -316,6 +316,38 @@ func TestSeparationDBNotVoiceActivatedAstats(t *testing.T) {
 	}
 }
 
+// TestSeparationDBVoiceActivatedUnmeasuredFloor confirms that for a voice-activated
+// capture with an UNMEASURED momentary floor (MeasuredNoiseFloor == 0 sentinel) the
+// SNR Gap keeps the astats path. The resolver falls back to the astats floor for the
+// display, so the separation must match it and NOT compute sp.MomentaryLUFS - 0.
+func TestSeparationDBVoiceActivatedUnmeasuredFloor(t *testing.T) {
+	m := &processor.AudioMeasurements{}
+	m.Noise.VoiceActivated = true
+	// Astats room-tone floor is real; the momentary floor is the unmeasured 0 sentinel.
+	m.Regions.ElectedRoomToneSample = &processor.RegionSample{RMSLevel: -70}
+	m.Regions.NoiseProfile = &processor.NoiseProfile{MeasuredNoiseFloor: 0}
+	m.Regions.SpeechProfile = &processor.SpeechCandidateMetrics{}
+	m.Regions.SpeechProfile.MomentaryLUFS = -24 // must NOT enter the gap with a 0 floor
+	m.Regions.SpeechProfile.RMSLevel = -22
+
+	s := NewAdaptedSummary(&processor.EffectiveFilterConfig{}, nil, m)
+
+	// Floor falls back to the astats room-tone RMS (-70); the momentary 0 is unusable.
+	if s.NoiseFloorDB != -70 {
+		t.Errorf("NoiseFloorDB = %v, want -70 (astats fallback, unmeasured momentary floor)", s.NoiseFloorDB)
+	}
+	// Separation stays the astats gap, NOT sp.MomentaryLUFS (-24) against a 0 floor.
+	if s.SeparationDB != s.VoiceAvgDB-s.NoiseFloorDB {
+		t.Errorf("SeparationDB = %v, want astats VoiceAvgDB - NoiseFloorDB = %v", s.SeparationDB, s.VoiceAvgDB-s.NoiseFloorDB)
+	}
+	if s.SeparationDB != -22-(-70) {
+		t.Errorf("SeparationDB = %v, want %v (astats path on unmeasured momentary floor)", s.SeparationDB, -22-(-70.0))
+	}
+	if s.SeparationDB == m.Regions.SpeechProfile.MomentaryLUFS {
+		t.Errorf("SeparationDB must not be the bogus momentary value %v against a 0 floor", m.Regions.SpeechProfile.MomentaryLUFS)
+	}
+}
+
 // TestNewAdaptedSummaryNilGuards confirms nil config or measurements yields a
 // not-ready summary (boxes stay pending) rather than panicking.
 func TestNewAdaptedSummaryNilGuards(t *testing.T) {

@@ -105,12 +105,18 @@ func NewAdaptedSummary(cfg *processor.EffectiveFilterConfig, diag *processor.Ada
 			// operands are K-weighted momentary-LUFS, a single axis matching the
 			// Recording score and the momentary floor the resolver set above; never
 			// mix with the astats VoiceAvgDB. Read MeasuredNoiseFloor from the profile,
-			// not s.NoiseFloorDB, so the two computations stay independent. If either
-			// momentary value is missing or non-finite, keep the astats gap.
+			// not s.NoiseFloorDB, so the two computations stay independent. Guard the
+			// momentary floor exactly as the resolver does (f != 0 && finite): a 0
+			// MeasuredNoiseFloor is the unmeasured sentinel, so the resolver falls back
+			// to the astats floor for s.NoiseFloorDB and the separation must match by
+			// keeping the astats gap. If the floor is unmeasured or the difference is
+			// non-finite, keep the astats gap.
 			if m.Noise.VoiceActivated {
 				if np := m.Regions.NoiseProfile; np != nil {
-					if mom := sp.MomentaryLUFS - np.MeasuredNoiseFloor; !math.IsNaN(mom) && !math.IsInf(mom, 0) {
-						s.SeparationDB = mom
+					if f := np.MeasuredNoiseFloor; f != 0 && !math.IsNaN(f) && !math.IsInf(f, 0) {
+						if mom := sp.MomentaryLUFS - f; !math.IsNaN(mom) && !math.IsInf(mom, 0) {
+							s.SeparationDB = mom
+						}
 					}
 				}
 			}
