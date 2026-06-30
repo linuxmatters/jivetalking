@@ -277,13 +277,57 @@ func TestFlooredFraction(t *testing.T) {
 		}
 	})
 
-	t.Run("all-NaN slice returns 0 via the zero-guard", func(t *testing.T) {
+	t.Run("NaN momentary counts as floored", func(t *testing.T) {
+		// macOS arm64 FFmpeg ebur128 reports digital silence as NaN. A NaN window
+		// must add to both numerator and denominator so the gated capture is
+		// detected the same as on Linux (-inf/finite-low).
+		iv := []IntervalSample{
+			vadInterval(0, math.NaN()),
+			vadInterval(1, -15),
+		}
+		got := flooredFraction(iv, axisMomentaryLUFS)
+		if want := 0.5; math.Abs(got-want) > 0.001 {
+			t.Errorf("flooredFraction = %.3f, want %.3f (NaN counts as floored)", got, want)
+		}
+	})
+
+	t.Run("mixed NaN, finite-low, and normal windows", func(t *testing.T) {
+		var iv []IntervalSample
+		idx := 0
+		// 25 NaN (macOS silence) + 25 finite-low (Linux silence) = 50 floored.
+		for range 25 {
+			iv = append(iv, vadInterval(idx, math.NaN()))
+			idx++
+		}
+		for range 25 {
+			iv = append(iv, vadInterval(idx, -120)) // <= vadLevelFloorDB (-115)
+			idx++
+		}
+		// 50 normal-level speech windows.
+		for range 50 {
+			iv = append(iv, vadInterval(idx, -15))
+			idx++
+		}
+
+		got := flooredFraction(iv, axisMomentaryLUFS)
+		if want := 50.0 / 100.0; math.Abs(got-want) > 0.001 {
+			t.Errorf("flooredFraction = %.3f, want %.3f (NaN + finite-low both floor)", got, want)
+		}
+	})
+
+	t.Run("all-NaN slice returns 1.0 (every window floors)", func(t *testing.T) {
 		var iv []IntervalSample
 		for i := range 20 {
 			iv = append(iv, vadInterval(i, math.NaN()))
 		}
-		if got := flooredFraction(iv, axisMomentaryLUFS); got != 0 {
-			t.Errorf("flooredFraction = %.3f, want 0 (every interval unmeasurable)", got)
+		if got := flooredFraction(iv, axisMomentaryLUFS); got != 1.0 {
+			t.Errorf("flooredFraction = %.3f, want 1.0 (every window is digital silence)", got)
+		}
+	})
+
+	t.Run("empty slice returns 0 via the zero-guard", func(t *testing.T) {
+		if got := flooredFraction(nil, axisMomentaryLUFS); got != 0 {
+			t.Errorf("flooredFraction = %.3f, want 0 (no intervals)", got)
 		}
 	})
 }

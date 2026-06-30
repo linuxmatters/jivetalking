@@ -697,20 +697,20 @@ func pickLowClusterRegion(intervals []IntervalSample, split float64, axis levelA
 // not separate gated recordings from sparse podcast tracks.
 const vadVoiceActivatedFraction = 0.20
 
-// flooredFraction returns the fraction of measurable intervals pinned at the
-// digital-silence floor (level <= vadLevelFloorDB, including a fully silent
-// momentary window that reads as -inf). Only an unmeasurable interval (NaN) is
-// skipped from the denominator. A high floored fraction is the platform-gated
-// capture signature; below-split-but-measurable intervals do not count here.
+// flooredFraction returns the fraction of intervals pinned at the digital-silence
+// floor. Every interval counts toward the denominator. A floored interval is one
+// whose K-weighted momentary loudness is non-finite (NaN) or at/below
+// vadLevelFloorDB: a non-finite momentary on a 250 ms window only occurs at
+// digital silence, which is the platform-gated capture signature we want to
+// count. FFmpeg ebur128 reports that silence as NaN on macOS arm64 and as
+// -inf/finite-low on Linux; counting non-finite as floored keeps voice-activated
+// detection platform-invariant. Below-split-but-measurable intervals do not count.
 func flooredFraction(intervals []IntervalSample, axis levelAxis) float64 {
 	var counted, floored float64
 	for _, iv := range intervals {
 		level := intervalLevel(iv, axis)
-		if math.IsNaN(level) {
-			continue
-		}
 		counted++
-		if level <= vadLevelFloorDB {
+		if math.IsNaN(level) || level <= vadLevelFloorDB {
 			floored++
 		}
 	}
